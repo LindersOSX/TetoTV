@@ -1,0 +1,277 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
+class TvDisplayMode {
+  const TvDisplayMode({
+    required this.id,
+    required this.width,
+    required this.height,
+    required this.refreshRate,
+  });
+
+  final int id;
+  final int width;
+  final int height;
+  final double refreshRate;
+
+  factory TvDisplayMode.fromMap(Map<Object?, Object?> value) => TvDisplayMode(
+    id: value['id'] as int? ?? 0,
+    width: value['width'] as int? ?? 0,
+    height: value['height'] as int? ?? 0,
+    refreshRate: (value['refreshRate'] as num?)?.toDouble() ?? 0,
+  );
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'width': width,
+    'height': height,
+    'refreshRate': refreshRate,
+  };
+}
+
+class TvCodecCapability {
+  const TvCodecCapability({
+    required this.name,
+    required this.mime,
+    required this.hardware,
+  });
+
+  final String name;
+  final String mime;
+  final bool hardware;
+
+  factory TvCodecCapability.fromMap(Map<Object?, Object?> value) =>
+      TvCodecCapability(
+        name: value['name'] as String? ?? '',
+        mime: value['mime'] as String? ?? '',
+        hardware: value['hardware'] as bool? ?? false,
+      );
+
+  Map<String, Object?> toJson() => {
+    'name': name,
+    'mime': mime,
+    'hardware': hardware,
+  };
+}
+
+class TvDeviceProfile {
+  const TvDeviceProfile({
+    required this.manufacturer,
+    required this.model,
+    required this.sdk,
+    required this.abis,
+    required this.displayModes,
+    required this.hdrTypes,
+    required this.codecs,
+    required this.audioOutputs,
+  });
+
+  const TvDeviceProfile.unknown()
+    : manufacturer = 'Unknown',
+      model = 'Unknown',
+      sdk = 0,
+      abis = const [],
+      displayModes = const [],
+      hdrTypes = const [],
+      codecs = const [],
+      audioOutputs = const [];
+
+  final String manufacturer;
+  final String model;
+  final int sdk;
+  final List<String> abis;
+  final List<TvDisplayMode> displayModes;
+  final List<int> hdrTypes;
+  final List<TvCodecCapability> codecs;
+  final List<Map<String, Object?>> audioOutputs;
+
+  String get key => '$manufacturer/$model/sdk$sdk'.toLowerCase();
+  bool get hasHdr => hdrTypes.isNotEmpty;
+  bool get hasHdmiAudio => audioOutputs.any((output) => output['hdmi'] == true);
+
+  bool supportsCodec(String? codec) {
+    final normalized = codec?.toLowerCase() ?? '';
+    final mime = switch (normalized) {
+      final value when value.contains('av1') => 'video/av01',
+      final value when value.contains('hevc') || value.contains('h265') =>
+        'video/hevc',
+      final value when value.contains('h264') || value.contains('avc') =>
+        'video/avc',
+      final value when value.contains('vp9') => 'video/x-vnd.on2.vp9',
+      _ => '',
+    };
+    if (mime.isEmpty) return true;
+    return codecs.any((item) => item.mime == mime && item.hardware);
+  }
+
+  Map<String, Object?> toJson() => {
+    'manufacturer': manufacturer,
+    'model': model,
+    'sdk': sdk,
+    'abis': abis,
+    'displayModes': displayModes.map((mode) => mode.toJson()).toList(),
+    'hdrTypes': hdrTypes,
+    'codecs': codecs.map((codec) => codec.toJson()).toList(),
+    'audioOutputs': audioOutputs,
+  };
+
+  factory TvDeviceProfile.fromMap(Map<Object?, Object?> value) {
+    List<Map<Object?, Object?>> maps(Object? input) =>
+        (input as List? ?? const [])
+            .whereType<Map>()
+            .map((item) => item.cast<Object?, Object?>())
+            .toList(growable: false);
+    return TvDeviceProfile(
+      manufacturer: value['manufacturer'] as String? ?? 'Unknown',
+      model: value['model'] as String? ?? 'Unknown',
+      sdk: value['sdk'] as int? ?? 0,
+      abis: (value['abis'] as List? ?? const []).whereType<String>().toList(),
+      displayModes: maps(
+        value['displayModes'],
+      ).map(TvDisplayMode.fromMap).toList(growable: false),
+      hdrTypes: (value['hdrTypes'] as List? ?? const [])
+          .whereType<int>()
+          .toList(),
+      codecs: maps(
+        value['codecs'],
+      ).map(TvCodecCapability.fromMap).toList(growable: false),
+      audioOutputs: maps(value['audioOutputs'])
+          .map(
+            (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+          )
+          .toList(growable: false),
+    );
+  }
+}
+
+class MediaAction {
+  const MediaAction(this.action, this.value);
+  final String action;
+  final int? value;
+}
+
+class AndroidTvBridge {
+  AndroidTvBridge._() {
+    _channel.setMethodCallHandler(_handleMethod);
+  }
+
+  static final instance = AndroidTvBridge._();
+  static const _channel = MethodChannel('dev.tetotv/android_tv');
+  final _mediaActions = StreamController<MediaAction>.broadcast();
+  TvDeviceProfile? _cachedProfile;
+
+  Stream<MediaAction> get mediaActions => _mediaActions.stream;
+
+  Future<dynamic> _handleMethod(MethodCall call) async {
+    if (call.method != 'mediaAction') return;
+    final args = (call.arguments as Map?)?.cast<Object?, Object?>();
+    if (args == null) return;
+    _mediaActions.add(
+      MediaAction(args['action'] as String? ?? '', args['value'] as int?),
+    );
+  }
+
+  Future<TvDeviceProfile> getDeviceProfile({bool refresh = false}) async {
+    if (!refresh && _cachedProfile != null) return _cachedProfile!;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const TvDeviceProfile.unknown();
+    }
+    try {
+      final result = await _channel.invokeMapMethod<Object?, Object?>(
+        'getDeviceProfile',
+      );
+      return _cachedProfile = result == null
+          ? const TvDeviceProfile.unknown()
+          : TvDeviceProfile.fromMap(result);
+    } on PlatformException {
+      return const TvDeviceProfile.unknown();
+    }
+  }
+
+  Future<void> setPreferredFrameRate(double fps) async {
+    if (fps <= 0 || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<int>('setPreferredFrameRate', {'fps': fps});
+    } on PlatformException {
+      // Mode switching is optional and unsupported by some Fire OS builds.
+    }
+  }
+
+  Future<void> clearPreferredFrameRate() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('clearPreferredFrameRate');
+    } on PlatformException {
+      // Best effort only.
+    }
+  }
+
+  Future<void> updateMediaSession({
+    required String title,
+    required int episode,
+    required Duration position,
+    required Duration duration,
+    required bool playing,
+  }) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('updateMediaSession', {
+        'title': title,
+        'subtitle': 'Episode $episode',
+        'positionMs': position.inMilliseconds,
+        'durationMs': duration.inMilliseconds,
+        'playing': playing,
+      });
+    } on PlatformException {
+      // Playback must continue even when a vendor MediaSession is unavailable.
+    }
+  }
+
+  Future<void> publishWatchNext({
+    required int mediaId,
+    required int episode,
+    required String title,
+    required Duration position,
+    required Duration duration,
+    String? posterUrl,
+  }) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<int>('publishWatchNext', {
+        'mediaId': mediaId,
+        'episode': episode,
+        'title': title,
+        'description': 'Continue episode $episode on TetoTV',
+        'posterUrl': posterUrl,
+        'positionMs': position.inMilliseconds,
+        'durationMs': duration.inMilliseconds,
+      });
+    } on PlatformException {
+      // Fire TV and some operator devices do not expose the Watch Next provider.
+    }
+  }
+
+  Future<bool> scheduleReminder({
+    required int mediaId,
+    required int episode,
+    required String title,
+    required DateTime airingAt,
+  }) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    final reminderAt = airingAt.subtract(const Duration(minutes: 10));
+    if (reminderAt.isBefore(DateTime.now())) return false;
+    try {
+      return await _channel.invokeMethod<bool>('scheduleReminder', {
+            'mediaId': mediaId,
+            'episode': episode,
+            'title': title,
+            'atMillis': reminderAt.millisecondsSinceEpoch,
+          }) ??
+          false;
+    } on PlatformException {
+      return false;
+    }
+  }
+}

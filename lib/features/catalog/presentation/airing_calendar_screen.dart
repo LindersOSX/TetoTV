@@ -1,0 +1,210 @@
+import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+class AiringCalendarScreen extends ConsumerWidget {
+  const AiringCalendarScreen({super.key});
+
+  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final schedule = ref.watch(airingWeekProvider);
+    final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(34, 24, 34, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                TvFocusable(
+                  onPressed: context.pop,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    child: Icon(Icons.arrow_back_rounded),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Text(
+                  'Airing calendar',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const Spacer(),
+                const Text(
+                  'Times use your TV timezone',
+                  style: TextStyle(color: AppColors.textMuted),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: schedule.when(
+                loading: () => const Center(
+                  child: CircularProgressIndicator(
+                    color: AppColors.accentBright,
+                  ),
+                ),
+                error: (error, _) =>
+                    Center(child: Text('Could not load schedule: $error')),
+                data: (entries) {
+                  final days = <DateTime, List<AiringScheduleEntry>>{};
+                  for (final entry in entries) {
+                    final local = entry.airingAt.toLocal();
+                    final day = DateTime(local.year, local.month, local.day);
+                    (days[day] ??= []).add(entry);
+                  }
+                  return ListView(
+                    children: [
+                      for (final group in days.entries) ...[
+                        Text(
+                          '${_weekdays[group.key.weekday - 1]}  ${group.key.month}/${group.key.day}',
+                          style: const TextStyle(
+                            color: AppColors.accentBright,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 108,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: group.value.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: 9),
+                            itemBuilder: (context, index) {
+                              final entry = group.value[index];
+                              final time = TimeOfDay.fromDateTime(
+                                entry.airingAt.toLocal(),
+                              ).format(context);
+                              return SizedBox(
+                                width: 270,
+                                child: ColoredBox(
+                                  color: const Color(0xFF141414),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TvFocusable(
+                                          onPressed: () => context.push(
+                                            '/anime/${entry.anime.id}',
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              SizedBox(
+                                                width: 68,
+                                                child: NetworkArtwork(
+                                                  url:
+                                                      entry.anime.coverImageUrl,
+                                                  cacheWidth: 140,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Column(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      entry.anime.displayTitle(
+                                                        titlePreference,
+                                                      ),
+                                                      maxLines: 2,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Text(
+                                                      '$time • Episode ${entry.episode}',
+                                                      style: const TextStyle(
+                                                        color:
+                                                            AppColors.textMuted,
+                                                        fontSize: 10,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 38,
+                                        child: TvFocusable(
+                                          onPressed: () async {
+                                            final saved = await AndroidTvBridge
+                                                .instance
+                                                .scheduleReminder(
+                                                  mediaId: entry.anime.id,
+                                                  episode: entry.episode,
+                                                  title: entry.anime
+                                                      .displayTitle(
+                                                        titlePreference,
+                                                      ),
+                                                  airingAt: entry.airingAt,
+                                                );
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  saved
+                                                      ? 'Reminder set for 10 minutes before airtime.'
+                                                      : 'This airing is too soon for a reminder.',
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          child: const Center(
+                                            child: Icon(
+                                              Icons
+                                                  .notifications_active_outlined,
+                                              size: 19,
+                                              color: AppColors.accentBright,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
