@@ -17,7 +17,14 @@ final trackingHomeProvider = FutureProvider<TrackingHomeData>((ref) async {
   };
 
   for (final provider in TrackingProvider.values) {
-    final token = await tokenService.accessToken(provider);
+    String? token;
+    try {
+      token = await tokenService.accessToken(provider);
+    } catch (_) {
+      // One expired or temporarily unreachable provider must not prevent the
+      // other linked tracker from populating the home screen.
+      continue;
+    }
     if (token == null || token.isEmpty) continue;
     final repository = switch (provider) {
       TrackingProvider.anilist => AniListTrackingRepository(accessToken: token),

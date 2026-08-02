@@ -41,11 +41,13 @@ int tvPlaybackCompatibilityRank(
   final unsupportedHdr = release.isHdr && device != null && !device.hasHdr
       ? 8
       : 0;
+  final softwareOnlyProfile = releaseRequiresSoftwareDecoder(release) ? 6 : 0;
   return codecRank +
       resolutionPenalty +
       (release.isHdr ? 2 : 0) +
       unsupportedCodec +
       unsupportedHdr +
+      softwareOnlyProfile +
       previousFailures * 5;
 }
 

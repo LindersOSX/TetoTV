@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -24,19 +25,22 @@ void main() {
     expect(preferredDubAudioTrack(tracks), isNull);
   });
 
-  test('uses copy-back MediaCodec rendering for Android TV compatibility', () {
-    expect(
-      tetoTvVideoControllerConfiguration.enableHardwareAcceleration,
-      isTrue,
-    );
-    expect(tetoTvVideoControllerConfiguration.vo, 'gpu');
-    expect(tetoTvVideoControllerConfiguration.hwdec, 'mediacodec-copy');
-    expect(
-      tetoTvVideoControllerConfiguration
-          .androidAttachSurfaceAfterVideoParameters,
-      isTrue,
-    );
-  });
+  test(
+    'uses media_kit safe decoder selection for Android TV compatibility',
+    () {
+      expect(
+        tetoTvVideoControllerConfiguration.enableHardwareAcceleration,
+        isTrue,
+      );
+      expect(tetoTvVideoControllerConfiguration.vo, 'gpu');
+      expect(tetoTvVideoControllerConfiguration.hwdec, 'auto-safe');
+      expect(
+        tetoTvVideoControllerConfiguration
+            .androidAttachSurfaceAfterVideoParameters,
+        isTrue,
+      );
+    },
+  );
 
   test('recognizes video failures that should trigger software decoding', () {
     expect(isLikelyVideoDecodeFailure('MediaCodec failed to initialize'), true);
@@ -45,15 +49,34 @@ void main() {
   });
 
   test('offers safe hardware, direct hardware, and software decoders', () {
-    expect(
-      hwdecForPlaybackMode(PlaybackDecoderMode.hardwareSafe),
-      'mediacodec-copy',
-    );
+    expect(hwdecForPlaybackMode(PlaybackDecoderMode.hardwareSafe), 'auto-safe');
     expect(
       hwdecForPlaybackMode(PlaybackDecoderMode.hardwareDirect),
       'mediacodec',
     );
     expect(hwdecForPlaybackMode(PlaybackDecoderMode.software), 'no');
+  });
+
+  test('forces software decoding for H.264 Hi10P anime releases', () {
+    const hi10 = ReleaseCandidate(
+      infoHash: '0123456789012345678901234567890123456789',
+      magnetUri: 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789',
+      releaseName: '[Group] Show - 01 [1080p Hi10P x264].mkv',
+      seeders: 1,
+      sourceId: 'test',
+      codec: 'H.264',
+    );
+    const ordinary = ReleaseCandidate(
+      infoHash: '0123456789012345678901234567890123456789',
+      magnetUri: 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789',
+      releaseName: '[Group] Show - 01 [1080p x264].mkv',
+      seeders: 1,
+      sourceId: 'test',
+      codec: 'H.264',
+    );
+
+    expect(releaseRequiresSoftwareDecoder(hi10), isTrue);
+    expect(releaseRequiresSoftwareDecoder(ordinary), isFalse);
   });
 
   test('D-pad arrows navigate controls instead of seeking playback', () {

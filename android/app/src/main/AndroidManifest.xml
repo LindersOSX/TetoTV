@@ -55,6 +55,7 @@
         android:allowBackup="false"
         android:name="${applicationName}"
         android:banner="@drawable/tv_banner"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="TetoTV"

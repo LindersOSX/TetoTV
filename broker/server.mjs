@@ -252,7 +252,7 @@ function startAuthorization(response, url) {
   const config = providerConfig(pairing.provider);
   if (
     !config.clientId ||
-    (pairing.provider === "anilist" && !config.clientSecret)
+    !config.clientSecret
   ) {
     return html(
       response,
@@ -348,7 +348,7 @@ async function exchangeCode(pairing, code) {
 
 async function refreshMyAnimeListToken(request, response) {
   const config = providerConfig("myanimelist");
-  if (!config.clientId) {
+  if (!config.clientId || !config.clientSecret) {
     return json(response, 503, { error: "provider_not_configured" });
   }
   const body = await readJson(request);
@@ -447,7 +447,13 @@ const server = createServer(async (request, response) => {
           anilist:
             Boolean(process.env.ANILIST_CLIENT_ID) &&
             Boolean(process.env.ANILIST_CLIENT_SECRET),
-          myanimelist: Boolean(process.env.MAL_CLIENT_ID),
+          myanimelist:
+            Boolean(process.env.MAL_CLIENT_ID) &&
+            Boolean(process.env.MAL_CLIENT_SECRET),
+        },
+        callbacks: {
+          anilist: callbackUrl("anilist"),
+          myanimelist: callbackUrl("myanimelist"),
         },
       });
     }
@@ -510,9 +516,16 @@ server.listen(port, async () => {
       const manualPage = await fetch(
         `http://127.0.0.1:${port}/pair`,
       ).then((response) => response.text());
+      const malPairing = await fetch(
+        `http://127.0.0.1:${port}/v1/myanimelist/pairings`,
+        { method: "POST" },
+      ).then((response) => response.json());
       if (
         health.status !== "ok" ||
+        health.callbacks.myanimelist !==
+          "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||
+        !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(malPairing.user_code) ||
         !String(pairing.verification_uri || "").startsWith("https://") ||
         pending.status !== "pending" ||
         !manualPage.includes('name="code"')

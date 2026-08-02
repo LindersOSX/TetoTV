@@ -30,12 +30,12 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
   enableHardwareAcceleration: true,
-  // Copy decoded MediaCodec frames through libmpv's GPU renderer. This avoids
-  // the zero-copy Android Surface path that produces green lines/corrupted
-  // frames on a number of Fire TV and budget Android TV chipsets, while still
-  // retaining hardware decoding for demanding HEVC/10-bit streams.
+  // Let media_kit/libmpv choose only a decoder path it considers safe for the
+  // current Android device. Forcing MediaCodec (including copy-back) causes
+  // green/pink frames on devices whose codec advertises profiles it cannot
+  // actually render correctly.
   vo: 'gpu',
-  hwdec: 'mediacodec-copy',
+  hwdec: 'auto-safe',
   androidAttachSurfaceAfterVideoParameters: true,
 );
 
@@ -44,13 +44,13 @@ enum PlaybackDecoderMode { hardwareSafe, hardwareDirect, software }
 typedef _PlaybackMenuResult = ({String type, Object value});
 
 String hwdecForPlaybackMode(PlaybackDecoderMode mode) => switch (mode) {
-  PlaybackDecoderMode.hardwareSafe => 'mediacodec-copy',
+  PlaybackDecoderMode.hardwareSafe => 'auto-safe',
   PlaybackDecoderMode.hardwareDirect => 'mediacodec',
   PlaybackDecoderMode.software => 'no',
 };
 
 String playbackDecoderLabel(PlaybackDecoderMode mode) => switch (mode) {
-  PlaybackDecoderMode.hardwareSafe => 'Hardware safe',
+  PlaybackDecoderMode.hardwareSafe => 'Automatic (recommended)',
   PlaybackDecoderMode.hardwareDirect => 'Hardware direct',
   PlaybackDecoderMode.software => 'Software compatibility',
 };
@@ -121,6 +121,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
   Timer? _controlsTimer;
   Timer? _videoWatchdog;
+  Timer? _performanceWatchdog;
   StreamSubscription<Duration>? _progressSubscription;
   StreamSubscription<Tracks>? _tracksSubscription;
   StreamSubscription<String>? _errorSubscription;
@@ -138,6 +139,9 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   bool _softwareFallbackUsed = false;
   bool _changingDecoder = false;
   int _watchdogAttempts = 0;
+  int _lastDroppedFrames = 0;
+  int _highDropSamples = 0;
+  bool _checkingPerformance = false;
   PlaybackDecoderMode _decoderMode = PlaybackDecoderMode.hardwareSafe;
   BoxFit _videoFit = BoxFit.contain;
   double _playbackRate = 1;
@@ -191,6 +195,11 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
           resume = checkpoint.position;
         }
       }
+    }
+    if (_decoderMode == PlaybackDecoderMode.hardwareSafe &&
+        releaseRequiresSoftwareDecoder(_currentRelease)) {
+      _decoderMode = PlaybackDecoderMode.software;
+      _softwareFallbackUsed = true;
     }
     if (!mounted) return;
     await _openMedia(resume: resume);
@@ -263,12 +272,6 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     });
     _mediaActionSubscription = AndroidTvBridge.instance.mediaActions.listen(
       _handleMediaAction,
-    );
-    unawaited(
-      _controller.waitUntilFirstFrameRendered.then((_) {
-        _videoFrameSeen = true;
-        _videoWatchdog?.cancel();
-      }),
     );
     unawaited(_bootstrapPlayback());
     _fetchSkips();
@@ -427,6 +430,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       await _applySubtitle();
       if (resume != null) await _player.seek(resume);
       _startVideoWatchdog();
+      _startPerformanceWatchdog();
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
     }
@@ -437,14 +441,25 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     if (platform is! NativePlayer) return;
     final properties = <String, String>{
       'hwdec': hwdecForPlaybackMode(_decoderMode),
-      'hwdec-software-fallback': 'yes',
+      'hwdec-software-fallback': '1',
+      'vd-lavc-check-hw-profile': 'yes',
+      'framedrop': 'vo',
       'demuxer-lavf-probesize': '67108864',
       'demuxer-lavf-analyzeduration': '10',
       'network-timeout': '20',
       'cache': 'yes',
       'cache-pause-initial': 'yes',
-      'cache-pause-wait': '1',
+      'cache-pause-wait': '2',
+      'cache-secs': '45',
+      'demuxer-readahead-secs': '20',
+      'demuxer-max-bytes': '${48 * 1024 * 1024}',
+      'demuxer-max-back-bytes': '${8 * 1024 * 1024}',
       'video-sync': 'audio',
+      'interpolation': 'no',
+      'deband': 'no',
+      'scale': 'bilinear',
+      'cscale': 'bilinear',
+      'dscale': 'bilinear',
       'sub-pos': '$_subtitlePosition',
       'sub-delay': '${_subtitleDelayMs / 1000}',
       'audio-delay': '${_audioDelayMs / 1000}',
@@ -641,7 +656,10 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
           _preferredAudioSelected = false;
           _preferredSubtitleSelected = false;
           _softwareFallbackUsed = false;
-          _decoderMode = PlaybackDecoderMode.hardwareSafe;
+          _decoderMode = releaseRequiresSoftwareDecoder(candidate)
+              ? PlaybackDecoderMode.software
+              : PlaybackDecoderMode.hardwareSafe;
+          _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
           _videoFrameSeen = false;
           await _openMedia(resume: position);
           if (mounted) setState(() => _playbackError = null);
@@ -772,9 +790,58 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   Future<void> _restartWithSoftwareDecoder() =>
       _switchDecoder(PlaybackDecoderMode.software, automatic: true);
 
+  void _startPerformanceWatchdog() {
+    _performanceWatchdog?.cancel();
+    _lastDroppedFrames = 0;
+    _highDropSamples = 0;
+    _performanceWatchdog = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => unawaited(_checkPlaybackPerformance()),
+    );
+  }
+
+  Future<void> _checkPlaybackPerformance() async {
+    if (_checkingPerformance ||
+        _changingDecoder ||
+        !_player.state.playing ||
+        _player.state.buffering) {
+      return;
+    }
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    _checkingPerformance = true;
+    try {
+      final value = await platform.getProperty('frame-drop-count');
+      final dropped = int.tryParse(value) ?? _lastDroppedFrames;
+      final delta = dropped >= _lastDroppedFrames
+          ? dropped - _lastDroppedFrames
+          : dropped;
+      _lastDroppedFrames = dropped;
+      _highDropSamples = delta >= 10 ? _highDropSamples + 1 : 0;
+      if (_highDropSamples < 2) return;
+      _highDropSamples = 0;
+      if (_decoderMode != PlaybackDecoderMode.software) {
+        await _switchDecoder(
+          PlaybackDecoderMode.software,
+          automatic: true,
+          reason: 'Playback was dropping frames; compatibility mode enabled',
+        );
+      } else if (widget.launch.alternatives.isNotEmpty) {
+        await _tryNextStream(
+          'This stream is dropping too many frames on this device.',
+        );
+      }
+    } catch (_) {
+      // Frame statistics are optional across libmpv builds.
+    } finally {
+      _checkingPerformance = false;
+    }
+  }
+
   Future<void> _switchDecoder(
     PlaybackDecoderMode mode, {
     bool automatic = false,
+    String? reason,
   }) async {
     if (_changingDecoder || mode == _decoderMode) return;
     _changingDecoder = true;
@@ -787,7 +854,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       final platform = _player.platform;
       if (platform is NativePlayer) {
         await platform.setProperty('hwdec', hwdecForPlaybackMode(mode));
-        await platform.setProperty('hwdec-software-fallback', 'yes');
+        await platform.setProperty('hwdec-software-fallback', '1');
       }
       _preferredAudioSelected = false;
       _preferredSubtitleSelected = false;
@@ -805,11 +872,14 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       if (position > Duration.zero) await _player.seek(position);
       await _applySubtitle();
       await _applyPlayerTuning();
+      _startVideoWatchdog();
+      _startPerformanceWatchdog();
       if (mounted) {
         setState(() => _playbackError = null);
         _showTrackMessage(
           automatic
-              ? 'Video failed to start; software compatibility enabled'
+              ? reason ??
+                    'Video failed to start; software compatibility enabled'
               : '${playbackDecoderLabel(mode)} enabled',
         );
       }
@@ -825,6 +895,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     final wasPlaying = _player.state.playing;
     setState(() => _playbackError = null);
     try {
+      _videoFrameSeen = false;
       await _configureNativePlayback();
       await _player.open(
         Media(
@@ -840,6 +911,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       await _applySubtitle();
       await _applyPlayerTuning();
       _startVideoWatchdog();
+      _startPerformanceWatchdog();
       _showTrackMessage('Stream restarted');
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
@@ -1111,6 +1183,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     unawaited(AndroidTvBridge.instance.clearPreferredFrameRate());
     _controlsTimer?.cancel();
     _videoWatchdog?.cancel();
+    _performanceWatchdog?.cancel();
     _seekPreviewTimer?.cancel();
     _progressSubscription?.cancel();
     _tracksSubscription?.cancel();
@@ -1190,6 +1263,15 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
                     onAudio: _cycleAudio,
                     onSubtitles: _cycleSubtitles,
                     onFit: _cycleFit,
+                    onCompatibility: () {
+                      if (_softwareFallbackUsed) {
+                        _showTrackMessage(
+                          'Software compatibility is already enabled',
+                        );
+                      } else {
+                        unawaited(_restartWithSoftwareDecoder());
+                      }
+                    },
                     onOptions: _openPlaybackMenu,
                   ),
                 ),
@@ -1281,6 +1363,7 @@ class _PlayerChrome extends StatelessWidget {
     required this.onAudio,
     required this.onSubtitles,
     required this.onFit,
+    required this.onCompatibility,
     required this.onOptions,
   });
 
@@ -1297,6 +1380,7 @@ class _PlayerChrome extends StatelessWidget {
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
   final VoidCallback onFit;
+  final VoidCallback onCompatibility;
   final VoidCallback onOptions;
 
   @override
@@ -1397,10 +1481,16 @@ class _PlayerChrome extends StatelessWidget {
                   label: 'Picture',
                   onPressed: onFit,
                 ),
+                const SizedBox(width: 8),
+                _PlayerControl(
+                  icon: Icons.build_circle_outlined,
+                  label: 'Fix video',
+                  onPressed: onCompatibility,
+                ),
                 const Spacer(),
                 _PlayerControl(
                   icon: Icons.tune_rounded,
-                  label: playbackDecoderLabel(decoderMode),
+                  label: 'Options',
                   onPressed: onOptions,
                 ),
               ],

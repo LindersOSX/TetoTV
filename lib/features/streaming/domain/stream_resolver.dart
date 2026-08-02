@@ -54,6 +54,20 @@ class ReleaseCandidate {
   final bool isHdr;
 }
 
+bool releaseRequiresSoftwareDecoder(ReleaseCandidate release) {
+  final codec = release.codec?.toLowerCase() ?? '';
+  final name = release.releaseName.toLowerCase();
+  final h264 =
+      codec.contains('264') ||
+      codec.contains('avc') ||
+      name.contains('x264') ||
+      name.contains('h.264');
+  final high10 = RegExp(
+    r'(?:hi10p|high[ ._-]?10|10[ ._-]?bit|yuv420p10)',
+  ).hasMatch(name);
+  return h264 && high10;
+}
+
 sealed class StreamResolution {
   const StreamResolution();
 }

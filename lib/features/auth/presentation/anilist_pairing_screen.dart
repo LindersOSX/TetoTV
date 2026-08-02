@@ -34,8 +34,9 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
   Future<void> _loadConfigurationAndStart() async {
     final storage = ref.read(secureStorageProvider);
     final saved = await storage.read(key: authBrokerUrlStorageKey);
+    final effective = await effectiveAuthBrokerBaseUrl(storage);
     if (!mounted) return;
-    _brokerController.text = saved ?? '';
+    _brokerController.text = saved ?? effective ?? '';
     await ref.read(pairingControllerProvider(widget.provider).notifier).start();
   }
 
@@ -231,6 +232,14 @@ class _PairingPanel extends StatelessWidget {
                   'This screen updates automatically after approval.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
+                if (provider == TrackingProvider.myAnimeList) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Registered callback: https://tetotv-auth.onrender.com/oauth/'
+                    'myanimelist/callback',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  ),
+                ],
               ],
             ),
           ),

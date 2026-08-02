@@ -29,7 +29,7 @@ android {
         // Flutter currently requires API 24. This supports Fire OS 6+
         // (API 25+) but cannot be installed on Fire OS 5 (API 22).
         minSdk = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -65,7 +65,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.8.0")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.tvprovider:tvprovider:1.1.0")
 }

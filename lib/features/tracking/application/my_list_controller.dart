@@ -11,7 +11,13 @@ final trackingListProvider = FutureProvider.autoDispose
       final tokenService = ref.watch(trackingTokenServiceProvider);
       final items = <HomeTrackedAnime>[];
       for (final provider in TrackingProvider.values) {
-        final token = await tokenService.accessToken(provider);
+        String? token;
+        try {
+          token = await tokenService.accessToken(provider);
+        } catch (_) {
+          // Keep the other tracker usable if this provider cannot refresh.
+          continue;
+        }
         if (token == null || token.isEmpty) continue;
         final repository = trackingRepository(provider, token);
         try {

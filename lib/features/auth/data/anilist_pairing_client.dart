@@ -7,8 +7,11 @@ class TrackingPairingClient {
     : _dio = Dio(
         BaseOptions(
           baseUrl: '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/',
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 15),
+          // Render's free tier may cold-start after the TV opens pairing.
+          // Keep this finite, but long enough that a valid QR flow does not
+          // fail before the broker finishes waking up.
+          connectTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 45),
           headers: const {'Accept': 'application/json'},
         ),
       );
@@ -71,12 +74,23 @@ class TrackingPairingClient {
   }
 
   Future<PairingPollResult> poll(PairingSession session) async {
-    final response = await _dio.get<Map<String, dynamic>>(
-      'v1/${_provider.slug}/pairings/${session.pairingId}',
-      options: Options(
-        headers: {'Authorization': 'Pairing ${session.deviceCode}'},
-      ),
-    );
+    late final Response<Map<String, dynamic>> response;
+    try {
+      response = await _dio.get<Map<String, dynamic>>(
+        'v1/${_provider.slug}/pairings/${session.pairingId}',
+        options: Options(
+          headers: {'Authorization': 'Pairing ${session.deviceCode}'},
+        ),
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) {
+        return const PairingPollResult(status: PairingStatus.expired);
+      }
+      if (error.response?.statusCode == 429) {
+        return const PairingPollResult(status: PairingStatus.pending);
+      }
+      rethrow;
+    }
     final data = response.data!;
     final status = switch (data['status']) {
       'authorized' => PairingStatus.authorized,

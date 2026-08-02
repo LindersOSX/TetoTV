@@ -36,6 +36,26 @@ void main() {
     expect(isTvSafeRelease(h264), isTrue);
   });
 
+  test('penalizes H.264 Hi10P streams that require software decoding', () {
+    final ordinary = release(codec: 'H.264');
+    const hi10 = ReleaseCandidate(
+      infoHash: '0000000000000000000000000000000000000001',
+      magnetUri: 'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
+      releaseName: 'Anime 01 1080p Hi10P x264',
+      seeders: 10,
+      sourceId: 'test',
+      codec: 'H.264',
+      quality: '1080p',
+    );
+
+    expect(releaseRequiresSoftwareDecoder(hi10), isTrue);
+    expect(
+      tvPlaybackCompatibilityRank(hi10),
+      greaterThan(tvPlaybackCompatibilityRank(ordinary)),
+    );
+    expect(isTvSafeRelease(hi10), isFalse);
+  });
+
   test('penalizes HDR and 4K for lower-power TV devices', () {
     final sdr1080 = release(codec: 'H.264');
     final hdr4k = release(codec: 'H.264', quality: '4K', hdr: true);

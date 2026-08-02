@@ -64,9 +64,11 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
   TrackingPairingClient? _activeClient;
   Timer? _pollTimer;
   bool _polling = false;
+  int _consecutivePollFailures = 0;
 
   Future<void> start() async {
     _pollTimer?.cancel();
+    _consecutivePollFailures = 0;
     state = const AsyncLoading();
     try {
       final configuredUrl = await effectiveAuthBrokerBaseUrl(_storage);
@@ -98,6 +100,7 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
     _polling = true;
     try {
       final result = await client.poll(session);
+      _consecutivePollFailures = 0;
       if (result.status == PairingStatus.authorized) {
         final token = result.accessToken;
         if (token == null || token.isEmpty) {
@@ -125,8 +128,12 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
       }
       state = AsyncData(session.copyWith(status: result.status));
     } catch (error, stackTrace) {
-      state = AsyncError(error, stackTrace);
-      _pollTimer?.cancel();
+      _consecutivePollFailures++;
+      if (_consecutivePollFailures >= 3 ||
+          DateTime.now().isAfter(session.expiresAt)) {
+        state = AsyncError(error, stackTrace);
+        _pollTimer?.cancel();
+      }
     } finally {
       _polling = false;
     }

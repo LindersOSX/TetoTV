@@ -1,5 +1,6 @@
 package dev.animetv.anime_tv
 
+import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -153,11 +154,7 @@ class MainActivity : FlutterActivity() {
                 "refreshRate" to it.refreshRate.toDouble(),
             )
         } ?: emptyList()
-        val hdrTypes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            display?.hdrCapabilities?.supportedHdrTypes?.toList() ?: emptyList()
-        } else {
-            emptyList()
-        }
+        val hdrTypes = display?.hdrCapabilities?.supportedHdrTypes?.toList() ?: emptyList()
 
         val codecs = mutableListOf<Map<String, Any?>>()
         MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
@@ -177,21 +174,17 @@ class MainActivity : FlutterActivity() {
             }
 
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val audioOutputs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { device ->
-                mapOf(
-                    "type" to device.type,
-                    "name" to (device.productName?.toString() ?: "Audio output"),
-                    "channels" to device.channelCounts.toList(),
-                    "sampleRates" to device.sampleRates.toList(),
-                    "encodings" to device.encodings.toList(),
-                    "hdmi" to (device.type == AudioDeviceInfo.TYPE_HDMI ||
-                        device.type == AudioDeviceInfo.TYPE_HDMI_ARC ||
-                        (Build.VERSION.SDK_INT >= 31 && device.type == AudioDeviceInfo.TYPE_HDMI_EARC)),
-                )
-            }
-        } else {
-            emptyList()
+        val audioOutputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { device ->
+            mapOf(
+                "type" to device.type,
+                "name" to (device.productName?.toString() ?: "Audio output"),
+                "channels" to device.channelCounts.toList(),
+                "sampleRates" to device.sampleRates.toList(),
+                "encodings" to device.encodings.toList(),
+                "hdmi" to (device.type == AudioDeviceInfo.TYPE_HDMI ||
+                    device.type == AudioDeviceInfo.TYPE_HDMI_ARC ||
+                    (Build.VERSION.SDK_INT >= 31 && device.type == AudioDeviceInfo.TYPE_HDMI_EARC)),
+            )
         }
 
         return mapOf(
@@ -237,6 +230,7 @@ class MainActivity : FlutterActivity() {
         return target.modeId
     }
 
+    @SuppressLint("RestrictedApi")
     private fun publishWatchNext(data: Map<String, Any?>): Long? {
         val mediaId = (data["mediaId"] as? Number)?.toLong() ?: return null
         val episode = (data["episode"] as? Number)?.toInt() ?: 1
