@@ -17,12 +17,7 @@ class PerformanceMonitor {
     SchedulerBinding.instance.addTimingsCallback(_recordFrames);
     SchedulerBinding.instance.addPostFrameCallback((_) {
       _startup.stop();
-      unawaited(
-        TetoTvDatabase.instance.recordPerformance(
-          'startup_first_frame',
-          _startup.elapsed,
-        ),
-      );
+      _record('startup_first_frame', _startup.elapsed);
     });
   }
 
@@ -30,10 +25,16 @@ class PerformanceMonitor {
     for (final timing in timings) {
       final total = timing.totalSpan;
       if (total > const Duration(milliseconds: 20)) {
-        unawaited(
-          TetoTvDatabase.instance.recordPerformance('slow_frame', total),
-        );
+        _record('slow_frame', total);
       }
     }
+  }
+
+  void _record(String name, Duration duration) {
+    unawaited(
+      TetoTvDatabase.instance
+          .recordPerformance(name, duration)
+          .catchError((_) {}),
+    );
   }
 }

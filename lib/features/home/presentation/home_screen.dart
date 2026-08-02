@@ -132,6 +132,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
             const SliverToBoxAdapter(child: SizedBox(height: 18)),
+            if (enabledShelves.contains(HomeShelf.tracking))
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: 'Continue watching',
+                  items: watchingItems,
+                ),
+              ),
             if (enabledShelves.contains(HomeShelf.history) &&
                 historyItems != null &&
                 historyItems.isNotEmpty)
@@ -144,13 +151,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 items: seasonalItems,
               ),
             ),
-            if (enabledShelves.contains(HomeShelf.tracking))
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Continue watching',
-                  items: watchingItems,
-                ),
-              ),
             if (enabledShelves.contains(HomeShelf.trending) &&
                 trendingItems != null &&
                 trendingItems.isNotEmpty)

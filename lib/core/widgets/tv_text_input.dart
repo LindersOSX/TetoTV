@@ -37,7 +37,7 @@ class TvTextInput extends StatelessWidget {
     final value = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: .32),
+      barrierColor: Colors.black.withValues(alpha: .20),
       builder: (_) => TvKeyboardDialog(
         title: keyboardTitle ?? labelText,
         initialValue: controller.text,
@@ -61,7 +61,7 @@ class TvTextInput extends StatelessWidget {
   Widget build(BuildContext context) {
     final value = controller.text;
     final visibleValue = obscureText && value.isNotEmpty
-        ? List.filled(value.length.clamp(1, 48), '•').join()
+        ? List.filled(value.length.clamp(1, 48), '\u2022').join()
         : value;
     return TvFocusable(
       autofocus: autofocus,
@@ -213,22 +213,30 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
   @override
   Widget build(BuildContext context) {
     final displayValue = !_reveal && _value.isNotEmpty
-        ? List.filled(_value.length, '•').join()
+        ? List.filled(_value.length, '\u2022').join()
         : _value;
     return Dialog(
       alignment: Alignment.bottomCenter,
-      insetPadding: const EdgeInsets.fromLTRB(24, 90, 24, 12),
+      insetPadding: const EdgeInsets.fromLTRB(24, 150, 24, 14),
       backgroundColor: Colors.transparent,
       child: Focus(
         canRequestFocus: false,
         onKeyEvent: _handlePhysicalKeyboard,
         child: Container(
-          width: 710,
-          padding: const EdgeInsets.all(12),
+          key: const ValueKey('tv-keyboard-panel'),
+          width: 650,
+          padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
           decoration: BoxDecoration(
-            color: const Color(0xFF080808),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .46)),
+            color: const Color(0xF7080808),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.accent.withValues(alpha: .32)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x88000000),
+                blurRadius: 22,
+                offset: Offset(0, -4),
+              ),
+            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -239,24 +247,33 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   Expanded(
                     child: Text(
                       widget.title,
-                      style: Theme.of(context).textTheme.titleMedium,
+                      style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                   const Text(
-                    'D-pad • controller • keyboard',
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+                    'REMOTE  /  CONTROLLER  /  KEYBOARD',
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 7,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .6,
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: 4),
               Container(
                 width: double.infinity,
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 9),
                 alignment: Alignment.centerLeft,
                 decoration: BoxDecoration(
                   color: AppColors.ink,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(
                     color: AppColors.accentBright.withValues(alpha: .62),
                   ),
@@ -269,26 +286,26 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     color: displayValue.isEmpty
                         ? AppColors.textMuted
                         : AppColors.textPrimary,
-                    fontSize: 15,
+                    fontSize: 12,
                     letterSpacing: widget.obscureText ? 1.4 : 0,
                   ),
                 ),
               ),
               if (_clipboardValue != null ||
                   widget.autofillSuggestions.isNotEmpty) ...[
-                const SizedBox(height: 7),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     const Text(
                       'AUTOFILL',
                       style: TextStyle(
                         color: AppColors.accentBright,
-                        fontSize: 10,
+                        fontSize: 8,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.2,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 7),
                     if (_clipboardValue case final clipboard?)
                       _AutofillChip(
                         label: widget.obscureText
@@ -300,7 +317,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     for (final suggestion in widget.autofillSuggestions.take(
                       3,
                     )) ...[
-                      const SizedBox(width: 7),
+                      const SizedBox(width: 5),
                       _AutofillChip(
                         label: suggestion,
                         icon: Icons.auto_awesome_rounded,
@@ -310,14 +327,14 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   ],
                 ),
               ],
-              const SizedBox(height: 10),
+              const SizedBox(height: 5),
               FocusTraversalGroup(
                 policy: ReadingOrderTraversalPolicy(),
                 child: Column(
                   children: [
                     for (var rowIndex = 0; rowIndex < _rows.length; rowIndex++)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
+                        padding: const EdgeInsets.only(bottom: 2),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -327,7 +344,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                               keyIndex++
                             ) ...[
                               SizedBox(
-                                width: 42,
+                                width: 36,
                                 child: _KeyboardKey(
                                   label: _shift
                                       ? _rows[rowIndex][keyIndex].toUpperCase()
@@ -338,7 +355,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                                 ),
                               ),
                               if (keyIndex != _rows[rowIndex].length - 1)
-                                const SizedBox(width: 4),
+                                const SizedBox(width: 3),
                             ],
                           ],
                         ),
@@ -352,27 +369,27 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                           selected: _shift,
                           onPressed: () => setState(() => _shift = !_shift),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         _KeyboardAction(
                           label: 'SPACE',
                           icon: Icons.space_bar_rounded,
                           flex: 2,
                           onPressed: () => _append(' '),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         _KeyboardAction(
-                          label: 'DELETE',
+                          label: 'DEL',
                           icon: Icons.backspace_outlined,
                           onPressed: _backspace,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         _KeyboardAction(
                           label: 'PASTE',
                           icon: Icons.content_paste_rounded,
                           onPressed: _paste,
                         ),
                         if (widget.obscureText) ...[
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                           _KeyboardAction(
                             label: _reveal ? 'HIDE' : 'SHOW',
                             icon: _reveal
@@ -381,24 +398,19 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                             onPressed: () => setState(() => _reveal = !_reveal),
                           ),
                         ],
-                      ],
-                    ),
-                    const SizedBox(height: 5),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
+                        const SizedBox(width: 4),
                         _KeyboardAction(
                           label: 'CLEAR',
                           icon: Icons.clear_all_rounded,
                           onPressed: () => setState(() => _value = ''),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
                         _KeyboardAction(
                           label: 'CANCEL',
                           icon: Icons.close_rounded,
                           onPressed: () => Navigator.of(context).pop(),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
                         _KeyboardAction(
                           label: 'DONE',
                           icon: Icons.check_rounded,
@@ -437,12 +449,12 @@ class _KeyboardKey extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
       onPressed: onPressed,
       child: Container(
-        height: 31,
+        height: 23,
         alignment: Alignment.center,
-        color: const Color(0xFF191919),
+        color: const Color(0xFF171717),
         child: Text(
           label,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
         ),
       ),
     );
@@ -475,9 +487,9 @@ class _KeyboardAction extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         onPressed: onPressed,
         child: Container(
-          constraints: const BoxConstraints(minWidth: 72),
-          height: 32,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          constraints: const BoxConstraints(minWidth: 46),
+          height: 24,
+          padding: const EdgeInsets.symmetric(horizontal: 5),
           color: primary
               ? AppColors.accent
               : selected
@@ -487,14 +499,14 @@ class _KeyboardAction extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 14),
-              const SizedBox(width: 4),
+              Icon(icon, size: 11),
+              const SizedBox(width: 3),
               Flexible(
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 9,
+                    fontSize: 7,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -526,14 +538,14 @@ class _AutofillChip extends StatelessWidget {
         focusScale: 1.02,
         borderRadius: BorderRadius.circular(7),
         child: Container(
-          height: 28,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          height: 22,
+          padding: const EdgeInsets.symmetric(horizontal: 7),
           color: const Color(0xFF181818),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 15, color: AppColors.accentBright),
-              const SizedBox(width: 6),
+              Icon(icon, size: 12, color: AppColors.accentBright),
+              const SizedBox(width: 5),
               Flexible(
                 child: Text(
                   label,
@@ -541,7 +553,7 @@ class _AutofillChip extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 11,
+                    fontSize: 8,
                     fontWeight: FontWeight.w800,
                   ),
                 ),

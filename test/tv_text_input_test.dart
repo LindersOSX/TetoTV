@@ -29,5 +29,10 @@ void main() {
     expect(find.byType(EditableText), findsNothing);
     expect(find.text('PASTE'), findsOneWidget);
     expect(find.text('DONE'), findsOneWidget);
+    final keyboardSize = tester.getSize(
+      find.byKey(const ValueKey('tv-keyboard-panel')),
+    );
+    expect(keyboardSize.width, 650);
+    expect(keyboardSize.height, lessThan(290));
   });
 }

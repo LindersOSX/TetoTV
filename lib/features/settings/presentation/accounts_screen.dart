@@ -38,6 +38,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _anilistSaveFocus = FocusNode(debugLabel: 'accounts.anilist.save');
   final _malTokenFocus = FocusNode(debugLabel: 'accounts.myanimelist.token');
   final _malSaveFocus = FocusNode(debugLabel: 'accounts.myanimelist.save');
+  final _shelfFocusNodes = {
+    for (final shelf in HomeShelf.values)
+      shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
+  };
 
   @override
   void dispose() {
@@ -57,6 +61,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _anilistSaveFocus.dispose();
     _malTokenFocus.dispose();
     _malSaveFocus.dispose();
+    for (final node in _shelfFocusNodes.values) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -67,20 +74,42 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
     FocusNode? target;
+    final shelfNodes = [
+      for (final shelf in HomeShelf.values) _shelfFocusNodes[shelf]!,
+    ];
+    final shelfIndex = current == null ? -1 : shelfNodes.indexOf(current);
 
-    if (current == _backFocus) {
-      if (key == LogicalKeyboardKey.arrowRight) {
+    if (shelfIndex >= 0) {
+      if (key == LogicalKeyboardKey.arrowLeft && shelfIndex > 0) {
+        target = shelfNodes[shelfIndex - 1];
+      }
+      if (key == LogicalKeyboardKey.arrowRight &&
+          shelfIndex < shelfNodes.length - 1) {
+        target = shelfNodes[shelfIndex + 1];
+      }
+      if (key == LogicalKeyboardKey.arrowUp) {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _debridConnectFocus;
       }
+    }
+
+    if (shelfIndex >= 0) {
+      // Shelf navigation was handled above.
+    } else if (current == _backFocus) {
+      if (key == LogicalKeyboardKey.arrowRight) {
+        target = _titleLanguageFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = shelfNodes.first;
+      }
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _debridConnectFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = shelfNodes.first;
     } else if (current == _debridConnectFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _titleLanguageFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = shelfNodes.first;
       if (key == LogicalKeyboardKey.arrowDown) target = _torBoxActionFocus;
     } else if (current == _tokenFocus) {
       if (key == LogicalKeyboardKey.arrowRight) target = _tokenSaveFocus;
@@ -268,6 +297,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                   _ShelfToggle(
                                     shelf: shelf,
                                     enabled: homeShelves.contains(shelf),
+                                    focusNode: _shelfFocusNodes[shelf]!,
                                     onPressed: () => ref
                                         .read(
                                           homeShelfPreferencesProvider.notifier,
@@ -479,11 +509,13 @@ class _ShelfToggle extends StatelessWidget {
   const _ShelfToggle({
     required this.shelf,
     required this.enabled,
+    required this.focusNode,
     required this.onPressed,
   });
 
   final HomeShelf shelf;
   final bool enabled;
+  final FocusNode focusNode;
   final VoidCallback onPressed;
 
   @override
@@ -497,6 +529,7 @@ class _ShelfToggle extends StatelessWidget {
       HomeShelf.completed => 'Completed',
     };
     return TvFocusable(
+      focusNode: focusNode,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(7),
       child: Container(

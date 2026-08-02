@@ -3,6 +3,13 @@ import 'dart:convert';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
+Future<void> configureTetoTvDatabase(Database db) async {
+  // journal_mode returns a result row on Android, so sqflite requires
+  // rawQuery rather than execute.
+  await db.rawQuery('PRAGMA journal_mode=WAL');
+  await db.execute('PRAGMA foreign_keys=ON');
+}
+
 class PlaybackCheckpoint {
   const PlaybackCheckpoint({
     required this.anilistMediaId,
@@ -116,18 +123,31 @@ class TetoTvDatabase {
 
   static final instance = TetoTvDatabase._();
   Database? _database;
+  Future<Database>? _opening;
 
-  Future<Database> get database async => _database ??= await _open();
+  Future<Database> get database async {
+    final openDatabase = _database;
+    if (openDatabase != null) return openDatabase;
+
+    // Several providers can request the database during the same frame. Keep
+    // one shared open operation so Android never races multiple connections to
+    // the same file.
+    final opening = _opening ??= _open();
+    try {
+      final database = await opening;
+      _database = database;
+      return database;
+    } finally {
+      if (identical(_opening, opening)) _opening = null;
+    }
+  }
 
   Future<Database> _open() async {
     final root = await getDatabasesPath();
     return openDatabase(
       path.join(root, 'tetotv.db'),
       version: 1,
-      onConfigure: (db) async {
-        await db.execute('PRAGMA journal_mode=WAL');
-        await db.execute('PRAGMA foreign_keys=ON');
-      },
+      onConfigure: configureTetoTvDatabase,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE playback_history (
@@ -376,5 +396,6 @@ class TetoTvDatabase {
   Future<void> close() async {
     await _database?.close();
     _database = null;
+    _opening = null;
   }
 }

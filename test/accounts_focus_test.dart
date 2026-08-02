@@ -6,7 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('D-pad reaches TorBox QR directly from Real-Debrid QR', (
+  testWidgets('D-pad reaches Home shelves and then the debrid controls', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -21,6 +21,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.back');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.shelf.history',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.shelf.tracking',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
@@ -50,6 +62,7 @@ void main() {
     await tester.pumpAndSettle();
 
     for (final key in [
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,

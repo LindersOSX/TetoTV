@@ -14,7 +14,7 @@ void main() {
   });
 
   testWidgets('renders the TV home shell', (tester) async {
-    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.physicalSize = const Size(3840, 2160);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -38,7 +38,12 @@ void main() {
     await tester.pump();
 
     expect(find.text('TetoTV'), findsOneWidget);
+    expect(find.text('Continue watching'), findsOneWidget);
     expect(find.text('Recently released'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Continue watching')).dy,
+      lessThan(tester.getTopLeft(find.text('Recently released')).dy),
+    );
     expect(find.text('Watch now'), findsOneWidget);
     expect(find.text('My List'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);

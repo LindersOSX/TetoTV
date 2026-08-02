@@ -98,7 +98,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       tokensAndProfile[1] as String?,
     ];
     final profile = tokensAndProfile[2] as TvDeviceProfile;
-    final failures = await TetoTvDatabase.instance.failureCounts(profile.key);
+    Map<String, int> failures = const {};
+    try {
+      failures = await TetoTvDatabase.instance.failureCounts(profile.key);
+    } catch (_) {
+      // Compatibility history improves sorting but is never required to find
+      // or play a stream. A local database problem must not block Torrentio.
+    }
     final connected = <DebridService>{
       if (tokens[0]?.isNotEmpty == true) DebridService.realDebrid,
       if (tokens[1]?.isNotEmpty == true) DebridService.torBox,
