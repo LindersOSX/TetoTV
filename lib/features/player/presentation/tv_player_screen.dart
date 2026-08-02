@@ -8,6 +8,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
+import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -18,7 +19,7 @@ import 'package:anime_tv/features/streaming/data/torbox_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
 import 'package:anime_tv/features/streaming/data/torrentio_release_source.dart';
-import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:dio/dio.dart';
@@ -279,6 +280,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final VideoController _controller;
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
+  final _doubleDownDetector = PlayerDoubleDownDetector();
   Timer? _controlsTimer;
   Timer? _videoWatchdog;
   Timer? _performanceWatchdog;
@@ -456,17 +458,44 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_preferredAudioSelected) return;
     final language = _seriesPreferences.audioLanguage.toLowerCase();
     final device = await AndroidTvBridge.instance.getDeviceProfile();
+    final languageMatches =
+        tracks.audio
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .where(
+              (track) =>
+                  playerTrackLanguageScore(
+                    language: track.language,
+                    title: track.title,
+                    preferredLanguage: language,
+                    isDefault: track.isDefault == true,
+                  ) >
+                  0,
+            )
+            .toList(growable: false)
+          ..sort(
+            (a, b) =>
+                playerTrackLanguageScore(
+                  language: b.language,
+                  title: b.title,
+                  preferredLanguage: language,
+                  isDefault: b.isDefault == true,
+                ).compareTo(
+                  playerTrackLanguageScore(
+                    language: a.language,
+                    title: a.title,
+                    preferredLanguage: language,
+                    isDefault: a.isDefault == true,
+                  ),
+                ),
+          );
     final preferred =
-        tracks.audio.where((track) {
-          final haystack = '${track.language} ${track.title}'.toLowerCase();
-          return haystack.contains(language) ||
-              (language == 'eng' &&
-                  (haystack.contains('english') || haystack.contains('dub')));
-        }).firstOrNull ??
-        preferredDubAudioTrack(
-          tracks.audio,
-          preferSurround: device.hasHdmiAudio,
-        );
+        languageMatches.firstOrNull ??
+        (canonicalPlayerLanguage(language) == 'eng'
+            ? preferredDubAudioTrack(
+                tracks.audio,
+                preferSurround: device.hasHdmiAudio,
+              )
+            : null);
     if (preferred == null) return;
     _preferredAudioSelected = true;
     await _player.setAudioTrack(preferred);
@@ -482,12 +511,37 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return;
     }
     final language = _seriesPreferences.subtitleLanguage.toLowerCase();
-    final preferred = tracks.subtitle.where((track) {
-      if (track.id == 'auto' || track.id == 'no') return false;
-      final haystack = '${track.language} ${track.title}'.toLowerCase();
-      return haystack.contains(language) ||
-          (language == 'eng' && haystack.contains('english'));
-    }).firstOrNull;
+    final matches =
+        tracks.subtitle
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .where(
+              (track) =>
+                  playerTrackLanguageScore(
+                    language: track.language,
+                    title: track.title,
+                    preferredLanguage: language,
+                    subtitle: true,
+                  ) >
+                  0,
+            )
+            .toList(growable: false)
+          ..sort(
+            (a, b) =>
+                playerTrackLanguageScore(
+                  language: b.language,
+                  title: b.title,
+                  preferredLanguage: language,
+                  subtitle: true,
+                ).compareTo(
+                  playerTrackLanguageScore(
+                    language: a.language,
+                    title: a.title,
+                    preferredLanguage: language,
+                    subtitle: true,
+                  ),
+                ),
+          );
+    final preferred = matches.firstOrNull;
     if (preferred == null) return;
     _preferredSubtitleSelected = true;
     await _player.setSubtitleTrack(preferred);
@@ -803,8 +857,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     EpisodeReference episode,
   ) async {
     final token = await ref
-        .read(secureStorageProvider)
-        .read(key: widget.debridService.tokenStorageKey);
+        .read(debridTokenServiceProvider)
+        .accessToken(widget.debridService);
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
     final resolver = switch (widget.debridService) {
@@ -1281,6 +1335,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
 
     final key = event.logicalKey;
+    if (event is KeyDownEvent && _doubleDownDetector.register(key)) {
+      _hideControls();
+      return KeyEventResult.handled;
+    }
     final directionalKey =
         key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowRight ||
@@ -1314,7 +1372,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyS) {
-      _cycleSubtitles();
+      unawaited(_openSubtitleTrackPicker());
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyI && _canSkipNow) {
@@ -1372,7 +1430,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
-  Future<void> _cycleAudio() async {
+  Future<void> _openAudioTrackPicker() async {
     final tracks = _player.state.tracks.audio
         .where((track) => track.id != 'auto' && track.id != 'no')
         .toList(growable: false);
@@ -1380,14 +1438,44 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _showTrackMessage('No alternate audio tracks');
       return;
     }
+    _controlsTimer?.cancel();
     final currentId = _player.state.track.audio.id;
-    final currentIndex = tracks.indexWhere((track) => track.id == currentId);
-    final next = tracks[(currentIndex + 1) % tracks.length];
-    await _player.setAudioTrack(next);
+    final selectedId = await showPlayerTrackPicker<String>(
+      context: context,
+      title: 'Audio track',
+      icon: Icons.audiotrack_rounded,
+      selectedValue: currentId,
+      options: tracks
+          .map(
+            (track) => PlayerTrackOption<String>(
+              value: track.id,
+              label: track.title ?? track.language ?? 'Track ${track.id}',
+              detail:
+                  playerTrackMatchesLanguage(
+                    language: track.language,
+                    title: track.title,
+                    preferredLanguage: 'eng',
+                  )
+                  ? 'English'
+                  : track.language,
+              icon: Icons.surround_sound_rounded,
+            ),
+          )
+          .toList(growable: false),
+    );
+    if (!mounted) return;
+    if (selectedId == null) {
+      _showControls();
+      return;
+    }
+    final selected = tracks.firstWhere((track) => track.id == selectedId);
+    _preferredAudioSelected = true;
+    await _player.setAudioTrack(selected);
     unawaited(_saveSeriesPreferences());
     _showTrackMessage(
-      'Audio: ${next.title ?? next.language ?? 'Track ${next.id}'}',
+      'Audio: ${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
     );
+    _showControls();
   }
 
   void _skipCurrentSegment() {
@@ -1405,21 +1493,57 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
-  Future<void> _cycleSubtitles() async {
+  Future<void> _openSubtitleTrackPicker() async {
     final embedded = _player.state.tracks.subtitle
         .where((track) => track.id != 'auto' && track.id != 'no')
         .toList(growable: false);
     final tracks = <SubtitleTrack>[SubtitleTrack.no(), ...embedded];
+    _controlsTimer?.cancel();
     final currentId = _player.state.track.subtitle.id;
-    final currentIndex = tracks.indexWhere((track) => track.id == currentId);
-    final next = tracks[(currentIndex + 1) % tracks.length];
-    await _player.setSubtitleTrack(next);
+    final selectedId = await showPlayerTrackPicker<String>(
+      context: context,
+      title: 'Closed captions',
+      icon: Icons.closed_caption_rounded,
+      selectedValue: currentId,
+      options: tracks
+          .map(
+            (track) => PlayerTrackOption<String>(
+              value: track.id,
+              label: track.id == 'no'
+                  ? 'Off'
+                  : track.title ?? track.language ?? 'Track ${track.id}',
+              detail: track.id == 'no'
+                  ? 'Disable captions'
+                  : playerTrackMatchesLanguage(
+                      language: track.language,
+                      title: track.title,
+                      preferredLanguage: 'eng',
+                    )
+                  ? 'English'
+                  : track.language,
+              icon: track.id == 'no'
+                  ? Icons.closed_caption_disabled_rounded
+                  : Icons.closed_caption_rounded,
+            ),
+          )
+          .toList(growable: false),
+    );
+    if (!mounted) return;
+    if (selectedId == null) {
+      _showControls();
+      return;
+    }
+    final selected = tracks.firstWhere((track) => track.id == selectedId);
+    _preferredSubtitleSelected = true;
+    await _player.setSubtitleTrack(selected);
     unawaited(_saveSeriesPreferences());
     _showTrackMessage(
-      next.id == 'no'
+      selected.id == 'no'
           ? 'Subtitles: Off'
-          : 'Subtitles: ${next.title ?? next.language ?? 'Track ${next.id}'}',
+          : 'Subtitles: '
+                '${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
     );
+    _showControls();
   }
 
   void _showTrackMessage(String message) {
@@ -1444,12 +1568,18 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   void _scheduleControlsHide() {
     _controlsTimer?.cancel();
-    _controlsTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && _player.state.playing) {
-        setState(() => _controlsVisible = false);
-        _playerRootFocus.requestFocus();
-      }
+    _controlsTimer = Timer(playerControlsIdleTimeout, () {
+      if (mounted) _hideControls();
     });
+  }
+
+  void _hideControls() {
+    _controlsTimer?.cancel();
+    _doubleDownDetector.reset();
+    if (mounted && _controlsVisible) {
+      setState(() => _controlsVisible = false);
+    }
+    _playerRootFocus.requestFocus();
   }
 
   @override
@@ -1536,8 +1666,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     onForward: () => _seekBy(const Duration(seconds: 10)),
                     canSkip: _canSkipNow,
                     onSkip: _skipCurrentSegment,
-                    onAudio: _cycleAudio,
-                    onSubtitles: _cycleSubtitles,
+                    onAudio: _openAudioTrackPicker,
+                    onSubtitles: _openSubtitleTrackPicker,
                     onFit: _cycleFit,
                     onCompatibility: () {
                       if (_softwareFallbackUsed) {
@@ -1661,161 +1791,179 @@ class _PlayerChrome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xAA000000), Colors.transparent, Color(0xCC000000)],
-          stops: [0, .38, 1],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
+    return Align(
+      alignment: Alignment.bottomCenter,
       child: SafeArea(
-        minimum: const EdgeInsets.all(34),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.cyan.withValues(alpha: .16),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    '${debridService.displayName} stream',
-                    style: const TextStyle(
-                      color: AppColors.cyan,
-                      fontWeight: FontWeight.w800,
+        minimum: const EdgeInsets.fromLTRB(28, 0, 28, 24),
+        child: Container(
+          key: const ValueKey('mpv-bottom-player-chrome'),
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 13),
+          decoration: BoxDecoration(
+            color: const Color(0xF5080808),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0xB3000000),
+                blurRadius: 24,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
                   ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            Row(
-              children: [
-                _PlayerControl(
-                  icon: Icons.replay_10_rounded,
-                  label: 'Back 10s',
-                  onPressed: onRewind,
-                ),
-                const SizedBox(width: 8),
-                StreamBuilder<bool>(
-                  stream: player.stream.playing,
-                  initialData: player.state.playing,
-                  builder: (context, snapshot) => _PlayerControl(
-                    focusNode: playFocusNode,
-                    primary: true,
-                    icon: snapshot.data == true
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    label: snapshot.data == true ? 'Pause' : 'Play',
-                    onPressed: onPlayPause,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _PlayerControl(
-                  icon: Icons.forward_10_rounded,
-                  label: 'Forward 10s',
-                  onPressed: onForward,
-                ),
-                if (canSkip) ...[
-                  const SizedBox(width: 8),
-                  _PlayerControl(
-                    icon: Icons.skip_next_rounded,
-                    label: 'Skip intro',
-                    primary: true,
-                    onPressed: onSkip,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent.withValues(alpha: .2),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '${debridService.displayName} stream',
+                      style: const TextStyle(
+                        color: AppColors.accentBright,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ),
                 ],
-                const SizedBox(width: 18),
-                _PlayerControl(
-                  icon: Icons.audiotrack_rounded,
-                  label: 'Audio',
-                  onPressed: onAudio,
+              ),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                key: const ValueKey('mpv-player-controls-scroll'),
+                scrollDirection: Axis.horizontal,
+                clipBehavior: Clip.none,
+                child: Row(
+                  children: [
+                    _PlayerControl(
+                      icon: Icons.replay_10_rounded,
+                      label: 'Back 10s',
+                      onPressed: onRewind,
+                    ),
+                    const SizedBox(width: 8),
+                    StreamBuilder<bool>(
+                      stream: player.stream.playing,
+                      initialData: player.state.playing,
+                      builder: (context, snapshot) => _PlayerControl(
+                        focusNode: playFocusNode,
+                        primary: true,
+                        icon: snapshot.data == true
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        label: snapshot.data == true ? 'Pause' : 'Play',
+                        onPressed: onPlayPause,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _PlayerControl(
+                      icon: Icons.forward_10_rounded,
+                      label: 'Forward 10s',
+                      onPressed: onForward,
+                    ),
+                    if (canSkip) ...[
+                      const SizedBox(width: 8),
+                      _PlayerControl(
+                        icon: Icons.skip_next_rounded,
+                        label: 'Skip intro',
+                        primary: true,
+                        onPressed: onSkip,
+                      ),
+                    ],
+                    const SizedBox(width: 18),
+                    _PlayerControl(
+                      icon: Icons.audiotrack_rounded,
+                      label: 'Audio',
+                      onPressed: onAudio,
+                    ),
+                    const SizedBox(width: 8),
+                    _PlayerControl(
+                      icon: Icons.closed_caption_rounded,
+                      label: 'CC',
+                      onPressed: onSubtitles,
+                    ),
+                    const SizedBox(width: 8),
+                    _PlayerControl(
+                      icon: Icons.aspect_ratio_rounded,
+                      label: 'Picture',
+                      onPressed: onFit,
+                    ),
+                    const SizedBox(width: 8),
+                    _PlayerControl(
+                      icon: Icons.build_circle_outlined,
+                      label: 'Fix video',
+                      onPressed: onCompatibility,
+                    ),
+                    const SizedBox(width: 18),
+                    _PlayerControl(
+                      icon: Icons.tune_rounded,
+                      label: 'Options',
+                      onPressed: onOptions,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _PlayerControl(
-                  icon: Icons.subtitles_rounded,
-                  label: 'Subtitles',
-                  onPressed: onSubtitles,
-                ),
-                const SizedBox(width: 8),
-                _PlayerControl(
-                  icon: Icons.aspect_ratio_rounded,
-                  label: 'Picture',
-                  onPressed: onFit,
-                ),
-                const SizedBox(width: 8),
-                _PlayerControl(
-                  icon: Icons.build_circle_outlined,
-                  label: 'Fix video',
-                  onPressed: onCompatibility,
-                ),
-                const Spacer(),
-                _PlayerControl(
-                  icon: Icons.tune_rounded,
-                  label: 'Options',
-                  onPressed: onOptions,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            StreamBuilder<Duration>(
-              stream: player.stream.position,
-              initialData: player.state.position,
-              builder: (context, positionSnapshot) {
-                return StreamBuilder<Duration>(
-                  stream: player.stream.duration,
-                  initialData: player.state.duration,
-                  builder: (context, durationSnapshot) {
-                    final position = positionSnapshot.data ?? Duration.zero;
-                    final duration = durationSnapshot.data ?? Duration.zero;
-                    final progress = duration.inMilliseconds == 0
-                        ? 0.0
-                        : (position.inMilliseconds / duration.inMilliseconds)
-                              .clamp(0.0, 1.0);
-                    return Column(
-                      children: [
-                        LinearProgressIndicator(
-                          value: progress,
-                          minHeight: 4,
-                          backgroundColor: Colors.white.withValues(alpha: .24),
-                          color: AppColors.accentBright,
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Text(
-                              '${_format(position)}  /  ${_format(duration)}',
-                              style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              StreamBuilder<Duration>(
+                stream: player.stream.position,
+                initialData: player.state.position,
+                builder: (context, positionSnapshot) {
+                  return StreamBuilder<Duration>(
+                    stream: player.stream.duration,
+                    initialData: player.state.duration,
+                    builder: (context, durationSnapshot) {
+                      final position = positionSnapshot.data ?? Duration.zero;
+                      final duration = durationSnapshot.data ?? Duration.zero;
+                      final progress = duration.inMilliseconds == 0
+                          ? 0.0
+                          : (position.inMilliseconds / duration.inMilliseconds)
+                                .clamp(0.0, 1.0);
+                      return Column(
+                        children: [
+                          LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 4,
+                            backgroundColor: Colors.white.withValues(
+                              alpha: .24,
                             ),
-                            const Spacer(),
-                            Text(
-                              'D-pad controls   •   J/L seek   •   '
-                              'Menu/Y options   •   C compatibility',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
-          ],
+                            color: AppColors.accentBright,
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Text(
+                                '${_format(position)}  /  ${_format(duration)}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const Spacer(),
+                              Text(
+                                'D-pad controls   •   J/L seek   •   '
+                                'Menu/Y options   •   C compatibility',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

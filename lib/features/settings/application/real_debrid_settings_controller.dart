@@ -107,7 +107,16 @@ class RealDebridSettingsController
     try {
       final account = await _clientFactory(token).account();
       if (persist) {
-        await _storage.write(key: realDebridTokenStorageKey, value: token);
+        // A token entered in Accounts is a standalone API token. Remove any
+        // older device-flow metadata so a stale refresh token cannot later
+        // overwrite the newly validated manual token.
+        await Future.wait([
+          _storage.write(key: realDebridTokenStorageKey, value: token),
+          _storage.delete(key: realDebridRefreshTokenStorageKey),
+          _storage.delete(key: realDebridClientIdStorageKey),
+          _storage.delete(key: realDebridClientSecretStorageKey),
+          _storage.delete(key: realDebridAccessExpiryStorageKey),
+        ]);
       }
       state = RealDebridSettingsState(hasSavedToken: true, account: account);
       return true;

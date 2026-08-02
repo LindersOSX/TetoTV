@@ -135,39 +135,37 @@ class TvKeyboardDialog extends StatefulWidget {
 }
 
 class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
-  static const _rows = <List<String>>[
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  static const _letterRows = <List<String>>[
     ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
     ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
-    ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
-    ['-', '_', '.', ':', '/', '?', '=', '&', '%', '+', '@'],
+    ['z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.'],
+  ];
+  static const _symbolRows = <List<String>>[
+    ['!', '@', '#', r'$', '%', '^', '&', '*', '(', ')'],
+    ['-', '_', '=', '+', '[', ']', '{', '}', r'\', '|'],
+    ['.', ',', ':', ';', '/', '?', '"', "'", '<', '>'],
+  ];
+  static const _numberRows = <List<String>>[
+    ['7', '8', '9'],
+    ['4', '5', '6'],
+    ['1', '2', '3'],
   ];
 
   late String _value;
   bool _shift = false;
+  bool _symbols = false;
   late bool _reveal;
-  String? _clipboardValue;
 
   @override
   void initState() {
     super.initState();
     _value = widget.initialValue;
     _reveal = !widget.obscureText;
-    _loadClipboardAutofill();
-  }
-
-  Future<void> _loadClipboardAutofill() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final value = data?.text?.replaceAll(RegExp(r'[\r\n]+'), '').trim();
-    if (!mounted || value == null || value.isEmpty || value.length > 8192) {
-      return;
-    }
-    setState(() => _clipboardValue = value);
   }
 
   void _append(String value) {
     setState(() {
-      _value += _shift ? value.toUpperCase() : value;
+      _value += _shift && !_symbols ? value.toUpperCase() : value;
       if (_shift) _shift = false;
     });
   }
@@ -220,16 +218,17 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     final displayValue = !_reveal && _value.isNotEmpty
         ? List.filled(_value.length, '\u2022').join()
         : _value;
+    final rows = _symbols ? _symbolRows : _letterRows;
     return Dialog(
       alignment: Alignment.bottomCenter,
-      insetPadding: const EdgeInsets.fromLTRB(24, 150, 24, 14),
+      insetPadding: const EdgeInsets.fromLTRB(24, 160, 24, 18),
       backgroundColor: Colors.transparent,
       child: Focus(
         canRequestFocus: false,
         onKeyEvent: _handlePhysicalKeyboard,
         child: Container(
           key: const ValueKey('tv-keyboard-panel'),
-          width: 650,
+          width: 560,
           padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
           decoration: BoxDecoration(
             color: const Color(0xF7080808),
@@ -296,8 +295,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   ),
                 ),
               ),
-              if (_clipboardValue != null ||
-                  widget.autofillSuggestions.isNotEmpty) ...[
+              if (widget.autofillSuggestions.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Row(
                   children: [
@@ -311,18 +309,9 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                       ),
                     ),
                     const SizedBox(width: 7),
-                    if (_clipboardValue case final clipboard?)
-                      _AutofillChip(
-                        label: widget.obscureText
-                            ? 'Use clipboard securely'
-                            : 'Use clipboard',
-                        icon: Icons.content_paste_go_rounded,
-                        onPressed: () => _autofill(clipboard),
-                      ),
                     for (final suggestion in widget.autofillSuggestions.take(
                       3,
                     )) ...[
-                      const SizedBox(width: 5),
                       _AutofillChip(
                         label: suggestion,
                         icon: Icons.auto_awesome_rounded,
@@ -335,94 +324,177 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
               const SizedBox(height: 5),
               FocusTraversalGroup(
                 policy: ReadingOrderTraversalPolicy(),
-                child: Column(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (var rowIndex = 0; rowIndex < _rows.length; rowIndex++)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            for (
-                              var keyIndex = 0;
-                              keyIndex < _rows[rowIndex].length;
-                              keyIndex++
-                            ) ...[
-                              SizedBox(
-                                width: 36,
-                                child: _KeyboardKey(
-                                  label: _shift
-                                      ? _rows[rowIndex][keyIndex].toUpperCase()
-                                      : _rows[rowIndex][keyIndex],
-                                  autofocus: rowIndex == 0 && keyIndex == 0,
-                                  onPressed: () =>
-                                      _append(_rows[rowIndex][keyIndex]),
-                                ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          for (
+                            var rowIndex = 0;
+                            rowIndex < rows.length;
+                            rowIndex++
+                          )
+                            Padding(
+                              padding: EdgeInsets.only(
+                                left: rowIndex == 1 ? 12 : 0,
+                                right: rowIndex == 1 ? 12 : 0,
+                                bottom: 3,
                               ),
-                              if (keyIndex != _rows[rowIndex].length - 1)
+                              child: Row(
+                                children: [
+                                  for (
+                                    var keyIndex = 0;
+                                    keyIndex < rows[rowIndex].length;
+                                    keyIndex++
+                                  ) ...[
+                                    Expanded(
+                                      child: _KeyboardKey(
+                                        label: _shift && !_symbols
+                                            ? rows[rowIndex][keyIndex]
+                                                  .toUpperCase()
+                                            : rows[rowIndex][keyIndex],
+                                        autofocus:
+                                            rowIndex == 0 && keyIndex == 0,
+                                        onPressed: () =>
+                                            _append(rows[rowIndex][keyIndex]),
+                                      ),
+                                    ),
+                                    if (keyIndex != rows[rowIndex].length - 1)
+                                      const SizedBox(width: 3),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          Row(
+                            children: [
+                              _KeyboardAction(
+                                label: _shift ? 'Aa ON' : 'Aa',
+                                icon: Icons.arrow_upward_rounded,
+                                selected: _shift,
+                                onPressed: () => setState(() {
+                                  if (_symbols) {
+                                    _symbols = false;
+                                    _shift = true;
+                                  } else {
+                                    _shift = !_shift;
+                                  }
+                                }),
+                              ),
+                              const SizedBox(width: 3),
+                              _KeyboardAction(
+                                label: _symbols ? 'ABC' : '#?&',
+                                icon: Icons.alternate_email_rounded,
+                                flex: 2,
+                                selected: _symbols,
+                                onPressed: () => setState(() {
+                                  _symbols = !_symbols;
+                                  _shift = false;
+                                }),
+                              ),
+                              const SizedBox(width: 3),
+                              _KeyboardAction(
+                                label: 'SPACE',
+                                icon: Icons.space_bar_rounded,
+                                flex: 3,
+                                onPressed: () => _append(' '),
+                              ),
+                              const SizedBox(width: 3),
+                              _KeyboardAction(
+                                label: 'DEL',
+                                icon: Icons.backspace_outlined,
+                                flex: 2,
+                                onPressed: _backspace,
+                              ),
+                              const SizedBox(width: 3),
+                              _KeyboardAction(
+                                label: 'PASTE',
+                                icon: Icons.content_paste_rounded,
+                                flex: 2,
+                                onPressed: _paste,
+                              ),
+                              if (widget.obscureText) ...[
                                 const SizedBox(width: 3),
+                                _KeyboardAction(
+                                  label: _reveal ? 'HIDE' : 'SHOW',
+                                  icon: _reveal
+                                      ? Icons.visibility_off_rounded
+                                      : Icons.visibility_rounded,
+                                  flex: 2,
+                                  onPressed: () =>
+                                      setState(() => _reveal = !_reveal),
+                                ),
+                              ],
+                              const SizedBox(width: 3),
+                              _KeyboardAction(
+                                label: 'DONE',
+                                icon: Icons.search_rounded,
+                                flex: 2,
+                                primary: true,
+                                onPressed: () =>
+                                    Navigator.of(context).pop(_value),
+                              ),
                             ],
-                          ],
-                        ),
-                      ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _KeyboardAction(
-                          label: _shift ? 'SHIFT ON' : 'SHIFT',
-                          icon: Icons.arrow_upward_rounded,
-                          selected: _shift,
-                          onPressed: () => setState(() => _shift = !_shift),
-                        ),
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'SPACE',
-                          icon: Icons.space_bar_rounded,
-                          flex: 2,
-                          onPressed: () => _append(' '),
-                        ),
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'DEL',
-                          icon: Icons.backspace_outlined,
-                          onPressed: _backspace,
-                        ),
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'PASTE',
-                          icon: Icons.content_paste_rounded,
-                          onPressed: _paste,
-                        ),
-                        if (widget.obscureText) ...[
-                          const SizedBox(width: 4),
-                          _KeyboardAction(
-                            label: _reveal ? 'HIDE' : 'SHOW',
-                            icon: _reveal
-                                ? Icons.visibility_off_rounded
-                                : Icons.visibility_rounded,
-                            onPressed: () => setState(() => _reveal = !_reveal),
                           ),
                         ],
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'CLEAR',
-                          icon: Icons.clear_all_rounded,
-                          onPressed: () => setState(() => _value = ''),
-                        ),
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'CANCEL',
-                          icon: Icons.close_rounded,
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
-                        const SizedBox(width: 4),
-                        _KeyboardAction(
-                          label: 'DONE',
-                          icon: Icons.check_rounded,
-                          primary: true,
-                          onPressed: () => Navigator.of(context).pop(_value),
-                        ),
-                      ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 110,
+                      child: Column(
+                        children: [
+                          for (final numberRow in _numberRows)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 3),
+                              child: Row(
+                                children: [
+                                  for (
+                                    var index = 0;
+                                    index < numberRow.length;
+                                    index++
+                                  ) ...[
+                                    Expanded(
+                                      child: _KeyboardKey(
+                                        label: numberRow[index],
+                                        onPressed: () =>
+                                            _append(numberRow[index]),
+                                      ),
+                                    ),
+                                    if (index != numberRow.length - 1)
+                                      const SizedBox(width: 3),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _KeyboardKey(
+                                  label: '0',
+                                  onPressed: () => _append('0'),
+                                ),
+                              ),
+                              const SizedBox(width: 3),
+                              Expanded(
+                                child: _KeyboardKey(
+                                  label: 'CLEAR',
+                                  compactLabel: true,
+                                  onPressed: () => setState(() => _value = ''),
+                                ),
+                              ),
+                              const SizedBox(width: 3),
+                              Expanded(
+                                child: _KeyboardKey(
+                                  label: 'CANCEL',
+                                  compactLabel: true,
+                                  onPressed: () => Navigator.of(context).pop(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -440,11 +512,13 @@ class _KeyboardKey extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.autofocus = false,
+    this.compactLabel = false,
   });
 
   final String label;
   final VoidCallback onPressed;
   final bool autofocus;
+  final bool compactLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -454,12 +528,15 @@ class _KeyboardKey extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
       onPressed: onPressed,
       child: Container(
-        height: 23,
+        height: 26,
         alignment: Alignment.center,
         color: const Color(0xFF171717),
         child: Text(
           label,
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+          style: TextStyle(
+            fontSize: compactLabel ? 6 : 11,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -493,7 +570,7 @@ class _KeyboardAction extends StatelessWidget {
         onPressed: onPressed,
         child: Container(
           constraints: const BoxConstraints(minWidth: 46),
-          height: 24,
+          height: 26,
           padding: const EdgeInsets.symmetric(horizontal: 5),
           color: primary
               ? AppColors.accent

@@ -7,7 +7,8 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
-import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
@@ -44,12 +45,12 @@ int? preferredVlcTrack(
   bool preferDub = false,
 }) {
   if (tracks.isEmpty) return null;
-  final wanted = language.toLowerCase();
   int score(String title) {
     final value = title.toLowerCase();
-    var result = 0;
-    if (value.contains(wanted)) result += 5;
-    if (wanted == 'eng' && value.contains('english')) result += 5;
+    var result = playerTrackLanguageScore(
+      title: title,
+      preferredLanguage: language,
+    );
     if (preferDub && value.contains('dub')) result += 3;
     if (value.contains('commentary') || value.contains('description')) {
       result -= 8;
@@ -104,6 +105,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   VlcPlayerController? _controller;
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
+  final _doubleDownDetector = PlayerDoubleDownDetector();
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   Timer? _controlsTimer;
   Timer? _trackMessageTimer;
@@ -115,7 +117,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   bool _syncHandled = false;
   bool _restarting = false;
   bool _failingOver = false;
-  bool _tracksApplied = false;
+  bool _audioPreferenceApplied = false;
+  bool _subtitlePreferenceApplied = false;
+  int _trackDiscoveryAttempts = 0;
+  Timer? _trackDiscoveryTimer;
   bool _engineInitialized = false;
   bool _canSkip = false;
   String? _trackMessage;
@@ -318,29 +323,53 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _applyPreferredTracks(VlcPlayerController controller) async {
-    if (_tracksApplied || controller != _controller) return;
-    _tracksApplied = true;
+    if (controller != _controller ||
+        (_audioPreferenceApplied && _subtitlePreferenceApplied)) {
+      return;
+    }
+    _trackDiscoveryTimer?.cancel();
     try {
-      final audioTracks = await controller.getAudioTracks();
-      final audioId = preferredVlcTrack(
-        audioTracks,
-        language: _preferences.audioLanguage,
-        preferDub: true,
-      );
-      if (audioId != null) await controller.setAudioTrack(audioId);
-      if (!_preferences.subtitleEnabled) {
+      if (!_audioPreferenceApplied) {
+        final audioTracks = await controller.getAudioTracks();
+        if (audioTracks.isNotEmpty) {
+          final audioId = preferredVlcTrack(
+            audioTracks,
+            language: _preferences.audioLanguage,
+            preferDub: true,
+          );
+          if (audioId != null) await controller.setAudioTrack(audioId);
+          _audioPreferenceApplied = true;
+        }
+      }
+      if (!_preferences.subtitleEnabled && !_subtitlePreferenceApplied) {
         await controller.setSpuTrack(-1);
-      } else {
+        _subtitlePreferenceApplied = true;
+      } else if (!_subtitlePreferenceApplied) {
         final subtitleTracks = await controller.getSpuTracks();
-        final subtitleId = preferredVlcTrack(
-          subtitleTracks,
-          language: _preferences.subtitleLanguage,
-        );
-        if (subtitleId != null) await controller.setSpuTrack(subtitleId);
+        if (subtitleTracks.isNotEmpty) {
+          final subtitleId = preferredVlcTrack(
+            subtitleTracks,
+            language: _preferences.subtitleLanguage,
+          );
+          if (subtitleId != null) await controller.setSpuTrack(subtitleId);
+          _subtitlePreferenceApplied = true;
+        }
       }
     } catch (_) {
-      // A stream can expose tracks later; manual cycling still remains usable.
+      // VLC commonly reports its track list a few frames after initialization.
     }
+    if (!_audioPreferenceApplied || !_subtitlePreferenceApplied) {
+      _scheduleTrackDiscoveryRetry(controller);
+    }
+  }
+
+  void _scheduleTrackDiscoveryRetry(VlcPlayerController controller) {
+    if (controller != _controller || _trackDiscoveryAttempts >= 8) return;
+    _trackDiscoveryAttempts += 1;
+    _trackDiscoveryTimer?.cancel();
+    _trackDiscoveryTimer = Timer(const Duration(milliseconds: 700), () {
+      unawaited(_applyPreferredTracks(controller));
+    });
   }
 
   Future<void> _restoreResume(
@@ -434,7 +463,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _videoWatchdog?.cancel();
     _decoderMode = mode;
     _pendingResume = position > const Duration(seconds: 2) ? position : null;
-    _tracksApplied = false;
+    _trackDiscoveryTimer?.cancel();
+    _trackDiscoveryAttempts = 0;
+    _audioPreferenceApplied = false;
+    _subtitlePreferenceApplied = false;
     _completionHandled = false;
     try {
       if (old != null) {
@@ -580,7 +612,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
-  Future<void> _cycleAudio() async {
+  Future<void> _openAudioTrackPicker() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     try {
@@ -591,31 +623,121 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         return;
       }
       final current = await controller.getAudioTrack() ?? ids.first;
-      final index = ids.indexOf(current);
-      final next = ids[(index + 1) % ids.length];
-      await controller.setAudioTrack(next);
-      _showMessage('Audio: ${tracks[next] ?? 'Track $next'}');
+      if (!mounted) return;
+      _controlsTimer?.cancel();
+      final selected = await showPlayerTrackPicker<int>(
+        context: context,
+        title: 'Audio track',
+        icon: Icons.audiotrack_rounded,
+        selectedValue: current,
+        options: ids
+            .map(
+              (id) => PlayerTrackOption<int>(
+                value: id,
+                label: tracks[id] ?? 'Track $id',
+                detail:
+                    playerTrackMatchesLanguage(
+                      title: tracks[id],
+                      preferredLanguage: 'eng',
+                    )
+                    ? 'English'
+                    : null,
+                icon: Icons.surround_sound_rounded,
+              ),
+            )
+            .toList(growable: false),
+      );
+      if (!mounted || selected == null) return;
+      await controller.setAudioTrack(selected);
+      _audioPreferenceApplied = true;
+      await _saveTrackPreferences(audioLabel: tracks[selected]);
+      _showMessage('Audio: ${tracks[selected] ?? 'Track $selected'}');
     } catch (_) {
       _showMessage('Audio tracks are not available yet');
+    } finally {
+      if (mounted) _showControls();
     }
   }
 
-  Future<void> _cycleSubtitles() async {
+  Future<void> _openSubtitleTrackPicker() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     try {
       final tracks = await controller.getSpuTracks();
       final ids = <int>[-1, ...tracks.keys.where((id) => id >= 0)]..sort();
       final current = await controller.getSpuTrack() ?? -1;
-      final index = ids.indexOf(current);
-      final next = ids[(index + 1) % ids.length];
-      await controller.setSpuTrack(next);
+      if (!mounted) return;
+      _controlsTimer?.cancel();
+      final selected = await showPlayerTrackPicker<int>(
+        context: context,
+        title: 'Closed captions',
+        icon: Icons.closed_caption_rounded,
+        selectedValue: current,
+        options: ids
+            .map(
+              (id) => PlayerTrackOption<int>(
+                value: id,
+                label: id == -1 ? 'Off' : tracks[id] ?? 'Track $id',
+                detail: id == -1
+                    ? 'Disable captions'
+                    : playerTrackMatchesLanguage(
+                        title: tracks[id],
+                        preferredLanguage: 'eng',
+                      )
+                    ? 'English'
+                    : null,
+                icon: id == -1
+                    ? Icons.closed_caption_disabled_rounded
+                    : Icons.closed_caption_rounded,
+              ),
+            )
+            .toList(growable: false),
+      );
+      if (!mounted || selected == null) return;
+      await controller.setSpuTrack(selected);
+      _subtitlePreferenceApplied = true;
+      await _saveTrackPreferences(
+        subtitleLabel: selected == -1 ? null : tracks[selected],
+        subtitleEnabled: selected != -1,
+      );
       _showMessage(
-        next == -1 ? 'Subtitles: Off' : 'Subtitles: ${tracks[next]}',
+        selected == -1
+            ? 'Subtitles: Off'
+            : 'Subtitles: ${tracks[selected] ?? 'Track $selected'}',
       );
     } catch (_) {
       _showMessage('Subtitle tracks are not available yet');
+    } finally {
+      if (mounted) _showControls();
     }
+  }
+
+  Future<void> _saveTrackPreferences({
+    String? audioLabel,
+    String? subtitleLabel,
+    bool? subtitleEnabled,
+  }) async {
+    final mediaId = widget.anilistMediaId;
+    if (mediaId == null) return;
+    _preferences = SeriesPlaybackPreferences(
+      audioLanguage: audioLabel == null
+          ? _preferences.audioLanguage
+          : canonicalPlayerLanguage(audioLabel),
+      subtitleLanguage: subtitleLabel == null
+          ? _preferences.subtitleLanguage
+          : canonicalPlayerLanguage(subtitleLabel),
+      subtitleEnabled: subtitleEnabled ?? _preferences.subtitleEnabled,
+      subtitleSize: _preferences.subtitleSize,
+      subtitlePosition: _preferences.subtitlePosition,
+      subtitleDelayMs: _subtitleDelayMs,
+      audioDelayMs: _audioDelayMs,
+      decoder: _preferences.decoder,
+      videoFit: _preferences.videoFit,
+      highContrastSubtitles: _preferences.highContrastSubtitles,
+    );
+    await ref
+        .read(tetoTvDatabaseProvider)
+        .saveSeriesPreferences(mediaId, _preferences);
   }
 
   Future<void> _seekBy(Duration offset) async {
@@ -633,8 +755,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
     final token = await ref
-        .read(secureStorageProvider)
-        .read(key: widget.debridService.tokenStorageKey);
+        .read(debridTokenServiceProvider)
+        .accessToken(widget.debridService);
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
     final resolver = switch (widget.debridService) {
@@ -797,6 +919,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
+    if (event is KeyDownEvent && _doubleDownDetector.register(key)) {
+      _hideControls();
+      return KeyEventResult.handled;
+    }
     final directional =
         key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowRight ||
@@ -833,7 +959,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyS) {
-      unawaited(_cycleSubtitles());
+      unawaited(_openSubtitleTrackPicker());
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyC) {
@@ -881,13 +1007,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   void _scheduleControlsHide() {
     _controlsTimer?.cancel();
-    _controlsTimer = Timer(const Duration(seconds: 5), () {
-      final playing = _controller?.value.isPlaying ?? false;
-      if (mounted && playing) {
-        setState(() => _controlsVisible = false);
-        _rootFocus.requestFocus();
-      }
+    _controlsTimer = Timer(playerControlsIdleTimeout, () {
+      if (mounted) _hideControls();
     });
+  }
+
+  void _hideControls() {
+    _controlsTimer?.cancel();
+    _doubleDownDetector.reset();
+    if (mounted && _controlsVisible) {
+      setState(() => _controlsVisible = false);
+    }
+    _rootFocus.requestFocus();
   }
 
   @override
@@ -906,6 +1037,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _trackMessageTimer?.cancel();
     _initializationWatchdog?.cancel();
     _videoWatchdog?.cancel();
+    _trackDiscoveryTimer?.cancel();
     _rootFocus.dispose();
     _playFocus.dispose();
     super.dispose();
@@ -992,8 +1124,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     onForward: () =>
                         unawaited(_seekBy(const Duration(seconds: 10))),
                     onSkip: () => unawaited(_skipCurrentSegment()),
-                    onAudio: () => unawaited(_cycleAudio()),
-                    onSubtitles: () => unawaited(_cycleSubtitles()),
+                    onAudio: () => unawaited(_openAudioTrackPicker()),
+                    onSubtitles: () => unawaited(_openSubtitleTrackPicker()),
                     onFixVideo: () => unawaited(
                       _decoderMode == VlcDecoderMode.software
                           ? _restart(
@@ -1083,147 +1215,163 @@ class _VlcPlayerChrome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xB0000000), Colors.transparent, Color(0xE6000000)],
-          stops: [0, .36, 1],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
+    return Align(
+      alignment: Alignment.bottomCenter,
       child: SafeArea(
-        minimum: const EdgeInsets.all(34),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                ),
-                _EngineBadge(
-                  text: mode == VlcDecoderMode.software
-                      ? 'VLC software'
-                      : 'VLC compatibility',
-                ),
-                const SizedBox(width: 10),
-                _EngineBadge(text: '${service.displayName} stream'),
-              ],
-            ),
-            const Spacer(),
-            Row(
-              children: [
-                _VlcControl(
-                  icon: Icons.replay_10_rounded,
-                  label: 'Back 10s',
-                  onPressed: onRewind,
-                ),
-                const SizedBox(width: 8),
-                if (controller != null)
-                  ValueListenableBuilder<VlcPlayerValue>(
-                    valueListenable: controller!,
-                    builder: (context, value, child) => _VlcControl(
-                      focusNode: playFocusNode,
-                      primary: true,
-                      icon: value.isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      label: value.isPlaying ? 'Pause' : 'Play',
-                      onPressed: onPlayPause,
+        minimum: const EdgeInsets.fromLTRB(28, 0, 28, 24),
+        child: Container(
+          key: const ValueKey('vlc-bottom-player-chrome'),
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 13),
+          decoration: BoxDecoration(
+            color: const Color(0xF5080808),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0xB3000000),
+                blurRadius: 24,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                  )
-                else
-                  _VlcControl(
-                    focusNode: playFocusNode,
-                    primary: true,
-                    icon: Icons.play_arrow_rounded,
-                    label: 'Play',
-                    onPressed: onPlayPause,
                   ),
-                const SizedBox(width: 8),
-                _VlcControl(
-                  icon: Icons.forward_10_rounded,
-                  label: 'Forward 10s',
-                  onPressed: onForward,
-                ),
-                if (canSkip) ...[
-                  const SizedBox(width: 8),
-                  _VlcControl(
-                    icon: Icons.skip_next_rounded,
-                    label: 'Skip intro',
-                    primary: true,
-                    onPressed: onSkip,
+                  _EngineBadge(
+                    text: mode == VlcDecoderMode.software
+                        ? 'VLC software'
+                        : 'VLC compatibility',
                   ),
+                  const SizedBox(width: 10),
+                  _EngineBadge(text: '${service.displayName} stream'),
                 ],
-                const SizedBox(width: 18),
-                _VlcControl(
-                  icon: Icons.audiotrack_rounded,
-                  label: 'Audio',
-                  onPressed: onAudio,
-                ),
-                const SizedBox(width: 8),
-                _VlcControl(
-                  icon: Icons.subtitles_rounded,
-                  label: 'Subtitles',
-                  onPressed: onSubtitles,
-                ),
-                const SizedBox(width: 8),
-                _VlcControl(
-                  icon: Icons.build_circle_outlined,
-                  label: 'Fix video',
-                  onPressed: onFixVideo,
-                ),
-                const Spacer(),
-                _VlcControl(
-                  icon: Icons.tune_rounded,
-                  label: 'Options',
-                  onPressed: onOptions,
-                ),
-              ],
-            ),
-            const SizedBox(height: 9),
-            if (controller != null)
-              ValueListenableBuilder<VlcPlayerValue>(
-                valueListenable: controller!,
-                builder: (context, value, child) {
-                  final progress = value.duration.inMilliseconds == 0
-                      ? 0.0
-                      : (value.position.inMilliseconds /
-                                value.duration.inMilliseconds)
-                            .clamp(0.0, 1.0);
-                  return Column(
-                    children: [
-                      LinearProgressIndicator(
-                        value: progress,
-                        minHeight: 4,
-                        color: AppColors.accentBright,
-                        backgroundColor: Colors.white.withValues(alpha: .22),
+              ),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                key: const ValueKey('vlc-player-controls-scroll'),
+                scrollDirection: Axis.horizontal,
+                clipBehavior: Clip.none,
+                child: Row(
+                  children: [
+                    _VlcControl(
+                      icon: Icons.replay_10_rounded,
+                      label: 'Back 10s',
+                      onPressed: onRewind,
+                    ),
+                    const SizedBox(width: 8),
+                    if (controller != null)
+                      ValueListenableBuilder<VlcPlayerValue>(
+                        valueListenable: controller!,
+                        builder: (context, value, child) => _VlcControl(
+                          focusNode: playFocusNode,
+                          primary: true,
+                          icon: value.isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          label: value.isPlaying ? 'Pause' : 'Play',
+                          onPressed: onPlayPause,
+                        ),
+                      )
+                    else
+                      _VlcControl(
+                        focusNode: playFocusNode,
+                        primary: true,
+                        icon: Icons.play_arrow_rounded,
+                        label: 'Play',
+                        onPressed: onPlayPause,
                       ),
-                      const SizedBox(height: 9),
-                      Row(
-                        children: [
-                          Text(
-                            '${_formatDuration(value.position)}  /  '
-                            '${_formatDuration(value.duration)}',
-                          ),
-                          const Spacer(),
-                          const Text(
-                            'VLC compatibility renderer  •  J/L seek  •  C decoder',
-                            style: TextStyle(color: AppColors.textMuted),
-                          ),
-                        ],
+                    const SizedBox(width: 8),
+                    _VlcControl(
+                      icon: Icons.forward_10_rounded,
+                      label: 'Forward 10s',
+                      onPressed: onForward,
+                    ),
+                    if (canSkip) ...[
+                      const SizedBox(width: 8),
+                      _VlcControl(
+                        icon: Icons.skip_next_rounded,
+                        label: 'Skip intro',
+                        primary: true,
+                        onPressed: onSkip,
                       ),
                     ],
-                  );
-                },
+                    const SizedBox(width: 18),
+                    _VlcControl(
+                      icon: Icons.audiotrack_rounded,
+                      label: 'Audio',
+                      onPressed: onAudio,
+                    ),
+                    const SizedBox(width: 8),
+                    _VlcControl(
+                      icon: Icons.closed_caption_rounded,
+                      label: 'CC',
+                      onPressed: onSubtitles,
+                    ),
+                    const SizedBox(width: 8),
+                    _VlcControl(
+                      icon: Icons.build_circle_outlined,
+                      label: 'Fix video',
+                      onPressed: onFixVideo,
+                    ),
+                    const SizedBox(width: 18),
+                    _VlcControl(
+                      icon: Icons.tune_rounded,
+                      label: 'Options',
+                      onPressed: onOptions,
+                    ),
+                  ],
+                ),
               ),
-          ],
+              const SizedBox(height: 9),
+              if (controller != null)
+                ValueListenableBuilder<VlcPlayerValue>(
+                  valueListenable: controller!,
+                  builder: (context, value, child) {
+                    final progress = value.duration.inMilliseconds == 0
+                        ? 0.0
+                        : (value.position.inMilliseconds /
+                                  value.duration.inMilliseconds)
+                              .clamp(0.0, 1.0);
+                    return Column(
+                      children: [
+                        LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 4,
+                          color: AppColors.accentBright,
+                          backgroundColor: Colors.white.withValues(alpha: .22),
+                        ),
+                        const SizedBox(height: 9),
+                        Row(
+                          children: [
+                            Text(
+                              '${_formatDuration(value.position)}  /  '
+                              '${_formatDuration(value.duration)}',
+                            ),
+                            const Spacer(),
+                            const Text(
+                              'VLC compatibility renderer  •  J/L seek  •  C decoder',
+                              style: TextStyle(color: AppColors.textMuted),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );

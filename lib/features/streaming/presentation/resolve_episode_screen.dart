@@ -5,6 +5,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
@@ -17,6 +18,38 @@ import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+typedef DebridStreamResolverFactory =
+    StreamResolver Function({
+      required DebridService service,
+      required String token,
+      required ReleaseSource source,
+    });
+
+final debridStreamResolverFactoryProvider =
+    Provider<DebridStreamResolverFactory>((_) {
+      return ({required service, required token, required source}) =>
+          switch (service) {
+            DebridService.realDebrid => RealDebridStreamResolver(
+              RealDebridClient(token: token),
+              source,
+            ),
+            DebridService.torBox => TorBoxStreamResolver(
+              TorBoxClient(token: token),
+              source,
+            ),
+          };
+    });
+
+final configuredReleaseSourceProvider = Provider<ReleaseSource?>((_) {
+  final sources = <ReleaseSource>[
+    if (AppConfig.hasStremioAddon)
+      TorrentioReleaseSource(manifestUrl: AppConfig.stremioAddonManifestUrl),
+    if (AppConfig.hasReleaseResolver)
+      HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
+  ];
+  return sources.isEmpty ? null : CompositeReleaseSource(sources);
+});
 
 int tvPlaybackCompatibilityRank(
   ReleaseCandidate release, {
@@ -79,6 +112,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
   TvDeviceProfile _deviceProfile = const TvDeviceProfile.unknown();
   Map<String, int> _failureCounts = const {};
+  ReleaseCandidate? _lastAttemptedRelease;
+  int _resolveAttempt = 0;
 
   bool get _hasDebrid => _connectedServices.contains(_debridService);
 
@@ -125,20 +160,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _loadConfiguredReleases() async {
-    final sources = <ReleaseSource>[];
-    if (AppConfig.hasStremioAddon) {
-      sources.add(
-        TorrentioReleaseSource(manifestUrl: AppConfig.stremioAddonManifestUrl),
-      );
-    }
-    if (AppConfig.hasReleaseResolver) {
-      sources.add(
-        HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
-      );
-    }
-    if (sources.isNotEmpty) {
-      await _loadReleases(CompositeReleaseSource(sources));
-    }
+    final source = ref.read(configuredReleaseSourceProvider);
+    if (source != null) await _loadReleases(source);
   }
 
   Future<void> _loadReleases(ReleaseSource source) async {
@@ -171,36 +194,37 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     required ReleaseCandidate selected,
   }) async {
     if (_resolving) return;
-    final token = await ref
-        .read(secureStorageProvider)
-        .read(key: _debridService.tokenStorageKey);
-    if (token == null || token.isEmpty) {
-      setState(
-        () =>
-            _connectedServices = {..._connectedServices}
-              ..remove(_debridService),
-      );
-      return;
-    }
+    final attempt = ++_resolveAttempt;
     setState(() {
       _resolving = true;
       _progress = 0;
       _status = 'Sending the release to ${_debridService.displayName}…';
       _error = null;
+      _lastAttemptedRelease = selected;
     });
     try {
-      final resolver = switch (_debridService) {
-        DebridService.realDebrid => RealDebridStreamResolver(
-          RealDebridClient(token: token),
-          source,
-        ),
-        DebridService.torBox => TorBoxStreamResolver(
-          TorBoxClient(token: token),
-          source,
-        ),
-      };
+      final token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(_debridService);
+      if (!mounted || attempt != _resolveAttempt) return;
+      if (token == null || token.isEmpty) {
+        setState(
+          () =>
+              _connectedServices = {..._connectedServices}
+                ..remove(_debridService),
+        );
+        throw StateError(
+          '${_debridService.displayName} is not connected. '
+          'Open Accounts to reconnect it.',
+        );
+      }
+      final resolver = ref.read(debridStreamResolverFactoryProvider)(
+        service: _debridService,
+        token: token,
+        source: source,
+      );
       await for (final state in resolver.resolve(widget.episode)) {
-        if (!mounted) return;
+        if (!mounted || attempt != _resolveAttempt) return;
         switch (state) {
           case StreamCaching():
             setState(() {
@@ -256,14 +280,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         }
       }
     } catch (error) {
-      if (mounted) {
+      if (mounted && attempt == _resolveAttempt) {
         setState(() {
-          _error = error.toString();
+          _error = error.toString().replaceFirst('Bad state: ', '');
           _status = 'Could not resolve this episode';
         });
       }
     } finally {
-      if (mounted) setState(() => _resolving = false);
+      if (mounted && attempt == _resolveAttempt) {
+        setState(() => _resolving = false);
+      }
     }
   }
 
@@ -283,7 +309,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       await _initialize();
       return;
     }
-    _resolve(_SelectedReleaseSource(candidate), selected: candidate);
+    await _resolve(_SelectedReleaseSource(candidate), selected: candidate);
   }
 
   @override
@@ -409,6 +435,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         filter: _languageFilter,
         onFilterChanged: (value) => setState(() => _languageFilter = value),
         onSelected: _resolveCandidate,
+        error: _error,
+        onRetry: _lastAttemptedRelease == null
+            ? null
+            : () => _resolveCandidate(_lastAttemptedRelease!),
         onRefresh: _loadConfiguredReleases,
         onManual: () => setState(() => _showManual = true),
       );
@@ -530,6 +560,8 @@ class _StreamPicker extends StatelessWidget {
     required this.filter,
     required this.onFilterChanged,
     required this.onSelected,
+    required this.error,
+    required this.onRetry,
     required this.onRefresh,
     required this.onManual,
   });
@@ -542,6 +574,8 @@ class _StreamPicker extends StatelessWidget {
   final _StreamLanguageFilter filter;
   final ValueChanged<_StreamLanguageFilter> onFilterChanged;
   final ValueChanged<ReleaseCandidate> onSelected;
+  final String? error;
+  final VoidCallback? onRetry;
   final VoidCallback onRefresh;
   final VoidCallback onManual;
 
@@ -616,6 +650,45 @@ class _StreamPicker extends StatelessWidget {
               ),
             ],
           ),
+          if (error case final message?) ...[
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A1117),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.accentBright.withValues(alpha: .65),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: Color(0xFFFF929B),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Could not start this stream: $message',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Color(0xFFFFC4C9)),
+                    ),
+                  ),
+                  if (onRetry case final retry?) ...[
+                    const SizedBox(width: 16),
+                    _CompactAction(
+                      icon: Icons.refresh_rounded,
+                      label: 'Retry',
+                      onPressed: retry,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 18),
           Expanded(
             child: releases.isEmpty

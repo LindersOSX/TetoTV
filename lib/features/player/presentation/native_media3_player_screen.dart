@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
-import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
@@ -299,8 +299,8 @@ class _NativeMedia3PlayerScreenState
 
   Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
     final token = await ref
-        .read(secureStorageProvider)
-        .read(key: widget.debridService.tokenStorageKey);
+        .read(debridTokenServiceProvider)
+        .accessToken(widget.debridService);
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
     final resolver = switch (widget.debridService) {

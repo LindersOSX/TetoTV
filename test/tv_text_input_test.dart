@@ -33,8 +33,10 @@ void main() {
     final keyboardSize = tester.getSize(
       find.byKey(const ValueKey('tv-keyboard-panel')),
     );
-    expect(keyboardSize.width, 650);
-    expect(keyboardSize.height, lessThan(290));
+    expect(keyboardSize.width, inInclusiveRange(540, 560));
+    expect(keyboardSize.height, lessThan(250));
+    expect(find.text('7'), findsOneWidget);
+    expect(find.text('#?&'), findsOneWidget);
   });
 
   testWidgets('physical Enter commits the TV keyboard value', (tester) async {

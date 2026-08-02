@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -159,6 +160,60 @@ void main() {
         preferDub: true,
       ),
       isNull,
+    );
+  });
+
+  test('English track matching accepts common ISO aliases', () {
+    for (final language in const ['en', 'eng', 'en-US', 'en_GB', 'English']) {
+      expect(
+        playerTrackMatchesLanguage(
+          language: language,
+          preferredLanguage: 'eng',
+        ),
+        isTrue,
+        reason: language,
+      );
+    }
+    expect(preferredVlcTrack(const {1: 'ja', 2: 'en'}, language: 'eng'), 2);
+  });
+
+  test('double Down requires two distinct presses inside the window', () {
+    final detector = PlayerDoubleDownDetector();
+    final start = DateTime(2026);
+
+    expect(detector.register(LogicalKeyboardKey.arrowDown, at: start), isFalse);
+    expect(
+      detector.register(
+        LogicalKeyboardKey.arrowDown,
+        at: start.add(const Duration(milliseconds: 440)),
+      ),
+      isTrue,
+    );
+    expect(playerControlsIdleTimeout, const Duration(seconds: 10));
+  });
+
+  test('another key or a late Down resets double-Down detection', () {
+    final detector = PlayerDoubleDownDetector();
+    final start = DateTime(2026);
+
+    detector.register(LogicalKeyboardKey.arrowDown, at: start);
+    detector.register(
+      LogicalKeyboardKey.arrowRight,
+      at: start.add(const Duration(milliseconds: 100)),
+    );
+    expect(
+      detector.register(
+        LogicalKeyboardKey.arrowDown,
+        at: start.add(const Duration(milliseconds: 200)),
+      ),
+      isFalse,
+    );
+    expect(
+      detector.register(
+        LogicalKeyboardKey.arrowDown,
+        at: start.add(const Duration(milliseconds: 800)),
+      ),
+      isFalse,
     );
   });
 }

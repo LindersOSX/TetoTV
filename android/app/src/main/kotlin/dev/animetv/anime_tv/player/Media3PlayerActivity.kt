@@ -1,6 +1,8 @@
 package dev.animetv.anime_tv.player
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
+import android.app.Dialog
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -10,11 +12,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.TypedValue
+import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ImageButton
+import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -41,6 +45,8 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TrackSelectionDialogBuilder
+import dev.animetv.anime_tv.R
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import okhttp3.OkHttpClient
@@ -57,6 +63,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var player: ExoPlayer
     private lateinit var playerView: PlayerView
     private lateinit var mediaSession: MediaSession
+    private lateinit var audioTrackButton: ImageButton
+    private lateinit var captionTrackButton: ImageButton
     private val handler = Handler(Looper.getMainLooper())
 
     private var source = ""
@@ -74,12 +82,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var resumeAfterTransientPause = false
     private var isForeground = false
     private var preferredAudioLanguage = "eng"
+    private var preferredSubtitleLanguage = "eng"
+    private var subtitlesEnabled = true
     private var preferredAudioOverrideApplied = false
+    private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
     private var backgroundResumeMs = 0L
     private var dropWindowElapsedMs = 0L
     private var dropWindowFrames = 0
     private var consecutiveChoppyWindows = 0
+    private var activeTrackDialog: Dialog? = null
+    private var lastDpadDownAtMs = 0L
+    private var consumedNavigationKeyUp: Int? = null
 
     private val checkpointPreferences by lazy {
         getSharedPreferences(CHECKPOINT_PREFERENCES, MODE_PRIVATE)
@@ -91,6 +105,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             if (!isFinishing && !isDestroyed && isForeground) {
                 handler.postDelayed(this, CHECKPOINT_INTERVAL_MS)
             }
+        }
+    }
+
+    private val hideControllerRunnable = Runnable {
+        if (
+            ::playerView.isInitialized &&
+            activeTrackDialog?.isShowing != true &&
+            !isFinishing &&
+            !isDestroyed
+        ) {
+            playerView.hideController()
         }
     }
 
@@ -172,10 +197,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         val audioLabels = preferredAudioLabels(
             preferredAudioLanguage,
         )
-        val subtitleLanguages = preferredLanguageTags(
-            intent.getStringExtra(EXTRA_SUBTITLE_LANGUAGE) ?: "eng",
-        )
-        val subtitlesEnabled = intent.getBooleanExtra(EXTRA_SUBTITLES_ENABLED, true)
+        preferredSubtitleLanguage =
+            intent.getStringExtra(EXTRA_SUBTITLE_LANGUAGE)?.ifBlank { "eng" } ?: "eng"
+        val subtitleLanguages = preferredLanguageTags(preferredSubtitleLanguage)
+        subtitlesEnabled = intent.getBooleanExtra(EXTRA_SUBTITLES_ENABLED, true)
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
@@ -260,13 +285,22 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
             }
 
-        playerView = PlayerView(this).apply {
+        setContentView(R.layout.activity_media3_player)
+        playerView = findViewById<PlayerView>(R.id.tetotv_player_view).apply {
             setBackgroundColor(Color.BLACK)
             setShutterBackgroundColor(Color.BLACK)
             useController = true
-            controllerAutoShow = true
+            // Media3 otherwise keeps controls visible forever while paused.
+            // TetoTV uses one deterministic inactivity policy in every state.
+            controllerAutoShow = false
             controllerHideOnTouch = true
-            controllerShowTimeoutMs = 5_000
+            controllerShowTimeoutMs = CONTROLLER_HIDE_TIMEOUT_MS.toInt()
+            setShowPreviousButton(false)
+            setShowNextButton(false)
+            setShowRewindButton(true)
+            setShowFastForwardButton(true)
+            // TetoTV owns the explicit, TV-focusable caption picker below.
+            setShowSubtitleButton(false)
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
             setKeepContentOnPlayerReset(false)
             resizeMode = when (intent.getStringExtra(EXTRA_VIDEO_FIT)) {
@@ -302,11 +336,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 }
             }
             player = this@Media3PlayerActivity.player
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
         }
+        audioTrackButton = playerView.findViewById<ImageButton>(R.id.tetotv_audio_tracks).apply {
+            setOnClickListener {
+                showTrackPicker(C.TRACK_TYPE_AUDIO, this)
+            }
+        }
+        captionTrackButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_caption_tracks).apply {
+                setOnClickListener {
+                    showTrackPicker(C.TRACK_TYPE_TEXT, this)
+                }
+            }
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
             terminalError =
@@ -316,7 +357,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             return
         }
         videoSurface.holder.addCallback(surfaceCallback)
-        setContentView(playerView)
         mediaSession = MediaSession.Builder(this, player)
             // Media3 requires IDs to remain unique until the prior Activity's
             // asynchronous destruction has released its session. This matters
@@ -357,7 +397,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         player.prepare()
         player.playWhenReady = intent.getBooleanExtra(EXTRA_AUTO_PLAY, true)
         playerView.showController()
-        playerView.requestFocus()
+        requestTransportFocus()
+        armControllerAutoHide()
     }
 
     private fun buildMediaItem(): MediaItem {
@@ -444,6 +485,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             return
         }
         applyPreferredAudioOverride(tracks)
+        applyPreferredSubtitleOverride(tracks)
+        updateTrackButtons(tracks)
         if (
             isForeground &&
             player.playbackState == Player.STATE_READY &&
@@ -453,6 +496,211 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             handler.removeCallbacks(firstFrameWatchdog)
             handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
         }
+    }
+
+    private fun applyPreferredSubtitleOverride(tracks: Tracks) {
+        if (preferredSubtitleOverrideApplied || !subtitlesEnabled) return
+        val preferredTags = preferredLanguageTags(preferredSubtitleLanguage).toSet()
+        val normalizedPreference = preferredSubtitleLanguage.trim().lowercase()
+        var bestGroup: Tracks.Group? = null
+        var bestTrack = -1
+        var bestScore = Int.MIN_VALUE
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (index in 0 until group.length) {
+                if (!group.isTrackSupported(index)) continue
+                val format = group.getTrackFormat(index)
+                val language = format.language.orEmpty().lowercase()
+                val label = format.label.orEmpty().lowercase()
+                val description = "$language $label"
+                var score = 0
+                if (language in preferredTags) score += 140
+                if (normalizedPreference in description) score += 80
+                if (
+                    normalizedPreference in setOf("eng", "en", "english") &&
+                    ("english" in description || "eng " in description)
+                ) score += 120
+                if (format.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0) score += 15
+                if ("full" in description || "dialogue" in description) score += 30
+                if ("closed caption" in description || "cc" in label || "sdh" in label) score += 20
+                if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) score -= 100
+                if ("sign" in description || "song" in description || "forced" in description) {
+                    score -= 100
+                }
+                if (score > bestScore) {
+                    bestScore = score
+                    bestGroup = group
+                    bestTrack = index
+                }
+            }
+        }
+        val group = bestGroup ?: return
+        if (bestTrack < 0 || bestScore < 50) return
+        // Set the guard before changing parameters because that change can
+        // synchronously result in another onTracksChanged callback.
+        preferredSubtitleOverrideApplied = true
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, bestTrack))
+            .build()
+    }
+
+    private fun updateTrackButtons(tracks: Tracks) {
+        if (!::audioTrackButton.isInitialized || !::captionTrackButton.isInitialized) return
+        val hasAudio = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_AUDIO &&
+                (0 until group.length).any(group::isTrackSupported)
+        }
+        val hasCaptions = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_TEXT &&
+                (0 until group.length).any(group::isTrackSupported)
+        }
+        audioTrackButton.isEnabled = hasAudio
+        audioTrackButton.alpha = if (hasAudio) 1f else DISABLED_CONTROL_ALPHA
+        captionTrackButton.isEnabled = hasCaptions
+        captionTrackButton.alpha = if (hasCaptions) 1f else DISABLED_CONTROL_ALPHA
+        val captionsSelected = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_TEXT && group.isSelected
+        }
+        captionTrackButton.isSelected = captionsSelected
+        captionTrackButton.setImageResource(
+            if (captionsSelected) {
+                androidx.media3.ui.R.drawable.exo_ic_subtitle_on
+            } else {
+                androidx.media3.ui.R.drawable.exo_ic_subtitle_off
+            },
+        )
+        captionTrackButton.contentDescription = getString(
+            if (captionsSelected) {
+                R.string.tetotv_player_closed_captions_on
+            } else {
+                R.string.tetotv_player_closed_captions_off
+            },
+        )
+    }
+
+    private fun showTrackPicker(trackType: Int, sourceButton: View) {
+        val selectableTracks = player.currentTracks.groups.any { group ->
+            group.type == trackType &&
+                (0 until group.length).any(group::isTrackSupported)
+        }
+        if (!selectableTracks) {
+            val message = if (trackType == C.TRACK_TYPE_AUDIO) {
+                R.string.tetotv_player_no_audio_tracks
+            } else {
+                R.string.tetotv_player_no_caption_tracks
+            }
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            armControllerAutoHide()
+            return
+        }
+
+        handler.removeCallbacks(hideControllerRunnable)
+        activeTrackDialog?.dismiss()
+        val title = if (trackType == C.TRACK_TYPE_AUDIO) {
+            R.string.tetotv_player_select_audio
+        } else {
+            R.string.tetotv_player_select_captions
+        }
+        val dialog = TrackSelectionDialogBuilder(this, getString(title), player, trackType)
+            .setTheme(R.style.NativePlayerTrackDialogTheme)
+            .setAllowAdaptiveSelections(false)
+            .setAllowMultipleOverrides(false)
+            .setShowDisableOption(trackType == C.TRACK_TYPE_TEXT)
+            .build()
+        activeTrackDialog = dialog
+        dialog.setOnDismissListener {
+            if (activeTrackDialog === dialog) activeTrackDialog = null
+            if (!isFinishing && !isDestroyed) {
+                playerView.showController()
+                sourceButton.requestFocus()
+                armControllerAutoHide()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun requestTransportFocus() {
+        val playPause = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)
+        if (playPause?.requestFocus() != true) playerView.requestFocus()
+    }
+
+    private fun armControllerAutoHide() {
+        handler.removeCallbacks(hideControllerRunnable)
+        if (
+            ::playerView.isInitialized &&
+            playerView.isControllerFullyVisible &&
+            activeTrackDialog?.isShowing != true
+        ) {
+            handler.postDelayed(hideControllerRunnable, CONTROLLER_HIDE_TIMEOUT_MS)
+        }
+    }
+
+    // ComponentActivity exposes the platform Activity dispatch hook through
+    // androidx.core with a library-group annotation. Overriding it is required
+    // here so a hidden controller can consume the first DPAD-left/right event
+    // before a video or time bar sees it.
+    @SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!::playerView.isInitialized) return super.dispatchKeyEvent(event)
+
+        consumedNavigationKeyUp?.let { consumedKey ->
+            if (event.keyCode == consumedKey) {
+                if (event.action == KeyEvent.ACTION_UP) consumedNavigationKeyUp = null
+                return true
+            }
+        }
+
+        val isInitialKeyDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        if (isInitialKeyDown) {
+            val now = SystemClock.elapsedRealtime()
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (
+                    playerView.isControllerFullyVisible &&
+                    now - lastDpadDownAtMs in 1..DOUBLE_DPAD_DOWN_WINDOW_MS
+                ) {
+                    lastDpadDownAtMs = 0L
+                    consumedNavigationKeyUp = event.keyCode
+                    handler.removeCallbacks(hideControllerRunnable)
+                    playerView.hideController()
+                    return true
+                }
+                lastDpadDownAtMs = now
+            } else {
+                lastDpadDownAtMs = 0L
+            }
+
+            if (event.keyCode in CONTROLLER_NAVIGATION_KEYS) {
+                if (!playerView.isControllerFullyVisible) {
+                    // The first direction press only opens the controls. This
+                    // prevents DPAD-left/right from leaking into a seek path.
+                    consumedNavigationKeyUp = event.keyCode
+                    playerView.showController()
+                    requestTransportFocus()
+                    armControllerAutoHide()
+                    return true
+                }
+                armControllerAutoHide()
+            } else if (event.keyCode in CONTROLLER_INTERACTION_KEYS) {
+                // Dedicated media buttons still perform their native action,
+                // but the viewer should also see the updated play/seek state.
+                if (!playerView.isControllerFullyVisible) {
+                    playerView.showController()
+                }
+                armControllerAutoHide()
+            }
+        }
+
+        val handled = super.dispatchKeyEvent(event)
+        if (
+            event.action == KeyEvent.ACTION_UP &&
+            playerView.isControllerFullyVisible &&
+            event.keyCode in CONTROLLER_INTERACTION_KEYS
+        ) {
+            armControllerAutoHide()
+        }
+        return handled
     }
 
     private fun applyPreferredAudioOverride(tracks: Tracks) {
@@ -666,12 +914,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(checkpointRunnable)
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
+        handler.removeCallbacks(hideControllerRunnable)
     }
 
     private fun armForegroundWork() {
         pauseScheduledWork()
         if (resultSent || !isForeground || !::player.isInitialized) return
         handler.postDelayed(checkpointRunnable, CHECKPOINT_INTERVAL_MS)
+        if (playerView.isControllerFullyVisible) armControllerAutoHide()
         if (firstFrameRendered) return
         if (player.playbackState == Player.STATE_READY && hasSelectedVideoTrack()) {
             handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
@@ -681,6 +931,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onDestroy() {
+        activeTrackDialog?.dismiss()
+        activeTrackDialog = null
         handler.removeCallbacksAndMessages(null)
         if (::playerView.isInitialized) {
             (playerView.videoSurfaceView as? SurfaceView)?.holder?.removeCallback(surfaceCallback)
@@ -701,6 +953,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(checkpointRunnable)
+        handler.removeCallbacks(hideControllerRunnable)
         persistCheckpoint()
         val duration = safeDurationMs()
         val position = safePositionMs()
@@ -809,12 +1062,30 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
+        private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
+        private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
+        private const val DISABLED_CONTROL_ALPHA = 0.38f
         private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
         private const val STARTUP_TIMEOUT_MS = 45_000L
         private const val CHOPPY_WINDOW_MIN_MS = 4_000L
         private const val CHOPPY_MIN_DROPPED_FRAMES = 20
         private const val CHOPPY_DROP_RATIO = 0.25f
         private const val CHOPPY_CONSECUTIVE_WINDOWS = 2
+        private val CONTROLLER_NAVIGATION_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+        )
+        private val CONTROLLER_INTERACTION_KEYS = CONTROLLER_NAVIGATION_KEYS + setOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_REWIND,
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        )
         private const val SMOKE_VIDEO_REQUEST_URI = "asset:///assets/videos/vlc_smoke.mp4"
         private const val SMOKE_VIDEO_URI =
             "asset:///flutter_assets/assets/videos/vlc_smoke.mp4"

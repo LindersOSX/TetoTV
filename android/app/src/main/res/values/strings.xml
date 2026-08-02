@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tetotv_player_audio_short">Audio</string>
+    <string name="tetotv_player_audio_tracks">Select audio track</string>
+    <string name="tetotv_player_cc_short">CC</string>
+    <string name="tetotv_player_closed_captions">Select closed captions</string>
+    <string name="tetotv_player_closed_captions_off">Closed captions off. Select captions</string>
+    <string name="tetotv_player_closed_captions_on">Closed captions on. Select captions</string>
+    <string name="tetotv_player_fast_forward">Fast forward 10 seconds</string>
+    <string name="tetotv_player_hide_more_controls">Hide more controls</string>
+    <string name="tetotv_player_no_audio_tracks">No selectable audio tracks</string>
+    <string name="tetotv_player_no_caption_tracks">No closed-caption tracks are available</string>
+    <string name="tetotv_player_play_pause">Play or pause</string>
+    <string name="tetotv_player_rewind">Rewind 10 seconds</string>
+    <string name="tetotv_player_select_audio">Audio tracks</string>
+    <string name="tetotv_player_select_captions">Closed captions</string>
+    <string name="tetotv_player_show_more_controls">Show more controls</string>
+    <string name="tetotv_player_time_separator">/</string>
+</resources>
