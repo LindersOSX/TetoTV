@@ -298,7 +298,11 @@ async function exchangeCode(pairing, code) {
     });
     const body = await result.json();
     if (!result.ok || !body.access_token) {
-      throw new Error("AniList token exchange failed.");
+      const detail =
+        body.error_description || body.message || body.error || "unknown error";
+      throw new Error(
+        `AniList token exchange failed (${result.status}: ${String(detail).slice(0, 160)}).`,
+      );
     }
     return {
       accessToken: body.access_token,
@@ -327,7 +331,11 @@ async function exchangeCode(pairing, code) {
   });
   const body = await result.json();
   if (!result.ok || !body.access_token) {
-    throw new Error("MyAnimeList token exchange failed.");
+    const detail =
+      body.error_description || body.message || body.error || "unknown error";
+    throw new Error(
+      `MyAnimeList token exchange failed (${result.status}: ${String(detail).slice(0, 160)}).`,
+    );
   }
   return {
     accessToken: body.access_token,
