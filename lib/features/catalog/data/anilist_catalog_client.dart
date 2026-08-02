@@ -1,10 +1,12 @@
-import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
-import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'dart:convert';
+
+import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/catalog/data/kitsu_catalog_fallback.dart';
+import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:dio/dio.dart';
 
 class AniListCatalogClient {
-  AniListCatalogClient({Dio? dio})
+  AniListCatalogClient({Dio? dio, Dio? kitsuDio})
     : _dio =
           dio ??
           Dio(
@@ -14,9 +16,11 @@ class AniListCatalogClient {
               receiveTimeout: const Duration(seconds: 15),
               headers: const {'Accept': 'application/json'},
             ),
-          );
+          ),
+      _kitsu = KitsuCatalogFallback(dio: kitsuDio);
 
   final Dio _dio;
+  final KitsuCatalogFallback _kitsu;
 
   Future<List<AnimeSummary>> trending({int page = 1}) async {
     const query = r'''
@@ -126,7 +130,21 @@ class AniListCatalogClient {
         }
       }
     ''';
-    return _mediaPage(query, {'page': page, 'search': term});
+    try {
+      return await _mediaPage(query, {
+        'page': page,
+        'search': term,
+      }, useStaleOnError: false);
+    } catch (anilistError) {
+      try {
+        return await _kitsu.search(term, page: page);
+      } catch (_) {
+        throw StateError(
+          'Anime search is temporarily unavailable. Please try again shortly. '
+          'AniList error: ${_friendlyError(anilistError)}',
+        );
+      }
+    }
   }
 
   Future<AnimeSummary> details(int id) async {
@@ -189,10 +207,14 @@ class AniListCatalogClient {
         }
       }
     ''';
-    final data = await _graphQl(query, {'id': id});
-    final media = data['Media'] as Map<String, dynamic>?;
-    if (media == null) throw StateError('Anime not found.');
-    return _mapAnime(media);
+    try {
+      final data = await _graphQl(query, {'id': id});
+      final media = data['Media'] as Map<String, dynamic>?;
+      if (media == null) throw StateError('Anime not found.');
+      return _mapAnime(media);
+    } catch (_) {
+      return _kitsu.detailsForAniListId(id);
+    }
   }
 
   Future<List<AnimeSummary>> discover(
@@ -355,21 +377,27 @@ class AniListCatalogClient {
 
   Future<List<AnimeSummary>> _mediaPage(
     String query,
-    Map<String, dynamic> variables,
-  ) async {
-    final data = await _graphQl(query, variables);
+    Map<String, dynamic> variables, {
+    bool useStaleOnError = true,
+  }) async {
+    final data = await _graphQl(
+      query,
+      variables,
+      useStaleOnError: useStaleOnError,
+    );
     final pageData = data['Page'] as Map<String, dynamic>?;
     final media = pageData?['media'] as List<dynamic>? ?? const [];
     return media
-        .cast<Map<String, dynamic>>()
+        .whereType<Map<String, dynamic>>()
         .map(_mapAnime)
         .toList(growable: false);
   }
 
   Future<Map<String, dynamic>> _graphQl(
     String query,
-    Map<String, dynamic> variables,
-  ) async {
+    Map<String, dynamic> variables, {
+    bool useStaleOnError = true,
+  }) async {
     final cacheKey =
         'anilist:${jsonEncode({'query': query, 'variables': variables})}';
     try {
@@ -385,15 +413,34 @@ class AniListCatalogClient {
         data: {'query': query, 'variables': variables},
       );
       body = response.data ?? const {};
+    } on DioException catch (error, stackTrace) {
+      if (useStaleOnError) {
+        try {
+          final stale = await TetoTvDatabase.instance.cachedJson(
+            cacheKey,
+            allowExpired: true,
+          );
+          if (stale != null) return stale;
+        } catch (_) {
+          // Preserve the original network error below.
+        }
+      }
+      final message = _graphQlErrorMessage(error.response?.data);
+      if (message != null) {
+        Error.throwWithStackTrace(StateError(message), stackTrace);
+      }
+      rethrow;
     } catch (_) {
-      try {
-        final stale = await TetoTvDatabase.instance.cachedJson(
-          cacheKey,
-          allowExpired: true,
-        );
-        if (stale != null) return stale;
-      } catch (_) {
-        // Preserve the original network error below.
+      if (useStaleOnError) {
+        try {
+          final stale = await TetoTvDatabase.instance.cachedJson(
+            cacheKey,
+            allowExpired: true,
+          );
+          if (stale != null) return stale;
+        } catch (_) {
+          // Preserve the original network error below.
+        }
       }
       rethrow;
     }
@@ -432,8 +479,12 @@ class AniListCatalogClient {
       score: score == null ? null : score.toDouble() / 10,
       coverImageUrl: cover?['extraLarge'] as String?,
       bannerImageUrl: item['bannerImage'] as String?,
-      genres: (item['genres'] as List<dynamic>? ?? const []).cast<String>(),
-      synonyms: (item['synonyms'] as List<dynamic>? ?? const []).cast<String>(),
+      genres: (item['genres'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(growable: false),
+      synonyms: (item['synonyms'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(growable: false),
       format: item['format'] as String?,
       status: item['status'] as String?,
       season: item['season'] as String?,
@@ -540,6 +591,25 @@ class AniListCatalogClient {
       if (value != null && value.trim().isNotEmpty) return value.trim();
     }
     return 'Untitled';
+  }
+
+  String? _graphQlErrorMessage(dynamic body) {
+    if (body is! Map) return null;
+    final errors = body['errors'];
+    if (errors is! List || errors.isEmpty) return null;
+    final first = errors.first;
+    if (first is! Map) return null;
+    final message = first['message']?.toString().trim();
+    return message == null || message.isEmpty ? null : message;
+  }
+
+  String _friendlyError(Object error) {
+    if (error is StateError) return error.message.toString();
+    if (error is DioException) {
+      return _graphQlErrorMessage(error.response?.data) ??
+          'the service could not be reached';
+    }
+    return 'the service could not be reached';
   }
 
   String _plainText(String value) {

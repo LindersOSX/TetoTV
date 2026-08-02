@@ -16,7 +16,7 @@ playback path, with two independent compatibility engines.
 | Secrets | `flutter_secure_storage` | Android Keystore-backed storage for user tokens. |
 | Local state | SQLite (`sqflite`, WAL mode) | Exact resume, history, per-series settings, compatibility failures, catalog cache, and performance events. |
 | Native TV | Kotlin activity and method channel | Direct-surface Media3 playback, MediaSession, Watch Next, reminders, codec/display/audio capabilities, and display mode selection. |
-| Metadata | AniList GraphQL | Seasonal, trending, search, relations, cover art, and user list mutations. |
+| Metadata | AniList GraphQL with mapped Kitsu search/details fallback | AniList remains canonical; Kitsu keeps title search usable during documented AniList API suspensions while preserving AniList/MAL IDs. |
 | Auth | Direct Real-Debrid device OAuth plus a tracker pairing broker | Real-Debrid exposes a TV-friendly device flow; AniList/MAL authorization is adapted by a small server so secrets never ship in the APK. |
 | Debrid | Real-Debrid and TorBox APIs | Magnets are processed remotely and only provider-generated HTTPS streams reach either player. |
 
@@ -42,7 +42,8 @@ lib/
     diagnostics/             redacted support report export
   features/
     auth/                    pairing broker client and secure token handoff
-    catalog/                 AniList metadata queries and domain models
+    catalog/                 AniList metadata, mapped Kitsu outage fallback,
+                             and domain models
     home/                    TV shelves and hero presentation
     player/                  native Media3 orchestration, MPV/VLC fallbacks,
                              resume, diagnostics, and remote controls

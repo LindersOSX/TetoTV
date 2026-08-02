@@ -27,12 +27,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _searchFocusNode = FocusNode(debugLabel: 'search_input');
   Timer? _debounce;
   AsyncValue<List<AnimeSummary>> _results = const AsyncData([]);
+  var _searchGeneration = 0;
+  var _hasSearched = false;
 
   @override
   void initState() {
     super.initState();
     final initial = widget.initialQuery?.trim() ?? '';
-    if (initial.isNotEmpty) {
+    if (initial.length >= 2) {
       _queryController.text = initial;
       Future.microtask(() => _search(initial));
     }
@@ -50,20 +52,44 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _debounce?.cancel();
     final query = value.trim();
     if (query.length < 2) {
-      setState(() => _results = const AsyncData([]));
+      _searchGeneration++;
+      setState(() {
+        _hasSearched = false;
+        _results = const AsyncData([]);
+      });
       return;
     }
     setState(() {});
     _debounce = Timer(const Duration(milliseconds: 450), () => _search(query));
   }
 
+  void _submitSearch(String value) {
+    _debounce?.cancel();
+    final query = value.trim();
+    if (query.length < 2) {
+      _queueSearch(query);
+      return;
+    }
+    unawaited(_search(query));
+  }
+
   Future<void> _search(String query) async {
-    setState(() => _results = const AsyncLoading());
+    final normalized = query.trim();
+    if (normalized.length < 2) return;
+    final generation = ++_searchGeneration;
+    setState(() {
+      _hasSearched = true;
+      _results = const AsyncLoading();
+    });
     try {
-      final results = await ref.read(catalogClientProvider).search(query);
-      if (mounted) setState(() => _results = AsyncData(results));
+      final results = await ref.read(catalogClientProvider).search(normalized);
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _results = AsyncData(results));
+      }
     } catch (error, stackTrace) {
-      if (mounted) setState(() => _results = AsyncError(error, stackTrace));
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _results = AsyncError(error, stackTrace));
+      }
     }
   }
 
@@ -103,16 +129,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     labelText: 'Search',
                     hintText: 'Title, synonym, or Japanese name',
                     keyboardTitle: 'Search anime',
+                    autofocus: true,
                     onChanged: _queueSearch,
+                    onSubmitted: _submitSearch,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 34),
             Text(
-              _queryController.text.trim().length < 2
-                  ? 'Start typing to search AniList'
-                  : 'Results',
+              !_hasSearched
+                  ? 'Start typing to search anime'
+                  : 'Results for “${_queryController.text.trim()}”',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 18),
@@ -130,15 +158,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       error: (error, _) => _SearchMessage(
         icon: Icons.cloud_off_rounded,
         title: 'Search failed',
-        body: error.toString(),
+        body: error is StateError
+            ? error.message.toString()
+            : 'The catalog could not be reached. Please try again.',
       ),
       data: (items) {
         if (items.isEmpty) {
-          return const _SearchMessage(
-            icon: Icons.manage_search_rounded,
-            title: 'Find your next show',
-            body: 'Search results will appear here.',
-          );
+          return _hasSearched
+              ? const _SearchMessage(
+                  icon: Icons.search_off_rounded,
+                  title: 'No matches found',
+                  body: 'Try another title, spelling, or Japanese name.',
+                )
+              : const _SearchMessage(
+                  icon: Icons.manage_search_rounded,
+                  title: 'Find your next show',
+                  body: 'Search results will appear here.',
+                );
         }
         return ListView.separated(
           scrollDirection: Axis.horizontal,

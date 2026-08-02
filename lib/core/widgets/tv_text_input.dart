@@ -200,6 +200,11 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       Navigator.of(context).pop();
       return KeyEventResult.handled;
     }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      Navigator.of(context).pop(_value);
+      return KeyEventResult.handled;
+    }
     final character = event.character;
     if (character != null &&
         character.length == 1 &&

@@ -18,8 +18,9 @@ currently includes:
 - Real-Debrid and TorBox magnet, cache/download progress, exact file selection,
   and secure direct-stream clients;
 - concrete AniList GraphQL and MyAnimeList v2 list/progress repositories;
-- live AniList trending, seasonal, search, and details screens with cached art
-  plus navigable sequel, prequel, spin-off, and related-title cards;
+- live AniList trending, seasonal, search, and details screens with cached art,
+  a mapping-backed Kitsu search/details fallback for AniList outages, plus
+  navigable sequel, prequel, spin-off, and related-title cards;
 - advanced AniList discovery filters, a weekly airing calendar with local TV
   reminders, franchise-order pages, and navigable studio/staff/cast credits;
 - tracker-backed Watching, Planning, Completed, Dropped, and On Hold My List
@@ -63,9 +64,12 @@ currently includes:
   emulator `x86_64` targets across Android TV and Fire TV hardware;
 - domain boundaries for catalog and pluggable release sources.
 
-AniList supplies the live discovery catalog. Local fallback content keeps the
-shell usable while offline. Player diagnostics use bundled H.264/AAC and styled
-ASS assets only as offline playback smoke tests.
+AniList supplies the primary live discovery catalog. When AniList temporarily
+suspends public API access, search and selected-title details fall back to Kitsu
+entries that contain real AniList and MyAnimeList mappings, preserving tracker
+and playback identifiers. Local fallback content keeps the shell usable while
+offline. Player diagnostics use bundled H.264/AAC and styled ASS assets only as
+offline playback smoke tests.
 
 ## Start here
 

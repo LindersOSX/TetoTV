@@ -22,6 +22,104 @@ void main() {
     return dio;
   }
 
+  Dio rejectedAniListDio() {
+    final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'));
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              response: Response<Map<String, dynamic>>(
+                data: const {
+                  'errors': [
+                    {
+                      'message':
+                          'The AniList API has been temporarily disabled.',
+                      'status': 403,
+                    },
+                  ],
+                },
+                requestOptions: options,
+                statusCode: 403,
+              ),
+              type: DioExceptionType.badResponse,
+            ),
+          );
+        },
+      ),
+    );
+    return dio;
+  }
+
+  Dio kitsuDio(Map<String, dynamic> Function(RequestOptions) responseFor) {
+    final dio = Dio(BaseOptions(baseUrl: 'https://kitsu.io/api/edge/'));
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              data: responseFor(options),
+              requestOptions: options,
+              statusCode: 200,
+            ),
+          );
+        },
+      ),
+    );
+    return dio;
+  }
+
+  Map<String, dynamic> kitsuAnimeResource() => {
+    'type': 'anime',
+    'id': '42',
+    'attributes': {
+      'canonicalTitle': 'Fallback Romaji',
+      'titles': {'en': 'Fallback English', 'en_jp': 'Fallback Romaji'},
+      'synopsis': 'Available during an AniList outage.',
+      'episodeCount': 12,
+      'averageRating': '84.5',
+      'posterImage': {'large': 'https://example.com/poster.jpg'},
+      'coverImage': {'large': 'https://example.com/banner.jpg'},
+      'subtype': 'TV',
+      'status': 'finished',
+      'startDate': '2024-04-01',
+      'episodeLength': 24,
+      'abbreviatedTitles': ['Fallback'],
+    },
+    'relationships': {
+      'mappings': {
+        'data': [
+          {'type': 'mappings', 'id': 'anilist-map'},
+          {'type': 'mappings', 'id': 'mal-map'},
+        ],
+      },
+      'categories': {
+        'data': [
+          {'type': 'categories', 'id': 'action'},
+        ],
+      },
+    },
+  };
+
+  List<Map<String, dynamic>> kitsuIncluded() => [
+    {
+      'type': 'mappings',
+      'id': 'anilist-map',
+      'attributes': {'externalSite': 'anilist/anime', 'externalId': '100'},
+    },
+    {
+      'type': 'mappings',
+      'id': 'mal-map',
+      'attributes': {'externalSite': 'myanimelist/anime', 'externalId': '200'},
+    },
+    {
+      'type': 'categories',
+      'id': 'action',
+      'attributes': {'title': 'Action'},
+    },
+  ];
+
   group('AniListCatalogClient', () {
     test('strips HTML tags from descriptions', () async {
       final client = AniListCatalogClient(
@@ -165,5 +263,143 @@ void main() {
         );
       }
     });
+
+    test(
+      'search falls back to mapped Kitsu results during AniList outage',
+      () async {
+        final client = AniListCatalogClient(
+          dio: rejectedAniListDio(),
+          kitsuDio: kitsuDio(
+            (_) => {
+              'data': [kitsuAnimeResource()],
+              'included': kitsuIncluded(),
+            },
+          ),
+        );
+
+        final results = await client.search('Fallback');
+
+        expect(results, hasLength(1));
+        final anime = results.single;
+        expect(anime.id, 100);
+        expect(anime.idMal, 200);
+        expect(anime.title, 'Fallback English');
+        expect(anime.titleRomaji, 'Fallback Romaji');
+        expect(anime.score, closeTo(8.45, 0.001));
+        expect(anime.genres, ['Action']);
+        expect(anime.season, 'SPRING');
+      },
+    );
+
+    test(
+      'details falls back by AniList mapping during AniList outage',
+      () async {
+        final client = AniListCatalogClient(
+          dio: rejectedAniListDio(),
+          kitsuDio: kitsuDio((options) {
+            if (options.uri.path.endsWith('/mappings')) {
+              expect(options.queryParameters['include'], 'item');
+              return {
+                'data': [
+                  {
+                    'type': 'mappings',
+                    'id': 'anilist-map',
+                    'relationships': {
+                      'item': {
+                        'data': {'type': 'anime', 'id': '42'},
+                      },
+                    },
+                  },
+                ],
+              };
+            }
+            return {'data': kitsuAnimeResource(), 'included': kitsuIncluded()};
+          }),
+        );
+
+        final anime = await client.details(100);
+
+        expect(anime.id, 100);
+        expect(anime.idMal, 200);
+        expect(anime.episodes, 12);
+        expect(anime.durationMinutes, 24);
+      },
+    );
+
+    test(
+      'fallback rejects adult categories even when Kitsu rating is incorrect',
+      () async {
+        final resource = kitsuAnimeResource();
+        final attributes = resource['attributes'] as Map<String, dynamic>;
+        attributes['nsfw'] = false;
+        attributes['ageRating'] = 'PG';
+        final relationships = resource['relationships'] as Map<String, dynamic>;
+        relationships['categories'] = {
+          'data': [
+            {'type': 'categories', 'id': 'adult-category'},
+          ],
+        };
+        final included = kitsuIncluded()
+          ..add({
+            'type': 'categories',
+            'id': 'adult-category',
+            'attributes': {'title': 'Yaoi'},
+          });
+        final client = AniListCatalogClient(
+          dio: rejectedAniListDio(),
+          kitsuDio: kitsuDio(
+            (_) => {
+              'data': [resource],
+              'included': included,
+            },
+          ),
+        );
+
+        final results = await client.search('Incorrectly rated title');
+
+        expect(results, isEmpty);
+      },
+    );
+
+    test(
+      'ignores malformed media entries without losing valid results',
+      () async {
+        final client = AniListCatalogClient(
+          dio: interceptedDio({
+            'data': {
+              'Page': {
+                'media': [
+                  null,
+                  {
+                    'id': 4,
+                    'idMal': null,
+                    'title': {'userPreferred': 'Valid'},
+                    'description': '',
+                    'episodes': 1,
+                    'averageScore': null,
+                    'genres': [null, 'Comedy'],
+                    'coverImage': <String, dynamic>{},
+                    'bannerImage': null,
+                    'format': 'TV',
+                    'status': 'FINISHED',
+                    'season': null,
+                    'seasonYear': null,
+                    'duration': 3,
+                    'synonyms': [null, 'Still valid'],
+                    'nextAiringEpisode': null,
+                  },
+                ],
+              },
+            },
+          }),
+        );
+
+        final results = await client.search('Valid');
+
+        expect(results, hasLength(1));
+        expect(results.single.genres, ['Comedy']);
+        expect(results.single.synonyms, ['Still valid']);
+      },
+    );
   });
 }

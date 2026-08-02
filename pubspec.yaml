@@ -1,7 +1,7 @@
 name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
-version: 1.7.0+30200
+version: 1.7.1+30300
 
 environment:
   sdk: ^3.12.2
