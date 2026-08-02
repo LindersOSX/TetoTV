@@ -32,7 +32,8 @@ currently includes:
 - exact Stremio `fileIdx` preservation for correct episode selection inside
   batch torrents;
 - a monotonic 90%-completion tracking outbox for both trackers;
-- a feature-rich MPV/libass player using `media_kit`, with D-pad controls for
+- a dual-engine player: libVLC compatibility playback is the default and MPV/
+  libass remains selectable for advanced ASS releases, with D-pad controls for
   audio, subtitles, picture fit, playback speed, subtitle size/position,
   audio/subtitle delay, contrast, stream failover, and decoder;
 - exact SQLite-backed resume points and watch history, per-series playback
@@ -44,8 +45,9 @@ currently includes:
   codec/HDR capability profiles;
 - slow-frame/startup instrumentation plus an on-device redacted diagnostics
   export for physical-TV troubleshooting;
-- copy-back MediaCodec rendering to avoid corrupt zero-copy surfaces, plus an
-  automatic and remote-triggered software-video fallback;
+- libVLC MediaCodec copy-back rendering to avoid corrupt zero-copy surfaces,
+  automatic VLC software-video and alternate-stream fallback, plus independent
+  MPV playback selectable from the player options;
 - TV-safe stream ordering that prioritizes H.264/1080p SDR while preserving
   selectable HEVC, AV1, 4K, and HDR releases;
 - automatic English/Dub audio-track preference with remote track switching;
@@ -54,8 +56,8 @@ currently includes:
 - domain boundaries for catalog and pluggable release sources.
 
 AniList supplies the live discovery catalog. Local fallback content keeps the
-shell usable while offline. The player diagnostics use media_kit's public
-example stream and a bundled styled ASS subtitle only as a playback smoke test.
+shell usable while offline. Player diagnostics use bundled H.264/AAC and styled
+ASS assets only as offline playback smoke tests.
 
 ## Start here
 
@@ -65,6 +67,8 @@ example stream and a bundled styled ASS subtitle only as a playback smoke test.
    [deployable broker instructions](broker/README.md).
 4. Read [the Real-Debrid flow](docs/REAL_DEBRID.md).
 5. Read [the TorBox flow](docs/TORBOX.md).
+6. Retain the [third-party playback notices](docs/THIRD_PARTY_NOTICES.md) when
+   redistributing builds.
 
 Then run:
 
@@ -109,7 +113,7 @@ deployed `broker/` service and report both providers as ready from `/health`.
 ## Current scope
 
 The installed APK validates TV launch and focus, live AniList discovery and
-search, Real-Debrid and TorBox device authorization, MPV/libass
+search, Real-Debrid and TorBox device authorization, libVLC and MPV/libass
 playback, and the client-side tracking/streaming flow. Production deployment
 still requires:
 

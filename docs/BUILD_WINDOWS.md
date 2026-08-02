@@ -62,6 +62,7 @@ flutter create `
   .
 
 flutter pub add `
+  flutter_vlc_player `
   media_kit `
   media_kit_video `
   media_kit_libs_android_video `

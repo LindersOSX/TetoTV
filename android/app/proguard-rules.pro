@@ -1,6 +1,8 @@
 # Flutter, media_kit and mpv communicate through generated JNI and reflection.
 -keep class io.flutter.** { *; }
 -keep class com.alexmercerind.** { *; }
+-keep class org.videolan.libvlc.** { *; }
+-keep class software.solid.fluttervlcplayer.** { *; }
 -keep class androidx.media.** { *; }
 -keep class androidx.tvprovider.** { *; }
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod

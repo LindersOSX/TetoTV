@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
+import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -126,6 +127,38 @@ void main() {
     expect(
       playerSeekOffsetForKey(LogicalKeyboardKey.mediaFastForward),
       const Duration(seconds: 10),
+    );
+  });
+
+  test('VLC compatibility mode is independent from its software fallback', () {
+    expect(
+      vlcHwAccForMode(VlcDecoderMode.hardwareCopy),
+      isNot(vlcHwAccForMode(VlcDecoderMode.software)),
+    );
+    expect(
+      vlcDecoderLabel(VlcDecoderMode.hardwareCopy),
+      contains('recommended'),
+    );
+  });
+
+  test('VLC track selection prioritizes English dub and avoids commentary', () {
+    final selected = preferredVlcTrack(
+      const {
+        1: 'Japanese Stereo',
+        2: 'English Commentary',
+        3: 'English Dub 5.1',
+      },
+      language: 'eng',
+      preferDub: true,
+    );
+    expect(selected, 3);
+    expect(
+      preferredVlcTrack(
+        const {1: 'Japanese Stereo'},
+        language: 'eng',
+        preferDub: true,
+      ),
+      isNull,
     );
   });
 }

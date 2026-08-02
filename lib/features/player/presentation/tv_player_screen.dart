@@ -7,6 +7,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
@@ -114,7 +115,7 @@ String _formatPlayerDuration(Duration value) {
   return hours > 0 ? '$hours:$minutes:$seconds' : '${value.inMinutes}:$seconds';
 }
 
-class TvPlayerScreen extends ConsumerStatefulWidget {
+class TvPlayerScreen extends StatefulWidget {
   const TvPlayerScreen({
     required this.source,
     required this.title,
@@ -139,10 +140,71 @@ class TvPlayerScreen extends ConsumerStatefulWidget {
   final String? coverImageUrl;
 
   @override
-  ConsumerState<TvPlayerScreen> createState() => _TvPlayerScreenState();
+  State<TvPlayerScreen> createState() => _TvPlayerScreenRouterState();
 }
 
-class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
+class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
+  bool _useMpv = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_useMpv) {
+      return MpvTvPlayerScreen(
+        source: widget.source,
+        title: widget.title,
+        debridService: widget.debridService,
+        launch: widget.launch,
+        subtitle: widget.subtitle,
+        anilistMediaId: widget.anilistMediaId,
+        malMediaId: widget.malMediaId,
+        episode: widget.episode,
+        coverImageUrl: widget.coverImageUrl,
+      );
+    }
+    return VlcTvPlayerScreen(
+      source: widget.source,
+      title: widget.title,
+      debridService: widget.debridService,
+      launch: widget.launch,
+      subtitle: widget.subtitle,
+      anilistMediaId: widget.anilistMediaId,
+      malMediaId: widget.malMediaId,
+      episode: widget.episode,
+      coverImageUrl: widget.coverImageUrl,
+      onUseMpv: () => setState(() => _useMpv = true),
+    );
+  }
+}
+
+class MpvTvPlayerScreen extends ConsumerStatefulWidget {
+  const MpvTvPlayerScreen({
+    required this.source,
+    required this.title,
+    required this.debridService,
+    required this.launch,
+    this.subtitle,
+    this.anilistMediaId,
+    this.malMediaId,
+    this.episode,
+    this.coverImageUrl,
+    super.key,
+  });
+
+  final String source;
+  final String title;
+  final DebridService debridService;
+  final PlaybackLaunch launch;
+  final String? subtitle;
+  final int? anilistMediaId;
+  final int? malMediaId;
+  final int? episode;
+  final String? coverImageUrl;
+
+  @override
+  ConsumerState<MpvTvPlayerScreen> createState() => _MpvTvPlayerScreenState();
+}
+
+class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
