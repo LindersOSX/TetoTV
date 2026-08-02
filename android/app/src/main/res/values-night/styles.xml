@@ -15,7 +15,7 @@
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
-    <style name="NativePlayerTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="NativePlayerTheme" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">#000000</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:colorAccent">#E63B55</item>
@@ -48,7 +48,7 @@
         <item name="android:padding">9dp</item>
     </style>
 
-    <style name="NativePlayerTrackDialogTheme" parent="@android:style/Theme.Material.Dialog.Alert">
+    <style name="NativePlayerTrackDialogTheme" parent="Theme.AppCompat.Dialog.Alert">
         <item name="android:windowBackground">#FF0B0B0B</item>
         <item name="android:colorAccent">#FFE63B55</item>
         <item name="android:textColorPrimary">#FFFFFFFF</item>

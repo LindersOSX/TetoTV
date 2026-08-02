@@ -152,6 +152,20 @@ class MediaAction {
   final int? value;
 }
 
+class AppVersionInfo {
+  const AppVersionInfo({required this.name, required this.code});
+
+  const AppVersionInfo.unknown() : name = 'unknown', code = 0;
+
+  final String name;
+  final int code;
+
+  factory AppVersionInfo.fromMap(Map<Object?, Object?> value) => AppVersionInfo(
+    name: value['versionName'] as String? ?? 'unknown',
+    code: (value['versionCode'] as num?)?.toInt() ?? 0,
+  );
+}
+
 class NativePlaybackResult {
   const NativePlaybackResult({
     required this.status,
@@ -257,6 +271,33 @@ class AndroidTvBridge {
     } on PlatformException {
       return const TvDeviceProfile.unknown();
     }
+  }
+
+  Future<AppVersionInfo> getAppVersion() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const AppVersionInfo.unknown();
+    }
+    try {
+      final result = await _channel.invokeMapMethod<Object?, Object?>(
+        'getAppVersion',
+      );
+      return result == null
+          ? const AppVersionInfo.unknown()
+          : AppVersionInfo.fromMap(result);
+    } on PlatformException {
+      return const AppVersionInfo.unknown();
+    }
+  }
+
+  Future<String> installApk(String path) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw PlatformException(
+        code: 'APK_INSTALL_UNSUPPORTED',
+        message: 'APK installation is only supported on Android.',
+      );
+    }
+    return await _channel.invokeMethod<String>('installApk', {'path': path}) ??
+        'launched';
   }
 
   Future<void> setPreferredFrameRate(double fps) async {

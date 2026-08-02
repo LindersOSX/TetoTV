@@ -15,8 +15,10 @@ import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.core.content.edit
+import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.tvprovider.media.tv.TvContractCompat
 import androidx.tvprovider.media.tv.WatchNextProgram
@@ -27,6 +29,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.player.Media3PlayerActivity
+import java.io.File
 import kotlin.math.abs
 
 class MainActivity : FlutterActivity() {
@@ -34,6 +37,8 @@ class MainActivity : FlutterActivity() {
     private lateinit var channel: MethodChannel
     private lateinit var mediaSession: MediaSessionCompat
     private var pendingNativePlayerResult: MethodChannel.Result? = null
+    private var pendingApkInstallResult: MethodChannel.Result? = null
+    private var pendingApkPath: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,6 +53,8 @@ class MainActivity : FlutterActivity() {
             try {
                 when (call.method) {
                     "getDeviceProfile" -> result.success(deviceProfile())
+                    "getAppVersion" -> result.success(appVersion())
+                    "installApk" -> installApk(call.argument<String>("path"), result)
                     "startNativePlayer" -> {
                         @Suppress("UNCHECKED_CAST")
                         startNativePlayer(call.arguments as? Map<String, Any?> ?: emptyMap(), result)
@@ -175,6 +182,31 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == APK_INSTALL_PERMISSION_REQUEST_CODE) {
+            val pending = pendingApkInstallResult
+            val path = pendingApkPath
+            pendingApkInstallResult = null
+            pendingApkPath = null
+            if (pending == null || path == null) return
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !packageManager.canRequestPackageInstalls()
+            ) {
+                pending.error(
+                    "APK_INSTALL_PERMISSION",
+                    "Allow TetoTV to install unknown apps, then try again.",
+                    null,
+                )
+                return
+            }
+            try {
+                launchApkInstaller(File(path))
+                pending.success("launched")
+            } catch (error: Throwable) {
+                pending.error("APK_INSTALL", error.message, null)
+            }
+            return
+        }
         if (requestCode == NATIVE_PLAYER_REQUEST_CODE) {
             if (::mediaSession.isInitialized) mediaSession.isActive = true
             val pending = pendingNativePlayerResult
@@ -249,6 +281,80 @@ class MainActivity : FlutterActivity() {
             return
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun appVersion(): Map<String, Any> {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            info.versionCode.toLong()
+        }
+        return mapOf(
+            "versionName" to (info.versionName ?: "unknown"),
+            "versionCode" to versionCode,
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installApk(path: String?, result: MethodChannel.Result) {
+        if (pendingApkInstallResult != null) {
+            result.error("APK_INSTALL_BUSY", "An update install is already pending.", null)
+            return
+        }
+        val file = path?.let(::File)
+        if (file == null || !file.isFile || !isUpdateCacheFile(file)) {
+            result.error("APK_INSTALL_FILE", "The downloaded update could not be found.", null)
+            return
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            pendingApkInstallResult = result
+            pendingApkPath = file.absolutePath
+            try {
+                startActivityForResult(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName"),
+                    ),
+                    APK_INSTALL_PERMISSION_REQUEST_CODE,
+                )
+            } catch (error: Throwable) {
+                pendingApkInstallResult = null
+                pendingApkPath = null
+                result.error("APK_INSTALL_PERMISSION", error.message, null)
+            }
+            return
+        }
+        launchApkInstaller(file)
+        result.success("launched")
+    }
+
+    private fun isUpdateCacheFile(file: File): Boolean {
+        val updateDirectory = File(cacheDir, "updates").canonicalFile
+        val candidate = file.canonicalFile
+        return candidate.path.startsWith(updateDirectory.path + File.separator)
+    }
+
+    private fun launchApkInstaller(file: File) {
+        val apkUri = FileProvider.getUriForFile(
+            this,
+            "$packageName.fileprovider",
+            file,
+        )
+        val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            data = apkUri
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+        }
+        if (intent.resolveActivity(packageManager) == null) {
+            throw IllegalStateException("No Android package installer is available on this TV.")
+        }
+        startActivity(intent)
     }
 
     private fun createMediaSession() {
@@ -484,11 +590,19 @@ class MainActivity : FlutterActivity() {
             null,
         )
         pendingNativePlayerResult = null
+        pendingApkInstallResult?.error(
+            "APK_INSTALL_DESTROYED",
+            "The Android TV activity closed before the installer opened.",
+            null,
+        )
+        pendingApkInstallResult = null
+        pendingApkPath = null
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
     }
 
     companion object {
         private const val NATIVE_PLAYER_REQUEST_CODE = 7314
+        private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
     }
 }

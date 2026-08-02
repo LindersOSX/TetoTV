@@ -10,6 +10,7 @@
     <string name="tetotv_player_hide_more_controls">Hide more controls</string>
     <string name="tetotv_player_no_audio_tracks">No selectable audio tracks</string>
     <string name="tetotv_player_no_caption_tracks">No closed-caption tracks are available</string>
+    <string name="tetotv_player_track_picker_error">Track selection could not be opened</string>
     <string name="tetotv_player_play_pause">Play or pause</string>
     <string name="tetotv_player_rewind">Rewind 10 seconds</string>
     <string name="tetotv_player_select_audio">Audio tracks</string>

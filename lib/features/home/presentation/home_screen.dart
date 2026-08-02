@@ -8,6 +8,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -47,7 +48,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _focusHero());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusHero();
+      ref
+          .read(appUpdateControllerProvider.notifier)
+          .checkForUpdates(automatic: true, launchInstaller: true);
+    });
   }
 
   void _focusHero() {

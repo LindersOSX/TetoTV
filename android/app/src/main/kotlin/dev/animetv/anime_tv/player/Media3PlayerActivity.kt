@@ -603,22 +603,34 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         } else {
             R.string.tetotv_player_select_captions
         }
-        val dialog = TrackSelectionDialogBuilder(this, getString(title), player, trackType)
-            .setTheme(R.style.NativePlayerTrackDialogTheme)
-            .setAllowAdaptiveSelections(false)
-            .setAllowMultipleOverrides(false)
-            .setShowDisableOption(trackType == C.TRACK_TYPE_TEXT)
-            .build()
-        activeTrackDialog = dialog
-        dialog.setOnDismissListener {
-            if (activeTrackDialog === dialog) activeTrackDialog = null
-            if (!isFinishing && !isDestroyed) {
-                playerView.showController()
-                sourceButton.requestFocus()
-                armControllerAutoHide()
+        try {
+            val dialog = TrackSelectionDialogBuilder(this, getString(title), player, trackType)
+                .setTheme(R.style.NativePlayerTrackDialogTheme)
+                .setAllowAdaptiveSelections(false)
+                .setAllowMultipleOverrides(false)
+                .setShowDisableOption(trackType == C.TRACK_TYPE_TEXT)
+                .build()
+            activeTrackDialog = dialog
+            dialog.setOnDismissListener {
+                if (activeTrackDialog === dialog) activeTrackDialog = null
+                if (!isFinishing && !isDestroyed) {
+                    playerView.showController()
+                    sourceButton.requestFocus()
+                    armControllerAutoHide()
+                }
             }
+            dialog.show()
+        } catch (_: Throwable) {
+            activeTrackDialog = null
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_track_picker_error,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
         }
-        dialog.show()
     }
 
     private fun requestTransportFocus() {

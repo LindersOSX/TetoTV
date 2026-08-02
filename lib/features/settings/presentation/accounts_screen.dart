@@ -5,6 +5,7 @@ import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/diagnostics/diagnostics_exporter.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
+import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
@@ -24,6 +25,7 @@ class AccountsScreen extends ConsumerStatefulWidget {
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _tokenController = TextEditingController();
   final _torBoxTokenController = TextEditingController();
+  final _githubTokenController = TextEditingController();
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
   final _debridConnectFocus = FocusNode(debugLabel: 'accounts.debrid.connect');
@@ -38,6 +40,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _anilistSaveFocus = FocusNode(debugLabel: 'accounts.anilist.save');
   final _malTokenFocus = FocusNode(debugLabel: 'accounts.myanimelist.token');
   final _malSaveFocus = FocusNode(debugLabel: 'accounts.myanimelist.save');
+  final _githubTokenFocus = FocusNode(debugLabel: 'accounts.updates.token');
+  final _githubSaveFocus = FocusNode(debugLabel: 'accounts.updates.save');
+  final _automaticUpdatesFocus = FocusNode(
+    debugLabel: 'accounts.updates.automatic',
+  );
+  final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
   final _shelfFocusNodes = {
     for (final shelf in HomeShelf.values)
       shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
@@ -47,6 +55,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   void dispose() {
     _tokenController.dispose();
     _torBoxTokenController.dispose();
+    _githubTokenController.dispose();
     _backFocus.dispose();
     _titleLanguageFocus.dispose();
     _debridConnectFocus.dispose();
@@ -61,6 +70,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _anilistSaveFocus.dispose();
     _malTokenFocus.dispose();
     _malSaveFocus.dispose();
+    _githubTokenFocus.dispose();
+    _githubSaveFocus.dispose();
+    _automaticUpdatesFocus.dispose();
+    _checkUpdatesFocus.dispose();
     for (final node in _shelfFocusNodes.values) {
       node.dispose();
     }
@@ -177,6 +190,25 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _malSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _malTokenFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+    } else if (current == _githubTokenFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _malSaveFocus;
+      if (key == LogicalKeyboardKey.arrowRight) target = _githubSaveFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _automaticUpdatesFocus;
+      }
+    } else if (current == _githubSaveFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _malSaveFocus;
+      if (key == LogicalKeyboardKey.arrowLeft) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _checkUpdatesFocus;
+    } else if (current == _automaticUpdatesFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowRight) target = _checkUpdatesFocus;
+    } else if (current == _checkUpdatesFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _githubSaveFocus;
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        target = _automaticUpdatesFocus;
+      }
     }
 
     if (target == null) return KeyEventResult.ignored;
@@ -191,6 +223,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final tracking = ref.watch(trackingAccountsControllerProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final homeShelves = ref.watch(homeShelfPreferencesProvider);
+    final appUpdate = ref.watch(appUpdateControllerProvider);
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
@@ -444,6 +477,44 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     const SizedBox(height: 10),
                     const _DebridOnlyPanel(),
                     const SizedBox(height: 10),
+                    const _SectionHeader(
+                      icon: Icons.system_update_alt_rounded,
+                      title: 'APP UPDATES',
+                      subtitle:
+                          'Private GitHub releases, downloaded directly to this TV.',
+                    ),
+                    const SizedBox(height: 8),
+                    _AppUpdatePanel(
+                      state: appUpdate,
+                      tokenController: _githubTokenController,
+                      tokenFocusNode: _githubTokenFocus,
+                      saveFocusNode: _githubSaveFocus,
+                      automaticFocusNode: _automaticUpdatesFocus,
+                      checkFocusNode: _checkUpdatesFocus,
+                      onSaveToken: () async {
+                        await ref
+                            .read(appUpdateControllerProvider.notifier)
+                            .saveAccessToken(_githubTokenController.text);
+                        _githubTokenController.clear();
+                      },
+                      onRemoveToken: () => ref
+                          .read(appUpdateControllerProvider.notifier)
+                          .saveAccessToken(''),
+                      onToggleAutomatic: () => ref
+                          .read(appUpdateControllerProvider.notifier)
+                          .setAutomaticUpdates(!appUpdate.automaticUpdates),
+                      onCheckOrInstall: () {
+                        final controller = ref.read(
+                          appUpdateControllerProvider.notifier,
+                        );
+                        if (appUpdate.downloadedPath != null) {
+                          controller.installDownloadedUpdate();
+                        } else {
+                          controller.checkForUpdates(launchInstaller: true);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
                     _Panel(
                       child: Row(
                         children: [
@@ -500,6 +571,185 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _AppUpdatePanel extends StatelessWidget {
+  const _AppUpdatePanel({
+    required this.state,
+    required this.tokenController,
+    required this.tokenFocusNode,
+    required this.saveFocusNode,
+    required this.automaticFocusNode,
+    required this.checkFocusNode,
+    required this.onSaveToken,
+    required this.onRemoveToken,
+    required this.onToggleAutomatic,
+    required this.onCheckOrInstall,
+  });
+
+  final AppUpdateState state;
+  final TextEditingController tokenController;
+  final FocusNode tokenFocusNode;
+  final FocusNode saveFocusNode;
+  final FocusNode automaticFocusNode;
+  final FocusNode checkFocusNode;
+  final VoidCallback onSaveToken;
+  final VoidCallback onRemoveToken;
+  final VoidCallback onToggleAutomatic;
+  final VoidCallback onCheckOrInstall;
+
+  @override
+  Widget build(BuildContext context) {
+    final latest = state.latestVersion;
+    final status =
+        state.message ??
+        'Current ${state.currentVersion}'
+            '${latest == null ? '' : ' • Latest $latest'}';
+    final checkLabel = switch (state.phase) {
+      AppUpdatePhase.checking => 'Checking…',
+      AppUpdatePhase.downloading =>
+        'Downloading ${(state.progress * 100).round()}%',
+      AppUpdatePhase.installing => 'Opening installer…',
+      AppUpdatePhase.ready => 'Install update',
+      _ => 'Check for updates',
+    };
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: .18),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: const Icon(
+                  Icons.system_update_rounded,
+                  color: AppColors.accentBright,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'TetoTV ${state.currentVersion}',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(width: 10),
+                        _StatusPill(
+                          connected: state.hasAccessToken,
+                          label: state.hasAccessToken
+                              ? 'PRIVATE RELEASES READY'
+                              : 'TOKEN REQUIRED',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Uses a fine-grained GitHub token with read-only Contents '
+                      'access. The token stays encrypted on this TV.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+          const SizedBox(height: 10),
+          _ResponsiveTokenRow(
+            title: 'Private GitHub token',
+            input: TvTextInput(
+              focusNode: tokenFocusNode,
+              controller: tokenController,
+              labelText: 'Read-only GitHub token',
+              hintText: state.hasAccessToken
+                  ? 'Saved — select to replace'
+                  : 'Select to enter or paste',
+              keyboardTitle: 'Private GitHub update token',
+              obscureText: true,
+              onSubmitted: (_) => onSaveToken(),
+            ),
+            action: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _TvTextButton(
+                  label: state.hasAccessToken ? 'Replace' : 'Save token',
+                  icon: Icons.lock_rounded,
+                  onPressed: onSaveToken,
+                  focusNode: saveFocusNode,
+                ),
+                if (state.hasAccessToken) ...[
+                  const SizedBox(width: 7),
+                  _TvTextButton(
+                    label: 'Remove',
+                    icon: Icons.delete_outline_rounded,
+                    onPressed: onRemoveToken,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  status,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: state.phase == AppUpdatePhase.error
+                        ? const Color(0xFFFF929B)
+                        : AppColors.textMuted,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              _TvTextButton(
+                label: state.automaticUpdates
+                    ? 'Automatic: ON'
+                    : 'Automatic: OFF',
+                icon: state.automaticUpdates
+                    ? Icons.autorenew_rounded
+                    : Icons.update_disabled_rounded,
+                onPressed: state.isBusy ? null : onToggleAutomatic,
+                focusNode: automaticFocusNode,
+              ),
+              const SizedBox(width: 7),
+              _TvTextButton(
+                label: checkLabel,
+                icon: state.downloadedPath == null
+                    ? Icons.refresh_rounded
+                    : Icons.install_mobile_rounded,
+                onPressed: state.isBusy || !state.hasAccessToken
+                    ? null
+                    : onCheckOrInstall,
+                focusNode: checkFocusNode,
+              ),
+            ],
+          ),
+          if (state.phase == AppUpdatePhase.downloading) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: state.progress > 0 ? state.progress : null,
+              color: AppColors.accentBright,
+              backgroundColor: const Color(0xFF2A2A2A),
+            ),
+          ],
+        ],
       ),
     );
   }
