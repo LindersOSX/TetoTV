@@ -16,6 +16,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.tvprovider.media.tv.TvContractCompat
 import androidx.tvprovider.media.tv.WatchNextProgram
 import android.support.v4.media.MediaMetadataCompat
@@ -239,7 +241,7 @@ class MainActivity : FlutterActivity() {
         val poster = (data["posterUrl"] as? String)?.let(Uri::parse)
         val duration = (data["durationMs"] as? Number)?.toInt() ?: 0
         val position = (data["positionMs"] as? Number)?.toInt() ?: 0
-        val deepLink = Uri.parse("tetotv:///anime/$mediaId?episode=$episode")
+        val deepLink = "tetotv:///anime/$mediaId?episode=$episode".toUri()
 
         val builder = WatchNextProgram.Builder()
             .setType(TvContractCompat.WatchNextPrograms.TYPE_TV_EPISODE)
@@ -270,7 +272,7 @@ class MainActivity : FlutterActivity() {
             TvContractCompat.WatchNextPrograms.CONTENT_URI,
             builder.build().toContentValues(),
         ) ?: return null
-        return ContentUris.parseId(uri).also { id -> preferences.edit().putLong(key, id).apply() }
+        return ContentUris.parseId(uri).also { id -> preferences.edit { putLong(key, id) } }
     }
 
     private fun scheduleReminder(data: Map<String, Any?>): Boolean {

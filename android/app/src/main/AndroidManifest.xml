@@ -59,7 +59,6 @@
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="TetoTV"
-        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
 
@@ -75,7 +74,6 @@
             android:hardwareAccelerated="true"
             android:resizeableActivity="true"
             android:launchMode="singleTop"
-            android:screenOrientation="landscape"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">

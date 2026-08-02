@@ -6,9 +6,9 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 
 class AiringReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -28,7 +28,7 @@ class AiringReminderReceiver : BroadcastReceiver() {
         }
         val open = Intent(
             Intent.ACTION_VIEW,
-            Uri.parse("tetotv:///anime/$mediaId?episode=$episode"),
+            "tetotv:///anime/$mediaId?episode=$episode".toUri(),
             context,
             MainActivity::class.java,
         )
