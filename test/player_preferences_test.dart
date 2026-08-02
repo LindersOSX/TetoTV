@@ -79,6 +79,43 @@ void main() {
     expect(releaseRequiresSoftwareDecoder(ordinary), isFalse);
   });
 
+  test('detects unlabeled 10-bit H.264 from decoded stream metadata', () {
+    expect(
+      isH264TenBitVideoProfile(
+        codec: 'h264',
+        profile: 'High 10',
+        format: 'yuv420p10le',
+        pixelFormat: 'mediacodec',
+      ),
+      isTrue,
+    );
+    expect(
+      isH264TenBitVideoProfile(
+        codec: 'h264',
+        profile: 'High',
+        format: 'yuv420p',
+      ),
+      isFalse,
+    );
+    expect(
+      isH264TenBitVideoProfile(
+        codec: 'hevc',
+        profile: 'Main 10',
+        format: 'yuv420p10le',
+      ),
+      isFalse,
+    );
+  });
+
+  test('retries a resume seek only when playback remained near the start', () {
+    const target = Duration(minutes: 12, seconds: 30);
+    expect(resumeSeekNeedsRetry(target, Duration.zero), isTrue);
+    expect(
+      resumeSeekNeedsRetry(target, const Duration(minutes: 12, seconds: 28)),
+      isFalse,
+    );
+  });
+
   test('D-pad arrows navigate controls instead of seeking playback', () {
     expect(playerSeekOffsetForKey(LogicalKeyboardKey.arrowLeft), isNull);
     expect(playerSeekOffsetForKey(LogicalKeyboardKey.arrowRight), isNull);

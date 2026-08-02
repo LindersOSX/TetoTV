@@ -55,6 +55,34 @@ String playbackDecoderLabel(PlaybackDecoderMode mode) => switch (mode) {
   PlaybackDecoderMode.software => 'Software compatibility',
 };
 
+bool isH264TenBitVideoProfile({
+  String? codec,
+  String? profile,
+  String? format,
+  String? pixelFormat,
+  String? hardwarePixelFormat,
+}) {
+  final description = [
+    codec,
+    profile,
+    format,
+    pixelFormat,
+    hardwarePixelFormat,
+  ].whereType<String>().join(' ').toLowerCase();
+  final isH264 =
+      description.contains('h264') ||
+      description.contains('h.264') ||
+      description.contains('avc');
+  final isTenBit = RegExp(
+    r'(?:high[ ._-]?10|hi10p|10[ ._-]?bit|yuv\d+p10|p010)',
+  ).hasMatch(description);
+  return isH264 && isTenBit;
+}
+
+bool resumeSeekNeedsRetry(Duration target, Duration actual) =>
+    target > const Duration(seconds: 15) &&
+    actual + const Duration(seconds: 5) < target;
+
 bool isLikelyVideoDecodeFailure(String message) {
   final value = message.toLowerCase();
   return const [
@@ -142,6 +170,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   int _lastDroppedFrames = 0;
   int _highDropSamples = 0;
   bool _checkingPerformance = false;
+  bool _checkingDecodedVideo = false;
+  bool _playbackPersistenceReady = false;
   PlaybackDecoderMode _decoderMode = PlaybackDecoderMode.hardwareSafe;
   BoxFit _videoFit = BoxFit.contain;
   double _playbackRate = 1;
@@ -168,43 +198,51 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume;
-    if (widget.anilistMediaId case final mediaId?) {
-      final database = ref.read(tetoTvDatabaseProvider);
-      _seriesPreferences = await database.seriesPreferences(mediaId);
-      _decoderMode = switch (_seriesPreferences.decoder) {
-        'hardware-direct' => PlaybackDecoderMode.hardwareDirect,
-        'software' => PlaybackDecoderMode.software,
-        _ => PlaybackDecoderMode.hardwareSafe,
-      };
-      _videoFit = switch (_seriesPreferences.videoFit) {
-        'cover' => BoxFit.cover,
-        'fill' => BoxFit.fill,
-        _ => BoxFit.contain,
-      };
-      _subtitleSize = _seriesPreferences.subtitleSize;
-      _subtitlePosition = _seriesPreferences.subtitlePosition;
-      _subtitleDelayMs = _seriesPreferences.subtitleDelayMs;
-      _audioDelayMs = _seriesPreferences.audioDelayMs;
-      _highContrastSubtitles = _seriesPreferences.highContrastSubtitles;
-      if (!widget.launch.episode.startFromBeginning && widget.episode != null) {
-        final checkpoint = await database.checkpoint(mediaId, widget.episode!);
-        if (checkpoint != null &&
-            !checkpoint.completed &&
-            checkpoint.position > const Duration(seconds: 15) &&
-            checkpoint.progress < .95) {
-          resume = checkpoint.position;
+    try {
+      if (widget.anilistMediaId case final mediaId?) {
+        final database = ref.read(tetoTvDatabaseProvider);
+        _seriesPreferences = await database.seriesPreferences(mediaId);
+        _decoderMode = switch (_seriesPreferences.decoder) {
+          'hardware-direct' => PlaybackDecoderMode.hardwareDirect,
+          'software' => PlaybackDecoderMode.software,
+          _ => PlaybackDecoderMode.hardwareSafe,
+        };
+        _videoFit = switch (_seriesPreferences.videoFit) {
+          'cover' => BoxFit.cover,
+          'fill' => BoxFit.fill,
+          _ => BoxFit.contain,
+        };
+        _subtitleSize = _seriesPreferences.subtitleSize;
+        _subtitlePosition = _seriesPreferences.subtitlePosition;
+        _subtitleDelayMs = _seriesPreferences.subtitleDelayMs;
+        _audioDelayMs = _seriesPreferences.audioDelayMs;
+        _highContrastSubtitles = _seriesPreferences.highContrastSubtitles;
+        if (!widget.launch.episode.startFromBeginning &&
+            widget.episode != null) {
+          final checkpoint = await database.checkpoint(
+            mediaId,
+            widget.episode!,
+          );
+          if (checkpoint != null &&
+              !checkpoint.completed &&
+              checkpoint.position > const Duration(seconds: 15) &&
+              checkpoint.progress < .95) {
+            resume = checkpoint.position;
+          }
         }
       }
-    }
-    if (_decoderMode == PlaybackDecoderMode.hardwareSafe &&
-        releaseRequiresSoftwareDecoder(_currentRelease)) {
-      _decoderMode = PlaybackDecoderMode.software;
-      _softwareFallbackUsed = true;
-    }
-    if (!mounted) return;
-    await _openMedia(resume: resume);
-    if (resume != null) {
-      _showTrackMessage('Resumed at ${_formatPlayerDuration(resume)}');
+      if (_decoderMode == PlaybackDecoderMode.hardwareSafe &&
+          releaseRequiresSoftwareDecoder(_currentRelease)) {
+        _decoderMode = PlaybackDecoderMode.software;
+        _softwareFallbackUsed = true;
+      }
+      if (!mounted) return;
+      await _openMedia(resume: resume);
+      if (resume != null) {
+        _showTrackMessage('Resumed at ${_formatPlayerDuration(resume)}');
+      }
+    } finally {
+      _playbackPersistenceReady = true;
     }
   }
 
@@ -266,6 +304,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       debugPrint('VO/hwdec: gpu / ${hwdecForPlaybackMode(_decoderMode)}');
       debugPrint('----------------------------\n');
       unawaited(_matchContentFrameRate());
+      unawaited(_inspectDecodedVideo(params));
     });
     _playingSubscription = _player.stream.playing.listen((_) {
       unawaited(_updateMediaSession(force: true));
@@ -324,8 +363,10 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
 
   void _onPosition(Duration position) {
     _checkSkips(position);
-    unawaited(_persistPlayback(position));
-    unawaited(_updateMediaSession());
+    if (_playbackPersistenceReady) {
+      unawaited(_persistPlayback(position));
+      unawaited(_updateMediaSession());
+    }
     if (_progressHandled || widget.episode == null) return;
     if (widget.anilistMediaId == null && widget.malMediaId == null) return;
     final duration = _player.state.duration;
@@ -415,6 +456,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   }
 
   Future<void> _openMedia({Duration? resume}) async {
+    final persistenceWasReady = _playbackPersistenceReady;
+    if (resume != null) _playbackPersistenceReady = false;
     try {
       await _configureNativePlayback();
       await _player.open(
@@ -428,11 +471,30 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
         play: true,
       );
       await _applySubtitle();
-      if (resume != null) await _player.seek(resume);
+      if (resume != null) await _restoreResumePosition(resume);
       _startVideoWatchdog();
       _startPerformanceWatchdog();
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
+    } finally {
+      if (persistenceWasReady) _playbackPersistenceReady = true;
+    }
+  }
+
+  Future<void> _restoreResumePosition(Duration resume) async {
+    if (_player.state.duration <= Duration.zero) {
+      try {
+        await _player.stream.duration
+            .firstWhere((duration) => duration > Duration.zero)
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        // Some streams do not expose duration until after their first seek.
+      }
+    }
+    await _player.seek(resume);
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (resumeSeekNeedsRetry(resume, _player.state.position)) {
+      await _player.seek(resume);
     }
   }
 
@@ -513,6 +575,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   }
 
   Future<void> _persistPlayback(Duration position, {bool force = false}) async {
+    if (!_playbackPersistenceReady) return;
     final mediaId = widget.anilistMediaId;
     final episode = widget.episode;
     if (mediaId == null || episode == null) return;
@@ -748,6 +811,30 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
         .saveSeriesPreferences(mediaId, _seriesPreferences);
   }
 
+  Future<void> _saveDecoderPreference() async {
+    final mediaId = widget.anilistMediaId;
+    if (mediaId == null) return;
+    _seriesPreferences = SeriesPlaybackPreferences(
+      audioLanguage: _seriesPreferences.audioLanguage,
+      subtitleLanguage: _seriesPreferences.subtitleLanguage,
+      subtitleEnabled: _seriesPreferences.subtitleEnabled,
+      subtitleSize: _seriesPreferences.subtitleSize,
+      subtitlePosition: _seriesPreferences.subtitlePosition,
+      subtitleDelayMs: _seriesPreferences.subtitleDelayMs,
+      audioDelayMs: _seriesPreferences.audioDelayMs,
+      decoder: switch (_decoderMode) {
+        PlaybackDecoderMode.hardwareDirect => 'hardware-direct',
+        PlaybackDecoderMode.software => 'software',
+        _ => 'hardware-safe',
+      },
+      videoFit: _seriesPreferences.videoFit,
+      highContrastSubtitles: _seriesPreferences.highContrastSubtitles,
+    );
+    await ref
+        .read(tetoTvDatabaseProvider)
+        .saveSeriesPreferences(mediaId, _seriesPreferences);
+  }
+
   Future<void> _offerNextEpisode() async {
     if (!mounted || widget.episode == null || widget.anilistMediaId == null) {
       return;
@@ -800,6 +887,55 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     );
   }
 
+  Future<String?> _optionalNativeProperty(
+    NativePlayer platform,
+    String name,
+  ) async {
+    try {
+      final value = await platform.getProperty(name);
+      return value.isEmpty ? null : value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _inspectDecodedVideo(VideoParams params) async {
+    if (_checkingDecodedVideo ||
+        _changingDecoder ||
+        _decoderMode == PlaybackDecoderMode.software) {
+      return;
+    }
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    _checkingDecodedVideo = true;
+    try {
+      final values = await Future.wait([
+        _optionalNativeProperty(platform, 'current-tracks/video/codec'),
+        _optionalNativeProperty(platform, 'current-tracks/video/codec-profile'),
+        _optionalNativeProperty(platform, 'current-tracks/video/format-name'),
+        _optionalNativeProperty(platform, 'video-dec-params/pixelformat'),
+        _optionalNativeProperty(platform, 'hwdec-current'),
+      ]);
+      final hardwareDecoder = values[4];
+      if (hardwareDecoder == null || hardwareDecoder == 'no') return;
+      if (isH264TenBitVideoProfile(
+        codec: values[0] ?? _player.state.track.video.codec,
+        profile: values[1],
+        format: values[2],
+        pixelFormat: values[3] ?? params.pixelformat,
+        hardwarePixelFormat: params.hwPixelformat,
+      )) {
+        await _switchDecoder(
+          PlaybackDecoderMode.software,
+          automatic: true,
+          reason: '10-bit H.264 detected; corrected video mode enabled',
+        );
+      }
+    } finally {
+      _checkingDecodedVideo = false;
+    }
+  }
+
   Future<void> _checkPlaybackPerformance() async {
     if (_checkingPerformance ||
         _changingDecoder ||
@@ -850,6 +986,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     _videoWatchdog?.cancel();
     final position = _player.state.position;
     final wasPlaying = _player.state.playing;
+    final persistenceWasReady = _playbackPersistenceReady;
+    _playbackPersistenceReady = false;
     try {
       final platform = _player.platform;
       if (platform is NativePlayer) {
@@ -869,9 +1007,10 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
         ),
         play: automatic || wasPlaying,
       );
-      if (position > Duration.zero) await _player.seek(position);
+      if (position > Duration.zero) await _restoreResumePosition(position);
       await _applySubtitle();
       await _applyPlayerTuning();
+      await _saveDecoderPreference();
       _startVideoWatchdog();
       _startPerformanceWatchdog();
       if (mounted) {
@@ -886,6 +1025,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
     } finally {
+      if (persistenceWasReady) _playbackPersistenceReady = true;
       _changingDecoder = false;
     }
   }
@@ -893,6 +1033,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   Future<void> _retryPlayback() async {
     final position = _player.state.position;
     final wasPlaying = _player.state.playing;
+    final persistenceWasReady = _playbackPersistenceReady;
+    _playbackPersistenceReady = false;
     setState(() => _playbackError = null);
     try {
       _videoFrameSeen = false;
@@ -907,7 +1049,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
         ),
         play: wasPlaying,
       );
-      if (position > Duration.zero) await _player.seek(position);
+      if (position > Duration.zero) await _restoreResumePosition(position);
       await _applySubtitle();
       await _applyPlayerTuning();
       _startVideoWatchdog();
@@ -915,6 +1057,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       _showTrackMessage('Stream restarted');
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
+    } finally {
+      if (persistenceWasReady) _playbackPersistenceReady = true;
     }
   }
 

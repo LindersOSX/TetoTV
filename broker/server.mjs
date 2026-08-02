@@ -17,8 +17,11 @@ function providerConfig(provider) {
   if (provider === "anilist") {
     return {
       name: "AniList",
-      clientId: process.env.ANILIST_CLIENT_ID || "",
-      clientSecret: process.env.ANILIST_CLIENT_SECRET || "",
+      clientId:
+        process.env.ANILIST_CLIENT_ID || (selfTest ? "test-anilist-id" : ""),
+      clientSecret:
+        process.env.ANILIST_CLIENT_SECRET ||
+        (selfTest ? "test-anilist-secret" : ""),
       authorizeUrl: "https://anilist.co/api/v2/oauth/authorize",
       tokenUrl: "https://anilist.co/api/v2/oauth/token",
     };
@@ -26,8 +29,9 @@ function providerConfig(provider) {
   if (provider === "myanimelist") {
     return {
       name: "MyAnimeList",
-      clientId: process.env.MAL_CLIENT_ID || "",
-      clientSecret: process.env.MAL_CLIENT_SECRET || "",
+      clientId: process.env.MAL_CLIENT_ID || (selfTest ? "test-mal-id" : ""),
+      clientSecret:
+        process.env.MAL_CLIENT_SECRET || (selfTest ? "test-mal-secret" : ""),
       authorizeUrl: "https://myanimelist.net/v1/oauth2/authorize",
       tokenUrl: "https://myanimelist.net/v1/oauth2/token",
     };
@@ -264,12 +268,16 @@ function startAuthorization(response, url) {
   pairing.codeVerifier = randomToken(64);
   const authorize = new URL(config.authorizeUrl);
   authorize.searchParams.set("client_id", config.clientId);
-  authorize.searchParams.set("redirect_uri", callbackUrl(pairing.provider));
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("state", pairing.state);
   if (pairing.provider === "myanimelist") {
+    // MAL binds the callback to the API client registration. Supplying a
+    // redirect_uri on this endpoint makes an otherwise valid client fail with
+    // `401 invalid_client` instead of showing the login page.
     authorize.searchParams.set("code_challenge", pairing.codeVerifier);
     authorize.searchParams.set("code_challenge_method", "plain");
+  } else {
+    authorize.searchParams.set("redirect_uri", callbackUrl(pairing.provider));
   }
   response.writeHead(302, {
     Location: authorize.toString(),
@@ -316,7 +324,6 @@ async function exchangeCode(pairing, code) {
   const form = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: config.clientId,
-    redirect_uri: callbackUrl(pairing.provider),
     code,
     code_verifier: pairing.codeVerifier,
   });
@@ -520,12 +527,20 @@ server.listen(port, async () => {
         `http://127.0.0.1:${port}/v1/myanimelist/pairings`,
         { method: "POST" },
       ).then((response) => response.json());
+      const malAuthorize = await fetch(
+        `http://127.0.0.1:${port}/authorize?code=${encodeURIComponent(malPairing.user_code)}`,
+        { redirect: "manual" },
+      );
+      const malAuthorizeUrl = new URL(malAuthorize.headers.get("location"));
       if (
         health.status !== "ok" ||
         health.callbacks.myanimelist !==
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(malPairing.user_code) ||
+        malAuthorize.status !== 302 ||
+        malAuthorizeUrl.searchParams.has("redirect_uri") ||
+        !malAuthorizeUrl.searchParams.get("code_challenge") ||
         !String(pairing.verification_uri || "").startsWith("https://") ||
         pending.status !== "pending" ||
         !manualPage.includes('name="code"')
