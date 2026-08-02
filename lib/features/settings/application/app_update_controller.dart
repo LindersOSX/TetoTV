@@ -9,6 +9,8 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 const githubUpdateTokenStorageKey = 'github_update_token';
+const bundledGitHubUpdateTokenDisabledStorageKey =
+    'bundled_github_update_token_disabled';
 const automaticUpdatesStorageKey = 'automatic_app_updates';
 const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
 const tetoTvRepository = 'LindersOSX/TetoTV';
@@ -269,6 +271,9 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     this._cacheDirectoryLoader,
     this._apkInstaller, {
     this.automaticCheckInterval = const Duration(hours: 12),
+    this.bundledAccessToken = const String.fromEnvironment(
+      'TETOTV_GITHUB_UPDATE_TOKEN',
+    ),
   }) : super(const AppUpdateState());
 
   final FlutterSecureStorage _storage;
@@ -278,6 +283,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   final CacheDirectoryLoader _cacheDirectoryLoader;
   final ApkInstaller _apkInstaller;
   final Duration automaticCheckInterval;
+  final String bundledAccessToken;
 
   String _token = '';
   bool _loaded = false;
@@ -288,8 +294,18 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       _storage.read(key: githubUpdateTokenStorageKey),
       _storage.read(key: automaticUpdatesStorageKey),
       _currentVersionLoader(),
+      _storage.read(key: bundledGitHubUpdateTokenDisabledStorageKey),
     ]);
-    _token = (values[0] ?? '').trim();
+    final storedToken = (values[0] ?? '').trim();
+    final provisionedToken = bundledAccessToken.trim();
+    final bundledTokenDisabled = values[3] == 'true';
+    _token = storedToken;
+    if (_token.isEmpty &&
+        provisionedToken.isNotEmpty &&
+        !bundledTokenDisabled) {
+      _token = provisionedToken;
+      await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
+    }
     _loaded = true;
     state = state.copyWith(
       currentVersion: values[2] ?? 'unknown',
@@ -303,8 +319,15 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     _token = token.trim();
     if (_token.isEmpty) {
       await _storage.delete(key: githubUpdateTokenStorageKey);
+      if (bundledAccessToken.trim().isNotEmpty) {
+        await _storage.write(
+          key: bundledGitHubUpdateTokenDisabledStorageKey,
+          value: 'true',
+        );
+      }
     } else {
       await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
+      await _storage.delete(key: bundledGitHubUpdateTokenDisabledStorageKey);
     }
     state = state.copyWith(
       phase: AppUpdatePhase.idle,

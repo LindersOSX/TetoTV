@@ -73,6 +73,58 @@ void main() {
     expect(controller.state.phase, AppUpdatePhase.error);
     expect(controller.state.message, contains('read-only GitHub token'));
   });
+
+  test('imports a build-provisioned token into encrypted storage', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final source = _FakeReleaseSource();
+    final controller = AppUpdateController(
+      storage,
+      source,
+      () async => '1.7.3',
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+      bundledAccessToken: 'bundled-read-token',
+    );
+
+    await controller.load();
+    await controller.checkForUpdates();
+
+    expect(controller.state.hasAccessToken, isTrue);
+    expect(source.requestedToken, 'bundled-read-token');
+    expect(
+      await storage.read(key: githubUpdateTokenStorageKey),
+      'bundled-read-token',
+    );
+  });
+
+  test(
+    'removing a provisioned token remains respected after restart',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      AppUpdateController createController() => AppUpdateController(
+        storage,
+        _FakeReleaseSource(),
+        () async => '1.7.3',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+        bundledAccessToken: 'bundled-read-token',
+      );
+
+      final first = createController();
+      await first.load();
+      await first.saveAccessToken('');
+      final restarted = createController();
+      await restarted.load();
+
+      expect(restarted.state.hasAccessToken, isFalse);
+      expect(
+        await storage.read(key: bundledGitHubUpdateTokenDisabledStorageKey),
+        'true',
+      );
+    },
+  );
 }
 
 class _FakeReleaseSource implements AppReleaseSource {
