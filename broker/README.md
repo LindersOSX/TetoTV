@@ -8,13 +8,13 @@ without embedding provider secrets in the APK.
 Create an AniList developer application and register:
 
 ```text
-https://auth.mytetotv.com/oauth/anilist/callback
+https://tetotv-auth.onrender.com/oauth/anilist/callback
 ```
 
 Create a MyAnimeList API client and register:
 
 ```text
-https://auth.mytetotv.com/oauth/myanimelist/callback
+https://tetotv-auth.onrender.com/oauth/myanimelist/callback
 ```
 
 Copy `.env.example` to `.env`, supply both clients, and set
@@ -28,7 +28,7 @@ node --env-file=.env server.mjs
 Confirm deployment health:
 
 ```powershell
-Invoke-RestMethod https://auth.mytetotv.com/health
+Invoke-RestMethod https://tetotv-auth.onrender.com/health
 ```
 
 Both `providers.anilist` and `providers.myanimelist` must be `true`. Then enter

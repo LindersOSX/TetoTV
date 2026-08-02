@@ -44,7 +44,7 @@ The broker starts AniList authorization with:
 ```text
 https://anilist.co/api/v2/oauth/authorize
   ?client_id=...
-  &redirect_uri=https%3A%2F%2Fauth.mytetotv.com%2Foauth%2Fanilist%2Fcallback
+  &redirect_uri=https%3A%2F%2Ftetotv-auth.onrender.com%2Foauth%2Fanilist%2Fcallback
   &response_type=code
   &state=...
 ```
@@ -61,7 +61,7 @@ settings.
 MyAnimeList is registered with:
 
 ```text
-https://auth.mytetotv.com/oauth/myanimelist/callback
+https://tetotv-auth.onrender.com/oauth/myanimelist/callback
 ```
 
 The broker uses PKCE for the authorization-code exchange. The client secret,
@@ -76,8 +76,8 @@ when the registered client has one, remains server-side.
   "pairing_id": "public-random-id",
   "device_code": "at-least-256-bits-of-entropy",
   "user_code": "KUMO-7F4K",
-  "verification_uri": "https://auth.mytetotv.com/pair",
-  "verification_uri_complete": "https://auth.mytetotv.com/pair?code=KUMO-7F4K",
+  "verification_uri": "https://tetotv-auth.onrender.com/pair",
+  "verification_uri_complete": "https://tetotv-auth.onrender.com/pair?code=KUMO-7F4K",
   "expires_at": "2026-07-31T00:00:00Z",
   "interval": 5
 }

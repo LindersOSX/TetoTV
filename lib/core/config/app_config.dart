@@ -1,7 +1,7 @@
 abstract final class AppConfig {
   static const authBrokerBaseUrl = String.fromEnvironment(
     'AUTH_BROKER_BASE_URL',
-    defaultValue: '',
+    defaultValue: 'https://tetotv-auth.onrender.com',
   );
 
   static const releaseResolverBaseUrl = String.fromEnvironment(
