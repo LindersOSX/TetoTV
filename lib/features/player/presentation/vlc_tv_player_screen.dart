@@ -188,7 +188,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       http: VlcHttpOptions([
         VlcHttpOptions.httpReconnect(true),
         VlcHttpOptions.httpContinuous(true),
-        VlcHttpOptions.httpUserAgent('TetoTV/1.6 AndroidTV libVLC'),
+        VlcHttpOptions.httpUserAgent('TetoTV/1.7 AndroidTV libVLC'),
       ]),
       video: VlcVideoOptions([
         VlcVideoOptions.dropLateFrames(true),

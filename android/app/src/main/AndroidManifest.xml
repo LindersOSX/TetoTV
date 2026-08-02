@@ -57,10 +57,25 @@
         android:banner="@drawable/tv_banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
+        android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="TetoTV"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
+
+        <!--
+            Media3 playback runs in its own native window so video reaches a
+            real SurfaceView directly. This deliberately bypasses Flutter's
+            TextureRegistry and virtual-display composition paths.
+        -->
+        <activity
+            android:name=".player.Media3PlayerActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|density|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:screenOrientation="landscape"
+            android:theme="@style/NativePlayerTheme" />
 
         <receiver
             android:name=".AiringReminderReceiver"

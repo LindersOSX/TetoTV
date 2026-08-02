@@ -32,10 +32,16 @@ currently includes:
 - exact Stremio `fileIdx` preservation for correct episode selection inside
   batch torrents;
 - a monotonic 90%-completion tracking outbox for both trackers;
-- a dual-engine player: libVLC compatibility playback is the default and MPV/
-  libass remains selectable for advanced ASS releases, with D-pad controls for
-  audio, subtitles, picture fit, playback speed, subtitle size/position,
-  audio/subtitle delay, contrast, stream failover, and decoder;
+- a device-agnostic three-tier player: native Android Media3 1.10.1 is the
+  default, MPV/libass handles advanced ASS and unusual-codec compatibility,
+  and VLC remains the final software fallback;
+- direct native `PlayerView`/`SurfaceView` video output with an OkHttp data
+  source, so normal playback bypasses Flutter's texture/compositor path while
+  retaining debrid headers, redirects, and HTTP range requests;
+- automatic H.264 Hi10P/High 10 detection and software-decoder preference
+  routing instead of repeatedly sending unsupported profiles to hardware;
+- D-pad controls for audio, subtitles, picture fit, playback speed, subtitle
+  size/position, audio/subtitle delay, contrast, stream failover, and decoder;
 - exact SQLite-backed resume points and watch history, per-series playback
   preferences, configurable home shelves, and a short-lived AniList cache;
 - ranked automatic debrid-stream failover, next-episode prewarming, trickplay
@@ -45,14 +51,16 @@ currently includes:
   codec/HDR capability profiles;
 - slow-frame/startup instrumentation plus an on-device redacted diagnostics
   export for physical-TV troubleshooting;
-- libVLC MediaCodec copy-back rendering to avoid corrupt zero-copy surfaces,
-  automatic VLC software-video and alternate-stream fallback, plus independent
-  MPV playback selectable from the player options;
+- native first-frame and dropped-frame monitoring, compatible-stream retry,
+  independent MPV compatibility playback, and VLC software recovery as the
+  final fallback;
 - TV-safe stream ordering that prioritizes H.264/1080p SDR while preserving
   selectable HEVC, AV1, 4K, and HDR releases;
 - automatic English/Dub audio-track preference with remote track switching;
 - a debrid-only player gate that rejects unresolved or direct demo URLs;
 - Android TV launcher declarations and a TV banner;
+- universal and split-per-ABI builds for `armeabi-v7a`, `arm64-v8a`, and
+  emulator `x86_64` targets across Android TV and Fire TV hardware;
 - domain boundaries for catalog and pluggable release sources.
 
 AniList supplies the live discovery catalog. Local fallback content keeps the
@@ -113,9 +121,9 @@ deployed `broker/` service and report both providers as ready from `/health`.
 ## Current scope
 
 The installed APK validates TV launch and focus, live AniList discovery and
-search, Real-Debrid and TorBox device authorization, libVLC and MPV/libass
-playback, and the client-side tracking/streaming flow. Production deployment
-still requires:
+search, Real-Debrid and TorBox device authorization, native Media3 playback
+with MPV/libass and VLC fallbacks, and the client-side tracking/streaming flow.
+Production deployment still requires:
 
 - registered AniList and MyAnimeList OAuth applications and an HTTPS deployment
   of the included `broker/`;
@@ -127,3 +135,8 @@ still requires:
 Local release APKs are placed in `build\fire-tv`. Builds fall back to the
 machine's debug key when `android\key.properties` is absent; configure a
 private release key before distributing updates to other users.
+
+Use `adb shell getprop ro.product.cpu.abilist` before choosing a split APK.
+Many Fire TV devices, including Fire TV Stick 4K Max models, expose the
+32-bit `armeabi-v7a` application ABI even when their CPU is 64-bit. Use the
+universal release APK when the target ABI is unknown.

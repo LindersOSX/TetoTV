@@ -152,6 +152,75 @@ class MediaAction {
   final int? value;
 }
 
+class NativePlaybackResult {
+  const NativePlaybackResult({
+    required this.status,
+    required this.position,
+    required this.duration,
+    this.completed = false,
+    this.firstFrameRendered = false,
+    this.droppedFrames = 0,
+    this.decoder,
+    this.error,
+    this.diagnostics = const {},
+  });
+
+  final String status;
+  final Duration position;
+  final Duration duration;
+  final bool completed;
+  final bool firstFrameRendered;
+  final int droppedFrames;
+  final String? decoder;
+  final String? error;
+  final Map<String, Object?> diagnostics;
+
+  bool get failed => status == 'error' || status == 'no_first_frame';
+
+  factory NativePlaybackResult.fromMap(Map<Object?, Object?> value) =>
+      NativePlaybackResult(
+        status: value['status'] as String? ?? 'exit',
+        position: Duration(
+          milliseconds: (value['positionMs'] as num?)?.round() ?? 0,
+        ),
+        duration: Duration(
+          milliseconds: (value['durationMs'] as num?)?.round() ?? 0,
+        ),
+        completed: value['completed'] as bool? ?? false,
+        firstFrameRendered: value['firstFrameRendered'] as bool? ?? false,
+        droppedFrames: (value['droppedFrames'] as num?)?.round() ?? 0,
+        decoder: value['decoder'] as String?,
+        error: value['error'] as String?,
+        diagnostics: {
+          for (final key in const [
+            'surfaceReady',
+            'manufacturer',
+            'model',
+            'sdk',
+            'abis',
+            'memoryClassMb',
+            'lowMemoryDevice',
+            'videoMime',
+            'videoCodecs',
+            'videoWidth',
+            'videoHeight',
+            'videoFrameRate',
+            'audioMime',
+            'audioCodecs',
+          ])
+            if (value.containsKey(key)) key: value[key],
+        },
+      );
+
+  factory NativePlaybackResult.platformError(Object error) =>
+      NativePlaybackResult(
+        status: 'error',
+        position: Duration.zero,
+        duration: Duration.zero,
+        error: error.toString(),
+      );
+}
+
 class AndroidTvBridge {
   AndroidTvBridge._() {
     _channel.setMethodCallHandler(_handleMethod);
@@ -205,6 +274,72 @@ class AndroidTvBridge {
       await _channel.invokeMethod<void>('clearPreferredFrameRate');
     } on PlatformException {
       // Best effort only.
+    }
+  }
+
+  /// Starts the dedicated Android Media3 player activity.
+  ///
+  /// Video is rendered by a native SurfaceView in a separate activity. This is
+  /// deliberately not an AndroidView/Flutter texture: several Fire TV devices
+  /// corrupt or drop frames when a decoder has to copy video through Flutter's
+  /// texture compositor.
+  Future<NativePlaybackResult> startNativePlayer({
+    required Uri source,
+    required String title,
+    required String checkpointKey,
+    required String releaseName,
+    required Duration resumePosition,
+    required bool startFromBeginning,
+    DateTime? resumeUpdatedAt,
+    String? externalSubtitle,
+    String audioLanguage = 'eng',
+    String subtitleLanguage = 'eng',
+    bool subtitlesEnabled = true,
+    double subtitleSize = 34,
+    int subtitlePosition = 100,
+    bool highContrastSubtitles = false,
+    String videoFit = 'contain',
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const NativePlaybackResult(
+        status: 'unsupported',
+        position: Duration.zero,
+        duration: Duration.zero,
+        error: 'The native Media3 player is only available on Android.',
+      );
+    }
+    try {
+      final value = await _channel
+          .invokeMapMethod<Object?, Object?>('startNativePlayer', {
+            'source': source.toString(),
+            'title': title,
+            'checkpointKey': checkpointKey,
+            'releaseName': releaseName,
+            'resumeMs': resumePosition.inMilliseconds,
+            'resumeProvided':
+                resumeUpdatedAt != null || resumePosition > Duration.zero,
+            if (resumeUpdatedAt != null)
+              'resumeUpdatedAtMs': resumeUpdatedAt.millisecondsSinceEpoch,
+            'startFromBeginning': startFromBeginning,
+            if (externalSubtitle != null && externalSubtitle.isNotEmpty)
+              'externalSubtitle': externalSubtitle,
+            'audioLanguage': audioLanguage,
+            'subtitleLanguage': subtitleLanguage,
+            'subtitlesEnabled': subtitlesEnabled,
+            'subtitleSize': subtitleSize,
+            'subtitlePosition': subtitlePosition,
+            'highContrastSubtitles': highContrastSubtitles,
+            'videoFit': videoFit,
+          });
+      return value == null
+          ? const NativePlaybackResult(
+              status: 'exit',
+              position: Duration.zero,
+              duration: Duration.zero,
+            )
+          : NativePlaybackResult.fromMap(value);
+    } on PlatformException catch (error) {
+      return NativePlaybackResult.platformError(error);
     }
   }
 

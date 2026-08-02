@@ -7,6 +7,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -144,16 +145,62 @@ class TvPlayerScreen extends StatefulWidget {
 }
 
 class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
-  bool _useMpv = false;
+  _TvPlaybackEngine _engine = _TvPlaybackEngine.nativeMedia3;
+  late String _activeSource;
+  late PlaybackLaunch _activeLaunch;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeSource = widget.source;
+    _activeLaunch = widget.launch;
+  }
+
+  @override
+  void didUpdateWidget(covariant TvPlayerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source != widget.source ||
+        oldWidget.episode != widget.episode ||
+        oldWidget.launch.selectedRelease.infoHash !=
+            widget.launch.selectedRelease.infoHash) {
+      _engine = _TvPlaybackEngine.nativeMedia3;
+      _activeSource = widget.source;
+      _activeLaunch = widget.launch;
+    }
+  }
+
+  void _switchEngine(
+    _TvPlaybackEngine engine,
+    String source,
+    ReleaseCandidate release,
+  ) {
+    final launch = PlaybackLaunch(
+      stream: StreamReady(
+        uri: Uri.parse(source),
+        displayName: release.releaseName,
+        debridService: widget.debridService,
+      ),
+      episode: _activeLaunch.episode,
+      selectedRelease: release,
+      alternatives: _activeLaunch.alternatives
+          .where((candidate) => candidate.infoHash != release.infoHash)
+          .toList(growable: false),
+    );
+    setState(() {
+      _activeSource = source;
+      _activeLaunch = launch;
+      _engine = engine;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (_useMpv) {
+    if (_engine == _TvPlaybackEngine.mpv) {
       return MpvTvPlayerScreen(
-        source: widget.source,
+        source: _activeSource,
         title: widget.title,
         debridService: widget.debridService,
-        launch: widget.launch,
+        launch: _activeLaunch,
         subtitle: widget.subtitle,
         anilistMediaId: widget.anilistMediaId,
         malMediaId: widget.malMediaId,
@@ -161,20 +208,43 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         coverImageUrl: widget.coverImageUrl,
       );
     }
-    return VlcTvPlayerScreen(
-      source: widget.source,
+    if (_engine == _TvPlaybackEngine.vlc) {
+      return VlcTvPlayerScreen(
+        source: _activeSource,
+        title: widget.title,
+        debridService: widget.debridService,
+        launch: _activeLaunch,
+        subtitle: widget.subtitle,
+        anilistMediaId: widget.anilistMediaId,
+        malMediaId: widget.malMediaId,
+        episode: widget.episode,
+        coverImageUrl: widget.coverImageUrl,
+        onUseMpv: () => _switchEngine(
+          _TvPlaybackEngine.mpv,
+          _activeSource,
+          _activeLaunch.selectedRelease,
+        ),
+      );
+    }
+    return NativeMedia3PlayerScreen(
+      source: _activeSource,
       title: widget.title,
       debridService: widget.debridService,
-      launch: widget.launch,
+      launch: _activeLaunch,
       subtitle: widget.subtitle,
       anilistMediaId: widget.anilistMediaId,
       malMediaId: widget.malMediaId,
       episode: widget.episode,
       coverImageUrl: widget.coverImageUrl,
-      onUseMpv: () => setState(() => _useMpv = true),
+      onUseMpv: (source, release) =>
+          _switchEngine(_TvPlaybackEngine.mpv, source, release),
+      onUseVlc: (source, release) =>
+          _switchEngine(_TvPlaybackEngine.vlc, source, release),
     );
   }
 }
+
+enum _TvPlaybackEngine { nativeMedia3, mpv, vlc }
 
 class MpvTvPlayerScreen extends ConsumerStatefulWidget {
   const MpvTvPlayerScreen({

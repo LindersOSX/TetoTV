@@ -26,12 +26,14 @@ import android.support.v4.media.session.PlaybackStateCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import dev.animetv.anime_tv.player.Media3PlayerActivity
 import kotlin.math.abs
 
 class MainActivity : FlutterActivity() {
     private val channelName = "dev.tetotv/android_tv"
     private lateinit var channel: MethodChannel
     private lateinit var mediaSession: MediaSessionCompat
+    private var pendingNativePlayerResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +48,10 @@ class MainActivity : FlutterActivity() {
             try {
                 when (call.method) {
                     "getDeviceProfile" -> result.success(deviceProfile())
+                    "startNativePlayer" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        startNativePlayer(call.arguments as? Map<String, Any?> ?: emptyMap(), result)
+                    }
                     "setPreferredFrameRate" -> {
                         val fps = call.argument<Double>("fps") ?: 0.0
                         result.success(setPreferredFrameRate(fps))
@@ -73,6 +79,176 @@ class MainActivity : FlutterActivity() {
                 result.error("ANDROID_TV_BRIDGE", error.message, null)
             }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startNativePlayer(data: Map<String, Any?>, result: MethodChannel.Result) {
+        if (pendingNativePlayerResult != null) {
+            result.error("NATIVE_PLAYER_BUSY", "A native playback session is already active.", null)
+            return
+        }
+        val source = data["source"] as? String
+        if (source.isNullOrBlank()) {
+            result.error("NATIVE_PLAYER_SOURCE", "A debrid stream URL is required.", null)
+            return
+        }
+        val headers = HashMap<String, String>()
+        (data["headers"] as? Map<*, *>)?.forEach { (key, value) ->
+            if (key is String && value is String) headers[key] = value
+        }
+        val intent = Intent(this, Media3PlayerActivity::class.java).apply {
+            putExtra(Media3PlayerActivity.EXTRA_SOURCE, source)
+            putExtra(Media3PlayerActivity.EXTRA_TITLE, data["title"] as? String)
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_URL,
+                data["subtitleUrl"] as? String ?: data["externalSubtitle"] as? String,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_MIME_TYPE,
+                data["subtitleMimeType"] as? String,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_LANGUAGE,
+                data["subtitleLanguage"] as? String,
+            )
+            putExtra(Media3PlayerActivity.EXTRA_SUBTITLE_LABEL, data["subtitleLabel"] as? String)
+            putExtra(Media3PlayerActivity.EXTRA_MIME_TYPE, data["mimeType"] as? String)
+            putExtra(
+                Media3PlayerActivity.EXTRA_FILE_NAME,
+                data["fileName"] as? String ?: data["releaseName"] as? String,
+            )
+            putExtra(Media3PlayerActivity.EXTRA_HEADERS, headers)
+            putExtra(
+                Media3PlayerActivity.EXTRA_RESUME_MS,
+                (data["resumeMs"] as? Number)?.toLong() ?: 0L,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_RESUME_PROVIDED,
+                data["resumeProvided"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_RESUME_UPDATED_AT_MS,
+                (data["resumeUpdatedAtMs"] as? Number)?.toLong() ?: 0L,
+            )
+            putExtra(Media3PlayerActivity.EXTRA_AUTO_PLAY, data["autoPlay"] as? Boolean ?: true)
+            putExtra(
+                Media3PlayerActivity.EXTRA_AUDIO_LANGUAGE,
+                data["audioLanguage"] as? String,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_LANGUAGE,
+                data["subtitleLanguage"] as? String,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLES_ENABLED,
+                data["subtitlesEnabled"] as? Boolean ?: true,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_SIZE,
+                (data["subtitleSize"] as? Number)?.toFloat() ?: 34f,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_POSITION,
+                (data["subtitlePosition"] as? Number)?.toInt() ?: 100,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_HIGH_CONTRAST_SUBTITLES,
+                data["highContrastSubtitles"] as? Boolean ?: false,
+            )
+            putExtra(Media3PlayerActivity.EXTRA_VIDEO_FIT, data["videoFit"] as? String)
+            putExtra(
+                Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,
+                data["startFromBeginning"] as? Boolean ?: false,
+            )
+            putExtra(Media3PlayerActivity.EXTRA_CHECKPOINT_KEY, data["checkpointKey"] as? String)
+        }
+        pendingNativePlayerResult = result
+        try {
+            if (::mediaSession.isInitialized) mediaSession.isActive = false
+            startActivityForResult(intent, NATIVE_PLAYER_REQUEST_CODE)
+        } catch (error: Throwable) {
+            if (::mediaSession.isInitialized) mediaSession.isActive = true
+            pendingNativePlayerResult = null
+            throw error
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == NATIVE_PLAYER_REQUEST_CODE) {
+            if (::mediaSession.isInitialized) mediaSession.isActive = true
+            val pending = pendingNativePlayerResult
+            pendingNativePlayerResult = null
+            if (pending == null) return
+            if (resultCode != RESULT_OK || data == null) {
+                pending.success(
+                    mapOf(
+                        "status" to "cancelled",
+                        "positionMs" to 0L,
+                        "durationMs" to 0L,
+                        "completed" to false,
+                        "firstFrame" to false,
+                        "droppedFrames" to 0,
+                    ),
+                )
+                return
+            }
+            pending.success(
+                mapOf(
+                    Media3PlayerActivity.RESULT_STATUS to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_STATUS),
+                    Media3PlayerActivity.RESULT_POSITION_MS to
+                        data.getLongExtra(Media3PlayerActivity.RESULT_POSITION_MS, 0L),
+                    Media3PlayerActivity.RESULT_DURATION_MS to
+                        data.getLongExtra(Media3PlayerActivity.RESULT_DURATION_MS, 0L),
+                    Media3PlayerActivity.RESULT_COMPLETED to
+                        data.getBooleanExtra(Media3PlayerActivity.RESULT_COMPLETED, false),
+                    Media3PlayerActivity.RESULT_ERROR to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_ERROR),
+                    Media3PlayerActivity.RESULT_FIRST_FRAME to
+                        data.getBooleanExtra(Media3PlayerActivity.RESULT_FIRST_FRAME, false),
+                    "firstFrameRendered" to
+                        data.getBooleanExtra(Media3PlayerActivity.RESULT_FIRST_FRAME, false),
+                    Media3PlayerActivity.RESULT_DECODER to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_DECODER),
+                    Media3PlayerActivity.RESULT_DROPPED_FRAMES to
+                        data.getIntExtra(Media3PlayerActivity.RESULT_DROPPED_FRAMES, 0),
+                    Media3PlayerActivity.RESULT_SURFACE_READY to
+                        data.getBooleanExtra(Media3PlayerActivity.RESULT_SURFACE_READY, false),
+                    Media3PlayerActivity.RESULT_MANUFACTURER to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_MANUFACTURER),
+                    Media3PlayerActivity.RESULT_MODEL to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_MODEL),
+                    Media3PlayerActivity.RESULT_SDK to
+                        data.getIntExtra(Media3PlayerActivity.RESULT_SDK, 0),
+                    Media3PlayerActivity.RESULT_ABIS to
+                        data.getStringArrayExtra(Media3PlayerActivity.RESULT_ABIS)?.toList(),
+                    Media3PlayerActivity.RESULT_MEMORY_CLASS_MB to
+                        data.getIntExtra(Media3PlayerActivity.RESULT_MEMORY_CLASS_MB, 0),
+                    Media3PlayerActivity.RESULT_LOW_MEMORY_DEVICE to
+                        data.getBooleanExtra(
+                            Media3PlayerActivity.RESULT_LOW_MEMORY_DEVICE,
+                            false,
+                        ),
+                    Media3PlayerActivity.RESULT_VIDEO_MIME to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_VIDEO_MIME),
+                    Media3PlayerActivity.RESULT_VIDEO_CODECS to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_VIDEO_CODECS),
+                    Media3PlayerActivity.RESULT_VIDEO_WIDTH to
+                        data.getIntExtra(Media3PlayerActivity.RESULT_VIDEO_WIDTH, 0),
+                    Media3PlayerActivity.RESULT_VIDEO_HEIGHT to
+                        data.getIntExtra(Media3PlayerActivity.RESULT_VIDEO_HEIGHT, 0),
+                    Media3PlayerActivity.RESULT_VIDEO_FRAME_RATE to
+                        data.getFloatExtra(Media3PlayerActivity.RESULT_VIDEO_FRAME_RATE, 0f),
+                    Media3PlayerActivity.RESULT_AUDIO_MIME to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_MIME),
+                    Media3PlayerActivity.RESULT_AUDIO_CODECS to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_CODECS),
+                ),
+            )
+            return
+        }
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     private fun createMediaSession() {
@@ -302,7 +478,17 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        pendingNativePlayerResult?.error(
+            "NATIVE_PLAYER_DESTROYED",
+            "The Android TV activity closed before native playback returned.",
+            null,
+        )
+        pendingNativePlayerResult = null
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val NATIVE_PLAYER_REQUEST_CODE = 7314
     }
 }

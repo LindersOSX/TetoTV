@@ -1,15 +1,36 @@
-# Third-party playback notices
+# Third-party playback and networking notices
 
-TetoTV includes two independently maintained playback stacks:
+TetoTV's default Android player and its independent compatibility engines use
+the following third-party components:
 
-- `flutter_vlc_player` (BSD 3-Clause) and VideoLAN libVLC (LGPL 2.1 or
-  later): <https://github.com/solid-software/flutter_vlc_player> and
-  <https://code.videolan.org/videolan/vlc-android>.
-- `media_kit` (MIT), mpv, FFmpeg, and their Android runtime libraries:
-  <https://github.com/media-kit/media-kit> and
-  <https://github.com/mpv-android/mpv-android>.
+| Component | Use in TetoTV | Upstream license |
+| --- | --- | --- |
+| AndroidX Media3 1.10.1 (`media3-exoplayer`, `media3-ui`, `media3-session`, and `media3-datasource-okhttp`) | Native default player, `PlayerView`/`SurfaceView`, MediaSession, and OkHttp-backed media data source | Apache License 2.0 |
+| OkHttp | HTTPS redirects, byte-range requests, retries, and debrid request headers for Media3 | Apache License 2.0 |
+| `media_kit`, `media_kit_video`, and `media_kit_libs_android_video` | MPV compatibility player and Flutter integration | MIT License for the media_kit projects; bundled native components retain their own licenses |
+| mpv, FFmpeg, and libass | Compatibility decoding and styled ASS subtitle rendering inside the media_kit Android runtime | Their respective upstream licenses apply; FFmpeg/mpv obligations depend on the exact binary build configuration |
+| `flutter_vlc_player` 7.4.4 | Flutter integration for the final VLC fallback | BSD 3-Clause License |
+| VideoLAN libVLC 3.6.3 | Final software compatibility player | GNU Lesser General Public License 2.1 or later, subject to the licenses of included modules |
 
-The exact resolved package versions are recorded in `pubspec.lock`. Copyright
-notices and license texts distributed by the packages remain applicable. When
-redistributing an APK, retain these notices and satisfy the corresponding
-source/relocation requirements of the packaged native libraries.
+Upstream projects and license sources:
+
+- AndroidX Media3: <https://github.com/androidx/media>
+- OkHttp: <https://github.com/square/okhttp>
+- media_kit and its Android native-library package:
+  <https://github.com/media-kit/media-kit>
+- mpv: <https://github.com/mpv-player/mpv>
+- FFmpeg: <https://ffmpeg.org/legal.html>
+- libass: <https://github.com/libass/libass>
+- flutter_vlc_player:
+  <https://github.com/solid-software/flutter_vlc_player>
+- VLC for Android/libVLC:
+  <https://code.videolan.org/videolan/vlc-android>
+
+The exact resolved Dart package versions are recorded in `pubspec.lock`.
+Native Android versions are declared in `android/app/build.gradle.kts`, plugin
+Gradle metadata, and the resolved Gradle dependency graph. Copyright notices
+and complete license texts shipped by those dependencies remain applicable.
+When redistributing an APK, retain those notices and comply with the source,
+relinking, attribution, and other requirements that apply to the exact native
+binaries in that build. This summary is not a replacement for the full license
+texts.
