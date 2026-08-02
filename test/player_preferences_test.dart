@@ -131,6 +131,56 @@ void main() {
     );
   });
 
+  test('seek target remains usable before stream duration is known', () {
+    expect(
+      playerSeekTarget(
+        position: const Duration(minutes: 3),
+        offset: const Duration(seconds: 10),
+        duration: Duration.zero,
+      ),
+      const Duration(minutes: 3, seconds: 10),
+    );
+    expect(
+      playerSeekTarget(
+        position: const Duration(seconds: 4),
+        offset: const Duration(seconds: -10),
+        duration: const Duration(minutes: 24),
+      ),
+      Duration.zero,
+    );
+    expect(
+      playerSeekTarget(
+        position: const Duration(minutes: 23, seconds: 58),
+        offset: const Duration(seconds: 10),
+        duration: const Duration(minutes: 24),
+      ),
+      const Duration(minutes: 24),
+    );
+  });
+
+  test('subtitle defaults follow the selected release language', () {
+    const sub = ReleaseCandidate(
+      infoHash: 'sub',
+      magnetUri: 'magnet:?xt=urn:btih:sub',
+      releaseName: 'Show 01 English Subbed',
+      seeders: 1,
+      sourceId: 'test',
+      hasSubtitles: true,
+    );
+    const dub = ReleaseCandidate(
+      infoHash: 'dub',
+      magnetUri: 'magnet:?xt=urn:btih:dub',
+      releaseName: 'Show 01 English Dub',
+      seeders: 1,
+      sourceId: 'test',
+      isDubbed: true,
+      hasSubtitles: true,
+    );
+
+    expect(subtitlesEnabledByDefault(sub), isTrue);
+    expect(subtitlesEnabledByDefault(dub), isFalse);
+  });
+
   test('VLC compatibility mode is independent from its software fallback', () {
     expect(
       vlcHwAccForMode(VlcDecoderMode.hardwareCopy),

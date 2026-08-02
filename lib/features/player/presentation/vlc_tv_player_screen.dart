@@ -135,8 +135,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   VlcDecoderMode _decoderMode = VlcDecoderMode.hardwareCopy;
   double _playbackRate = 1;
+  double _subtitleSize = 34;
   int _subtitleDelayMs = 0;
   int _audioDelayMs = 0;
+  Duration? _queuedSeekTarget;
+  bool _seekInProgress = false;
 
   @override
   void initState() {
@@ -156,6 +159,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (mediaId != null) {
       final database = ref.read(tetoTvDatabaseProvider);
       _preferences = await database.seriesPreferences(mediaId);
+      _subtitleSize = _preferences.subtitleSize;
       _subtitleDelayMs = _preferences.subtitleDelayMs;
       _audioDelayMs = _preferences.audioDelayMs;
       if (!widget.launch.episode.startFromBeginning && widget.episode != null) {
@@ -168,6 +172,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         }
       }
     }
+    _preferences = _preferences.copyWith(
+      subtitleEnabled: subtitlesEnabledByDefault(_release),
+    );
     if (_releaseRequiresSoftware(_release)) {
       _decoderMode = VlcDecoderMode.software;
     }
@@ -201,7 +208,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       ]),
       subtitle: VlcSubtitleOptions([
         VlcSubtitleOptions.relativeFontSize(
-          (100 - (_preferences.subtitleSize - 20).round()).clamp(45, 85),
+          (100 - (_subtitleSize - 20).round()).clamp(45, 85),
         ),
         VlcSubtitleOptions.boldStyle(true),
         VlcSubtitleOptions.backgroundOpacity(
@@ -727,7 +734,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           ? _preferences.subtitleLanguage
           : canonicalPlayerLanguage(subtitleLabel),
       subtitleEnabled: subtitleEnabled ?? _preferences.subtitleEnabled,
-      subtitleSize: _preferences.subtitleSize,
+      subtitleSize: _subtitleSize,
       subtitlePosition: _preferences.subtitlePosition,
       subtitleDelayMs: _subtitleDelayMs,
       audioDelayMs: _audioDelayMs,
@@ -743,14 +750,24 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Future<void> _seekBy(Duration offset) async {
     final controller = _controller;
     if (controller == null) return;
-    final value = controller.value;
-    final candidate = value.position + offset;
-    final target = candidate < Duration.zero
-        ? Duration.zero
-        : value.duration > Duration.zero && candidate > value.duration
-        ? value.duration
-        : candidate;
-    await controller.seekTo(target);
+    _queuedSeekTarget = playerSeekTarget(
+      position: _queuedSeekTarget ?? controller.value.position,
+      offset: offset,
+      duration: controller.value.duration,
+    );
+    if (_seekInProgress) return;
+    _seekInProgress = true;
+    try {
+      while (_queuedSeekTarget != null) {
+        final target = _queuedSeekTarget!;
+        _queuedSeekTarget = null;
+        final activeController = _controller;
+        if (activeController == null) return;
+        await activeController.seekTo(target);
+      }
+    } finally {
+      _seekInProgress = false;
+    }
   }
 
   Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
@@ -790,6 +807,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         if (ready == null) continue;
         _source = ready.uri.toString();
         _release = candidate;
+        _preferences = _preferences.copyWith(
+          subtitleEnabled: subtitlesEnabledByDefault(candidate),
+        );
         _decoderMode = _releaseRequiresSoftware(candidate)
             ? VlcDecoderMode.software
             : VlcDecoderMode.hardwareCopy;
@@ -878,6 +898,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       builder: (_) => _VlcOptionsDialog(
         mode: _decoderMode,
         playbackRate: _playbackRate,
+        subtitleSize: _subtitleSize,
         subtitleDelayMs: _subtitleDelayMs,
         audioDelayMs: _audioDelayMs,
         hasAlternateStreams:
@@ -896,6 +917,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _playbackRate = rate;
         await _controller?.setPlaybackSpeed(rate);
         _showMessage('Playback speed ${rate}x');
+      case 'subtitleSize':
+        _subtitleSize = result.value as double;
+        _preferences = _preferences.copyWith(subtitleSize: _subtitleSize);
+        await _saveTrackPreferences();
+        await _restart(
+          _decoderMode,
+          reason: 'Subtitle size ${_subtitleSize.round()}',
+        );
       case 'subtitleDelay':
         _subtitleDelayMs = result.value as int;
         await _controller?.setSpuDelay(_subtitleDelayMs);
@@ -1496,6 +1525,7 @@ class _VlcOptionsDialog extends StatelessWidget {
   const _VlcOptionsDialog({
     required this.mode,
     required this.playbackRate,
+    required this.subtitleSize,
     required this.subtitleDelayMs,
     required this.audioDelayMs,
     required this.hasAlternateStreams,
@@ -1503,6 +1533,7 @@ class _VlcOptionsDialog extends StatelessWidget {
 
   final VlcDecoderMode mode;
   final double playbackRate;
+  final double subtitleSize;
   final int subtitleDelayMs;
   final int audioDelayMs;
   final bool hasAlternateStreams;
@@ -1622,6 +1653,21 @@ class _VlcOptionsDialog extends StatelessWidget {
             section('SPEED', [
               for (final rate in const [.75, 1.0, 1.25, 1.5, 2.0])
                 chip('${rate}x', 'rate', rate, selected: playbackRate == rate),
+            ]),
+            const SizedBox(height: 8),
+            section('SUBTITLE SIZE', [
+              for (final size in const [28.0, 34.0, 42.0, 50.0])
+                chip(
+                  switch (size) {
+                    28 => 'Small',
+                    34 => 'Medium',
+                    42 => 'Large',
+                    _ => 'Extra large',
+                  },
+                  'subtitleSize',
+                  size,
+                  selected: subtitleSize == size,
+                ),
             ]),
             const SizedBox(height: 8),
             section('SUBTITLE DELAY', [

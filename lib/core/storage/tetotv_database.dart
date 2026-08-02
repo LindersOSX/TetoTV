@@ -90,6 +90,30 @@ class SeriesPlaybackPreferences {
   final String videoFit;
   final bool highContrastSubtitles;
 
+  SeriesPlaybackPreferences copyWith({
+    String? audioLanguage,
+    String? subtitleLanguage,
+    bool? subtitleEnabled,
+    double? subtitleSize,
+    int? subtitlePosition,
+    int? subtitleDelayMs,
+    int? audioDelayMs,
+    String? decoder,
+    String? videoFit,
+    bool? highContrastSubtitles,
+  }) => SeriesPlaybackPreferences(
+    audioLanguage: audioLanguage ?? this.audioLanguage,
+    subtitleLanguage: subtitleLanguage ?? this.subtitleLanguage,
+    subtitleEnabled: subtitleEnabled ?? this.subtitleEnabled,
+    subtitleSize: subtitleSize ?? this.subtitleSize,
+    subtitlePosition: subtitlePosition ?? this.subtitlePosition,
+    subtitleDelayMs: subtitleDelayMs ?? this.subtitleDelayMs,
+    audioDelayMs: audioDelayMs ?? this.audioDelayMs,
+    decoder: decoder ?? this.decoder,
+    videoFit: videoFit ?? this.videoFit,
+    highContrastSubtitles: highContrastSubtitles ?? this.highContrastSubtitles,
+  );
+
   Map<String, Object?> toJson() => {
     'audioLanguage': audioLanguage,
     'subtitleLanguage': subtitleLanguage,

@@ -54,6 +54,10 @@ class ReleaseCandidate {
   final bool isHdr;
 }
 
+/// Sub releases should start with English captions visible, while releases
+/// identified as dubbed should start clean and let the viewer opt in.
+bool subtitlesEnabledByDefault(ReleaseCandidate release) => !release.isDubbed;
+
 bool releaseRequiresSoftwareDecoder(ReleaseCandidate release) {
   final codec = release.codec?.toLowerCase() ?? '';
   final name = release.releaseName.toLowerCase();

@@ -245,6 +245,8 @@ class MainActivity : FlutterActivity() {
                         data.getStringExtra(Media3PlayerActivity.RESULT_DECODER),
                     Media3PlayerActivity.RESULT_DROPPED_FRAMES to
                         data.getIntExtra(Media3PlayerActivity.RESULT_DROPPED_FRAMES, 0),
+                    Media3PlayerActivity.RESULT_SUBTITLE_SIZE to
+                        data.getFloatExtra(Media3PlayerActivity.RESULT_SUBTITLE_SIZE, 34f),
                     Media3PlayerActivity.RESULT_SURFACE_READY to
                         data.getBooleanExtra(Media3PlayerActivity.RESULT_SURFACE_READY, false),
                     Media3PlayerActivity.RESULT_MANUFACTURER to

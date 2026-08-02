@@ -176,6 +176,7 @@ class NativePlaybackResult {
     this.droppedFrames = 0,
     this.decoder,
     this.error,
+    this.subtitleSize,
     this.diagnostics = const {},
   });
 
@@ -187,6 +188,7 @@ class NativePlaybackResult {
   final int droppedFrames;
   final String? decoder;
   final String? error;
+  final double? subtitleSize;
   final Map<String, Object?> diagnostics;
 
   bool get failed => status == 'error' || status == 'no_first_frame';
@@ -205,6 +207,7 @@ class NativePlaybackResult {
         droppedFrames: (value['droppedFrames'] as num?)?.round() ?? 0,
         decoder: value['decoder'] as String?,
         error: value['error'] as String?,
+        subtitleSize: (value['subtitleSize'] as num?)?.toDouble(),
         diagnostics: {
           for (final key in const [
             'surfaceReady',

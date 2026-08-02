@@ -22,6 +22,7 @@ import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import android.app.AlertDialog
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -48,6 +49,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import dev.animetv.anime_tv.R
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.math.max
 import okhttp3.OkHttpClient
 
@@ -65,6 +67,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var mediaSession: MediaSession
     private lateinit var audioTrackButton: ImageButton
     private lateinit var captionTrackButton: ImageButton
+    private lateinit var captionSizeButton: ImageButton
     private val handler = Handler(Looper.getMainLooper())
 
     private var source = ""
@@ -84,6 +87,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var preferredAudioLanguage = "eng"
     private var preferredSubtitleLanguage = "eng"
     private var subtitlesEnabled = true
+    private var subtitleSize = 34f
+    private var subtitlePosition = 100
+    private var highContrastSubtitles = false
     private var preferredAudioOverrideApplied = false
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
@@ -201,6 +207,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getStringExtra(EXTRA_SUBTITLE_LANGUAGE)?.ifBlank { "eng" } ?: "eng"
         val subtitleLanguages = preferredLanguageTags(preferredSubtitleLanguage)
         subtitlesEnabled = intent.getBooleanExtra(EXTRA_SUBTITLES_ENABLED, true)
+        subtitleSize = intent.getFloatExtra(EXTRA_SUBTITLE_SIZE, 34f).coerceIn(18f, 60f)
+        subtitlePosition =
+            intent.getIntExtra(EXTRA_SUBTITLE_POSITION, 100).coerceIn(60, 100)
+        highContrastSubtitles =
+            intent.getBooleanExtra(EXTRA_HIGH_CONTRAST_SUBTITLES, false)
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
@@ -309,20 +320,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
             subtitleView?.apply {
-                val highContrast =
-                    intent.getBooleanExtra(EXTRA_HIGH_CONTRAST_SUBTITLES, false)
-                val subtitleSize =
-                    intent.getFloatExtra(EXTRA_SUBTITLE_SIZE, 34f).coerceIn(18f, 60f)
-                setApplyEmbeddedStyles(!highContrast)
-                setApplyEmbeddedFontSizes(!highContrast && subtitleSize == 34f)
+                setApplyEmbeddedStyles(!highContrastSubtitles)
+                setApplyEmbeddedFontSizes(
+                    !highContrastSubtitles && subtitleSize == DEFAULT_SUBTITLE_SIZE,
+                )
                 setFixedTextSize(
                     TypedValue.COMPLEX_UNIT_SP,
                     subtitleSize,
                 )
-                val subtitlePosition =
-                    intent.getIntExtra(EXTRA_SUBTITLE_POSITION, 100).coerceIn(60, 100)
                 setBottomPaddingFraction((108 - subtitlePosition) / 100f)
-                if (highContrast) {
+                if (highContrastSubtitles) {
                     setStyle(
                         CaptionStyleCompat(
                             Color.WHITE,
@@ -348,6 +355,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     showTrackPicker(C.TRACK_TYPE_TEXT, this)
                 }
             }
+        captionSizeButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_caption_size).apply {
+                setOnClickListener { showSubtitleSizePicker(this) }
+            }
+        updateCaptionSizeDescription()
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).setOnClickListener {
+            seekRelative(-SEEK_INCREMENT_MS, it)
+        }
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).setOnClickListener {
+            seekRelative(SEEK_INCREMENT_MS, it)
+        }
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
             terminalError =
@@ -631,6 +649,112 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             sourceButton.requestFocus()
             armControllerAutoHide()
         }
+    }
+
+    private fun showSubtitleSizePicker(sourceButton: View) {
+        handler.removeCallbacks(hideControllerRunnable)
+        activeTrackDialog?.dismiss()
+        val values = SUBTITLE_SIZE_VALUES
+        val labels = arrayOf(
+            getString(R.string.tetotv_player_caption_size_small),
+            getString(R.string.tetotv_player_caption_size_medium),
+            getString(R.string.tetotv_player_caption_size_large),
+            getString(R.string.tetotv_player_caption_size_extra_large),
+        )
+        val selectedIndex = values.indices.minByOrNull { index ->
+            abs(values[index] - subtitleSize)
+        } ?: 1
+        try {
+            val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+                .setTitle(R.string.tetotv_player_select_caption_size)
+                .setSingleChoiceItems(labels, selectedIndex) { picker, index ->
+                    subtitleSize = values[index]
+                    applySubtitleStyle()
+                    Toast.makeText(
+                        this,
+                        getString(
+                            R.string.tetotv_player_caption_size_changed,
+                            labels[index],
+                        ),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    picker.dismiss()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+            activeTrackDialog = dialog
+            dialog.setOnDismissListener {
+                if (activeTrackDialog === dialog) activeTrackDialog = null
+                if (!isFinishing && !isDestroyed) {
+                    playerView.showController()
+                    sourceButton.requestFocus()
+                    armControllerAutoHide()
+                }
+            }
+            dialog.show()
+        } catch (_: Throwable) {
+            activeTrackDialog = null
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_track_picker_error,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
+        }
+    }
+
+    private fun applySubtitleStyle() {
+        playerView.subtitleView?.apply {
+            setApplyEmbeddedStyles(!highContrastSubtitles)
+            setApplyEmbeddedFontSizes(
+                !highContrastSubtitles && subtitleSize == DEFAULT_SUBTITLE_SIZE,
+            )
+            setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, subtitleSize)
+            setBottomPaddingFraction((108 - subtitlePosition) / 100f)
+            if (highContrastSubtitles) {
+                setStyle(
+                    CaptionStyleCompat(
+                        Color.WHITE,
+                        0x99000000.toInt(),
+                        Color.TRANSPARENT,
+                        CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                        Color.BLACK,
+                        null,
+                    ),
+                )
+            }
+        }
+        updateCaptionSizeDescription()
+    }
+
+    private fun updateCaptionSizeDescription() {
+        if (!::captionSizeButton.isInitialized) return
+        val label = when (subtitleSize) {
+            in 0f..30f -> getString(R.string.tetotv_player_caption_size_small)
+            in 30f..38f -> getString(R.string.tetotv_player_caption_size_medium)
+            in 38f..46f -> getString(R.string.tetotv_player_caption_size_large)
+            else -> getString(R.string.tetotv_player_caption_size_extra_large)
+        }
+        captionSizeButton.contentDescription = getString(
+            R.string.tetotv_player_caption_size_changed,
+            label,
+        )
+    }
+
+    private fun seekRelative(offsetMs: Long, sourceButton: View) {
+        val duration = safeDurationMs()
+        val candidate = safePositionMs() + offsetMs
+        val target = when {
+            candidate < 0L -> 0L
+            duration > 0L && candidate > duration -> duration
+            else -> candidate
+        }
+        player.seekTo(target)
+        playerView.showController()
+        sourceButton.requestFocus()
+        armControllerAutoHide()
     }
 
     private fun requestTransportFocus() {
@@ -980,6 +1104,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             putExtra(RESULT_FIRST_FRAME, everFirstFrameRendered)
             putExtra(RESULT_DECODER, decoderName)
             putExtra(RESULT_DROPPED_FRAMES, droppedFrames)
+            putExtra(RESULT_SUBTITLE_SIZE, subtitleSize)
             putExtra(RESULT_SURFACE_READY, surfaceReady)
             putExtra(RESULT_MANUFACTURER, Build.MANUFACTURER)
             putExtra(RESULT_MODEL, Build.MODEL)
@@ -1053,6 +1178,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val RESULT_FIRST_FRAME = "firstFrame"
         const val RESULT_DECODER = "decoder"
         const val RESULT_DROPPED_FRAMES = "droppedFrames"
+        const val RESULT_SUBTITLE_SIZE = "subtitleSize"
         const val RESULT_SURFACE_READY = "surfaceReady"
         const val RESULT_MANUFACTURER = "manufacturer"
         const val RESULT_MODEL = "model"
@@ -1076,6 +1202,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
+        private const val SEEK_INCREMENT_MS = 10_000L
+        private const val DEFAULT_SUBTITLE_SIZE = 34f
+        private val SUBTITLE_SIZE_VALUES = floatArrayOf(28f, 34f, 42f, 50f)
         private const val DISABLED_CONTROL_ALPHA = 0.38f
         private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
         private const val STARTUP_TIMEOUT_MS = 45_000L

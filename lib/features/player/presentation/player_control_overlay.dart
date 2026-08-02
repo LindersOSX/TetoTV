@@ -6,6 +6,17 @@ import 'package:flutter/services.dart';
 const playerControlsIdleTimeout = Duration(seconds: 10);
 const playerControlsDoubleDownWindow = Duration(milliseconds: 450);
 
+Duration playerSeekTarget({
+  required Duration position,
+  required Duration offset,
+  required Duration duration,
+}) {
+  final candidate = position + offset;
+  if (candidate < Duration.zero) return Duration.zero;
+  if (duration > Duration.zero && candidate > duration) return duration;
+  return candidate;
+}
+
 /// Detects an intentional double press of D-pad Down without treating a held
 /// button (which produces key-repeat events) as two presses.
 class PlayerDoubleDownDetector {

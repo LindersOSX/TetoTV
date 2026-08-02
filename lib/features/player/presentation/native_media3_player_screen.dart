@@ -118,7 +118,7 @@ class _NativeMedia3PlayerScreenState
           externalSubtitle: widget.subtitle,
           audioLanguage: _preferences.audioLanguage,
           subtitleLanguage: _preferences.subtitleLanguage,
-          subtitlesEnabled: _preferences.subtitleEnabled,
+          subtitlesEnabled: subtitlesEnabledByDefault(_release),
           subtitleSize: _preferences.subtitleSize,
           subtitlePosition: _preferences.subtitlePosition,
           highContrastSubtitles: _preferences.highContrastSubtitles,
@@ -210,6 +210,15 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _persistResult(NativePlaybackResult result) async {
+    if (result.subtitleSize case final subtitleSize?) {
+      final normalizedSize = subtitleSize.clamp(18, 60).toDouble();
+      if (normalizedSize != _preferences.subtitleSize) {
+        _preferences = _preferences.copyWith(subtitleSize: normalizedSize);
+        await ref
+            .read(tetoTvDatabaseProvider)
+            .saveSeriesPreferences(_mediaId, _preferences);
+      }
+    }
     if (result.duration <= Duration.zero) {
       return;
     }

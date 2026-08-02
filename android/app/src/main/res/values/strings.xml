@@ -3,6 +3,14 @@
     <string name="tetotv_player_audio_short">Audio</string>
     <string name="tetotv_player_audio_tracks">Select audio track</string>
     <string name="tetotv_player_cc_short">CC</string>
+    <string name="tetotv_player_size_short">Size</string>
+    <string name="tetotv_player_caption_size">Caption size</string>
+    <string name="tetotv_player_select_caption_size">Choose caption size</string>
+    <string name="tetotv_player_caption_size_small">Small</string>
+    <string name="tetotv_player_caption_size_medium">Medium</string>
+    <string name="tetotv_player_caption_size_large">Large</string>
+    <string name="tetotv_player_caption_size_extra_large">Extra large</string>
+    <string name="tetotv_player_caption_size_changed">Caption size: %1$s</string>
     <string name="tetotv_player_closed_captions">Select closed captions</string>
     <string name="tetotv_player_closed_captions_off">Closed captions off. Select captions</string>
     <string name="tetotv_player_closed_captions_on">Closed captions on. Select captions</string>

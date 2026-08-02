@@ -329,6 +329,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Uint8List? _seekPreview;
   Duration? _seekPreviewPosition;
   Timer? _seekPreviewTimer;
+  Duration? _queuedSeekTarget;
+  bool _seekInProgress = false;
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume;
@@ -370,6 +372,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _decoderMode = PlaybackDecoderMode.software;
         _softwareFallbackUsed = true;
       }
+      _seriesPreferences = _seriesPreferences.copyWith(
+        subtitleEnabled: subtitlesEnabledByDefault(_currentRelease),
+      );
       if (!mounted) return;
       await _openMedia(resume: resume);
       if (resume != null) {
@@ -744,6 +749,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _applySubtitle() async {
+    if (!_seriesPreferences.subtitleEnabled) {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+      return;
+    }
     final subtitle = widget.subtitle;
     if (subtitle != null && subtitle.isNotEmpty) {
       if (subtitle.startsWith('asset:///')) {
@@ -902,6 +911,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           if (ready == null) continue;
           _source = ready.uri.toString();
           _currentRelease = candidate;
+          _seriesPreferences = _seriesPreferences.copyWith(
+            subtitleEnabled: subtitlesEnabledByDefault(candidate),
+          );
           _preferredAudioSelected = false;
           _preferredSubtitleSelected = false;
           _softwareFallbackUsed = false;
@@ -1402,15 +1414,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _seekBy(Duration offset) async {
-    final duration = _player.state.duration;
-    final candidate = _player.state.position + offset;
-    final target = candidate < Duration.zero
-        ? Duration.zero
-        : candidate > duration
-        ? duration
-        : candidate;
-    await _player.seek(target);
-    unawaited(_captureTrickplay(target));
+    _queuedSeekTarget = playerSeekTarget(
+      position: _queuedSeekTarget ?? _player.state.position,
+      offset: offset,
+      duration: _player.state.duration,
+    );
+    if (_seekInProgress) return;
+    _seekInProgress = true;
+    try {
+      while (_queuedSeekTarget != null) {
+        final target = _queuedSeekTarget!;
+        _queuedSeekTarget = null;
+        await _player.seek(target);
+        unawaited(_captureTrickplay(target));
+      }
+    } finally {
+      _seekInProgress = false;
+    }
   }
 
   Future<void> _captureTrickplay(Duration target) async {

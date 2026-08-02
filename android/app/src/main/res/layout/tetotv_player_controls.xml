@@ -144,12 +144,34 @@
                     style="@style/TetoTVPlayerControlButton.Compact"
                     android:contentDescription="@string/tetotv_player_closed_captions"
                     android:nextFocusLeft="@id/tetotv_audio_tracks"
+                    android:nextFocusRight="@id/tetotv_caption_size"
                     android:src="@drawable/exo_ic_subtitle_on" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/tetotv_player_cc_short"
+                    android:textColor="@android:color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="64dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/tetotv_caption_size"
+                    style="@style/TetoTVPlayerControlButton.Compact"
+                    android:contentDescription="@string/tetotv_player_caption_size"
+                    android:nextFocusLeft="@id/tetotv_caption_tracks"
+                    android:src="@drawable/tetotv_ic_caption_size" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/tetotv_player_size_short"
                     android:textColor="@android:color/white"
                     android:textSize="11sp" />
             </LinearLayout>
