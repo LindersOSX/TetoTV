@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -35,6 +37,8 @@ class TvFocusable extends StatefulWidget {
 class _TvFocusableState extends State<TvFocusable> {
   late final FocusNode _fallbackFocusNode;
   bool _focused = false;
+  Timer? _holdTimer;
+  bool _holdTriggered = false;
 
   FocusNode get _focusNode => widget.focusNode ?? _fallbackFocusNode;
 
@@ -46,8 +50,36 @@ class _TvFocusableState extends State<TvFocusable> {
 
   @override
   void dispose() {
+    _holdTimer?.cancel();
     _fallbackFocusNode.dispose();
     super.dispose();
+  }
+
+  KeyEventResult _handleRemoteActivation(FocusNode node, KeyEvent event) {
+    if (widget.onLongPress == null ||
+        (event.logicalKey != LogicalKeyboardKey.select &&
+            event.logicalKey != LogicalKeyboardKey.enter)) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent) {
+      _holdTimer?.cancel();
+      _holdTriggered = false;
+      _holdTimer = Timer(const Duration(milliseconds: 650), () {
+        if (!mounted) return;
+        _holdTriggered = true;
+        widget.onLongPress?.call();
+      });
+      return KeyEventResult.handled;
+    }
+    if (event is KeyRepeatEvent) return KeyEventResult.handled;
+    if (event is KeyUpEvent) {
+      _holdTimer?.cancel();
+      _holdTimer = null;
+      if (!_holdTriggered) widget.onPressed();
+      _holdTriggered = false;
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.handled;
   }
 
   void _handleFocus(bool focused) {
@@ -70,60 +102,64 @@ class _TvFocusableState extends State<TvFocusable> {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      child: Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.contextMenu):
-              _TvSecondaryActivateIntent(),
-        },
-        child: FocusableActionDetector(
-          focusNode: _focusNode,
-          autofocus: widget.autofocus,
-          onFocusChange: _handleFocus,
-          onShowHoverHighlight: (hovering) {
-            if (hovering) _focusNode.requestFocus();
+      child: Focus(
+        canRequestFocus: false,
+        onKeyEvent: _handleRemoteActivation,
+        child: Shortcuts(
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.contextMenu):
+                _TvSecondaryActivateIntent(),
           },
-          actions: <Type, Action<Intent>>{
-            ActivateIntent: CallbackAction<ActivateIntent>(
-              onInvoke: (_) {
-                widget.onPressed();
-                return null;
-              },
-            ),
-            _TvSecondaryActivateIntent:
-                CallbackAction<_TvSecondaryActivateIntent>(
-                  onInvoke: (_) {
-                    widget.onLongPress?.call();
-                    return null;
-                  },
-                ),
-          },
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _focusNode.requestFocus();
-                widget.onPressed();
-              },
-              onLongPress: widget.onLongPress,
-              child: AnimatedScale(
-                scale: _focused ? widget.focusScale : 1,
-                duration: const Duration(milliseconds: 80),
-                curve: Curves.easeOutCubic,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 80),
-                  decoration: BoxDecoration(
-                    borderRadius: widget.borderRadius,
-                    border: Border.all(
-                      color: _focused
-                          ? AppColors.accentBright
-                          : Colors.transparent,
-                      width: 3,
-                    ),
+          child: FocusableActionDetector(
+            focusNode: _focusNode,
+            autofocus: widget.autofocus,
+            onFocusChange: _handleFocus,
+            onShowHoverHighlight: (hovering) {
+              if (hovering) _focusNode.requestFocus();
+            },
+            actions: <Type, Action<Intent>>{
+              ActivateIntent: CallbackAction<ActivateIntent>(
+                onInvoke: (_) {
+                  widget.onPressed();
+                  return null;
+                },
+              ),
+              _TvSecondaryActivateIntent:
+                  CallbackAction<_TvSecondaryActivateIntent>(
+                    onInvoke: (_) {
+                      widget.onLongPress?.call();
+                      return null;
+                    },
                   ),
-                  child: ClipRRect(
-                    borderRadius: widget.borderRadius,
-                    child: widget.child,
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  _focusNode.requestFocus();
+                  widget.onPressed();
+                },
+                onLongPress: widget.onLongPress,
+                child: AnimatedScale(
+                  scale: _focused ? widget.focusScale : 1,
+                  duration: const Duration(milliseconds: 80),
+                  curve: Curves.easeOutCubic,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 80),
+                    decoration: BoxDecoration(
+                      borderRadius: widget.borderRadius,
+                      border: Border.all(
+                        color: _focused
+                            ? AppColors.accentBright
+                            : Colors.transparent,
+                        width: 3,
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: widget.borderRadius,
+                      child: widget.child,
+                    ),
                   ),
                 ),
               ),
