@@ -51,6 +51,12 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
             node['alternative_titles'] as Map<String, dynamic>?;
         final titleRomaji = node['title'] as String;
         final titleEnglish = alternatives?['en'] as String?;
+        final updatedAt = DateTime.tryParse(
+          listStatus['updated_at'] as String? ?? '',
+        );
+        final startDate = DateTime.tryParse(
+          listStatus['start_date'] as String? ?? '',
+        );
         result.add(
           TrackedAnime(
             mediaId: node['id'] as int,
@@ -64,6 +70,9 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
             totalEpisodes: node['num_episodes'] as int?,
             coverImageUrl:
                 picture?['large'] as String? ?? picture?['medium'] as String?,
+            score: (listStatus['score'] as num?)?.toDouble(),
+            updatedAt: updatedAt?.toLocal(),
+            startDate: startDate,
           ),
         );
       }

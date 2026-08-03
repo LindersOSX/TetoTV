@@ -37,13 +37,13 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.debrid.connect',
+      'accounts.debrid.provider',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.torbox.action',
+      'accounts.debrid.connect',
     );
   });
 
@@ -67,6 +67,7 @@ void main() {
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
@@ -109,6 +110,39 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('provider selector only shows the chosen debrid configuration', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Advanced: personal token'), findsOneWidget);
+    expect(find.text('TorBox API token'), findsNothing);
+
+    for (var index = 0; index < 2; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Debrid provider'), findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Advanced: personal token'), findsNothing);
+    expect(find.text('TorBox API token'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('D-pad reaches private update token and check controls', (
     tester,
   ) async {
@@ -131,12 +165,20 @@ void main() {
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+    }
+
+    for (var attempt = 0; attempt < 30; attempt++) {
+      if (FocusManager.instance.primaryFocus?.debugLabel ==
+          'accounts.updates.token') {
+        break;
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
 

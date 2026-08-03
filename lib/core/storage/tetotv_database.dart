@@ -229,7 +229,7 @@ class TetoTvDatabase {
     final root = await getDatabasesPath();
     return openDatabase(
       path.join(root, 'tetotv.db'),
-      version: 1,
+      version: 2,
       onConfigure: configureTetoTvDatabase,
       onCreate: (db, _) async {
         await db.execute('''
@@ -283,12 +283,21 @@ class TetoTvDatabase {
             created_at INTEGER NOT NULL
           )
         ''');
+        await _createContinueDismissalsTable(db);
+      },
+      onUpgrade: (db, oldVersion, _) async {
+        if (oldVersion < 2) await _createContinueDismissalsTable(db);
       },
     );
   }
 
   Future<void> saveCheckpoint(PlaybackCheckpoint checkpoint) async {
     final db = await database;
+    await db.delete(
+      'continue_watching_dismissals',
+      where: 'anilist_media_id = ?',
+      whereArgs: [checkpoint.anilistMediaId],
+    );
     await db.insert(
       'playback_history',
       checkpoint.toMap(),
@@ -337,6 +346,34 @@ class TetoTvDatabase {
       [limit],
     );
     return rows.map(PlaybackCheckpoint.fromMap).toList(growable: false);
+  }
+
+  Future<void> removeLocalHistory(int mediaId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'playback_history',
+        where: 'anilist_media_id = ?',
+        whereArgs: [mediaId],
+      );
+      await txn.insert(
+        'continue_watching_dismissals',
+        {
+          'anilist_media_id': mediaId,
+          'dismissed_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+  }
+
+  Future<Set<int>> dismissedContinueWatchingIds() async {
+    final db = await database;
+    final rows = await db.query(
+      'continue_watching_dismissals',
+      columns: ['anilist_media_id'],
+    );
+    return rows.map((row) => row['anilist_media_id']! as int).toSet();
   }
 
   Future<SeriesPlaybackPreferences> seriesPreferences(int mediaId) async {
@@ -482,3 +519,11 @@ class TetoTvDatabase {
     _opening = null;
   }
 }
+
+Future<void> _createContinueDismissalsTable(DatabaseExecutor db) =>
+    db.execute('''
+  CREATE TABLE IF NOT EXISTS continue_watching_dismissals (
+    anilist_media_id INTEGER PRIMARY KEY,
+    dismissed_at INTEGER NOT NULL
+  )
+''');

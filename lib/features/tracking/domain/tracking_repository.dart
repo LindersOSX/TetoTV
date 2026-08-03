@@ -22,6 +22,9 @@ class TrackedAnime {
     this.titleRomaji,
     this.totalEpisodes,
     this.coverImageUrl,
+    this.score,
+    this.updatedAt,
+    this.startDate,
   });
 
   final int mediaId;
@@ -32,6 +35,9 @@ class TrackedAnime {
   final int progress;
   final int? totalEpisodes;
   final String? coverImageUrl;
+  final double? score;
+  final DateTime? updatedAt;
+  final DateTime? startDate;
 
   String displayTitle(TitleLanguagePreference preference) =>
       preferredAnimeTitle(

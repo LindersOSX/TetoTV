@@ -10,6 +10,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
@@ -105,6 +106,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   VlcPlayerController? _controller;
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
+  final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
   final _doubleDownDetector = PlayerDoubleDownDetector();
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   Timer? _controlsTimer;
@@ -141,6 +143,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   int _audioDelayMs = 0;
   Duration? _queuedSeekTarget;
   bool _seekInProgress = false;
+  int _seekBackSeconds = 10;
+  int _seekForwardSeconds = 10;
+  int _captionTextColor = 0xFFFFFFFF;
+  int _captionBackgroundColor = 0x00000000;
+  final Set<String> _autoFocusedSkipSegments = {};
+  bool _allowExit = false;
+  bool _confirmingExit = false;
 
   @override
   void initState() {
@@ -155,11 +164,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _bootstrap() async {
+    final appearance = ref.read(settingsPreferencesProvider);
+    _seekBackSeconds = appearance.seekBackSeconds;
+    _seekForwardSeconds = appearance.seekForwardSeconds;
+    _captionTextColor = appearance.captionTextColor;
+    _captionBackgroundColor = appearance.captionBackgroundColor;
     final mediaId = widget.anilistMediaId;
     if (mediaId != null) {
       final database = ref.read(tetoTvDatabaseProvider);
       _preferences = await database.seriesPreferences(mediaId);
-      _subtitleSize = _preferences.subtitleSize;
+      _subtitleSize = _preferences.subtitleSize == 34
+          ? appearance.captionTextSize
+          : _preferences.subtitleSize;
       _subtitleDelayMs = _preferences.subtitleDelayMs;
       _audioDelayMs = _preferences.audioDelayMs;
       if (!widget.launch.episode.startFromBeginning && widget.episode != null) {
@@ -213,8 +229,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           (100 - (_subtitleSize - 20).round()).clamp(45, 85),
         ),
         VlcSubtitleOptions.boldStyle(true),
+        VlcSubtitleOptions.color(
+          VlcSubtitleColor(_captionTextColor & 0x00FFFFFF),
+        ),
         VlcSubtitleOptions.backgroundOpacity(
-          _preferences.highContrastSubtitles ? 150 : 0,
+          _preferences.highContrastSubtitles
+              ? 221
+              : (_captionBackgroundColor >> 24) & 0xFF,
+        ),
+        VlcSubtitleOptions.backgroundColor(
+          VlcSubtitleColor(_captionBackgroundColor & 0x00FFFFFF),
         ),
       ]),
       extras: const [
@@ -606,7 +630,17 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _canSkip = available;
         _activeSkip = active;
       });
+      if (active != null) _focusSkipOnce(active);
     }
+  }
+
+  void _focusSkipOnce(SkipSegment segment) {
+    final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
+    if (!_autoFocusedSkipSegments.add(key)) return;
+    _showControls();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _activeSkip == segment) _skipFocus.requestFocus();
+    });
   }
 
   Future<void> _skipCurrentSegment() async {
@@ -971,12 +1005,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
     if (key == LogicalKeyboardKey.keyJ ||
         key == LogicalKeyboardKey.mediaRewind) {
-      unawaited(_seekBy(const Duration(seconds: -10)));
+      unawaited(_seekBy(Duration(seconds: -_seekBackSeconds)));
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyL ||
         key == LogicalKeyboardKey.mediaFastForward) {
-      unawaited(_seekBy(const Duration(seconds: 10)));
+      unawaited(_seekBy(Duration(seconds: _seekForwardSeconds)));
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.select ||
@@ -1049,6 +1083,49 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _rootFocus.requestFocus();
   }
 
+  Future<void> _confirmExit() async {
+    if (_confirmingExit || !mounted) return;
+    _confirmingExit = true;
+    final controller = _controller;
+    final wasPlaying = controller?.value.isPlaying == true;
+    if (wasPlaying) await controller?.pause();
+    if (!mounted) return;
+    final exit = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: const Text('Exit video?'),
+        content: const Text('Your current playback position will be saved.'),
+        actions: [
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Continue watching'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Exit video'),
+          ),
+        ],
+      ),
+    );
+    _confirmingExit = false;
+    if (!mounted) return;
+    if (exit == true) {
+      if (controller != null) {
+        await _persistPlayback(controller.value.position, force: true);
+      }
+      setState(() => _allowExit = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && context.canPop()) context.pop();
+      });
+    } else if (wasPlaying) {
+      await controller?.play();
+      _showControls(focusControls: true);
+    }
+  }
+
   @override
   void dispose() {
     final controller = _controller;
@@ -1068,141 +1145,177 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _trackDiscoveryTimer?.cancel();
     _rootFocus.dispose();
     _playFocus.dispose();
+    _skipFocus.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Focus(
-        focusNode: _rootFocus,
-        autofocus: true,
-        onKeyEvent: _handleKey,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (controller != null)
-              KeyedSubtree(
-                // Never replace the Android platform view when initialization
-                // completes. Re-keying this subtree disposes libVLC's surface
-                // while its decoder is producing the first frame.
-                key: const ValueKey('vlc-player-surface'),
-                child: Center(
-                  child: VlcPlayer(
-                    controller: controller,
-                    aspectRatio: 16 / 9,
-                    // flutter_vlc_player owns a TextureRegistry surface. Its
-                    // AndroidView/virtual-display path keeps that surface alive
-                    // across the controller's asynchronous initialization;
-                    // hybrid composition abandons it on several TV runtimes.
-                    virtualDisplay: true,
-                    placeholder: const ColoredBox(color: Colors.black),
-                  ),
-                ),
-              ),
-            if (_engineInitialized)
-              const SizedBox(
-                key: ValueKey('vlc-player-initialized'),
-                width: 0,
-                height: 0,
-              ),
-            if (controller == null)
-              const Center(
-                child: CircularProgressIndicator(color: AppColors.cyan),
-              )
-            else
-              ValueListenableBuilder<VlcPlayerValue>(
-                valueListenable: controller,
-                builder: (context, value, child) => Stack(
-                  children: [
-                    if (value.position > const Duration(seconds: 1) &&
-                        value.size.width > 0 &&
-                        value.size.height > 0)
-                      const SizedBox(
-                        key: ValueKey('vlc-playback-advancing'),
-                        width: 0,
-                        height: 0,
-                      ),
-                    if (value.isBuffering)
-                      const Center(
-                        child: CircularProgressIndicator(color: AppColors.cyan),
-                      ),
-                  ],
-                ),
-              ),
-            ExcludeFocus(
-              excluding: !_controlsVisible,
-              child: IgnorePointer(
-                ignoring: !_controlsVisible,
-                child: AnimatedOpacity(
-                  opacity: _controlsVisible ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: _VlcPlayerChrome(
-                    controller: controller,
-                    title: widget.title,
-                    service: widget.debridService,
-                    playFocusNode: _playFocus,
-                    canSkip: _canSkip,
-                    skipLabel: _activeSkip?.actionLabel,
-                    mode: _decoderMode,
-                    onRewind: () =>
-                        unawaited(_seekBy(const Duration(seconds: -10))),
-                    onPlayPause: _playOrPause,
-                    onForward: () =>
-                        unawaited(_seekBy(const Duration(seconds: 10))),
-                    onSkip: () => unawaited(_skipCurrentSegment()),
-                    onAudio: () => unawaited(_openAudioTrackPicker()),
-                    onSubtitles: () => unawaited(_openSubtitleTrackPicker()),
-                    onFixVideo: () => unawaited(
-                      _decoderMode == VlcDecoderMode.software
-                          ? _restart(
-                              VlcDecoderMode.hardwareCopy,
-                              reason: 'VLC hardware-copy decoding enabled',
-                            )
-                          : _restart(
-                              VlcDecoderMode.software,
-                              reason: 'VLC software decoding enabled',
-                            ),
-                    ),
-                    onOptions: () => unawaited(_openOptions()),
-                  ),
-                ),
-              ),
-            ),
-            if (_playbackError case final error?)
-              Positioned(
-                left: 36,
-                right: 36,
-                bottom: 104,
-                child: _VlcPlaybackError(
-                  message: error,
-                  onRetry: () => unawaited(_restart(_decoderMode)),
-                  onUseMpv: widget.onUseMpv,
-                ),
-              ),
-            if (_trackMessage case final message?)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xEE0A0A0A),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: AppColors.accent.withValues(alpha: .6),
+    return PopScope(
+      canPop: _allowExit,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_confirmExit());
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Focus(
+          focusNode: _rootFocus,
+          autofocus: true,
+          onKeyEvent: _handleKey,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (controller != null)
+                KeyedSubtree(
+                  // Never replace the Android platform view when initialization
+                  // completes. Re-keying this subtree disposes libVLC's surface
+                  // while its decoder is producing the first frame.
+                  key: const ValueKey('vlc-player-surface'),
+                  child: Center(
+                    child: VlcPlayer(
+                      controller: controller,
+                      aspectRatio: 16 / 9,
+                      // flutter_vlc_player owns a TextureRegistry surface. Its
+                      // AndroidView/virtual-display path keeps that surface alive
+                      // across the controller's asynchronous initialization;
+                      // hybrid composition abandons it on several TV runtimes.
+                      virtualDisplay: true,
+                      placeholder: const ColoredBox(color: Colors.black),
                     ),
                   ),
-                  child: Text(
-                    message,
-                    style: Theme.of(context).textTheme.titleMedium,
+                ),
+              if (_engineInitialized)
+                const SizedBox(
+                  key: ValueKey('vlc-player-initialized'),
+                  width: 0,
+                  height: 0,
+                ),
+              if (controller == null)
+                const Center(
+                  child: CircularProgressIndicator(color: AppColors.cyan),
+                )
+              else
+                ValueListenableBuilder<VlcPlayerValue>(
+                  valueListenable: controller,
+                  builder: (context, value, child) => Stack(
+                    children: [
+                      if (value.position > const Duration(seconds: 1) &&
+                          value.size.width > 0 &&
+                          value.size.height > 0)
+                        const SizedBox(
+                          key: ValueKey('vlc-playback-advancing'),
+                          width: 0,
+                          height: 0,
+                        ),
+                      if (value.isBuffering)
+                        const Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.cyan,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (controller != null)
+                Positioned(
+                  left: 34,
+                  right: 34,
+                  top: 28,
+                  child: ValueListenableBuilder<VlcPlayerValue>(
+                    valueListenable: controller,
+                    builder: (context, value, child) => value.isPlaying
+                        ? const SizedBox.shrink()
+                        : Text(
+                            widget.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.headlineSmall
+                                ?.copyWith(
+                                  shadows: const [
+                                    Shadow(color: Colors.black, blurRadius: 12),
+                                  ],
+                                ),
+                          ),
+                  ),
+                ),
+              ExcludeFocus(
+                excluding: !_controlsVisible,
+                child: IgnorePointer(
+                  ignoring: !_controlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _VlcPlayerChrome(
+                      controller: controller,
+                      title: widget.title,
+                      service: widget.debridService,
+                      playFocusNode: _playFocus,
+                      skipFocusNode: _skipFocus,
+                      seekBackSeconds: _seekBackSeconds,
+                      seekForwardSeconds: _seekForwardSeconds,
+                      canSkip: _canSkip,
+                      skipLabel: _activeSkip?.actionLabel,
+                      mode: _decoderMode,
+                      onRewind: () => unawaited(
+                        _seekBy(Duration(seconds: -_seekBackSeconds)),
+                      ),
+                      onPlayPause: _playOrPause,
+                      onForward: () => unawaited(
+                        _seekBy(Duration(seconds: _seekForwardSeconds)),
+                      ),
+                      onSkip: () => unawaited(_skipCurrentSegment()),
+                      onAudio: () => unawaited(_openAudioTrackPicker()),
+                      onSubtitles: () => unawaited(_openSubtitleTrackPicker()),
+                      onFixVideo: () => unawaited(
+                        _decoderMode == VlcDecoderMode.software
+                            ? _restart(
+                                VlcDecoderMode.hardwareCopy,
+                                reason: 'VLC hardware-copy decoding enabled',
+                              )
+                            : _restart(
+                                VlcDecoderMode.software,
+                                reason: 'VLC software decoding enabled',
+                              ),
+                      ),
+                      onOptions: () => unawaited(_openOptions()),
+                    ),
                   ),
                 ),
               ),
-          ],
+              if (_playbackError case final error?)
+                Positioned(
+                  left: 36,
+                  right: 36,
+                  bottom: 104,
+                  child: _VlcPlaybackError(
+                    message: error,
+                    onRetry: () => unawaited(_restart(_decoderMode)),
+                    onUseMpv: widget.onUseMpv,
+                  ),
+                ),
+              if (_trackMessage case final message?)
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xEE0A0A0A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.accent.withValues(alpha: .6),
+                      ),
+                    ),
+                    child: Text(
+                      message,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1215,6 +1328,9 @@ class _VlcPlayerChrome extends StatelessWidget {
     required this.title,
     required this.service,
     required this.playFocusNode,
+    required this.skipFocusNode,
+    required this.seekBackSeconds,
+    required this.seekForwardSeconds,
     required this.canSkip,
     required this.skipLabel,
     required this.mode,
@@ -1232,6 +1348,9 @@ class _VlcPlayerChrome extends StatelessWidget {
   final String title;
   final DebridService service;
   final FocusNode playFocusNode;
+  final FocusNode skipFocusNode;
+  final int seekBackSeconds;
+  final int seekForwardSeconds;
   final bool canSkip;
   final String? skipLabel;
   final VlcDecoderMode mode;
@@ -1297,8 +1416,8 @@ class _VlcPlayerChrome extends StatelessWidget {
                 child: Row(
                   children: [
                     _VlcControl(
-                      icon: Icons.replay_10_rounded,
-                      label: 'Back 10s',
+                      icon: Icons.replay_rounded,
+                      label: 'Back ${seekBackSeconds}s',
                       onPressed: onRewind,
                     ),
                     const SizedBox(width: 8),
@@ -1325,13 +1444,14 @@ class _VlcPlayerChrome extends StatelessWidget {
                       ),
                     const SizedBox(width: 8),
                     _VlcControl(
-                      icon: Icons.forward_10_rounded,
-                      label: 'Forward 10s',
+                      icon: Icons.forward_rounded,
+                      label: 'Forward ${seekForwardSeconds}s',
                       onPressed: onForward,
                     ),
                     if (canSkip) ...[
                       const SizedBox(width: 8),
                       _VlcControl(
+                        focusNode: skipFocusNode,
                         icon: Icons.skip_next_rounded,
                         label: skipLabel ?? 'Skip',
                         primary: true,

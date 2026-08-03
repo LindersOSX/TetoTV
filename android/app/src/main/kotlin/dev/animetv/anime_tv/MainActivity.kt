@@ -9,6 +9,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.graphics.Color
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaCodecInfo
@@ -165,6 +166,22 @@ class MainActivity : FlutterActivity() {
             putExtra(
                 Media3PlayerActivity.EXTRA_HIGH_CONTRAST_SUBTITLES,
                 data["highContrastSubtitles"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_TEXT_COLOR,
+                (data["subtitleTextColor"] as? Number)?.toInt() ?: Color.WHITE,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_BACKGROUND_COLOR,
+                (data["subtitleBackgroundColor"] as? Number)?.toInt() ?: Color.TRANSPARENT,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SEEK_BACK_MS,
+                (data["seekBackMs"] as? Number)?.toLong() ?: 10_000L,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_SEEK_FORWARD_MS,
+                (data["seekForwardMs"] as? Number)?.toLong() ?: 10_000L,
             )
             putExtra(Media3PlayerActivity.EXTRA_VIDEO_FIT, data["videoFit"] as? String)
             putExtra(

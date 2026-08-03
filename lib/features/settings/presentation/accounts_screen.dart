@@ -8,8 +8,10 @@ import 'package:anime_tv/features/settings/application/real_debrid_settings_cont
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +30,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _githubTokenController = TextEditingController();
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
+  final _debridProviderFocus = FocusNode(
+    debugLabel: 'accounts.debrid.provider',
+  );
+  final _trackingProviderFocus = FocusNode(
+    debugLabel: 'accounts.tracking.provider',
+  );
+  final _appearanceFocus = FocusNode(debugLabel: 'accounts.appearance.first');
   final _debridConnectFocus = FocusNode(debugLabel: 'accounts.debrid.connect');
   final _tokenFocus = FocusNode(debugLabel: 'accounts.debrid.token');
   final _tokenSaveFocus = FocusNode(debugLabel: 'accounts.debrid.save');
@@ -58,6 +67,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _githubTokenController.dispose();
     _backFocus.dispose();
     _titleLanguageFocus.dispose();
+    _debridProviderFocus.dispose();
+    _trackingProviderFocus.dispose();
+    _appearanceFocus.dispose();
     _debridConnectFocus.dispose();
     _tokenFocus.dispose();
     _tokenSaveFocus.dispose();
@@ -86,6 +98,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     }
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
+    final preferences = ref.read(settingsPreferencesProvider);
+    final selectedDebridAction =
+        preferences.debridProvider == DebridService.realDebrid
+        ? _debridConnectFocus
+        : _torBoxActionFocus;
+    final selectedDebridLast =
+        preferences.debridProvider == DebridService.realDebrid
+        ? _tokenSaveFocus
+        : _torBoxSaveFocus;
+    final selectedTrackingAction =
+        preferences.trackingProvider == TrackingProvider.anilist
+        ? _anilistFocus
+        : _malFocus;
     FocusNode? target;
     final shelfNodes = [
       for (final shelf in HomeShelf.values) _shelfFocusNodes[shelf]!,
@@ -104,7 +129,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _debridConnectFocus;
+        target = _debridProviderFocus;
       }
     }
 
@@ -120,25 +145,31 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = shelfNodes.first;
+    } else if (current == _debridProviderFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = shelfNodes.first;
+      if (key == LogicalKeyboardKey.arrowDown) target = selectedDebridAction;
     } else if (current == _debridConnectFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = shelfNodes.first;
-      if (key == LogicalKeyboardKey.arrowDown) target = _torBoxActionFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _debridProviderFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _tokenFocus.context == null
+            ? _trackingProviderFocus
+            : _tokenFocus;
+      }
     } else if (current == _tokenFocus) {
       if (key == LogicalKeyboardKey.arrowRight) target = _tokenSaveFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _debridConnectFocus;
     } else if (current == _tokenSaveFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _tokenFocus;
       if (key == LogicalKeyboardKey.arrowUp) target = _debridConnectFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _torBoxActionFocus;
-    } else if (current == _torBoxActionFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _tokenSaveFocus.context == null
-            ? _debridConnectFocus
-            : _tokenSaveFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingProviderFocus;
       }
+    } else if (current == _torBoxActionFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _debridProviderFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _torBoxTokenFocus.context == null
-            ? _anilistFocus
+            ? _trackingProviderFocus
             : _torBoxTokenFocus;
       }
     } else if (current == _torBoxTokenFocus) {
@@ -147,39 +178,31 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _torBoxSaveFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _torBoxTokenFocus;
       if (key == LogicalKeyboardKey.arrowUp) target = _torBoxActionFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _anilistFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingProviderFocus;
+      }
+    } else if (current == _trackingProviderFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = selectedDebridLast;
+      if (key == LogicalKeyboardKey.arrowDown) target = selectedTrackingAction;
     } else if (current == _anilistFocus) {
-      if (key == LogicalKeyboardKey.arrowRight) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowDown &&
           _anilistTokenFocus.context != null) {
         target = _anilistTokenFocus;
       }
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _torBoxTokenFocus.context == null
-            ? _torBoxActionFocus
-            : _torBoxTokenFocus;
-      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _malFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _anilistFocus;
       if (key == LogicalKeyboardKey.arrowDown &&
           _malTokenFocus.context != null) {
         target = _malTokenFocus;
       }
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _torBoxSaveFocus.context == null
-            ? _torBoxActionFocus
-            : _torBoxSaveFocus;
-      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _anilistTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _anilistFocus;
       if (key == LogicalKeyboardKey.arrowRight) target = _anilistSaveFocus;
     } else if (current == _anilistSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _anilistFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _anilistTokenFocus;
-      if (key == LogicalKeyboardKey.arrowRight &&
-          _malTokenFocus.context != null) {
-        target = _malTokenFocus;
-      }
+      if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
     } else if (current == _malTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft &&
@@ -190,7 +213,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _malSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _malTokenFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
     } else if (current == _githubTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malSaveFocus;
       if (key == LogicalKeyboardKey.arrowRight) target = _githubSaveFocus;
@@ -224,6 +247,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final homeShelves = ref.watch(homeShelfPreferencesProvider);
     final appUpdate = ref.watch(appUpdateControllerProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
@@ -347,135 +371,166 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     const _SectionHeader(
                       icon: Icons.cloud_done_rounded,
                       title: 'DEBRID STREAMING',
-                      subtitle: 'Every playable link is resolved securely.',
+                      subtitle: 'Choose the provider used to resolve streams.',
                     ),
                     const SizedBox(height: 8),
-                    _RealDebridPanel(
-                      state: debrid,
-                      tokenController: _tokenController,
-                      onSave: () async {
-                        final saved = await ref
+                    _SettingsSelection<DebridService>(
+                      focusNode: _debridProviderFocus,
+                      label: 'Debrid provider',
+                      value: preferences.debridProvider,
+                      options: [
+                        for (final service in DebridService.values)
+                          _SettingsOption(
+                            value: service,
+                            label: service.displayName,
+                            detail:
+                                (service == DebridService.realDebrid
+                                    ? debrid.hasSavedToken
+                                    : torBox.hasSavedToken)
+                                ? 'Connected'
+                                : 'Not connected',
+                          ),
+                      ],
+                      onSelected: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setDebridProvider,
+                    ),
+                    const SizedBox(height: 8),
+                    if (preferences.debridProvider == DebridService.realDebrid)
+                      _RealDebridPanel(
+                        state: debrid,
+                        tokenController: _tokenController,
+                        onSave: () async {
+                          final saved = await ref
+                              .read(
+                                realDebridSettingsControllerProvider.notifier,
+                              )
+                              .saveAndValidate(_tokenController.text);
+                          if (saved) _tokenController.clear();
+                        },
+                        onDisconnect: () => ref
                             .read(realDebridSettingsControllerProvider.notifier)
-                            .saveAndValidate(_tokenController.text);
-                        if (saved) _tokenController.clear();
-                      },
-                      onDisconnect: () => ref
-                          .read(realDebridSettingsControllerProvider.notifier)
-                          .disconnect(),
-                      onDeviceConnect: () => context.push('/pair/realdebrid'),
-                      connectFocusNode: _debridConnectFocus,
-                      tokenFocusNode: _tokenFocus,
-                      saveFocusNode: _tokenSaveFocus,
-                    ),
-                    const SizedBox(height: 10),
-                    _TorBoxPanel(
-                      state: torBox,
-                      tokenController: _torBoxTokenController,
-                      onSave: () async {
-                        final saved = await ref
+                            .disconnect(),
+                        onDeviceConnect: () => context.push('/pair/realdebrid'),
+                        connectFocusNode: _debridConnectFocus,
+                        tokenFocusNode: _tokenFocus,
+                        saveFocusNode: _tokenSaveFocus,
+                      )
+                    else
+                      _TorBoxPanel(
+                        state: torBox,
+                        tokenController: _torBoxTokenController,
+                        onSave: () async {
+                          final saved = await ref
+                              .read(torBoxSettingsControllerProvider.notifier)
+                              .saveAndValidate(_torBoxTokenController.text);
+                          if (saved) _torBoxTokenController.clear();
+                        },
+                        onDisconnect: () => ref
                             .read(torBoxSettingsControllerProvider.notifier)
-                            .saveAndValidate(_torBoxTokenController.text);
-                        if (saved) _torBoxTokenController.clear();
-                      },
-                      onDisconnect: () => ref
-                          .read(torBoxSettingsControllerProvider.notifier)
-                          .disconnect(),
-                      onDeviceConnect: () async {
-                        await context.push('/pair/torbox');
-                        await ref
-                            .read(torBoxSettingsControllerProvider.notifier)
-                            .load();
-                      },
-                      actionFocusNode: _torBoxActionFocus,
-                      tokenFocusNode: _torBoxTokenFocus,
-                      saveFocusNode: _torBoxSaveFocus,
-                    ),
+                            .disconnect(),
+                        onDeviceConnect: () async {
+                          await context.push('/pair/torbox');
+                          await ref
+                              .read(torBoxSettingsControllerProvider.notifier)
+                              .load();
+                        },
+                        actionFocusNode: _torBoxActionFocus,
+                        tokenFocusNode: _torBoxTokenFocus,
+                        saveFocusNode: _torBoxSaveFocus,
+                      ),
                     const SizedBox(height: 14),
                     const _SectionHeader(
                       icon: Icons.sync_alt_rounded,
                       title: 'ANIME TRACKING',
-                      subtitle: 'Lists and progress sync in both directions.',
+                      subtitle: 'Configure one list service at a time.',
                     ),
                     const SizedBox(height: 8),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final anilistPanel = _TrackingPanel(
-                          provider: TrackingProvider.anilist,
-                          color: AppColors.accentBright,
-                          description:
-                              'Seasonal discovery, lists, and automatic '
-                              'episode progress.',
-                          username:
-                              tracking.usernames[TrackingProvider.anilist],
-                          error: tracking.errors[TrackingProvider.anilist],
-                          isLoading: tracking.isLoading,
-                          onConnect: () async {
-                            await context.push('/pair/anilist');
-                            await ref
-                                .read(
-                                  trackingAccountsControllerProvider.notifier,
-                                )
-                                .load();
-                          },
-                          onDisconnect: () => ref
-                              .read(trackingAccountsControllerProvider.notifier)
-                              .disconnect(TrackingProvider.anilist),
-                          onSaveToken: (token) => ref
-                              .read(trackingAccountsControllerProvider.notifier)
-                              .save(TrackingProvider.anilist, token),
-                          focusNode: _anilistFocus,
-                          tokenFocusNode: _anilistTokenFocus,
-                          saveFocusNode: _anilistSaveFocus,
+                    _SettingsSelection<TrackingProvider>(
+                      focusNode: _trackingProviderFocus,
+                      label: 'Anime-list provider',
+                      value: preferences.trackingProvider,
+                      options: [
+                        for (final provider in TrackingProvider.values)
+                          _SettingsOption(
+                            value: provider,
+                            label: provider.displayName,
+                            detail: tracking.isConnected(provider)
+                                ? 'Connected as ${tracking.usernames[provider]}'
+                                : 'Not connected',
+                          ),
+                      ],
+                      onSelected: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setTrackingProvider,
+                    ),
+                    const SizedBox(height: 8),
+                    _TrackingPanel(
+                      provider: preferences.trackingProvider,
+                      color:
+                          preferences.trackingProvider ==
+                              TrackingProvider.anilist
+                          ? AppColors.accentBright
+                          : const Color(0xFFB41F3D),
+                      description:
+                          preferences.trackingProvider ==
+                              TrackingProvider.anilist
+                          ? 'Seasonal discovery, lists, and automatic episode progress.'
+                          : 'Sync watch progress and MyAnimeList statuses automatically.',
+                      username:
+                          tracking.usernames[preferences.trackingProvider],
+                      error: tracking.errors[preferences.trackingProvider],
+                      isLoading: tracking.isLoading,
+                      onConnect: () async {
+                        await context.push(
+                          preferences.trackingProvider ==
+                                  TrackingProvider.anilist
+                              ? '/pair/anilist'
+                              : '/pair/myanimelist',
                         );
-                        final malPanel = _TrackingPanel(
-                          provider: TrackingProvider.myAnimeList,
-                          color: const Color(0xFFB41F3D),
-                          description:
-                              'Sync watch progress and your MyAnimeList '
-                              'watching lists automatically.',
-                          username:
-                              tracking.usernames[TrackingProvider.myAnimeList],
-                          error: tracking.errors[TrackingProvider.myAnimeList],
-                          isLoading: tracking.isLoading,
-                          onConnect: () async {
-                            await context.push('/pair/myanimelist');
-                            await ref
-                                .read(
-                                  trackingAccountsControllerProvider.notifier,
-                                )
-                                .load();
-                          },
-                          onDisconnect: () => ref
-                              .read(trackingAccountsControllerProvider.notifier)
-                              .disconnect(TrackingProvider.myAnimeList),
-                          onSaveToken: (token) => ref
-                              .read(trackingAccountsControllerProvider.notifier)
-                              .save(TrackingProvider.myAnimeList, token),
-                          focusNode: _malFocus,
-                          tokenFocusNode: _malTokenFocus,
-                          saveFocusNode: _malSaveFocus,
-                        );
-                        if (constraints.maxWidth >= 820) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(child: anilistPanel),
-                              const SizedBox(width: 10),
-                              Expanded(child: malPanel),
-                            ],
-                          );
-                        }
-                        return Column(
-                          children: [
-                            anilistPanel,
-                            const SizedBox(height: 10),
-                            malPanel,
-                          ],
-                        );
+                        await ref
+                            .read(trackingAccountsControllerProvider.notifier)
+                            .load();
                       },
+                      onDisconnect: () => ref
+                          .read(trackingAccountsControllerProvider.notifier)
+                          .disconnect(preferences.trackingProvider),
+                      onSaveToken: (token) => ref
+                          .read(trackingAccountsControllerProvider.notifier)
+                          .save(preferences.trackingProvider, token),
+                      focusNode:
+                          preferences.trackingProvider ==
+                              TrackingProvider.anilist
+                          ? _anilistFocus
+                          : _malFocus,
+                      tokenFocusNode:
+                          preferences.trackingProvider ==
+                              TrackingProvider.anilist
+                          ? _anilistTokenFocus
+                          : _malTokenFocus,
+                      saveFocusNode:
+                          preferences.trackingProvider ==
+                              TrackingProvider.anilist
+                          ? _anilistSaveFocus
+                          : _malSaveFocus,
                     ),
                     const SizedBox(height: 10),
                     const _DebridOnlyPanel(),
+                    const SizedBox(height: 14),
+                    const _SectionHeader(
+                      icon: Icons.palette_outlined,
+                      title: 'APPEARANCE & CONTROLS',
+                      subtitle:
+                          'Tune captions, card density, interface scale, and seeking.',
+                    ),
+                    const SizedBox(height: 8),
+                    _AppearancePanel(
+                      preferences: preferences,
+                      firstFocusNode: _appearanceFocus,
+                      controller: ref.read(
+                        settingsPreferencesProvider.notifier,
+                      ),
+                    ),
                     const SizedBox(height: 10),
                     const _SectionHeader(
                       icon: Icons.system_update_alt_rounded,
@@ -570,6 +625,403 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsOption<T> {
+  const _SettingsOption({
+    required this.value,
+    required this.label,
+    required this.detail,
+  });
+
+  final T value;
+  final String label;
+  final String detail;
+}
+
+class _SettingsSelection<T> extends StatelessWidget {
+  const _SettingsSelection({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onSelected,
+    this.focusNode,
+  });
+
+  final String label;
+  final T value;
+  final List<_SettingsOption<T>> options;
+  final ValueChanged<T> onSelected;
+  final FocusNode? focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = options.firstWhere((option) => option.value == value);
+    return TvFocusable(
+      focusNode: focusNode,
+      onPressed: () async {
+        final result = await showDialog<T>(
+          context: context,
+          barrierDismissible: true,
+          builder: (context) => Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              width: 560,
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                color: AppColors.panel,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.accent.withValues(alpha: .7),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 14),
+                  for (final option in options) ...[
+                    TvFocusable(
+                      autofocus: option.value == value,
+                      onPressed: () => Navigator.of(context).pop(option.value),
+                      borderRadius: BorderRadius.circular(9),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 13,
+                        ),
+                        decoration: BoxDecoration(
+                          color: option.value == value
+                              ? AppColors.accent.withValues(alpha: .28)
+                              : AppColors.panelRaised,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              option.value == value
+                                  ? Icons.radio_button_checked_rounded
+                                  : Icons.radio_button_off_rounded,
+                              color: option.value == value
+                                  ? AppColors.accentBright
+                                  : AppColors.textMuted,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    option.label,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    option.detail,
+                                    style: const TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (option != options.last) const SizedBox(height: 8),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+        if (result != null) onSelected(result);
+      },
+      borderRadius: BorderRadius.circular(10),
+      focusScale: 1.01,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: .1)),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 180,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                selected.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            Text(
+              selected.detail,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+            ),
+            const SizedBox(width: 12),
+            const Icon(
+              Icons.expand_more_rounded,
+              color: AppColors.accentBright,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AppearancePanel extends StatelessWidget {
+  const _AppearancePanel({
+    required this.preferences,
+    required this.controller,
+    required this.firstFocusNode,
+  });
+
+  final SettingsPreferences preferences;
+  final SettingsPreferencesController controller;
+  final FocusNode firstFocusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: Column(
+        children: [
+          _PreferenceRow(
+            label: 'Caption text',
+            children: [
+              for (final option in const [
+                (0xFFFFFFFF, 'White'),
+                (0xFFFFFF66, 'Yellow'),
+                (0xFF66E7FF, 'Cyan'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.captionTextColor == option.$1,
+                  focusNode: option.$1 == 0xFFFFFFFF ? firstFocusNode : null,
+                  swatch: Color(option.$1),
+                  onPressed: () => controller.setCaptionTextColor(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Caption background',
+            children: [
+              for (final option in const [
+                (0x00000000, 'Off'),
+                (0x99000000, 'Dark'),
+                (0xDD000000, 'Strong'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.captionBackgroundColor == option.$1,
+                  swatch: Color(option.$1),
+                  onPressed: () =>
+                      controller.setCaptionBackgroundColor(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Caption size',
+            children: [
+              for (final size in const [28.0, 34.0, 42.0, 50.0])
+                _PreferenceChip(
+                  label: '${size.round()}',
+                  selected: preferences.captionTextSize == size,
+                  onPressed: () => controller.setCaptionTextSize(size),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Thumbnail size',
+            children: [
+              for (final option in const [
+                (.85, 'Small'),
+                (1.0, 'Medium'),
+                (1.15, 'Large'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.thumbnailScale == option.$1,
+                  onPressed: () => controller.setThumbnailScale(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Interface scale',
+            children: [
+              for (final option in const [
+                (.9, '90%'),
+                (1.0, '100%'),
+                (1.1, '110%'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.interfaceScale == option.$1,
+                  onPressed: () => controller.setInterfaceScale(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Content density',
+            children: [
+              for (final density in ContentDensity.values)
+                _PreferenceChip(
+                  label: density.displayName,
+                  selected: preferences.contentDensity == density,
+                  onPressed: () => controller.setContentDensity(density),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Rewind',
+            children: [
+              for (final seconds in const [5, 10, 15, 30, 60])
+                _PreferenceChip(
+                  label: '${seconds}s',
+                  selected: preferences.seekBackSeconds == seconds,
+                  onPressed: () => controller.setSeekBackSeconds(seconds),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Fast-forward',
+            children: [
+              for (final seconds in const [5, 10, 15, 30, 60])
+                _PreferenceChip(
+                  label: '${seconds}s',
+                  selected: preferences.seekForwardSeconds == seconds,
+                  onPressed: () => controller.setSeekForwardSeconds(seconds),
+                ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _TvTextButton(
+              label: 'Reset appearance',
+              icon: Icons.restart_alt_rounded,
+              onPressed: controller.resetAppearance,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PreferenceRow extends StatelessWidget {
+  const _PreferenceRow({required this.label, required this.children});
+
+  final String label;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 180,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Expanded(child: Wrap(spacing: 7, runSpacing: 7, children: children)),
+        ],
+      ),
+    );
+  }
+}
+
+class _PreferenceChip extends StatelessWidget {
+  const _PreferenceChip({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+    this.focusNode,
+    this.swatch,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+  final FocusNode? focusNode;
+  final Color? swatch;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      focusNode: focusNode,
+      onPressed: onPressed,
+      focusScale: 1.04,
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        height: 31,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accent : AppColors.panelRaised,
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: selected
+                ? AppColors.accentBright
+                : Colors.white.withValues(alpha: .1),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (swatch case final color?) ...[
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: Colors.white54),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
         ),
       ),
     );

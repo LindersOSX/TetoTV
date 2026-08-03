@@ -72,7 +72,10 @@ class AniSkipClient {
       return const [];
     }
     final actualSeconds = episodeDuration.inMilliseconds / 1000;
-    final durationTolerance = math.max(15.0, actualSeconds * .015);
+    // Container runtimes can include/exclude credits or round broadcast
+    // durations. AniSkip markers are still valid when that small difference is
+    // present, so use a conservative five-percent window with a 45s floor.
+    final durationTolerance = math.max(45.0, actualSeconds * .05);
     final candidates = <({SkipSegment segment, double durationDelta})>[];
     for (final item in body['results'] as List) {
       if (item is! Map) continue;
@@ -80,8 +83,10 @@ class AniSkipClient {
       final start = interval is Map ? interval['startTime'] : null;
       final end = interval is Map ? interval['endTime'] : null;
       final referenceLength = item['episodeLength'];
-      if (start is! num || end is! num || referenceLength is! num) continue;
-      final durationDelta = (referenceLength.toDouble() - actualSeconds).abs();
+      if (start is! num || end is! num) continue;
+      final durationDelta = referenceLength is num
+          ? (referenceLength.toDouble() - actualSeconds).abs()
+          : 0.0;
       if (durationDelta > durationTolerance) continue;
       final startSeconds = start.toDouble().clamp(0, actualSeconds);
       final endSeconds = end.toDouble().clamp(0, actualSeconds);

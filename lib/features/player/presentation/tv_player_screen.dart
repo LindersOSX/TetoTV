@@ -11,6 +11,7 @@ import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
@@ -43,6 +44,9 @@ const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
 );
 
 enum PlaybackDecoderMode { hardwareSafe, hardwareDirect, software }
+
+String _mpvColor(Color color) =>
+    '#${color.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase()}';
 
 typedef _PlaybackMenuResult = ({String type, Object value});
 
@@ -99,13 +103,17 @@ bool isLikelyVideoDecodeFailure(String message) {
   ].any(value.contains);
 }
 
-Duration? playerSeekOffsetForKey(LogicalKeyboardKey key) {
+Duration? playerSeekOffsetForKey(
+  LogicalKeyboardKey key, {
+  int backSeconds = 10,
+  int forwardSeconds = 10,
+}) {
   if (key == LogicalKeyboardKey.keyJ || key == LogicalKeyboardKey.mediaRewind) {
-    return const Duration(seconds: -10);
+    return Duration(seconds: -backSeconds);
   }
   if (key == LogicalKeyboardKey.keyL ||
       key == LogicalKeyboardKey.mediaFastForward) {
-    return const Duration(seconds: 10);
+    return Duration(seconds: forwardSeconds);
   }
   return null;
 }
@@ -280,6 +288,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final VideoController _controller;
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
+  final _skipControlFocus = FocusNode(debugLabel: 'player.skip-segment');
   final _doubleDownDetector = PlayerDoubleDownDetector();
   Timer? _controlsTimer;
   Timer? _videoWatchdog;
@@ -332,10 +341,22 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Timer? _seekPreviewTimer;
   Duration? _queuedSeekTarget;
   bool _seekInProgress = false;
+  int _seekBackSeconds = 10;
+  int _seekForwardSeconds = 10;
+  Color _captionTextColor = Colors.white;
+  Color _captionBackgroundColor = Colors.transparent;
+  final Set<String> _autoFocusedSkipSegments = {};
+  bool _allowExit = false;
+  bool _confirmingExit = false;
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume;
     try {
+      final appearance = ref.read(settingsPreferencesProvider);
+      _seekBackSeconds = appearance.seekBackSeconds;
+      _seekForwardSeconds = appearance.seekForwardSeconds;
+      _captionTextColor = Color(appearance.captionTextColor);
+      _captionBackgroundColor = Color(appearance.captionBackgroundColor);
       if (widget.anilistMediaId case final mediaId?) {
         final database = ref.read(tetoTvDatabaseProvider);
         _seriesPreferences = await database.seriesPreferences(mediaId);
@@ -349,7 +370,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           'fill' => BoxFit.fill,
           _ => BoxFit.contain,
         };
-        _subtitleSize = _seriesPreferences.subtitleSize;
+        _subtitleSize = _seriesPreferences.subtitleSize == 34
+            ? appearance.captionTextSize
+            : _seriesPreferences.subtitleSize;
         _subtitlePosition = _seriesPreferences.subtitlePosition;
         _subtitleDelayMs = _seriesPreferences.subtitleDelayMs;
         _audioDelayMs = _seriesPreferences.audioDelayMs;
@@ -582,10 +605,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _canSkipNow = canSkip;
         _activeSkip = active;
       });
-      if (canSkip) _showControls();
+      if (canSkip) {
+        _showControls();
+        _focusSkipOnce(active);
+      }
     } else if (!identical(_activeSkip, active)) {
       setState(() => _activeSkip = active);
+      if (active != null) _focusSkipOnce(active);
     }
+  }
+
+  void _focusSkipOnce(SkipSegment segment) {
+    final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
+    if (!_autoFocusedSkipSegments.add(key)) return;
+    _showControls();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _activeSkip == segment) _skipControlFocus.requestFocus();
+    });
   }
 
   Future<void> _loadSkipSegments() async {
@@ -753,7 +789,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       'sub-delay': '${_subtitleDelayMs / 1000}',
       'audio-delay': '${_audioDelayMs / 1000}',
       'sub-border-size': _highContrastSubtitles ? '4' : '2.5',
-      'sub-back-color': _highContrastSubtitles ? '#88000000' : '#00000000',
+      'sub-color': _mpvColor(_captionTextColor),
+      'sub-back-color': _mpvColor(
+        _highContrastSubtitles
+            ? const Color(0xDD000000)
+            : _captionBackgroundColor,
+      ),
     };
     for (final property in properties.entries) {
       try {
@@ -773,7 +814,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       'sub-delay': '${_subtitleDelayMs / 1000}',
       'audio-delay': '${_audioDelayMs / 1000}',
       'sub-border-size': _highContrastSubtitles ? '4' : '2.5',
-      'sub-back-color': _highContrastSubtitles ? '#88000000' : '#00000000',
+      'sub-color': _mpvColor(_captionTextColor),
+      'sub-back-color': _mpvColor(
+        _highContrastSubtitles
+            ? const Color(0xDD000000)
+            : _captionBackgroundColor,
+      ),
     };
     for (final property in properties.entries) {
       try {
@@ -1401,7 +1447,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _showControls(focusControls: true);
       return KeyEventResult.handled;
     }
-    if (playerSeekOffsetForKey(key) case final offset?) {
+    if (playerSeekOffsetForKey(
+          key,
+          backSeconds: _seekBackSeconds,
+          forwardSeconds: _seekForwardSeconds,
+        )
+        case final offset?) {
       _seekBy(offset);
       return KeyEventResult.handled;
     }
@@ -1623,6 +1674,46 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _playerRootFocus.requestFocus();
   }
 
+  Future<void> _confirmExit() async {
+    if (_confirmingExit || !mounted) return;
+    _confirmingExit = true;
+    final wasPlaying = _player.state.playing;
+    if (wasPlaying) await _player.pause();
+    if (!mounted) return;
+    final exit = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: const Text('Exit video?'),
+        content: const Text('Your current playback position will be saved.'),
+        actions: [
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Continue watching'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Exit video'),
+          ),
+        ],
+      ),
+    );
+    _confirmingExit = false;
+    if (!mounted) return;
+    if (exit == true) {
+      await _persistPlayback(_player.state.position, force: true);
+      setState(() => _allowExit = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && context.canPop()) context.pop();
+      });
+    } else if (wasPlaying) {
+      await _player.play();
+      _showControls(focusControls: true);
+    }
+  }
+
   @override
   void dispose() {
     unawaited(_persistPlayback(_player.state.position, force: true));
@@ -1641,155 +1732,190 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _mediaActionSubscription?.cancel();
     _playerRootFocus.dispose();
     _playControlFocus.dispose();
+    _skipControlFocus.dispose();
     _player.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Focus(
-        focusNode: _playerRootFocus,
-        autofocus: true,
-        onKeyEvent: _handleKey,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Video(
-              controller: _controller,
-              controls: NoVideoControls,
-              fit: _videoFit,
-              subtitleViewConfiguration: SubtitleViewConfiguration(
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: _subtitleSize,
-                  height: 1.25,
-                  fontWeight: FontWeight.w600,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black,
-                      blurRadius: 5,
-                      offset: Offset(2, 2),
-                    ),
-                  ],
-                  backgroundColor: _highContrastSubtitles
-                      ? const Color(0xAA000000)
-                      : Colors.transparent,
-                ),
-              ),
-            ),
-            StreamBuilder<bool>(
-              stream: _player.stream.buffering,
-              initialData: _player.state.buffering,
-              builder: (context, snapshot) {
-                if (snapshot.data != true) return const SizedBox.shrink();
-                return const Center(
-                  child: CircularProgressIndicator(color: AppColors.cyan),
-                );
-              },
-            ),
-            ExcludeFocus(
-              excluding: !_controlsVisible,
-              child: IgnorePointer(
-                ignoring: !_controlsVisible,
-                child: AnimatedOpacity(
-                  opacity: _controlsVisible ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: _PlayerChrome(
-                    player: _player,
-                    title: widget.title,
-                    debridService: widget.debridService,
-                    decoderMode: _decoderMode,
-                    playFocusNode: _playControlFocus,
-                    onRewind: () => _seekBy(const Duration(seconds: -10)),
-                    onPlayPause: _player.playOrPause,
-                    onForward: () => _seekBy(const Duration(seconds: 10)),
-                    canSkip: _canSkipNow,
-                    skipLabel: _activeSkip?.actionLabel,
-                    onSkip: _skipCurrentSegment,
-                    onAudio: _openAudioTrackPicker,
-                    onSubtitles: _openSubtitleTrackPicker,
-                    onFit: _cycleFit,
-                    onCompatibility: () {
-                      if (_softwareFallbackUsed) {
-                        _showTrackMessage(
-                          'Software compatibility is already enabled',
-                        );
-                      } else {
-                        unawaited(_restartWithSoftwareDecoder());
-                      }
-                    },
-                    onOptions: _openPlaybackMenu,
+    return PopScope(
+      canPop: _allowExit,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_confirmExit());
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Focus(
+          focusNode: _playerRootFocus,
+          autofocus: true,
+          onKeyEvent: _handleKey,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Video(
+                controller: _controller,
+                controls: NoVideoControls,
+                fit: _videoFit,
+                subtitleViewConfiguration: SubtitleViewConfiguration(
+                  style: TextStyle(
+                    color: _captionTextColor,
+                    fontSize: _subtitleSize,
+                    height: 1.25,
+                    fontWeight: FontWeight.w600,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black,
+                        blurRadius: 5,
+                        offset: Offset(2, 2),
+                      ),
+                    ],
+                    backgroundColor: _highContrastSubtitles
+                        ? const Color(0xDD000000)
+                        : _captionBackgroundColor,
                   ),
                 ),
               ),
-            ),
-            if (_playbackError case final error?)
+              StreamBuilder<bool>(
+                stream: _player.stream.buffering,
+                initialData: _player.state.buffering,
+                builder: (context, snapshot) {
+                  if (snapshot.data != true) return const SizedBox.shrink();
+                  return const Center(
+                    child: CircularProgressIndicator(color: AppColors.cyan),
+                  );
+                },
+              ),
               Positioned(
                 left: 34,
                 right: 34,
-                bottom: 110,
-                child: _PlaybackError(message: error),
+                top: 28,
+                child: StreamBuilder<bool>(
+                  stream: _player.stream.playing,
+                  initialData: _player.state.playing,
+                  builder: (context, snapshot) {
+                    if (snapshot.data == true) return const SizedBox.shrink();
+                    return Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            shadows: const [
+                              Shadow(color: Colors.black, blurRadius: 12),
+                            ],
+                          ),
+                    );
+                  },
+                ),
               ),
-            if (_trackMessage case final message?)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xEE0A0A0A),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    message,
-                    style: Theme.of(context).textTheme.titleMedium,
+              ExcludeFocus(
+                excluding: !_controlsVisible,
+                child: IgnorePointer(
+                  ignoring: !_controlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _PlayerChrome(
+                      player: _player,
+                      title: widget.title,
+                      debridService: widget.debridService,
+                      decoderMode: _decoderMode,
+                      playFocusNode: _playControlFocus,
+                      skipFocusNode: _skipControlFocus,
+                      seekBackSeconds: _seekBackSeconds,
+                      seekForwardSeconds: _seekForwardSeconds,
+                      onRewind: () =>
+                          _seekBy(Duration(seconds: -_seekBackSeconds)),
+                      onPlayPause: _player.playOrPause,
+                      onForward: () =>
+                          _seekBy(Duration(seconds: _seekForwardSeconds)),
+                      canSkip: _canSkipNow,
+                      skipLabel: _activeSkip?.actionLabel,
+                      onSkip: _skipCurrentSegment,
+                      onAudio: _openAudioTrackPicker,
+                      onSubtitles: _openSubtitleTrackPicker,
+                      onFit: _cycleFit,
+                      onCompatibility: () {
+                        if (_softwareFallbackUsed) {
+                          _showTrackMessage(
+                            'Software compatibility is already enabled',
+                          );
+                        } else {
+                          unawaited(_restartWithSoftwareDecoder());
+                        }
+                      },
+                      onOptions: _openPlaybackMenu,
+                    ),
                   ),
                 ),
               ),
-            if (_seekPreview case final preview?)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 116,
-                child: Center(
+              if (_playbackError case final error?)
+                Positioned(
+                  left: 34,
+                  right: 34,
+                  bottom: 110,
+                  child: _PlaybackError(message: error),
+                ),
+              if (_trackMessage case final message?)
+                Center(
                   child: Container(
-                    width: 210,
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.accentBright),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        AspectRatio(
-                          aspectRatio: 16 / 9,
-                          child: Image.memory(
-                            preview,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          _formatPlayerDuration(
-                            _seekPreviewPosition ?? Duration.zero,
-                          ),
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ],
+                    decoration: BoxDecoration(
+                      color: const Color(0xEE0A0A0A),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      message,
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
                 ),
-              ),
-          ],
+              if (_seekPreview case final preview?)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 116,
+                  child: Center(
+                    child: Container(
+                      width: 210,
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppColors.accentBright),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AspectRatio(
+                            aspectRatio: 16 / 9,
+                            child: Image.memory(
+                              preview,
+                              fit: BoxFit.cover,
+                              gaplessPlayback: true,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _formatPlayerDuration(
+                              _seekPreviewPosition ?? Duration.zero,
+                            ),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1803,6 +1929,9 @@ class _PlayerChrome extends StatelessWidget {
     required this.debridService,
     required this.decoderMode,
     required this.playFocusNode,
+    required this.skipFocusNode,
+    required this.seekBackSeconds,
+    required this.seekForwardSeconds,
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
@@ -1821,6 +1950,9 @@ class _PlayerChrome extends StatelessWidget {
   final DebridService debridService;
   final PlaybackDecoderMode decoderMode;
   final FocusNode playFocusNode;
+  final FocusNode skipFocusNode;
+  final int seekBackSeconds;
+  final int seekForwardSeconds;
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
@@ -1894,8 +2026,8 @@ class _PlayerChrome extends StatelessWidget {
                 child: Row(
                   children: [
                     _PlayerControl(
-                      icon: Icons.replay_10_rounded,
-                      label: 'Back 10s',
+                      icon: Icons.replay_rounded,
+                      label: 'Back ${seekBackSeconds}s',
                       onPressed: onRewind,
                     ),
                     const SizedBox(width: 8),
@@ -1914,13 +2046,14 @@ class _PlayerChrome extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     _PlayerControl(
-                      icon: Icons.forward_10_rounded,
-                      label: 'Forward 10s',
+                      icon: Icons.forward_rounded,
+                      label: 'Forward ${seekForwardSeconds}s',
                       onPressed: onForward,
                     ),
                     if (canSkip) ...[
                       const SizedBox(width: 8),
                       _PlayerControl(
+                        focusNode: skipFocusNode,
                         icon: Icons.skip_next_rounded,
                         label: skipLabel ?? 'Skip',
                         primary: true,

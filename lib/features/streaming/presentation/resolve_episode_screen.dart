@@ -7,6 +7,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
@@ -239,6 +240,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
 
   Future<void> _initialize() async {
     final storage = ref.read(secureStorageProvider);
+    final preferredDebrid = ref
+        .read(settingsPreferencesProvider)
+        .debridProvider;
     final tokensAndProfile = await Future.wait<Object?>([
       storage.read(key: DebridService.realDebrid.tokenStorageKey),
       storage.read(key: DebridService.torBox.tokenStorageKey),
@@ -267,7 +271,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (!mounted) return;
     setState(() {
       _connectedServices = connected;
-      if (!connected.contains(_debridService) && connected.isNotEmpty) {
+      if (connected.contains(preferredDebrid)) {
+        _debridService = preferredDebrid;
+      } else if (!connected.contains(_debridService) && connected.isNotEmpty) {
         _debridService = connected.first;
       }
       _loadingAccount = false;
@@ -449,7 +455,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           _automaticResolveFallbacks++;
           setState(() {
             _resolving = false;
-            _status = 'That release failed. Trying another cached streamâ€¦';
+            _status = 'That release failed. Trying another cached stream…';
           });
           unawaited(
             Future<void>.microtask(

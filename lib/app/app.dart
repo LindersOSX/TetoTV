@@ -1,7 +1,9 @@
 import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 double tvCanvasWidthForPhysicalPixels(double physicalWidth) {
   if (physicalWidth >= 3200) return 1600;
@@ -9,11 +11,12 @@ double tvCanvasWidthForPhysicalPixels(double physicalWidth) {
   return 960;
 }
 
-class TetoTvApp extends StatelessWidget {
+class TetoTvApp extends ConsumerWidget {
   const TetoTvApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preferences = ref.watch(settingsPreferencesProvider);
     return MaterialApp.router(
       title: 'TetoTV',
       debugShowCheckedModeBanner: false,
@@ -23,7 +26,8 @@ class TetoTvApp extends StatelessWidget {
         final mq = MediaQuery.of(context);
         final physicalWidth = View.of(context).physicalSize.width;
         final canvasWidth = tvCanvasWidthForPhysicalPixels(physicalWidth);
-        final scale = mq.size.width / canvasWidth;
+        final scale =
+            (mq.size.width / canvasWidth) * preferences.interfaceScale;
 
         return MediaQuery(
           data: mq.copyWith(

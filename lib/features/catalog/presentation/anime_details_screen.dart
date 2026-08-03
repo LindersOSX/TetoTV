@@ -8,6 +8,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,6 +55,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     final knownEpisodes = (anime.episodes != null && anime.episodes! > 0)
         ? anime.episodes!
         : ((anime.nextAiringEpisode ?? 1) - 1).clamp(1, 999);
@@ -271,17 +273,20 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                     ),
                     const SizedBox(height: 7),
                     SizedBox(
-                      height: 88,
+                      height: 88 * preferences.thumbnailScale,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         clipBehavior: Clip.none,
                         itemCount: anime.relatedAnime.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        separatorBuilder: (_, _) => SizedBox(
+                          width: 10 * preferences.contentDensity.spacingScale,
+                        ),
                         itemBuilder: (context, index) {
                           final related = anime.relatedAnime[index];
                           return _RelatedCard(
                             related: related,
                             titlePreference: titlePreference,
+                            thumbnailScale: preferences.thumbnailScale,
                             onPressed: () =>
                                 context.push('/anime/${related.anime.id}'),
                           );
@@ -304,16 +309,18 @@ class _RelatedCard extends StatelessWidget {
     required this.related,
     required this.titlePreference,
     required this.onPressed,
+    required this.thumbnailScale,
   });
 
   final RelatedAnime related;
   final TitleLanguagePreference titlePreference;
   final VoidCallback onPressed;
+  final double thumbnailScale;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 210,
+      width: 210 * thumbnailScale,
       child: TvFocusable(
         onPressed: onPressed,
         focusScale: 1.02,
@@ -324,7 +331,8 @@ class _RelatedCard extends StatelessWidget {
           child: Row(
             children: [
               SizedBox(
-                width: 50,
+                width: 50 * thumbnailScale,
+                height: double.infinity,
                 child: NetworkArtwork(
                   url: related.anime.coverImageUrl,
                   cacheWidth: 110,

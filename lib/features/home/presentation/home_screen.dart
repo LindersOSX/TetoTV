@@ -8,6 +8,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -62,6 +63,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
   }
 
+  Future<void> _removeFromLocalHistory(_ShelfItem item) async {
+    final mediaId = item.historyMediaId ?? item.animeId;
+    if (mediaId == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: const Text('Remove from this TV?'),
+        content: Text(
+          'Remove “${item.title}” from local Watch History and Continue '
+          'Watching? AniList and MyAnimeList will not be changed.',
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await ref.read(tetoTvDatabaseProvider).removeLocalHistory(mediaId);
+    ref.invalidate(recentPlaybackProvider);
+    ref.invalidate(latestPlaybackProvider(mediaId));
+    ref.invalidate(dismissedContinueWatchingProvider);
+  }
+
   @override
   void dispose() {
     _heroFocus.dispose();
@@ -84,6 +118,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final localHistory = ref.watch(recentPlaybackProvider).valueOrNull;
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final enabledShelves = ref.watch(homeShelfPreferencesProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
+    final dismissedIds =
+        ref.watch(dismissedContinueWatchingProvider).valueOrNull ??
+        const <int>{};
     final hero = trending?.firstOrNull;
     final seasonalItems = seasonal == null || seasonal.isEmpty
         ? _seasonalFallback
@@ -94,8 +132,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ?.skip(1)
         .map((anime) => _ShelfItem.fromAnime(anime, titlePreference))
         .toList(growable: false);
-    final watchingItems = tracking?.watching.isNotEmpty == true
+    final trackedWatchingItems = tracking?.watching.isNotEmpty == true
         ? tracking!.watching
+              .where(
+                (item) =>
+                    item.anilistId == null ||
+                    !dismissedIds.contains(item.anilistId),
+              )
               .map((item) => _ShelfItem.fromTracked(item, titlePreference))
               .toList(growable: false)
         : _connectTracking;
@@ -110,6 +153,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final historyItems = localHistory
         ?.map(_ShelfItem.fromCheckpoint)
         .toList(growable: false);
+    final localContinueItems = localHistory
+        ?.where((checkpoint) => !checkpoint.completed)
+        .map(_ShelfItem.fromCheckpoint)
+        .toList(growable: false);
+    final watchingItems = localContinueItems?.isNotEmpty == true
+        ? localContinueItems!
+        : trackedWatchingItems;
     final airingItems = seasonal
         ?.where((anime) => anime.nextAiringEpisode != null)
         .take(20)
@@ -143,36 +193,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 child: _MediaShelf(
                   title: 'Continue watching',
                   items: watchingItems,
+                  preferences: preferences,
+                  onRemove: _removeFromLocalHistory,
                 ),
               ),
             if (enabledShelves.contains(HomeShelf.history) &&
                 historyItems != null &&
                 historyItems.isNotEmpty)
               SliverToBoxAdapter(
-                child: _MediaShelf(title: 'Watch history', items: historyItems),
+                child: _MediaShelf(
+                  title: 'Watch history',
+                  items: historyItems,
+                  preferences: preferences,
+                  onRemove: _removeFromLocalHistory,
+                ),
               ),
             SliverToBoxAdapter(
               child: _MediaShelf(
                 title: 'Recently released',
                 items: seasonalItems,
+                preferences: preferences,
               ),
             ),
             if (enabledShelves.contains(HomeShelf.trending) &&
                 trendingItems != null &&
                 trendingItems.isNotEmpty)
               SliverToBoxAdapter(
-                child: _MediaShelf(title: 'Trending now', items: trendingItems),
+                child: _MediaShelf(
+                  title: 'Trending now',
+                  items: trendingItems,
+                  preferences: preferences,
+                ),
               ),
             if (enabledShelves.contains(HomeShelf.planned) &&
                 plannedItems.isNotEmpty)
               SliverToBoxAdapter(
-                child: _MediaShelf(title: 'Plan to watch', items: plannedItems),
+                child: _MediaShelf(
+                  title: 'Plan to watch',
+                  items: plannedItems,
+                  preferences: preferences,
+                ),
               ),
             if (enabledShelves.contains(HomeShelf.airing) &&
                 airingItems != null &&
                 airingItems.isNotEmpty)
               SliverToBoxAdapter(
-                child: _MediaShelf(title: 'Airing soon', items: airingItems),
+                child: _MediaShelf(
+                  title: 'Airing soon',
+                  items: airingItems,
+                  preferences: preferences,
+                ),
               ),
             if (enabledShelves.contains(HomeShelf.completed) &&
                 completedItems != null &&
@@ -181,6 +251,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 child: _MediaShelf(
                   title: 'Recently completed',
                   items: completedItems,
+                  preferences: preferences,
                 ),
               ),
             const SliverToBoxAdapter(child: SizedBox(height: 42)),
@@ -452,10 +523,17 @@ class _HeroDot extends StatelessWidget {
 }
 
 class _MediaShelf extends StatelessWidget {
-  const _MediaShelf({required this.title, required this.items});
+  const _MediaShelf({
+    required this.title,
+    required this.items,
+    required this.preferences,
+    this.onRemove,
+  });
 
   final String title;
   final List<_ShelfItem> items;
+  final SettingsPreferences preferences;
+  final ValueChanged<_ShelfItem>? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -465,18 +543,20 @@ class _MediaShelf extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
+          SizedBox(height: 9 * preferences.contentDensity.spacingScale),
           SizedBox(
-            height: 205,
+            height: 205 * preferences.thumbnailScale,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
               itemCount: items.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              separatorBuilder: (_, _) =>
+                  SizedBox(width: 10 * preferences.contentDensity.spacingScale),
               itemBuilder: (context, index) {
                 final item = items[index];
                 return _PosterCard(
                   item: item,
+                  width: 106 * preferences.thumbnailScale,
                   onPressed: () => item.route != null
                       ? context.push(item.route!)
                       : item.animeId == null
@@ -487,6 +567,7 @@ class _MediaShelf extends StatelessWidget {
                           ).toString(),
                         )
                       : context.push('/anime/${item.animeId}'),
+                  onLongPress: onRemove == null ? null : () => onRemove!(item),
                 );
               },
             ),
@@ -498,17 +579,25 @@ class _MediaShelf extends StatelessWidget {
 }
 
 class _PosterCard extends StatelessWidget {
-  const _PosterCard({required this.item, required this.onPressed});
+  const _PosterCard({
+    required this.item,
+    required this.width,
+    required this.onPressed,
+    this.onLongPress,
+  });
 
   final _ShelfItem item;
   final VoidCallback onPressed;
+  final VoidCallback? onLongPress;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 106,
+      width: width,
       child: TvFocusable(
         onPressed: onPressed,
+        onLongPress: onLongPress,
         focusScale: 1.025,
         borderRadius: BorderRadius.circular(7),
         child: ColoredBox(
@@ -553,7 +642,7 @@ class _PosterCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 5),
+              const SizedBox(height: 8),
               Text(
                 item.title,
                 maxLines: 2,
@@ -727,6 +816,7 @@ class _ShelfItem {
     this.score,
     this.releaseYear,
     this.durationMinutes,
+    this.historyMediaId,
   });
 
   final String title;
@@ -739,6 +829,7 @@ class _ShelfItem {
   final double? score;
   final int? releaseYear;
   final int? durationMinutes;
+  final int? historyMediaId;
 
   bool get hasPosterMetadata =>
       score != null || releaseYear != null || durationMinutes != null;
@@ -767,6 +858,7 @@ class _ShelfItem {
       progress: checkpoint.progress,
       animeId: checkpoint.anilistMediaId,
       coverImageUrl: checkpoint.coverImageUrl,
+      historyMediaId: checkpoint.anilistMediaId,
     );
   }
 
@@ -781,6 +873,7 @@ class _ShelfItem {
     score: score,
     releaseYear: releaseYear,
     durationMinutes: durationMinutes,
+    historyMediaId: historyMediaId,
   );
 
   factory _ShelfItem.fromTracked(
@@ -808,6 +901,7 @@ class _ShelfItem {
           ? null
           : (tracked.progress / tracked.totalEpisodes!).clamp(0, 1),
       animeId: item.anilistId,
+      historyMediaId: item.anilistId,
       coverImageUrl: item.coverImageUrl,
       route: item.anilistId == null
           ? Uri(

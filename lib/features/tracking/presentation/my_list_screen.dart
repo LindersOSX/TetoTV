@@ -6,6 +6,7 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -20,6 +21,16 @@ class MyListScreen extends ConsumerStatefulWidget {
 class _MyListScreenState extends ConsumerState<MyListScreen> {
   TrackingListStatus _status = TrackingListStatus.watching;
   bool _updating = false;
+
+  Future<void> _chooseSort(MyListSort current) async {
+    final selected = await showDialog<MyListSort>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _SortDialog(current: current),
+    );
+    if (selected == null || !mounted) return;
+    await ref.read(myListSortProvider.notifier).setSort(selected);
+  }
 
   void _open(HomeTrackedAnime item) {
     final route = item.anilistId == null
@@ -80,6 +91,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
   Widget build(BuildContext context) {
     final list = ref.watch(trackingListProvider(_status));
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final sort = ref.watch(myListSortProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -103,6 +116,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                   ),
                   const SizedBox(width: 8),
                 ],
+                const Spacer(),
+                _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
               ],
             ),
             const SizedBox(height: 18),
@@ -130,11 +145,12 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                                   'a title to this status.',
                             )
                           : _TrackedShelf(
-                              items: items,
+                              items: sortMyListItems(items, sort),
                               titlePreference: titlePreference,
                               onPressed: _open,
                               onManage: (item) =>
                                   _manage(item, titlePreference),
+                              preferences: preferences,
                             ),
                     ),
                   ),
@@ -304,18 +320,126 @@ class _StatusTab extends StatelessWidget {
   }
 }
 
+class _SortButton extends StatelessWidget {
+  const _SortButton({required this.sort, required this.onPressed});
+
+  final MyListSort sort;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      onPressed: onPressed,
+      focusScale: 1.03,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sort_rounded, size: 18),
+            const SizedBox(width: 7),
+            Text(
+              'Sort: ${sort.displayName}',
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+            ),
+            const SizedBox(width: 5),
+            const Icon(Icons.expand_more_rounded, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SortDialog extends StatelessWidget {
+  const _SortDialog({required this.current});
+
+  final MyListSort current;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 520,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Sort My List', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 14),
+            for (final sort in MyListSort.values) ...[
+              TvFocusable(
+                autofocus: sort == current,
+                onPressed: () => Navigator.of(context).pop(sort),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 13,
+                  ),
+                  decoration: BoxDecoration(
+                    color: sort == current
+                        ? AppColors.accent
+                        : AppColors.panelRaised,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        sort == current
+                            ? Icons.check_circle_rounded
+                            : Icons.radio_button_off_rounded,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        sort.displayName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (sort != MyListSort.values.last) const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TrackedShelf extends StatelessWidget {
   const _TrackedShelf({
     required this.items,
     required this.titlePreference,
     required this.onPressed,
     required this.onManage,
+    required this.preferences,
   });
 
   final List<HomeTrackedAnime> items;
   final TitleLanguagePreference titlePreference;
   final ValueChanged<HomeTrackedAnime> onPressed;
   final ValueChanged<HomeTrackedAnime> onManage;
+  final SettingsPreferences preferences;
 
   @override
   Widget build(BuildContext context) {
@@ -324,14 +448,15 @@ class _TrackedShelf extends StatelessWidget {
       clipBehavior: Clip.none,
       padding: const EdgeInsets.fromLTRB(4, 5, 4, 24),
       itemCount: items.length,
-      separatorBuilder: (_, _) => const SizedBox(width: 9),
+      separatorBuilder: (_, _) =>
+          SizedBox(width: 10 * preferences.contentDensity.spacingScale),
       itemBuilder: (context, index) {
         final item = items[index];
         return Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: 126,
-            height: 238,
+            width: 126 * preferences.thumbnailScale,
+            height: 238 * preferences.thumbnailScale,
             child: TvFocusable(
               autofocus: index == 0,
               onPressed: () => onPressed(item),
@@ -373,7 +498,7 @@ class _TrackedShelf extends StatelessWidget {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 8),
                     Text(
                       item.tracked.displayTitle(titlePreference),
                       maxLines: 2,

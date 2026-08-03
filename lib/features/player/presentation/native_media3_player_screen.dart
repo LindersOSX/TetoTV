@@ -5,6 +5,7 @@ import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
@@ -91,6 +92,7 @@ class _NativeMedia3PlayerScreenState
     _running = true;
     try {
       await _loadResumeAndPreferences();
+      final appearance = ref.read(settingsPreferencesProvider);
       // Media3 intentionally owns the fast hardware-decoding path. Preserve
       // the user's compatibility choice and send known Hi10P or delay-tuned
       // streams straight to MPV, which can software-decode and apply A/V delay.
@@ -122,9 +124,15 @@ class _NativeMedia3PlayerScreenState
           subtitlesEnabled: _preferences.subtitlePreferenceSet
               ? _preferences.subtitleEnabled
               : subtitlesEnabledByDefault(_release),
-          subtitleSize: _preferences.subtitleSize,
+          subtitleSize: _preferences.subtitleSize == 34
+              ? appearance.captionTextSize
+              : _preferences.subtitleSize,
           subtitlePosition: _preferences.subtitlePosition,
           highContrastSubtitles: _preferences.highContrastSubtitles,
+          subtitleTextColor: appearance.captionTextColor,
+          subtitleBackgroundColor: appearance.captionBackgroundColor,
+          seekBackSeconds: appearance.seekBackSeconds,
+          seekForwardSeconds: appearance.seekForwardSeconds,
           videoFit: _preferences.videoFit,
           malMediaId: _malMediaId,
           episodeNumber: _episodeNumber,

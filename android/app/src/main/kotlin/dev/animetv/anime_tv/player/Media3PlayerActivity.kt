@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.Button
 import android.widget.Toast
+import android.widget.TextView
 import androidx.annotation.OptIn
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -76,6 +77,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var captionTrackButton: ImageButton
     private lateinit var captionSizeButton: ImageButton
     private lateinit var skipSegmentButton: Button
+    private lateinit var pausedTitleView: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val metadataClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -103,6 +105,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var subtitleSize = 34f
     private var subtitlePosition = 100
     private var highContrastSubtitles = false
+    private var subtitleTextColor = Color.WHITE
+    private var subtitleBackgroundColor = Color.TRANSPARENT
+    private var seekBackIncrementMs = 10_000L
+    private var seekForwardIncrementMs = 10_000L
     private var preferredAudioOverrideApplied = false
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
@@ -118,6 +124,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var skipFetchStarted = false
     private var activeSkipSegment: NativeSkipSegment? = null
     private val skipSegments = mutableListOf<NativeSkipSegment>()
+    private val autoFocusedSkipSegments = mutableSetOf<String>()
+    private var exitDialog: AlertDialog? = null
 
     private data class NativeSkipSegment(
         val startMs: Long,
@@ -213,7 +221,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() = finishWithResult(STATUS_STOPPED)
+                override fun handleOnBackPressed() = showExitConfirmation()
             },
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -247,6 +255,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getIntExtra(EXTRA_SUBTITLE_POSITION, 100).coerceIn(60, 100)
         highContrastSubtitles =
             intent.getBooleanExtra(EXTRA_HIGH_CONTRAST_SUBTITLES, false)
+        subtitleTextColor = intent.getIntExtra(EXTRA_SUBTITLE_TEXT_COLOR, Color.WHITE)
+        subtitleBackgroundColor =
+            intent.getIntExtra(EXTRA_SUBTITLE_BACKGROUND_COLOR, Color.TRANSPARENT)
+        seekBackIncrementMs =
+            intent.getLongExtra(EXTRA_SEEK_BACK_MS, 10_000L).coerceIn(5_000L, 60_000L)
+        seekForwardIncrementMs =
+            intent.getLongExtra(EXTRA_SEEK_FORWARD_MS, 10_000L).coerceIn(5_000L, 60_000L)
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
@@ -309,8 +324,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(10_000)
+            .setSeekBackIncrementMs(seekBackIncrementMs)
+            .setSeekForwardIncrementMs(seekForwardIncrementMs)
             .build()
             .also {
                 it.addListener(this)
@@ -355,7 +370,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
             subtitleView?.apply {
-                setApplyEmbeddedStyles(!highContrastSubtitles)
+                val customCaptionColors =
+                    subtitleTextColor != Color.WHITE || subtitleBackgroundColor != Color.TRANSPARENT
+                setApplyEmbeddedStyles(!highContrastSubtitles && !customCaptionColors)
                 setApplyEmbeddedFontSizes(
                     !highContrastSubtitles && subtitleSize == DEFAULT_SUBTITLE_SIZE,
                 )
@@ -364,11 +381,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     subtitleSize,
                 )
                 setBottomPaddingFraction((108 - subtitlePosition) / 100f)
-                if (highContrastSubtitles) {
+                if (highContrastSubtitles || customCaptionColors) {
                     setStyle(
                         CaptionStyleCompat(
-                            Color.WHITE,
-                            0x99000000.toInt(),
+                            subtitleTextColor,
+                            if (highContrastSubtitles) 0xDD000000.toInt()
+                            else subtitleBackgroundColor,
                             Color.TRANSPARENT,
                             CaptionStyleCompat.EDGE_TYPE_OUTLINE,
                             Color.BLACK,
@@ -407,12 +425,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     armControllerAutoHide()
                 }
             }
+        pausedTitleView = playerView.findViewById<TextView>(R.id.tetotv_paused_title).apply {
+            text = intent.getStringExtra(EXTRA_TITLE).orEmpty()
+            visibility = View.GONE
+        }
         updateCaptionSizeDescription()
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).setOnClickListener {
-            seekRelative(-SEEK_INCREMENT_MS, it)
+            seekRelative(-seekBackIncrementMs, it)
         }
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).setOnClickListener {
-            seekRelative(SEEK_INCREMENT_MS, it)
+            seekRelative(seekForwardIncrementMs, it)
         }
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
@@ -516,6 +538,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
     }
 
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+        if (::pausedTitleView.isInitialized) {
+            pausedTitleView.visibility = if (isPlaying) View.GONE else View.VISIBLE
+        }
+    }
+
     private fun fetchSkipSegmentsIfReady() {
         if (skipFetchStarted || malMediaId <= 0 || episodeNumber <= 0) return
         val durationMs = safeDurationMs()
@@ -572,7 +600,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 val startMs = (interval.optDouble("startTime", -1.0) * 1_000).toLong()
                 val endMs = (interval.optDouble("endTime", -1.0) * 1_000).toLong()
                 val referenceLength = item.optDouble("episodeLength", episodeLengthSeconds)
-                val durationTolerance = max(15.0, episodeLengthSeconds * 0.015)
+                val durationTolerance = max(45.0, episodeLengthSeconds * 0.05)
                 if (abs(referenceLength - episodeLengthSeconds) > durationTolerance) continue
                 val clampedStart = startMs.coerceIn(0L, durationMs)
                 val clampedEnd = endMs.coerceIn(0L, durationMs)
@@ -606,6 +634,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     else -> R.string.tetotv_player_skip_intro
                 },
             )
+            val focusKey = "${active.kind}:${active.startMs}"
+            if (autoFocusedSkipSegments.add(focusKey)) {
+                playerView.showController()
+                skipSegmentButton.post { skipSegmentButton.requestFocus() }
+            }
         }
     }
 
@@ -849,17 +882,21 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun applySubtitleStyle() {
         playerView.subtitleView?.apply {
-            setApplyEmbeddedStyles(!highContrastSubtitles)
+            val customCaptionColors =
+                subtitleTextColor != Color.WHITE || subtitleBackgroundColor != Color.TRANSPARENT
+            setApplyEmbeddedStyles(!highContrastSubtitles && !customCaptionColors)
             setApplyEmbeddedFontSizes(
-                !highContrastSubtitles && subtitleSize == DEFAULT_SUBTITLE_SIZE,
+                !highContrastSubtitles && !customCaptionColors &&
+                    subtitleSize == DEFAULT_SUBTITLE_SIZE,
             )
             setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, subtitleSize)
             setBottomPaddingFraction((108 - subtitlePosition) / 100f)
-            if (highContrastSubtitles) {
+            if (highContrastSubtitles || customCaptionColors) {
                 setStyle(
                     CaptionStyleCompat(
-                        Color.WHITE,
-                        0x99000000.toInt(),
+                        subtitleTextColor,
+                        if (highContrastSubtitles) 0xDD000000.toInt()
+                        else subtitleBackgroundColor,
                         Color.TRANSPARENT,
                         CaptionStyleCompat.EDGE_TYPE_OUTLINE,
                         Color.BLACK,
@@ -897,6 +934,35 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         playerView.showController()
         sourceButton.requestFocus()
         armControllerAutoHide()
+    }
+
+    private fun showExitConfirmation() {
+        if (exitDialog?.isShowing == true || isFinishing || isDestroyed) return
+        val resumeAfterDialog = ::player.isInitialized && player.isPlaying
+        if (resumeAfterDialog) player.pause()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Exit video?")
+            .setMessage("Your current playback position will be saved.")
+            .setCancelable(false)
+            .setNegativeButton("Continue watching") { _, _ ->
+                if (resumeAfterDialog && !isFinishing && !isDestroyed) player.play()
+                playerView.showController()
+                requestTransportFocus()
+                armControllerAutoHide()
+            }
+            .setPositiveButton("Exit video") { _, _ ->
+                persistCheckpoint()
+                finishWithResult(STATUS_STOPPED)
+            }
+            .create()
+        exitDialog = dialog
+        dialog.setOnDismissListener {
+            if (exitDialog === dialog) exitDialog = null
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.requestFocus()
+        }
+        dialog.show()
     }
 
     private fun requestTransportFocus() {
@@ -1212,6 +1278,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onDestroy() {
+        exitDialog?.dismiss()
+        exitDialog = null
         activeTrackDialog?.dismiss()
         activeTrackDialog = null
         handler.removeCallbacksAndMessages(null)
@@ -1334,6 +1402,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_SUBTITLE_SIZE = "subtitleSize"
         const val EXTRA_SUBTITLE_POSITION = "subtitlePosition"
         const val EXTRA_HIGH_CONTRAST_SUBTITLES = "highContrastSubtitles"
+        const val EXTRA_SUBTITLE_TEXT_COLOR = "subtitleTextColor"
+        const val EXTRA_SUBTITLE_BACKGROUND_COLOR = "subtitleBackgroundColor"
+        const val EXTRA_SEEK_BACK_MS = "seekBackMs"
+        const val EXTRA_SEEK_FORWARD_MS = "seekForwardMs"
         const val EXTRA_VIDEO_FIT = "videoFit"
         const val EXTRA_START_FROM_BEGINNING = "startFromBeginning"
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"
@@ -1375,7 +1447,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
-        private const val SEEK_INCREMENT_MS = 10_000L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MIN_SKIP_SEGMENT_MS = 8_000L
         private const val MAX_SKIP_SEGMENT_MS = 240_000L

@@ -88,4 +88,38 @@ void main() {
       expect(segments.single.kind, SkipSegmentKind.opening);
     },
   );
+
+  test(
+    'AniSkip accepts valid markers when reference runtime is omitted',
+    () async {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 200,
+              data: <String, dynamic>{
+                'found': true,
+                'results': [
+                  {
+                    'interval': {'startTime': 18, 'endTime': 108},
+                    'skipType': 'op',
+                  },
+                ],
+              },
+            ),
+          ),
+        ),
+      );
+
+      final segments = await AniSkipClient(dio: dio).segments(
+        malMediaId: 21,
+        episode: 2,
+        episodeDuration: const Duration(minutes: 24),
+      );
+
+      expect(segments.single.kind, SkipSegmentKind.opening);
+    },
+  );
 }

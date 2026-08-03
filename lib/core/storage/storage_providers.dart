@@ -15,3 +15,7 @@ final latestPlaybackProvider = FutureProvider.family<PlaybackCheckpoint?, int>((
 ) {
   return ref.watch(tetoTvDatabaseProvider).latestCheckpoint(mediaId);
 });
+
+final dismissedContinueWatchingProvider = FutureProvider<Set<int>>((ref) {
+  return ref.watch(tetoTvDatabaseProvider).dismissedContinueWatchingIds();
+});

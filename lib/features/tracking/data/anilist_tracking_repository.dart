@@ -38,6 +38,9 @@ query ($userId: Int!, $status: MediaListStatus!, $page: Int!) {
       mediaId
       progress
       status
+      score(format: POINT_10_DECIMAL)
+      updatedAt
+      startedAt { year month day }
       media {
         episodes
         title { userPreferred english romaji }
@@ -59,6 +62,7 @@ query ($userId: Int!, $status: MediaListStatus!, $page: Int!) {
         final titleRomaji = title['romaji'] as String?;
         final fallbackTitle = title['userPreferred'] as String;
         final cover = media['coverImage'] as Map<String, dynamic>?;
+        final startedAt = entry['startedAt'] as Map<String, dynamic>?;
         result.add(
           TrackedAnime(
             mediaId: entry['mediaId'] as int,
@@ -73,6 +77,16 @@ query ($userId: Int!, $status: MediaListStatus!, $page: Int!) {
             progress: entry['progress'] as int? ?? 0,
             totalEpisodes: media['episodes'] as int?,
             coverImageUrl: cover?['extraLarge'] as String?,
+            score: (entry['score'] as num?)?.toDouble(),
+            updatedAt: switch (entry['updatedAt']) {
+              final int timestamp when timestamp > 0 =>
+                DateTime.fromMillisecondsSinceEpoch(
+                  timestamp * 1000,
+                  isUtc: true,
+                ).toLocal(),
+              _ => null,
+            },
+            startDate: _fuzzyDate(startedAt),
           ),
         );
       }
@@ -163,6 +177,14 @@ mutation ($mediaId: Int!, $status: MediaListStatus!) {
     }
     return body['data'] as Map<String, dynamic>? ?? const {};
   }
+}
+
+DateTime? _fuzzyDate(Map<String, dynamic>? value) {
+  final year = value?['year'] as int?;
+  if (year == null || year <= 0) return null;
+  final month = (value?['month'] as int? ?? 1).clamp(1, 12);
+  final day = (value?['day'] as int? ?? 1).clamp(1, 31);
+  return DateTime(year, month, day);
 }
 
 String anilistStatus(TrackingListStatus status) => switch (status) {
