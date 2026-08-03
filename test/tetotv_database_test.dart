@@ -13,6 +13,37 @@ void main() {
       'execute:PRAGMA foreign_keys=ON',
     ]);
   });
+
+  test('series playback and stream preferences survive JSON storage', () {
+    const preferences = SeriesPlaybackPreferences(
+      audioLanguage: 'jpn',
+      subtitleLanguage: 'eng',
+      subtitleEnabled: true,
+      subtitlePreferenceSet: true,
+      subtitleSize: 42,
+      autoplayNextEpisode: true,
+      preferredStreamLanguage: 'sub',
+      preferredQuality: 'p1080',
+      preferredCodec: 'hevc',
+      preferredHdrMode: 'sdr',
+      allowBatchStreams: false,
+      streamSortMode: 'seeders',
+      preferredReleaseProvider: 'Torrentio',
+    );
+
+    final restored = SeriesPlaybackPreferences.fromJson(preferences.toJson());
+
+    expect(restored.audioLanguage, 'jpn');
+    expect(restored.subtitlePreferenceSet, isTrue);
+    expect(restored.subtitleSize, 42);
+    expect(restored.preferredStreamLanguage, 'sub');
+    expect(restored.preferredQuality, 'p1080');
+    expect(restored.preferredCodec, 'hevc');
+    expect(restored.preferredHdrMode, 'sdr');
+    expect(restored.allowBatchStreams, isFalse);
+    expect(restored.streamSortMode, 'seeders');
+    expect(restored.preferredReleaseProvider, 'Torrentio');
+  });
 }
 
 class _RecordingDatabase implements Database {

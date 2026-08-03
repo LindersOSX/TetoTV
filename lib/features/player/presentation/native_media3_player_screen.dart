@@ -4,6 +4,7 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
@@ -118,11 +119,15 @@ class _NativeMedia3PlayerScreenState
           externalSubtitle: widget.subtitle,
           audioLanguage: _preferences.audioLanguage,
           subtitleLanguage: _preferences.subtitleLanguage,
-          subtitlesEnabled: subtitlesEnabledByDefault(_release),
+          subtitlesEnabled: _preferences.subtitlePreferenceSet
+              ? _preferences.subtitleEnabled
+              : subtitlesEnabledByDefault(_release),
           subtitleSize: _preferences.subtitleSize,
           subtitlePosition: _preferences.subtitlePosition,
           highContrastSubtitles: _preferences.highContrastSubtitles,
           videoFit: _preferences.videoFit,
+          malMediaId: _malMediaId,
+          episodeNumber: _episodeNumber,
         );
         if (!mounted) return;
         _startFromBeginning = false;
@@ -210,14 +215,37 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _persistResult(NativePlaybackResult result) async {
-    if (result.subtitleSize case final subtitleSize?) {
-      final normalizedSize = subtitleSize.clamp(18, 60).toDouble();
-      if (normalizedSize != _preferences.subtitleSize) {
-        _preferences = _preferences.copyWith(subtitleSize: normalizedSize);
-        await ref
-            .read(tetoTvDatabaseProvider)
-            .saveSeriesPreferences(_mediaId, _preferences);
-      }
+    final normalizedSize = result.subtitleSize?.clamp(18, 60).toDouble();
+    final audioLanguage = result.audioLanguage == null
+        ? null
+        : canonicalPlayerLanguage(result.audioLanguage);
+    final subtitleLanguage = result.subtitleLanguage == null
+        ? null
+        : canonicalPlayerLanguage(result.subtitleLanguage);
+    var nextPreferences = _preferences;
+    if (normalizedSize != null) {
+      nextPreferences = nextPreferences.copyWith(subtitleSize: normalizedSize);
+    }
+    if (audioLanguage != null && audioLanguage.isNotEmpty) {
+      nextPreferences = nextPreferences.copyWith(audioLanguage: audioLanguage);
+    }
+    if (subtitleLanguage != null && subtitleLanguage.isNotEmpty) {
+      nextPreferences = nextPreferences.copyWith(
+        subtitleLanguage: subtitleLanguage,
+      );
+    }
+    if (result.subtitlesEnabled case final enabled?) {
+      nextPreferences = nextPreferences.copyWith(
+        subtitleEnabled: enabled,
+        subtitlePreferenceSet: true,
+      );
+    }
+    if (nextPreferences.toJson().toString() !=
+        _preferences.toJson().toString()) {
+      _preferences = nextPreferences;
+      await ref
+          .read(tetoTvDatabaseProvider)
+          .saveSeriesPreferences(_mediaId, _preferences);
     }
     if (result.duration <= Duration.zero) {
       return;
@@ -350,22 +378,7 @@ class _NativeMedia3PlayerScreenState
     final playNext = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF0B0B0D),
-        title: const Text('Episode complete'),
-        content: const Text('Play the next episode?'),
-        actions: [
-          TextButton(
-            autofocus: true,
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Play next'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Back to show'),
-          ),
-        ],
-      ),
+      builder: (context) => const _NativeNextEpisodeDialog(),
     );
     if (!mounted) return;
     if (playNext == true) {
@@ -392,6 +405,7 @@ class _NativeMedia3PlayerScreenState
             'title': details.title,
             'synonyms': details.synonyms.join('|'),
             'episode': nextEpisode.toString(),
+            'autoplay': '1',
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
             if (_malMediaId != null) 'malId': _malMediaId.toString(),
           },
@@ -454,5 +468,55 @@ class _NativeMedia3PlayerScreenState
         ),
       ),
     ),
+  );
+}
+
+class _NativeNextEpisodeDialog extends StatefulWidget {
+  const _NativeNextEpisodeDialog();
+
+  @override
+  State<_NativeNextEpisodeDialog> createState() =>
+      _NativeNextEpisodeDialogState();
+}
+
+class _NativeNextEpisodeDialogState extends State<_NativeNextEpisodeDialog> {
+  Timer? _timer;
+  int _seconds = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_seconds <= 1) {
+        Navigator.of(context).pop(true);
+      } else {
+        setState(() => _seconds--);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    backgroundColor: const Color(0xFF0B0B0D),
+    title: const Text('Episode complete'),
+    content: Text('Playing the next episode in $_seconds seconds.'),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(false),
+        child: const Text('Stay here'),
+      ),
+      FilledButton(
+        autofocus: true,
+        onPressed: () => Navigator.of(context).pop(true),
+        child: const Text('Play now'),
+      ),
+    ],
   );
 }

@@ -14,6 +14,10 @@ void main() {
       'error': 'No video frame reached the SurfaceView',
       'videoMime': 'video/hevc',
       'model': 'AFTKRT',
+      'audioLanguage': 'jpn',
+      'subtitleLanguage': 'eng',
+      'subtitlesEnabled': true,
+      'subtitleSize': 42.0,
     });
 
     expect(result.failed, isTrue);
@@ -23,6 +27,10 @@ void main() {
     expect(result.decoder, 'c2.mtk.hevc.decoder');
     expect(result.diagnostics['videoMime'], 'video/hevc');
     expect(result.diagnostics['model'], 'AFTKRT');
+    expect(result.audioLanguage, 'jpn');
+    expect(result.subtitleLanguage, 'eng');
+    expect(result.subtitlesEnabled, isTrue);
+    expect(result.subtitleSize, 42);
   });
 
   test('native player exit is not treated as a decoder failure', () {

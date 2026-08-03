@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -87,6 +89,109 @@ int tvPlaybackCompatibilityRank(
 bool isTvSafeRelease(ReleaseCandidate release) =>
     tvPlaybackCompatibilityRank(release) == 0;
 
+bool releaseMatchesStreamFilters(
+  ReleaseCandidate release, {
+  String language = 'all',
+  String quality = 'any',
+  String codec = 'any',
+  String hdr = 'any',
+  bool allowBatch = true,
+}) {
+  if (language == 'dub' && !release.isDubbed) return false;
+  if (language == 'sub' && release.isDubbed) return false;
+  if (!allowBatch && release.isBatch) return false;
+  final qualityText = '${release.quality ?? ''} ${release.releaseName}'
+      .toLowerCase();
+  if (quality == 'p2160' &&
+      !qualityText.contains('2160') &&
+      !qualityText.contains('4k')) {
+    return false;
+  }
+  if (quality == 'p1080' && !qualityText.contains('1080')) return false;
+  if (quality == 'p720' && !qualityText.contains('720')) return false;
+  final codecText = '${release.codec ?? ''} ${release.releaseName}'
+      .toLowerCase();
+  if (codec == 'h264' &&
+      !codecText.contains('264') &&
+      !codecText.contains('avc')) {
+    return false;
+  }
+  if (codec == 'hevc' &&
+      !codecText.contains('hevc') &&
+      !codecText.contains('265')) {
+    return false;
+  }
+  if (codec == 'av1' && !codecText.contains('av1')) return false;
+  if (hdr == 'hdr' && !release.isHdr) return false;
+  if (hdr == 'sdr' && release.isHdr) return false;
+  return true;
+}
+
+int compareStreamReleases(
+  ReleaseCandidate left,
+  ReleaseCandidate right, {
+  TvDeviceProfile? device,
+  Map<String, int> failureCounts = const {},
+  String sortMode = 'compatibility',
+  String? preferredProvider,
+}) {
+  final preferred = _providerRank(
+    left,
+    preferredProvider,
+  ).compareTo(_providerRank(right, preferredProvider));
+  if (preferred != 0) return preferred;
+  switch (sortMode) {
+    case 'seeders':
+      final seeders = right.seeders.compareTo(left.seeders);
+      if (seeders != 0) return seeders;
+      break;
+    case 'size':
+      final size = _releaseSizeMb(left).compareTo(_releaseSizeMb(right));
+      if (size != 0) return size;
+      break;
+    default:
+      final compatibility =
+          tvPlaybackCompatibilityRank(
+            left,
+            device: device,
+            previousFailures: failureCounts[left.infoHash.toLowerCase()] ?? 0,
+          ).compareTo(
+            tvPlaybackCompatibilityRank(
+              right,
+              device: device,
+              previousFailures:
+                  failureCounts[right.infoHash.toLowerCase()] ?? 0,
+            ),
+          );
+      if (compatibility != 0) return compatibility;
+      break;
+  }
+  return right.seeders.compareTo(left.seeders);
+}
+
+int _providerRank(ReleaseCandidate release, String? preferredProvider) {
+  if (preferredProvider == null || preferredProvider.isEmpty) return 1;
+  return release.provider?.toLowerCase() == preferredProvider.toLowerCase()
+      ? 0
+      : 1;
+}
+
+double _releaseSizeMb(ReleaseCandidate release) {
+  final value = release.sizeLabel?.toUpperCase() ?? '';
+  final amount = double.tryParse(
+    RegExp(r'[\d.]+').firstMatch(value)?.group(0) ?? '',
+  );
+  if (amount == null) return double.maxFinite;
+  if (value.contains('TB')) return amount * 1024 * 1024;
+  if (value.contains('GB')) return amount * 1024;
+  if (value.contains('KB')) return amount / 1024;
+  return amount;
+}
+
+T _enumByName<T extends Enum>(List<T> values, String name, T fallback) {
+  return values.where((value) => value.name == name).firstOrNull ?? fallback;
+}
+
 class ResolveEpisodeScreen extends ConsumerStatefulWidget {
   const ResolveEpisodeScreen({required this.episode, super.key});
 
@@ -110,10 +215,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   Set<DebridService> _connectedServices = const {};
   DebridService _debridService = DebridService.realDebrid;
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
+  _StreamQualityFilter _qualityFilter = _StreamQualityFilter.any;
+  _StreamCodecFilter _codecFilter = _StreamCodecFilter.any;
+  _StreamHdrFilter _hdrFilter = _StreamHdrFilter.any;
+  _StreamSortMode _sortMode = _StreamSortMode.compatibility;
+  bool _allowBatchStreams = true;
+  SeriesPlaybackPreferences _seriesPreferences =
+      const SeriesPlaybackPreferences();
   TvDeviceProfile _deviceProfile = const TvDeviceProfile.unknown();
   Map<String, int> _failureCounts = const {};
   ReleaseCandidate? _lastAttemptedRelease;
   int _resolveAttempt = 0;
+  final Set<String> _failedResolveHashes = {};
+  int _automaticResolveFallbacks = 0;
 
   bool get _hasDebrid => _connectedServices.contains(_debridService);
 
@@ -129,12 +243,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       storage.read(key: DebridService.realDebrid.tokenStorageKey),
       storage.read(key: DebridService.torBox.tokenStorageKey),
       AndroidTvBridge.instance.getDeviceProfile(),
+      TetoTvDatabase.instance
+          .seriesPreferences(widget.episode.anilistMediaId)
+          .catchError((_) => const SeriesPlaybackPreferences()),
     ]);
     final tokens = [
       tokensAndProfile[0] as String?,
       tokensAndProfile[1] as String?,
     ];
     final profile = tokensAndProfile[2] as TvDeviceProfile;
+    final preferences = tokensAndProfile[3] as SeriesPlaybackPreferences;
     Map<String, int> failures = const {};
     try {
       failures = await TetoTvDatabase.instance.failureCounts(profile.key);
@@ -155,6 +273,33 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _loadingAccount = false;
       _deviceProfile = profile;
       _failureCounts = failures;
+      _seriesPreferences = preferences;
+      _languageFilter = _enumByName(
+        _StreamLanguageFilter.values,
+        preferences.preferredStreamLanguage,
+        _StreamLanguageFilter.dub,
+      );
+      _qualityFilter = _enumByName(
+        _StreamQualityFilter.values,
+        preferences.preferredQuality,
+        _StreamQualityFilter.any,
+      );
+      _codecFilter = _enumByName(
+        _StreamCodecFilter.values,
+        preferences.preferredCodec,
+        _StreamCodecFilter.any,
+      );
+      _hdrFilter = _enumByName(
+        _StreamHdrFilter.values,
+        preferences.preferredHdrMode,
+        _StreamHdrFilter.any,
+      );
+      _sortMode = _enumByName(
+        _StreamSortMode.values,
+        preferences.streamSortMode,
+        _StreamSortMode.compatibility,
+      );
+      _allowBatchStreams = preferences.allowBatchStreams;
     });
     await _loadConfiguredReleases();
   }
@@ -176,10 +321,18 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       if (!mounted) return;
       setState(() {
         _releases = releases;
+        if (widget.episode.autoPlay) _loadingReleases = false;
         if (releases.isEmpty) {
           _error = 'No releases were returned for this episode.';
         }
       });
+      if (widget.episode.autoPlay && releases.isNotEmpty && _hasDebrid) {
+        final filtered = _filteredAndSortedReleases(releases);
+        final candidates = filtered.isNotEmpty
+            ? filtered
+            : _filteredAndSortedReleases(releases, ignoreOptionalFilters: true);
+        await _resolveCandidate(candidates.first);
+      }
     } catch (error) {
       if (mounted) {
         setState(() => _error = error.toString());
@@ -251,22 +404,21 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             );
             final alternatives = [..._releases]
               ..removeWhere((item) => item.infoHash == selected.infoHash)
-              ..sort(
-                (left, right) =>
-                    tvPlaybackCompatibilityRank(
-                      left,
-                      device: _deviceProfile,
-                      previousFailures:
-                          _failureCounts[left.infoHash.toLowerCase()] ?? 0,
-                    ).compareTo(
-                      tvPlaybackCompatibilityRank(
-                        right,
-                        device: _deviceProfile,
-                        previousFailures:
-                            _failureCounts[right.infoHash.toLowerCase()] ?? 0,
-                      ),
-                    ),
-              );
+              ..sort((left, right) {
+                final languageMatch =
+                    (left.isDubbed == selected.isDubbed ? 0 : 1).compareTo(
+                      right.isDubbed == selected.isDubbed ? 0 : 1,
+                    );
+                if (languageMatch != 0) return languageMatch;
+                return compareStreamReleases(
+                  left,
+                  right,
+                  device: _deviceProfile,
+                  failureCounts: _failureCounts,
+                  sortMode: 'compatibility',
+                  preferredProvider: selected.provider,
+                );
+              });
             context.pushReplacement(
               playerUri.toString(),
               extra: PlaybackLaunch(
@@ -281,6 +433,31 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       }
     } catch (error) {
       if (mounted && attempt == _resolveAttempt) {
+        _failedResolveHashes.add(selected.infoHash.toLowerCase());
+        final preferred = _filteredAndSortedReleases(_releases);
+        final recoveryPool = <ReleaseCandidate>[
+          ...preferred,
+          ..._releases.where((item) => !preferred.contains(item)),
+        ];
+        final next = recoveryPool
+            .where(
+              (item) =>
+                  !_failedResolveHashes.contains(item.infoHash.toLowerCase()),
+            )
+            .firstOrNull;
+        if (next != null && _automaticResolveFallbacks < 3) {
+          _automaticResolveFallbacks++;
+          setState(() {
+            _resolving = false;
+            _status = 'That release failed. Trying another cached streamâ€¦';
+          });
+          unawaited(
+            Future<void>.microtask(
+              () => _resolve(_SelectedReleaseSource(next), selected: next),
+            ),
+          );
+          return;
+        }
         setState(() {
           _error = error.toString().replaceFirst('Bad state: ', '');
           _status = 'Could not resolve this episode';
@@ -309,7 +486,76 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       await _initialize();
       return;
     }
+    _failedResolveHashes.clear();
+    _automaticResolveFallbacks = 0;
+    await _rememberStreamSelection(candidate);
     await _resolve(_SelectedReleaseSource(candidate), selected: candidate);
+  }
+
+  List<ReleaseCandidate> _filteredAndSortedReleases(
+    Iterable<ReleaseCandidate> releases, {
+    bool ignoreOptionalFilters = false,
+  }) {
+    final filtered = releases.where((release) {
+      return releaseMatchesStreamFilters(
+        release,
+        language: ignoreOptionalFilters ? 'all' : _languageFilter.name,
+        quality: ignoreOptionalFilters ? 'any' : _qualityFilter.name,
+        codec: ignoreOptionalFilters ? 'any' : _codecFilter.name,
+        hdr: ignoreOptionalFilters ? 'any' : _hdrFilter.name,
+        allowBatch: ignoreOptionalFilters || _allowBatchStreams,
+      );
+    }).toList();
+    filtered.sort(
+      (left, right) => compareStreamReleases(
+        left,
+        right,
+        device: _deviceProfile,
+        failureCounts: _failureCounts,
+        sortMode: _sortMode.name,
+        preferredProvider: _seriesPreferences.preferredReleaseProvider,
+      ),
+    );
+    return filtered;
+  }
+
+  Future<void> _rememberPickerPreferences() async {
+    _seriesPreferences = _seriesPreferences.copyWith(
+      preferredStreamLanguage: _languageFilter.name,
+      preferredQuality: _qualityFilter.name,
+      preferredCodec: _codecFilter.name,
+      preferredHdrMode: _hdrFilter.name,
+      allowBatchStreams: _allowBatchStreams,
+      streamSortMode: _sortMode.name,
+    );
+    try {
+      await TetoTvDatabase.instance.saveSeriesPreferences(
+        widget.episode.anilistMediaId,
+        _seriesPreferences,
+      );
+    } catch (_) {
+      // A local preference write must never block stream selection.
+    }
+  }
+
+  Future<void> _rememberStreamSelection(ReleaseCandidate candidate) async {
+    _seriesPreferences = _seriesPreferences.copyWith(
+      preferredReleaseProvider: candidate.provider,
+      preferredStreamLanguage: candidate.isDubbed ? 'dub' : 'sub',
+    );
+    try {
+      await TetoTvDatabase.instance.saveSeriesPreferences(
+        widget.episode.anilistMediaId,
+        _seriesPreferences,
+      );
+    } catch (_) {
+      // A local preference write must never block playback.
+    }
+  }
+
+  void _updatePicker(VoidCallback update) {
+    setState(update);
+    unawaited(_rememberPickerPreferences());
   }
 
   @override
@@ -401,31 +647,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if (_releases.isNotEmpty && !_showManual) {
-      final filtered = _releases.where((release) {
-        return switch (_languageFilter) {
-          _StreamLanguageFilter.all => true,
-          _StreamLanguageFilter.sub => !release.isDubbed,
-          _StreamLanguageFilter.dub => release.isDubbed,
-        };
-      }).toList();
-      filtered.sort((left, right) {
-        final compatibility =
-            tvPlaybackCompatibilityRank(
-              left,
-              device: _deviceProfile,
-              previousFailures:
-                  _failureCounts[left.infoHash.toLowerCase()] ?? 0,
-            ).compareTo(
-              tvPlaybackCompatibilityRank(
-                right,
-                device: _deviceProfile,
-                previousFailures:
-                    _failureCounts[right.infoHash.toLowerCase()] ?? 0,
-              ),
-            );
-        if (compatibility != 0) return compatibility;
-        return right.seeders.compareTo(left.seeders);
-      });
+      final filtered = _filteredAndSortedReleases(_releases);
       return _StreamPicker(
         releases: filtered,
         totalCount: _releases.length,
@@ -433,7 +655,20 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         selectedService: _debridService,
         onServiceChanged: (value) => setState(() => _debridService = value),
         filter: _languageFilter,
-        onFilterChanged: (value) => setState(() => _languageFilter = value),
+        onFilterChanged: (value) =>
+            _updatePicker(() => _languageFilter = value),
+        qualityFilter: _qualityFilter,
+        onQualityChanged: (value) =>
+            _updatePicker(() => _qualityFilter = value),
+        codecFilter: _codecFilter,
+        onCodecChanged: (value) => _updatePicker(() => _codecFilter = value),
+        hdrFilter: _hdrFilter,
+        onHdrChanged: (value) => _updatePicker(() => _hdrFilter = value),
+        sortMode: _sortMode,
+        onSortChanged: (value) => _updatePicker(() => _sortMode = value),
+        allowBatchStreams: _allowBatchStreams,
+        onBatchChanged: (value) =>
+            _updatePicker(() => _allowBatchStreams = value),
         onSelected: _resolveCandidate,
         error: _error,
         onRetry: _lastAttemptedRelease == null
@@ -550,6 +785,14 @@ class _SelectedReleaseSource implements ReleaseSource {
 
 enum _StreamLanguageFilter { all, sub, dub }
 
+enum _StreamQualityFilter { any, p2160, p1080, p720 }
+
+enum _StreamCodecFilter { any, h264, hevc, av1 }
+
+enum _StreamHdrFilter { any, sdr, hdr }
+
+enum _StreamSortMode { compatibility, seeders, size }
+
 class _StreamPicker extends StatelessWidget {
   const _StreamPicker({
     required this.releases,
@@ -559,6 +802,16 @@ class _StreamPicker extends StatelessWidget {
     required this.onServiceChanged,
     required this.filter,
     required this.onFilterChanged,
+    required this.qualityFilter,
+    required this.onQualityChanged,
+    required this.codecFilter,
+    required this.onCodecChanged,
+    required this.hdrFilter,
+    required this.onHdrChanged,
+    required this.sortMode,
+    required this.onSortChanged,
+    required this.allowBatchStreams,
+    required this.onBatchChanged,
     required this.onSelected,
     required this.error,
     required this.onRetry,
@@ -573,6 +826,16 @@ class _StreamPicker extends StatelessWidget {
   final ValueChanged<DebridService> onServiceChanged;
   final _StreamLanguageFilter filter;
   final ValueChanged<_StreamLanguageFilter> onFilterChanged;
+  final _StreamQualityFilter qualityFilter;
+  final ValueChanged<_StreamQualityFilter> onQualityChanged;
+  final _StreamCodecFilter codecFilter;
+  final ValueChanged<_StreamCodecFilter> onCodecChanged;
+  final _StreamHdrFilter hdrFilter;
+  final ValueChanged<_StreamHdrFilter> onHdrChanged;
+  final _StreamSortMode sortMode;
+  final ValueChanged<_StreamSortMode> onSortChanged;
+  final bool allowBatchStreams;
+  final ValueChanged<bool> onBatchChanged;
   final ValueChanged<ReleaseCandidate> onSelected;
   final String? error;
   final VoidCallback? onRetry;
@@ -650,6 +913,61 @@ class _StreamPicker extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const _FilterLabel('QUALITY'),
+              for (final value in _StreamQualityFilter.values)
+                _FilterButton(
+                  label: switch (value) {
+                    _StreamQualityFilter.any => 'ANY',
+                    _StreamQualityFilter.p2160 => '4K',
+                    _StreamQualityFilter.p1080 => '1080P',
+                    _StreamQualityFilter.p720 => '720P',
+                  },
+                  selected: qualityFilter == value,
+                  onPressed: () => onQualityChanged(value),
+                ),
+              const _FilterLabel('CODEC'),
+              for (final value in _StreamCodecFilter.values)
+                _FilterButton(
+                  label: switch (value) {
+                    _StreamCodecFilter.any => 'ANY',
+                    _StreamCodecFilter.h264 => 'H.264',
+                    _StreamCodecFilter.hevc => 'HEVC',
+                    _StreamCodecFilter.av1 => 'AV1',
+                  },
+                  selected: codecFilter == value,
+                  onPressed: () => onCodecChanged(value),
+                ),
+              const _FilterLabel('COLOR'),
+              for (final value in _StreamHdrFilter.values)
+                _FilterButton(
+                  label: value.name.toUpperCase(),
+                  selected: hdrFilter == value,
+                  onPressed: () => onHdrChanged(value),
+                ),
+              _FilterButton(
+                label: allowBatchStreams ? 'BATCHES ON' : 'BATCHES OFF',
+                selected: allowBatchStreams,
+                onPressed: () => onBatchChanged(!allowBatchStreams),
+              ),
+              const _FilterLabel('SORT'),
+              for (final value in _StreamSortMode.values)
+                _FilterButton(
+                  label: switch (value) {
+                    _StreamSortMode.compatibility => 'BEST',
+                    _StreamSortMode.seeders => 'SEEDERS',
+                    _StreamSortMode.size => 'SMALLEST',
+                  },
+                  selected: sortMode == value,
+                  onPressed: () => onSortChanged(value),
+                ),
+            ],
+          ),
           if (error case final message?) ...[
             const SizedBox(height: 14),
             Container(
@@ -694,9 +1012,7 @@ class _StreamPicker extends StatelessWidget {
             child: releases.isEmpty
                 ? Center(
                     child: Text(
-                      filter == _StreamLanguageFilter.dub
-                          ? 'No dubbed releases found for this episode.'
-                          : 'No matching releases found.',
+                      'No releases match the selected filters.',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   )
@@ -711,6 +1027,7 @@ class _StreamPicker extends StatelessWidget {
                       final release = releases[index];
                       return _ReleaseCard(
                         release: release,
+                        recommended: index == 0,
                         onPressed: () => onSelected(release),
                       );
                     },
@@ -723,10 +1040,15 @@ class _StreamPicker extends StatelessWidget {
 }
 
 class _ReleaseCard extends StatelessWidget {
-  const _ReleaseCard({required this.release, required this.onPressed});
+  const _ReleaseCard({
+    required this.release,
+    required this.onPressed,
+    required this.recommended,
+  });
 
   final ReleaseCandidate release;
   final VoidCallback onPressed;
+  final bool recommended;
 
   @override
   Widget build(BuildContext context) {
@@ -780,6 +1102,11 @@ class _ReleaseCard extends StatelessWidget {
                     spacing: 8,
                     runSpacing: 6,
                     children: [
+                      if (recommended)
+                        const _MetaPill(
+                          label: 'RECOMMENDED',
+                          color: Color(0xFF67D49B),
+                        ),
                       _MetaPill(
                         label: release.isDubbed ? 'DUB / DUAL' : 'SUB',
                         color: release.isDubbed
@@ -878,6 +1205,26 @@ class _FilterButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FilterLabel extends StatelessWidget {
+  const _FilterLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(left: 7, right: 1),
+    child: Text(
+      label,
+      style: const TextStyle(
+        color: AppColors.textMuted,
+        fontSize: 10,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1,
+      ),
+    ),
+  );
 }
 
 class _CompactAction extends StatelessWidget {

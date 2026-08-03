@@ -88,6 +88,37 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     expect(resolveCalls, 2);
   });
+
+  test(
+    'stream filters distinguish language, quality, codec, HDR and batches',
+    () {
+      const release = ReleaseCandidate(
+        infoHash: 'hash',
+        magnetUri: 'magnet:?xt=urn:btih:hash',
+        releaseName: 'Show S01 2160p HEVC HDR Dual Audio Batch',
+        seeders: 50,
+        sourceId: 'test',
+        isDubbed: true,
+        isBatch: true,
+        isHdr: true,
+        quality: '2160p',
+        codec: 'HEVC',
+      );
+
+      expect(
+        releaseMatchesStreamFilters(
+          release,
+          language: 'dub',
+          quality: 'p2160',
+          codec: 'hevc',
+          hdr: 'hdr',
+        ),
+        isTrue,
+      );
+      expect(releaseMatchesStreamFilters(release, language: 'sub'), isFalse);
+      expect(releaseMatchesStreamFilters(release, allowBatch: false), isFalse);
+    },
+  );
 }
 
 Future<void> _pumpUntilFound(WidgetTester tester, Finder finder) async {

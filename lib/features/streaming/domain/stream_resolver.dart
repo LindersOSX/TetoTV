@@ -9,6 +9,7 @@ class EpisodeReference {
     this.alternativeTitles = const [],
     this.coverImageUrl,
     this.startFromBeginning = false,
+    this.autoPlay = false,
   });
 
   final int anilistMediaId;
@@ -18,6 +19,7 @@ class EpisodeReference {
   final List<String> alternativeTitles;
   final String? coverImageUrl;
   final bool startFromBeginning;
+  final bool autoPlay;
 }
 
 class ReleaseCandidate {

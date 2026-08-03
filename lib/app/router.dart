@@ -109,6 +109,7 @@ final appRouter = GoRouter(
                 const [],
             coverImageUrl: query['cover'],
             startFromBeginning: query['restart'] == '1',
+            autoPlay: query['autoplay'] == '1',
           ),
         );
       },

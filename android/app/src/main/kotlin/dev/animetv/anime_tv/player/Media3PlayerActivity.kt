@@ -18,6 +18,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
+import android.widget.Button
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.activity.ComponentActivity
@@ -51,7 +52,13 @@ import dev.animetv.anime_tv.R
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import org.json.JSONObject
+import java.io.IOException
 
 /**
  * Full-screen native Android playback isolated from Flutter's texture pipeline.
@@ -68,7 +75,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var audioTrackButton: ImageButton
     private lateinit var captionTrackButton: ImageButton
     private lateinit var captionSizeButton: ImageButton
+    private lateinit var skipSegmentButton: Button
     private val handler = Handler(Looper.getMainLooper())
+    private val metadataClient = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
 
     private var source = ""
     private var checkpointKey = ""
@@ -100,6 +113,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var activeTrackDialog: Dialog? = null
     private var lastDpadDownAtMs = 0L
     private var consumedNavigationKeyUp: Int? = null
+    private var malMediaId = 0
+    private var episodeNumber = 0
+    private var skipFetchStarted = false
+    private var activeSkipSegment: NativeSkipSegment? = null
+    private val skipSegments = mutableListOf<NativeSkipSegment>()
+
+    private data class NativeSkipSegment(
+        val startMs: Long,
+        val endMs: Long,
+        val kind: String,
+    )
 
     private val checkpointPreferences by lazy {
         getSharedPreferences(CHECKPOINT_PREFERENCES, MODE_PRIVATE)
@@ -122,6 +146,15 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             !isDestroyed
         ) {
             playerView.hideController()
+        }
+    }
+
+    private val skipSegmentRunnable = object : Runnable {
+        override fun run() {
+            updateSkipSegmentButton()
+            if (!isFinishing && !isDestroyed && isForeground) {
+                handler.postDelayed(this, SKIP_SEGMENT_POLL_MS)
+            }
         }
     }
 
@@ -192,6 +225,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         requestedResumeMs = intent.getLongExtra(EXTRA_RESUME_MS, 0L).coerceAtLeast(0L)
         requestedResumeUpdatedAtMs =
             intent.getLongExtra(EXTRA_RESUME_UPDATED_AT_MS, 0L).coerceAtLeast(0L)
+        malMediaId = intent.getIntExtra(EXTRA_MAL_MEDIA_ID, 0).coerceAtLeast(0)
+        episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
         if (source.isBlank() || (!source.startsWith("https://") && source != SMOKE_VIDEO_URI)) {
             terminalError = "The native player requires an HTTPS debrid URL."
             finishWithResult(STATUS_ERROR)
@@ -359,6 +394,19 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerView.findViewById<ImageButton>(R.id.tetotv_caption_size).apply {
                 setOnClickListener { showSubtitleSizePicker(this) }
             }
+        skipSegmentButton =
+            playerView.findViewById<Button>(R.id.tetotv_skip_segment).apply {
+                visibility = View.GONE
+                setOnClickListener {
+                    val segment = activeSkipSegment ?: return@setOnClickListener
+                    player.seekTo(segment.endMs.coerceAtMost(safeDurationMs()))
+                    activeSkipSegment = null
+                    visibility = View.GONE
+                    playerView.showController()
+                    requestTransportFocus()
+                    armControllerAutoHide()
+                }
+            }
         updateCaptionSizeDescription()
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).setOnClickListener {
             seekRelative(-SEEK_INCREMENT_MS, it)
@@ -458,12 +506,106 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         when (playbackState) {
             Player.STATE_READY -> {
                 handler.removeCallbacks(firstFrameWatchdog)
+                fetchSkipSegmentsIfReady()
                 if (isForeground && !firstFrameRendered && hasSelectedVideoTrack()) {
                     handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
                 }
             }
             Player.STATE_ENDED -> finishWithResult(STATUS_COMPLETED)
             Player.STATE_BUFFERING, Player.STATE_IDLE -> Unit
+        }
+    }
+
+    private fun fetchSkipSegmentsIfReady() {
+        if (skipFetchStarted || malMediaId <= 0 || episodeNumber <= 0) return
+        val durationMs = safeDurationMs()
+        if (durationMs <= 0L) return
+        skipFetchStarted = true
+        val episodeLength = durationMs / 1_000.0
+        val url = buildString {
+            append("https://api.aniskip.com/v2/skip-times/")
+            append(malMediaId)
+            append('/')
+            append(episodeNumber)
+            append("?types%5B%5D=op&types%5B%5D=ed")
+            append("&types%5B%5D=mixed-op&types%5B%5D=mixed-ed")
+            append("&types%5B%5D=recap")
+            append("&episodeLength=")
+            append(episodeLength)
+        }
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", "TetoTV/1.8 AndroidTV Media3")
+            .build()
+        metadataClient.newCall(request).enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) = Unit
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!response.isSuccessful) return
+                        val payload = response.body?.string().orEmpty()
+                        val parsed = runCatching {
+                            parseSkipSegments(payload, durationMs)
+                        }.getOrDefault(emptyList())
+                        if (parsed.isEmpty()) return
+                        handler.post {
+                            if (resultSent || isFinishing || isDestroyed) return@post
+                            skipSegments.clear()
+                            skipSegments.addAll(parsed)
+                            updateSkipSegmentButton()
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    private fun parseSkipSegments(payload: String, durationMs: Long): List<NativeSkipSegment> {
+        val results = JSONObject(payload).optJSONArray("results") ?: return emptyList()
+        val episodeLengthSeconds = durationMs / 1_000.0
+        return buildList {
+            for (index in 0 until results.length()) {
+                val item = results.optJSONObject(index) ?: continue
+                val interval = item.optJSONObject("interval") ?: continue
+                val startMs = (interval.optDouble("startTime", -1.0) * 1_000).toLong()
+                val endMs = (interval.optDouble("endTime", -1.0) * 1_000).toLong()
+                val referenceLength = item.optDouble("episodeLength", episodeLengthSeconds)
+                val durationTolerance = max(15.0, episodeLengthSeconds * 0.015)
+                if (abs(referenceLength - episodeLengthSeconds) > durationTolerance) continue
+                val clampedStart = startMs.coerceIn(0L, durationMs)
+                val clampedEnd = endMs.coerceIn(0L, durationMs)
+                val length = clampedEnd - clampedStart
+                if (length !in MIN_SKIP_SEGMENT_MS..MAX_SKIP_SEGMENT_MS) continue
+                val kind = when (item.optString("skipType").lowercase()) {
+                    "op", "mixed-op", "opening", "intro" -> "opening"
+                    "ed", "mixed-ed", "ending", "outro" -> "ending"
+                    "recap" -> "recap"
+                    else -> continue
+                }
+                add(NativeSkipSegment(clampedStart, clampedEnd, kind))
+            }
+        }.sortedBy(NativeSkipSegment::startMs)
+    }
+
+    private fun updateSkipSegmentButton() {
+        if (!::skipSegmentButton.isInitialized || !::player.isInitialized) return
+        val position = safePositionMs()
+        val active = skipSegments.firstOrNull {
+            position >= it.startMs && position < it.endMs - 500L
+        }
+        if (active == activeSkipSegment) return
+        activeSkipSegment = active
+        skipSegmentButton.visibility = if (active == null) View.GONE else View.VISIBLE
+        if (active != null) {
+            skipSegmentButton.setText(
+                when (active.kind) {
+                    "ending" -> R.string.tetotv_player_skip_outro
+                    "recap" -> R.string.tetotv_player_skip_recap
+                    else -> R.string.tetotv_player_skip_intro
+                },
+            )
         }
     }
 
@@ -1048,6 +1190,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun pauseScheduledWork() {
         handler.removeCallbacks(checkpointRunnable)
+        handler.removeCallbacks(skipSegmentRunnable)
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(hideControllerRunnable)
@@ -1057,6 +1200,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         pauseScheduledWork()
         if (resultSent || !isForeground || !::player.isInitialized) return
         handler.postDelayed(checkpointRunnable, CHECKPOINT_INTERVAL_MS)
+        handler.post(skipSegmentRunnable)
+        fetchSkipSegmentsIfReady()
         if (playerView.isControllerFullyVisible) armControllerAutoHide()
         if (firstFrameRendered) return
         if (player.playbackState == Player.STATE_READY && hasSelectedVideoTrack()) {
@@ -1089,6 +1234,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(checkpointRunnable)
+        handler.removeCallbacks(skipSegmentRunnable)
         handler.removeCallbacks(hideControllerRunnable)
         persistCheckpoint()
         val duration = safeDurationMs()
@@ -1105,6 +1251,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             putExtra(RESULT_DECODER, decoderName)
             putExtra(RESULT_DROPPED_FRAMES, droppedFrames)
             putExtra(RESULT_SUBTITLE_SIZE, subtitleSize)
+            putExtra(RESULT_AUDIO_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_AUDIO))
+            putExtra(RESULT_SUBTITLE_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_TEXT))
+            putExtra(RESULT_SUBTITLES_ENABLED, hasSelectedTextTrack())
             putExtra(RESULT_SURFACE_READY, surfaceReady)
             putExtra(RESULT_MANUFACTURER, Build.MANUFACTURER)
             putExtra(RESULT_MODEL, Build.MODEL)
@@ -1135,6 +1284,25 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun playerAudioFormat() =
         if (::player.isInitialized) player.audioFormat else null
+
+    private fun hasSelectedTextTrack(): Boolean =
+        ::player.isInitialized && player.currentTracks.groups.any {
+            it.type == C.TRACK_TYPE_TEXT && it.isSelected
+        }
+
+    private fun selectedTrackLanguage(trackType: Int): String? {
+        if (!::player.isInitialized) return null
+        for (group in player.currentTracks.groups) {
+            if (group.type != trackType || !group.isSelected) continue
+            for (index in 0 until group.length) {
+                if (!group.isTrackSelected(index)) continue
+                val format = group.getTrackFormat(index)
+                return format.language?.takeIf(String::isNotBlank)
+                    ?: format.label?.takeIf(String::isNotBlank)
+            }
+        }
+        return null
+    }
 
     @Suppress("DEPRECATION")
     private fun enterImmersiveMode() {
@@ -1169,6 +1337,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_VIDEO_FIT = "videoFit"
         const val EXTRA_START_FROM_BEGINNING = "startFromBeginning"
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"
+        const val EXTRA_MAL_MEDIA_ID = "malMediaId"
+        const val EXTRA_EPISODE_NUMBER = "episodeNumber"
 
         const val RESULT_STATUS = "status"
         const val RESULT_POSITION_MS = "positionMs"
@@ -1179,6 +1349,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val RESULT_DECODER = "decoder"
         const val RESULT_DROPPED_FRAMES = "droppedFrames"
         const val RESULT_SUBTITLE_SIZE = "subtitleSize"
+        const val RESULT_AUDIO_LANGUAGE = "audioLanguage"
+        const val RESULT_SUBTITLE_LANGUAGE = "subtitleLanguage"
+        const val RESULT_SUBTITLES_ENABLED = "subtitlesEnabled"
         const val RESULT_SURFACE_READY = "surfaceReady"
         const val RESULT_MANUFACTURER = "manufacturer"
         const val RESULT_MODEL = "model"
@@ -1203,6 +1376,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
         private const val SEEK_INCREMENT_MS = 10_000L
+        private const val SKIP_SEGMENT_POLL_MS = 300L
+        private const val MIN_SKIP_SEGMENT_MS = 8_000L
+        private const val MAX_SKIP_SEGMENT_MS = 240_000L
         private const val DEFAULT_SUBTITLE_SIZE = 34f
         private val SUBTITLE_SIZE_VALUES = floatArrayOf(28f, 34f, 42f, 50f)
         private const val DISABLED_CONTROL_ALPHA = 0.38f

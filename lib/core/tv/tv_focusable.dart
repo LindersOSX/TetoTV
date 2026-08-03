@@ -1,5 +1,10 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+class _TvSecondaryActivateIntent extends Intent {
+  const _TvSecondaryActivateIntent();
+}
 
 class TvFocusable extends StatefulWidget {
   const TvFocusable({
@@ -10,6 +15,7 @@ class TvFocusable extends StatefulWidget {
     this.focusScale = 1.045,
     this.focusNode,
     this.onFocusChanged,
+    this.onLongPress,
     super.key,
   });
 
@@ -20,6 +26,7 @@ class TvFocusable extends StatefulWidget {
   final double focusScale;
   final FocusNode? focusNode;
   final ValueChanged<bool>? onFocusChanged;
+  final VoidCallback? onLongPress;
 
   @override
   State<TvFocusable> createState() => _TvFocusableState();
@@ -63,47 +70,61 @@ class _TvFocusableState extends State<TvFocusable> {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      child: FocusableActionDetector(
-        focusNode: _focusNode,
-        autofocus: widget.autofocus,
-        onFocusChange: _handleFocus,
-        onShowHoverHighlight: (hovering) {
-          if (hovering) _focusNode.requestFocus();
+      child: Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.contextMenu):
+              _TvSecondaryActivateIntent(),
         },
-        actions: <Type, Action<Intent>>{
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (_) {
-              widget.onPressed();
-              return null;
-            },
-          ),
-        },
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              _focusNode.requestFocus();
-              widget.onPressed();
-            },
-            child: AnimatedScale(
-              scale: _focused ? widget.focusScale : 1,
-              duration: const Duration(milliseconds: 80),
-              curve: Curves.easeOutCubic,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 80),
-                decoration: BoxDecoration(
-                  borderRadius: widget.borderRadius,
-                  border: Border.all(
-                    color: _focused
-                        ? AppColors.accentBright
-                        : Colors.transparent,
-                    width: 3,
-                  ),
+        child: FocusableActionDetector(
+          focusNode: _focusNode,
+          autofocus: widget.autofocus,
+          onFocusChange: _handleFocus,
+          onShowHoverHighlight: (hovering) {
+            if (hovering) _focusNode.requestFocus();
+          },
+          actions: <Type, Action<Intent>>{
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                widget.onPressed();
+                return null;
+              },
+            ),
+            _TvSecondaryActivateIntent:
+                CallbackAction<_TvSecondaryActivateIntent>(
+                  onInvoke: (_) {
+                    widget.onLongPress?.call();
+                    return null;
+                  },
                 ),
-                child: ClipRRect(
-                  borderRadius: widget.borderRadius,
-                  child: widget.child,
+          },
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                _focusNode.requestFocus();
+                widget.onPressed();
+              },
+              onLongPress: widget.onLongPress,
+              child: AnimatedScale(
+                scale: _focused ? widget.focusScale : 1,
+                duration: const Duration(milliseconds: 80),
+                curve: Curves.easeOutCubic,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 80),
+                  decoration: BoxDecoration(
+                    borderRadius: widget.borderRadius,
+                    border: Border.all(
+                      color: _focused
+                          ? AppColors.accentBright
+                          : Colors.transparent,
+                      width: 3,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: widget.borderRadius,
+                    child: widget.child,
+                  ),
                 ),
               ),
             ),

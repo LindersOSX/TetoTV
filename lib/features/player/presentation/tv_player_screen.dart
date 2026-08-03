@@ -7,6 +7,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
@@ -22,7 +23,6 @@ import 'package:anime_tv/features/streaming/data/torrentio_release_source.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
-import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -294,7 +294,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   String? _trackMessage;
   String? _playbackError;
   StreamSubscription<void>? _completedSubscription;
-  List<Map<String, dynamic>> _skips = [];
+  List<SkipSegment> _skips = const [];
+  SkipSegment? _activeSkip;
   bool _canSkipNow = false;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   bool _videoFrameSeen = false;
@@ -372,9 +373,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _decoderMode = PlaybackDecoderMode.software;
         _softwareFallbackUsed = true;
       }
-      _seriesPreferences = _seriesPreferences.copyWith(
-        subtitleEnabled: subtitlesEnabledByDefault(_currentRelease),
-      );
+      if (!_seriesPreferences.subtitlePreferenceSet) {
+        _seriesPreferences = _seriesPreferences.copyWith(
+          subtitleEnabled: subtitlesEnabledByDefault(_currentRelease),
+        );
+      }
       if (!mounted) return;
       await _openMedia(resume: resume);
       if (resume != null) {
@@ -452,7 +455,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _handleMediaAction,
     );
     unawaited(_bootstrapPlayback());
-    _fetchSkips();
+    unawaited(_loadSkipSegments());
     _scheduleControlsHide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _playControlFocus.requestFocus();
@@ -572,37 +575,69 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   void _checkSkips(Duration position) {
-    if (_skips.isEmpty) return;
-    final posSec = position.inMilliseconds / 1000.0;
-    bool canSkip = false;
-    for (final skip in _skips) {
-      final start = skip['interval']['startTime'];
-      final end = skip['interval']['endTime'];
-      if (posSec >= start && posSec < end) {
-        canSkip = true;
-        break;
-      }
-    }
+    final active = _skips.where((skip) => skip.contains(position)).firstOrNull;
+    final canSkip = active != null;
     if (_canSkipNow != canSkip) {
-      setState(() => _canSkipNow = canSkip);
+      setState(() {
+        _canSkipNow = canSkip;
+        _activeSkip = active;
+      });
       if (canSkip) _showControls();
+    } else if (!identical(_activeSkip, active)) {
+      setState(() => _activeSkip = active);
     }
   }
 
-  Future<void> _fetchSkips() async {
-    if (widget.malMediaId == null || widget.episode == null) return;
+  Future<void> _loadSkipSegments() async {
     try {
-      final res = await Dio().get(
-        'https://api.aniskip.com/v2/skip-times/${widget.malMediaId}/${widget.episode}?types=op,ed,mixed-op,mixed-ed',
-      );
-      if (res.data['found'] == true) {
-        if (mounted) {
-          setState(() {
-            _skips = List<Map<String, dynamic>>.from(res.data['results']);
-          });
-        }
+      var duration = _player.state.duration;
+      if (duration <= Duration.zero) {
+        duration = await _player.stream.duration
+            .firstWhere((value) => value > Duration.zero)
+            .timeout(const Duration(seconds: 15));
       }
-    } catch (_) {}
+      final embedded = await _embeddedChapterSkips(duration);
+      final external = widget.malMediaId == null || widget.episode == null
+          ? const <SkipSegment>[]
+          : await AniSkipClient().segments(
+              malMediaId: widget.malMediaId!,
+              episode: widget.episode!,
+              episodeDuration: duration,
+            );
+      if (!mounted) return;
+      setState(() => _skips = mergeSkipSegments(embedded, external));
+      _checkSkips(_player.state.position);
+    } catch (_) {
+      // Chapter and community skip data are optional playback enhancements.
+    }
+  }
+
+  Future<List<SkipSegment>> _embeddedChapterSkips(Duration duration) async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return const [];
+    try {
+      final count = int.tryParse(
+        await platform.getProperty('chapter-list/count'),
+      );
+      if (count == null || count <= 0 || count > 100) return const [];
+      final chapters = <MediaChapter>[];
+      for (var index = 0; index < count; index++) {
+        final title = await platform.getProperty('chapter-list/$index/title');
+        final seconds = double.tryParse(
+          await platform.getProperty('chapter-list/$index/time'),
+        );
+        if (seconds == null || seconds < 0) continue;
+        chapters.add(
+          MediaChapter(
+            title: title,
+            start: Duration(milliseconds: (seconds * 1000).round()),
+          ),
+        );
+      }
+      return skipSegmentsFromChapters(chapters, duration);
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<void> _playNextEpisode() async {
@@ -621,6 +656,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         'title': details.title,
         'synonyms': details.synonyms.join('|'),
         'episode': nextEp.toString(),
+        'autoplay': '1',
         if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
         if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
       };
@@ -923,6 +959,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
           _videoFrameSeen = false;
           await _openMedia(resume: position);
+          unawaited(_loadSkipSegments());
           if (mounted) setState(() => _playbackError = null);
           _showTrackMessage('Switched to a compatible stream');
           return;
@@ -983,11 +1020,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (mediaId == null) return;
     final audio = _player.state.track.audio;
     final subtitle = _player.state.track.subtitle;
-    _seriesPreferences = SeriesPlaybackPreferences(
+    _seriesPreferences = _seriesPreferences.copyWith(
       audioLanguage: audio.language ?? _seriesPreferences.audioLanguage,
       subtitleLanguage:
           subtitle.language ?? _seriesPreferences.subtitleLanguage,
       subtitleEnabled: subtitle.id != 'no',
+      subtitlePreferenceSet: true,
       subtitleSize: _subtitleSize,
       subtitlePosition: _subtitlePosition,
       subtitleDelayMs: _subtitleDelayMs,
@@ -1012,21 +1050,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Future<void> _saveDecoderPreference() async {
     final mediaId = widget.anilistMediaId;
     if (mediaId == null) return;
-    _seriesPreferences = SeriesPlaybackPreferences(
-      audioLanguage: _seriesPreferences.audioLanguage,
-      subtitleLanguage: _seriesPreferences.subtitleLanguage,
-      subtitleEnabled: _seriesPreferences.subtitleEnabled,
-      subtitleSize: _seriesPreferences.subtitleSize,
-      subtitlePosition: _seriesPreferences.subtitlePosition,
-      subtitleDelayMs: _seriesPreferences.subtitleDelayMs,
-      audioDelayMs: _seriesPreferences.audioDelayMs,
+    _seriesPreferences = _seriesPreferences.copyWith(
       decoder: switch (_decoderMode) {
         PlaybackDecoderMode.hardwareDirect => 'hardware-direct',
         PlaybackDecoderMode.software => 'software',
         _ => 'hardware-safe',
       },
-      videoFit: _seriesPreferences.videoFit,
-      highContrastSubtitles: _seriesPreferences.highContrastSubtitles,
     );
     await ref
         .read(tetoTvDatabaseProvider)
@@ -1499,18 +1528,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   void _skipCurrentSegment() {
-    final posSec = _player.state.position.inMilliseconds / 1000.0;
-    for (final skip in _skips) {
-      final interval = skip['interval'];
-      if (interval is! Map) continue;
-      final start = interval['startTime'];
-      final end = interval['endTime'];
-      if (start is num && end is num && posSec >= start && posSec < end) {
-        _player.seek(Duration(milliseconds: (end * 1000).toInt()));
-        _showTrackMessage('Skipped intro/credits');
-        return;
-      }
-    }
+    final segment = _activeSkip;
+    if (segment == null) return;
+    _player.seek(segment.end);
+    _showTrackMessage(segment.actionLabel.replaceFirst('Skip', 'Skipped'));
   }
 
   Future<void> _openSubtitleTrackPicker() async {
@@ -1685,6 +1706,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     onPlayPause: _player.playOrPause,
                     onForward: () => _seekBy(const Duration(seconds: 10)),
                     canSkip: _canSkipNow,
+                    skipLabel: _activeSkip?.actionLabel,
                     onSkip: _skipCurrentSegment,
                     onAudio: _openAudioTrackPicker,
                     onSubtitles: _openSubtitleTrackPicker,
@@ -1785,6 +1807,7 @@ class _PlayerChrome extends StatelessWidget {
     required this.onPlayPause,
     required this.onForward,
     required this.canSkip,
+    required this.skipLabel,
     required this.onSkip,
     required this.onAudio,
     required this.onSubtitles,
@@ -1802,6 +1825,7 @@ class _PlayerChrome extends StatelessWidget {
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
   final bool canSkip;
+  final String? skipLabel;
   final VoidCallback onSkip;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
@@ -1898,7 +1922,7 @@ class _PlayerChrome extends StatelessWidget {
                       const SizedBox(width: 8),
                       _PlayerControl(
                         icon: Icons.skip_next_rounded,
-                        label: 'Skip intro',
+                        label: skipLabel ?? 'Skip',
                         primary: true,
                         onPressed: onSkip,
                       ),

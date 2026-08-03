@@ -70,6 +70,7 @@ class SeriesPlaybackPreferences {
     this.audioLanguage = 'eng',
     this.subtitleLanguage = 'eng',
     this.subtitleEnabled = true,
+    this.subtitlePreferenceSet = false,
     this.subtitleSize = 34,
     this.subtitlePosition = 100,
     this.subtitleDelayMs = 0,
@@ -77,11 +78,20 @@ class SeriesPlaybackPreferences {
     this.decoder = 'hardware-safe',
     this.videoFit = 'contain',
     this.highContrastSubtitles = false,
+    this.autoplayNextEpisode = true,
+    this.preferredStreamLanguage = 'dub',
+    this.preferredQuality = 'any',
+    this.preferredCodec = 'any',
+    this.preferredHdrMode = 'any',
+    this.allowBatchStreams = true,
+    this.streamSortMode = 'compatibility',
+    this.preferredReleaseProvider,
   });
 
   final String audioLanguage;
   final String subtitleLanguage;
   final bool subtitleEnabled;
+  final bool subtitlePreferenceSet;
   final double subtitleSize;
   final int subtitlePosition;
   final int subtitleDelayMs;
@@ -89,11 +99,20 @@ class SeriesPlaybackPreferences {
   final String decoder;
   final String videoFit;
   final bool highContrastSubtitles;
+  final bool autoplayNextEpisode;
+  final String preferredStreamLanguage;
+  final String preferredQuality;
+  final String preferredCodec;
+  final String preferredHdrMode;
+  final bool allowBatchStreams;
+  final String streamSortMode;
+  final String? preferredReleaseProvider;
 
   SeriesPlaybackPreferences copyWith({
     String? audioLanguage,
     String? subtitleLanguage,
     bool? subtitleEnabled,
+    bool? subtitlePreferenceSet,
     double? subtitleSize,
     int? subtitlePosition,
     int? subtitleDelayMs,
@@ -101,10 +120,20 @@ class SeriesPlaybackPreferences {
     String? decoder,
     String? videoFit,
     bool? highContrastSubtitles,
+    bool? autoplayNextEpisode,
+    String? preferredStreamLanguage,
+    String? preferredQuality,
+    String? preferredCodec,
+    String? preferredHdrMode,
+    bool? allowBatchStreams,
+    String? streamSortMode,
+    String? preferredReleaseProvider,
+    bool clearPreferredReleaseProvider = false,
   }) => SeriesPlaybackPreferences(
     audioLanguage: audioLanguage ?? this.audioLanguage,
     subtitleLanguage: subtitleLanguage ?? this.subtitleLanguage,
     subtitleEnabled: subtitleEnabled ?? this.subtitleEnabled,
+    subtitlePreferenceSet: subtitlePreferenceSet ?? this.subtitlePreferenceSet,
     subtitleSize: subtitleSize ?? this.subtitleSize,
     subtitlePosition: subtitlePosition ?? this.subtitlePosition,
     subtitleDelayMs: subtitleDelayMs ?? this.subtitleDelayMs,
@@ -112,12 +141,24 @@ class SeriesPlaybackPreferences {
     decoder: decoder ?? this.decoder,
     videoFit: videoFit ?? this.videoFit,
     highContrastSubtitles: highContrastSubtitles ?? this.highContrastSubtitles,
+    autoplayNextEpisode: autoplayNextEpisode ?? this.autoplayNextEpisode,
+    preferredStreamLanguage:
+        preferredStreamLanguage ?? this.preferredStreamLanguage,
+    preferredQuality: preferredQuality ?? this.preferredQuality,
+    preferredCodec: preferredCodec ?? this.preferredCodec,
+    preferredHdrMode: preferredHdrMode ?? this.preferredHdrMode,
+    allowBatchStreams: allowBatchStreams ?? this.allowBatchStreams,
+    streamSortMode: streamSortMode ?? this.streamSortMode,
+    preferredReleaseProvider: clearPreferredReleaseProvider
+        ? null
+        : preferredReleaseProvider ?? this.preferredReleaseProvider,
   );
 
   Map<String, Object?> toJson() => {
     'audioLanguage': audioLanguage,
     'subtitleLanguage': subtitleLanguage,
     'subtitleEnabled': subtitleEnabled,
+    'subtitlePreferenceSet': subtitlePreferenceSet,
     'subtitleSize': subtitleSize,
     'subtitlePosition': subtitlePosition,
     'subtitleDelayMs': subtitleDelayMs,
@@ -125,6 +166,14 @@ class SeriesPlaybackPreferences {
     'decoder': decoder,
     'videoFit': videoFit,
     'highContrastSubtitles': highContrastSubtitles,
+    'autoplayNextEpisode': autoplayNextEpisode,
+    'preferredStreamLanguage': preferredStreamLanguage,
+    'preferredQuality': preferredQuality,
+    'preferredCodec': preferredCodec,
+    'preferredHdrMode': preferredHdrMode,
+    'allowBatchStreams': allowBatchStreams,
+    'streamSortMode': streamSortMode,
+    'preferredReleaseProvider': preferredReleaseProvider,
   };
 
   factory SeriesPlaybackPreferences.fromJson(Map<String, dynamic> json) =>
@@ -132,6 +181,7 @@ class SeriesPlaybackPreferences {
         audioLanguage: json['audioLanguage'] as String? ?? 'eng',
         subtitleLanguage: json['subtitleLanguage'] as String? ?? 'eng',
         subtitleEnabled: json['subtitleEnabled'] as bool? ?? true,
+        subtitlePreferenceSet: json['subtitlePreferenceSet'] as bool? ?? false,
         subtitleSize: (json['subtitleSize'] as num?)?.toDouble() ?? 34,
         subtitlePosition: json['subtitlePosition'] as int? ?? 100,
         subtitleDelayMs: json['subtitleDelayMs'] as int? ?? 0,
@@ -139,6 +189,15 @@ class SeriesPlaybackPreferences {
         decoder: json['decoder'] as String? ?? 'hardware-safe',
         videoFit: json['videoFit'] as String? ?? 'contain',
         highContrastSubtitles: json['highContrastSubtitles'] as bool? ?? false,
+        autoplayNextEpisode: json['autoplayNextEpisode'] as bool? ?? true,
+        preferredStreamLanguage:
+            json['preferredStreamLanguage'] as String? ?? 'dub',
+        preferredQuality: json['preferredQuality'] as String? ?? 'any',
+        preferredCodec: json['preferredCodec'] as String? ?? 'any',
+        preferredHdrMode: json['preferredHdrMode'] as String? ?? 'any',
+        allowBatchStreams: json['allowBatchStreams'] as bool? ?? true,
+        streamSortMode: json['streamSortMode'] as String? ?? 'compatibility',
+        preferredReleaseProvider: json['preferredReleaseProvider'] as String?,
       );
 }
 

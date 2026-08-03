@@ -8,9 +8,12 @@ import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   testWidgets('a stale search cannot replace the latest results', (
     tester,
   ) async {
@@ -61,6 +64,36 @@ void main() {
 
     expect(find.text('No matches found'), findsOneWidget);
     expect(find.text('Find your next show'), findsNothing);
+  });
+
+  testWidgets('voice search submits the recognized anime title', (
+    tester,
+  ) async {
+    final client = _DeferredCatalogClient();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('dev.tetotv/android_tv'),
+          (call) async => call.method == 'voiceSearch' ? 'Cowboy Bebop' : null,
+        );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('dev.tetotv/android_tv'),
+            null,
+          ),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(client)],
+        child: const MaterialApp(home: SearchScreen()),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.mic_rounded));
+    await tester.pump();
+
+    expect(client.requests, contains('Cowboy Bebop'));
+    expect(find.text('Results for “Cowboy Bebop”'), findsOneWidget);
   });
 }
 

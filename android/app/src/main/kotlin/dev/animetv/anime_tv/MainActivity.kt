@@ -5,6 +5,7 @@ import android.content.ContentUris
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
@@ -16,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognizerIntent
 import android.view.WindowManager
 import androidx.core.content.edit
 import androidx.core.content.FileProvider
@@ -39,6 +41,7 @@ class MainActivity : FlutterActivity() {
     private var pendingNativePlayerResult: MethodChannel.Result? = null
     private var pendingApkInstallResult: MethodChannel.Result? = null
     private var pendingApkPath: String? = null
+    private var pendingVoiceSearchResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +58,7 @@ class MainActivity : FlutterActivity() {
                     "getDeviceProfile" -> result.success(deviceProfile())
                     "getAppVersion" -> result.success(appVersion())
                     "installApk" -> installApk(call.argument<String>("path"), result)
+                    "voiceSearch" -> startVoiceSearch(result)
                     "startNativePlayer" -> {
                         @Suppress("UNCHECKED_CAST")
                         startNativePlayer(call.arguments as? Map<String, Any?> ?: emptyMap(), result)
@@ -164,6 +168,14 @@ class MainActivity : FlutterActivity() {
             )
             putExtra(Media3PlayerActivity.EXTRA_VIDEO_FIT, data["videoFit"] as? String)
             putExtra(
+                Media3PlayerActivity.EXTRA_MAL_MEDIA_ID,
+                (data["malMediaId"] as? Number)?.toInt() ?: 0,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_EPISODE_NUMBER,
+                (data["episodeNumber"] as? Number)?.toInt() ?: 0,
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,
                 data["startFromBeginning"] as? Boolean ?: false,
             )
@@ -182,6 +194,18 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == VOICE_SEARCH_REQUEST_CODE) {
+            val pending = pendingVoiceSearchResult
+            pendingVoiceSearchResult = null
+            if (pending == null) return
+            if (resultCode != RESULT_OK) {
+                pending.success(null)
+                return
+            }
+            val matches = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            pending.success(matches?.firstOrNull()?.trim()?.takeIf(String::isNotBlank))
+            return
+        }
         if (requestCode == APK_INSTALL_PERMISSION_REQUEST_CODE) {
             val pending = pendingApkInstallResult
             val path = pendingApkPath
@@ -247,6 +271,15 @@ class MainActivity : FlutterActivity() {
                         data.getIntExtra(Media3PlayerActivity.RESULT_DROPPED_FRAMES, 0),
                     Media3PlayerActivity.RESULT_SUBTITLE_SIZE to
                         data.getFloatExtra(Media3PlayerActivity.RESULT_SUBTITLE_SIZE, 34f),
+                    Media3PlayerActivity.RESULT_AUDIO_LANGUAGE to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_LANGUAGE),
+                    Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE to
+                        data.getStringExtra(Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE),
+                    Media3PlayerActivity.RESULT_SUBTITLES_ENABLED to
+                        data.getBooleanExtra(
+                            Media3PlayerActivity.RESULT_SUBTITLES_ENABLED,
+                            false,
+                        ),
                     Media3PlayerActivity.RESULT_SURFACE_READY to
                         data.getBooleanExtra(Media3PlayerActivity.RESULT_SURFACE_READY, false),
                     Media3PlayerActivity.RESULT_MANUFACTURER to
@@ -283,6 +316,36 @@ class MainActivity : FlutterActivity() {
             return
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startVoiceSearch(result: MethodChannel.Result) {
+        if (pendingVoiceSearchResult != null) {
+            result.error("VOICE_SEARCH_BUSY", "Voice search is already open.", null)
+            return
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Search anime")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        pendingVoiceSearchResult = result
+        try {
+            startActivityForResult(intent, VOICE_SEARCH_REQUEST_CODE)
+        } catch (_: ActivityNotFoundException) {
+            pendingVoiceSearchResult = null
+            result.error(
+                "VOICE_SEARCH_UNAVAILABLE",
+                "This TV does not have a speech recognition service installed.",
+                null,
+            )
+        } catch (error: Throwable) {
+            pendingVoiceSearchResult = null
+            result.error("VOICE_SEARCH", error.message, null)
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -606,5 +669,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val NATIVE_PLAYER_REQUEST_CODE = 7314
         private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
+        private const val VOICE_SEARCH_REQUEST_CODE = 7316
     }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -93,6 +94,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
   }
 
+  Future<void> _voiceSearch() async {
+    final query = await AndroidTvBridge.instance.voiceSearch();
+    if (!mounted) return;
+    if (query == null || query.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Voice search is unavailable or no title was recognized.',
+          ),
+          backgroundColor: AppColors.panelRaised,
+        ),
+      );
+      return;
+    }
+    _queryController.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
+    _submitSearch(query);
+  }
+
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
@@ -132,6 +154,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     autofocus: true,
                     onChanged: _queueSearch,
                     onSubmitted: _submitSearch,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                TvFocusable(
+                  onPressed: () => unawaited(_voiceSearch()),
+                  borderRadius: BorderRadius.circular(12),
+                  focusScale: 1.03,
+                  child: Container(
+                    width: 52,
+                    height: 52,
+                    alignment: Alignment.center,
+                    color: AppColors.panel,
+                    child: const Icon(
+                      Icons.mic_rounded,
+                      color: AppColors.accentBright,
+                      size: 25,
+                    ),
                   ),
                 ),
               ],

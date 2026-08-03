@@ -177,6 +177,9 @@ class NativePlaybackResult {
     this.decoder,
     this.error,
     this.subtitleSize,
+    this.audioLanguage,
+    this.subtitleLanguage,
+    this.subtitlesEnabled,
     this.diagnostics = const {},
   });
 
@@ -189,6 +192,9 @@ class NativePlaybackResult {
   final String? decoder;
   final String? error;
   final double? subtitleSize;
+  final String? audioLanguage;
+  final String? subtitleLanguage;
+  final bool? subtitlesEnabled;
   final Map<String, Object?> diagnostics;
 
   bool get failed => status == 'error' || status == 'no_first_frame';
@@ -208,6 +214,9 @@ class NativePlaybackResult {
         decoder: value['decoder'] as String?,
         error: value['error'] as String?,
         subtitleSize: (value['subtitleSize'] as num?)?.toDouble(),
+        audioLanguage: value['audioLanguage'] as String?,
+        subtitleLanguage: value['subtitleLanguage'] as String?,
+        subtitlesEnabled: value['subtitlesEnabled'] as bool?,
         diagnostics: {
           for (final key in const [
             'surfaceReady',
@@ -303,6 +312,17 @@ class AndroidTvBridge {
         'launched';
   }
 
+  Future<String?> voiceSearch() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+    try {
+      final result = await _channel.invokeMethod<String>('voiceSearch');
+      final query = result?.trim() ?? '';
+      return query.isEmpty ? null : query;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   Future<void> setPreferredFrameRate(double fps) async {
     if (fps <= 0 || defaultTargetPlatform != TargetPlatform.android) return;
     try {
@@ -343,6 +363,8 @@ class AndroidTvBridge {
     int subtitlePosition = 100,
     bool highContrastSubtitles = false,
     String videoFit = 'contain',
+    int? malMediaId,
+    int? episodeNumber,
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return const NativePlaybackResult(
@@ -374,6 +396,8 @@ class AndroidTvBridge {
             'subtitlePosition': subtitlePosition,
             'highContrastSubtitles': highContrastSubtitles,
             'videoFit': videoFit,
+            'malMediaId': ?malMediaId,
+            'episodeNumber': ?episodeNumber,
           });
       return value == null
           ? const NativePlaybackResult(

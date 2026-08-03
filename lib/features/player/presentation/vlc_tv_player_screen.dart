@@ -7,6 +7,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
@@ -17,7 +18,6 @@ import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -123,6 +123,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Timer? _trackDiscoveryTimer;
   bool _engineInitialized = false;
   bool _canSkip = false;
+  SkipSegment? _activeSkip;
   String? _trackMessage;
   String? _playbackError;
   Duration? _pendingResume;
@@ -131,7 +132,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   late String _source;
   late ReleaseCandidate _release;
   int _alternativeIndex = 0;
-  List<Map<String, dynamic>> _skips = const [];
+  List<SkipSegment> _skips = const [];
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   VlcDecoderMode _decoderMode = VlcDecoderMode.hardwareCopy;
   double _playbackRate = 1;
@@ -150,7 +151,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       _handleMediaAction,
     );
     unawaited(_bootstrap());
-    unawaited(_fetchSkips());
     _scheduleControlsHide();
   }
 
@@ -172,9 +172,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         }
       }
     }
-    _preferences = _preferences.copyWith(
-      subtitleEnabled: subtitlesEnabledByDefault(_release),
-    );
+    if (!_preferences.subtitlePreferenceSet) {
+      _preferences = _preferences.copyWith(
+        subtitleEnabled: subtitlesEnabledByDefault(_release),
+      );
+    }
     if (_releaseRequiresSoftware(_release)) {
       _decoderMode = VlcDecoderMode.software;
     }
@@ -296,6 +298,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       _showMessage('Resumed at ${_formatDuration(resume)}');
     }
     _persistenceReady = true;
+    unawaited(_loadSkipSegments());
     _scheduleVideoWatchdog(controller);
     if (mounted) {
       setState(() {
@@ -570,53 +573,48 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
-  Future<void> _fetchSkips() async {
+  Future<void> _loadSkipSegments() async {
     if (widget.malMediaId == null || widget.episode == null) return;
     try {
-      final response = await Dio().get(
-        'https://api.aniskip.com/v2/skip-times/'
-        '${widget.malMediaId}/${widget.episode}'
-        '?types=op,ed,mixed-op,mixed-ed',
-      );
-      if (response.data['found'] == true && mounted) {
-        setState(
-          () => _skips = List<Map<String, dynamic>>.from(
-            response.data['results'],
-          ),
-        );
+      var duration = _controller?.value.duration ?? Duration.zero;
+      for (
+        var attempt = 0;
+        duration <= Duration.zero && attempt < 30;
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        duration = _controller?.value.duration ?? Duration.zero;
       }
+      if (duration <= Duration.zero) return;
+      final segments = await AniSkipClient().segments(
+        malMediaId: widget.malMediaId!,
+        episode: widget.episode!,
+        episodeDuration: duration,
+      );
+      if (mounted) setState(() => _skips = segments);
+      _checkSkips(_controller?.value.position ?? Duration.zero);
     } catch (_) {
       // Skip data is optional.
     }
   }
 
   void _checkSkips(Duration position) {
-    final seconds = position.inMilliseconds / 1000;
-    final available = _skips.any((skip) {
-      final interval = skip['interval'];
-      if (interval is! Map) return false;
-      final start = interval['startTime'];
-      final end = interval['endTime'];
-      return start is num && end is num && seconds >= start && seconds < end;
-    });
-    if (available != _canSkip && mounted) setState(() => _canSkip = available);
+    final active = _skips.where((skip) => skip.contains(position)).firstOrNull;
+    final available = active != null;
+    if (mounted && (available != _canSkip || !identical(active, _activeSkip))) {
+      setState(() {
+        _canSkip = available;
+        _activeSkip = active;
+      });
+    }
   }
 
   Future<void> _skipCurrentSegment() async {
     final controller = _controller;
-    if (controller == null) return;
-    final seconds = controller.value.position.inMilliseconds / 1000;
-    for (final skip in _skips) {
-      final interval = skip['interval'];
-      if (interval is! Map) continue;
-      final start = interval['startTime'];
-      final end = interval['endTime'];
-      if (start is num && end is num && seconds >= start && seconds < end) {
-        await controller.seekTo(Duration(milliseconds: (end * 1000).round()));
-        _showMessage('Skipped intro/credits');
-        return;
-      }
-    }
+    final segment = _activeSkip;
+    if (controller == null || segment == null) return;
+    await controller.seekTo(segment.end);
+    _showMessage(segment.actionLabel.replaceFirst('Skip', 'Skipped'));
   }
 
   Future<void> _openAudioTrackPicker() async {
@@ -726,7 +724,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }) async {
     final mediaId = widget.anilistMediaId;
     if (mediaId == null) return;
-    _preferences = SeriesPlaybackPreferences(
+    _preferences = _preferences.copyWith(
       audioLanguage: audioLabel == null
           ? _preferences.audioLanguage
           : canonicalPlayerLanguage(audioLabel),
@@ -734,13 +732,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           ? _preferences.subtitleLanguage
           : canonicalPlayerLanguage(subtitleLabel),
       subtitleEnabled: subtitleEnabled ?? _preferences.subtitleEnabled,
+      subtitlePreferenceSet: subtitleEnabled == null
+          ? _preferences.subtitlePreferenceSet
+          : true,
       subtitleSize: _subtitleSize,
       subtitlePosition: _preferences.subtitlePosition,
       subtitleDelayMs: _subtitleDelayMs,
       audioDelayMs: _audioDelayMs,
-      decoder: _preferences.decoder,
-      videoFit: _preferences.videoFit,
-      highContrastSubtitles: _preferences.highContrastSubtitles,
     );
     await ref
         .read(tetoTvDatabaseProvider)
@@ -871,6 +869,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             'title': details.title,
             'synonyms': details.synonyms.join('|'),
             'episode': nextEpisode.toString(),
+            'autoplay': '1',
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
             if (widget.malMediaId != null)
               'malId': widget.malMediaId.toString(),
@@ -1146,6 +1145,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     service: widget.debridService,
                     playFocusNode: _playFocus,
                     canSkip: _canSkip,
+                    skipLabel: _activeSkip?.actionLabel,
                     mode: _decoderMode,
                     onRewind: () =>
                         unawaited(_seekBy(const Duration(seconds: -10))),
@@ -1216,6 +1216,7 @@ class _VlcPlayerChrome extends StatelessWidget {
     required this.service,
     required this.playFocusNode,
     required this.canSkip,
+    required this.skipLabel,
     required this.mode,
     required this.onRewind,
     required this.onPlayPause,
@@ -1232,6 +1233,7 @@ class _VlcPlayerChrome extends StatelessWidget {
   final DebridService service;
   final FocusNode playFocusNode;
   final bool canSkip;
+  final String? skipLabel;
   final VlcDecoderMode mode;
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
@@ -1331,7 +1333,7 @@ class _VlcPlayerChrome extends StatelessWidget {
                       const SizedBox(width: 8),
                       _VlcControl(
                         icon: Icons.skip_next_rounded,
-                        label: 'Skip intro',
+                        label: skipLabel ?? 'Skip',
                         primary: true,
                         onPressed: onSkip,
                       ),

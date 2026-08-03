@@ -21,6 +21,16 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
   TrackingListStatus _status = TrackingListStatus.watching;
   bool _updating = false;
 
+  void _open(HomeTrackedAnime item) {
+    final route = item.anilistId == null
+        ? Uri(
+            path: '/search',
+            queryParameters: {'q': item.tracked.title},
+          ).toString()
+        : '/anime/${item.anilistId}';
+    context.push(route);
+  }
+
   Future<void> _manage(
     HomeTrackedAnime item,
     TitleLanguagePreference titlePreference,
@@ -33,13 +43,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         titlePreference: titlePreference,
         onOpen: () {
           Navigator.of(dialogContext).pop();
-          final route = item.anilistId == null
-              ? Uri(
-                  path: '/search',
-                  queryParameters: {'q': item.tracked.title},
-                ).toString()
-              : '/anime/${item.anilistId}';
-          context.push(route);
+          _open(item);
         },
       ),
     );
@@ -128,7 +132,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                           : _TrackedShelf(
                               items: items,
                               titlePreference: titlePreference,
-                              onPressed: (item) =>
+                              onPressed: _open,
+                              onManage: (item) =>
                                   _manage(item, titlePreference),
                             ),
                     ),
@@ -150,7 +155,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
             const Padding(
               padding: EdgeInsets.only(bottom: 18),
               child: Text(
-                'Select a title to view episodes or change its tracker status.',
+                'Select to view episodes. Hold OK or press Menu for quick '
+                'watchlist actions.',
                 style: TextStyle(color: AppColors.textMuted, fontSize: 12),
               ),
             ),
@@ -303,11 +309,13 @@ class _TrackedShelf extends StatelessWidget {
     required this.items,
     required this.titlePreference,
     required this.onPressed,
+    required this.onManage,
   });
 
   final List<HomeTrackedAnime> items;
   final TitleLanguagePreference titlePreference;
   final ValueChanged<HomeTrackedAnime> onPressed;
+  final ValueChanged<HomeTrackedAnime> onManage;
 
   @override
   Widget build(BuildContext context) {
@@ -327,6 +335,7 @@ class _TrackedShelf extends StatelessWidget {
             child: TvFocusable(
               autofocus: index == 0,
               onPressed: () => onPressed(item),
+              onLongPress: () => onManage(item),
               focusScale: 1.025,
               borderRadius: BorderRadius.circular(8),
               child: ColoredBox(
