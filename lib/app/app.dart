@@ -2,6 +2,7 @@ import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,6 +18,7 @@ class TetoTvApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final preferences = ref.watch(settingsPreferencesProvider);
+    ref.watch(trackingOutboxFlushProvider);
     return MaterialApp.router(
       title: 'TetoTV',
       debugShowCheckedModeBanner: false,

@@ -704,15 +704,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   Future<void> _syncProgress() async {
     try {
-      await ref
+      final synced = await ref
           .read(trackingSyncServiceProvider)
           .syncEpisode(
             completedEpisodes: widget.episode!,
             anilistMediaId: widget.anilistMediaId,
             malMediaId: widget.malMediaId,
           );
-      ref.invalidate(trackingHomeProvider);
-      _showTrackMessage('Episode progress saved');
+      if (synced) {
+        ref.invalidate(trackingHomeProvider);
+        _showTrackMessage('Episode progress saved');
+      } else {
+        _showTrackMessage('Progress will retry when the tracker reconnects');
+      }
     } catch (_) {
       _showTrackMessage('Progress will retry when the tracker reconnects');
     }
@@ -890,6 +894,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         position: position,
         duration: duration,
       );
+    } else if (completed) {
+      await AndroidTvBridge.instance.removeWatchNext(mediaId);
     }
   }
 
@@ -906,6 +912,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       position: _player.state.position,
       duration: _player.state.duration,
       playing: _player.state.playing,
+      seekBackSeconds: _seekBackSeconds,
+      seekForwardSeconds: _seekForwardSeconds,
     );
   }
 
@@ -1718,6 +1726,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   void dispose() {
     unawaited(_persistPlayback(_player.state.position, force: true));
     unawaited(_saveSeriesPreferences());
+    unawaited(AndroidTvBridge.instance.clearMediaSession());
     unawaited(AndroidTvBridge.instance.clearPreferredFrameRate());
     _controlsTimer?.cancel();
     _videoWatchdog?.cancel();

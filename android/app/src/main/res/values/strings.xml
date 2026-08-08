@@ -14,7 +14,8 @@
     <string name="tetotv_player_closed_captions">Select closed captions</string>
     <string name="tetotv_player_closed_captions_off">Closed captions off. Select captions</string>
     <string name="tetotv_player_closed_captions_on">Closed captions on. Select captions</string>
-    <string name="tetotv_player_fast_forward">Fast forward 10 seconds</string>
+    <string name="tetotv_player_fast_forward">Fast forward</string>
+    <string name="tetotv_player_fast_forward_seconds">Fast forward %1$d seconds</string>
     <string name="tetotv_player_skip_intro">Skip intro</string>
     <string name="tetotv_player_skip_outro">Skip outro</string>
     <string name="tetotv_player_skip_recap">Skip recap</string>
@@ -23,7 +24,8 @@
     <string name="tetotv_player_no_caption_tracks">No closed-caption tracks are available</string>
     <string name="tetotv_player_track_picker_error">Track selection could not be opened</string>
     <string name="tetotv_player_play_pause">Play or pause</string>
-    <string name="tetotv_player_rewind">Rewind 10 seconds</string>
+    <string name="tetotv_player_rewind">Rewind</string>
+    <string name="tetotv_player_rewind_seconds">Rewind %1$d seconds</string>
     <string name="tetotv_player_select_audio">Audio tracks</string>
     <string name="tetotv_player_select_captions">Closed captions</string>
     <string name="tetotv_player_show_more_controls">Show more controls</string>

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -50,10 +53,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _focusHero();
-      ref
-          .read(appUpdateControllerProvider.notifier)
-          .checkForUpdates(automatic: true, launchInstaller: true);
+      unawaited(
+        ref
+            .read(appUpdateControllerProvider.notifier)
+            .checkForUpdates(automatic: true, launchInstaller: true),
+      );
     });
   }
 
@@ -90,7 +96,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await ref.read(tetoTvDatabaseProvider).removeLocalHistory(mediaId);
+    final database = ref.read(tetoTvDatabaseProvider);
+    try {
+      await database.removeLocalHistory(mediaId);
+      await AndroidTvBridge.instance.removeWatchNext(mediaId);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not remove local watch history.')),
+      );
+      return;
+    }
+    if (!mounted) return;
     ref.invalidate(recentPlaybackProvider);
     ref.invalidate(latestPlaybackProvider(mediaId));
     ref.invalidate(dismissedContinueWatchingProvider);
@@ -108,7 +125,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ref.listen(trendingAnimeProvider, (_, next) {
       if (!_catalogFocusSettled && next.valueOrNull?.isNotEmpty == true) {
         _catalogFocusSettled = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) => _focusHero());
+        // The hero keeps the same focus node while its artwork loads. Do not
+        // steal focus or jump to the top after the user has started navigating.
+        if (_heroFocus.hasFocus || FocusManager.instance.primaryFocus == null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_heroFocus.hasFocus ||
+                FocusManager.instance.primaryFocus == null) {
+              _focusHero();
+            }
+          });
+        }
       }
     });
 

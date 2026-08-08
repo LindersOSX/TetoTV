@@ -24,6 +24,7 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
   bool _polling = false;
   bool _authorized = false;
   String? _error;
+  int _generation = 0;
 
   @override
   void initState() {
@@ -32,6 +33,8 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
   }
 
   Future<void> _start() async {
+    if (!mounted) return;
+    final generation = ++_generation;
     _pollTimer?.cancel();
     setState(() {
       _session = null;
@@ -40,17 +43,25 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
     });
     try {
       final session = await _client.start();
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() => _session = session);
-      _pollTimer = Timer.periodic(session.interval, (_) => _poll());
+      _pollTimer = Timer.periodic(session.interval, (_) => _poll(generation));
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted && generation == _generation) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 
-  Future<void> _poll() async {
+  Future<void> _poll(int generation) async {
     final session = _session;
-    if (_polling || session == null || _authorized || !mounted) return;
+    if (_polling ||
+        session == null ||
+        _authorized ||
+        !mounted ||
+        generation != _generation) {
+      return;
+    }
     if (DateTime.now().isAfter(session.expiresAt)) {
       _pollTimer?.cancel();
       setState(() => _error = 'The TorBox authorization code expired.');
@@ -59,11 +70,11 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
     _polling = true;
     try {
       final token = await _client.poll(session);
-      if (token == null || !mounted) return;
+      if (token == null || !mounted || generation != _generation) return;
       final saved = await ref
           .read(torBoxSettingsControllerProvider.notifier)
           .saveAndValidate(token);
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       if (!saved) {
         throw StateError(
           ref.read(torBoxSettingsControllerProvider).errorMessage ??
@@ -73,8 +84,9 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
       _pollTimer?.cancel();
       setState(() => _authorized = true);
     } catch (error) {
+      if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
-      if (mounted) setState(() => _error = error.toString());
+      setState(() => _error = error.toString());
     } finally {
       _polling = false;
     }
@@ -82,6 +94,7 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
 
   @override
   void dispose() {
+    _generation++;
     _pollTimer?.cancel();
     super.dispose();
   }

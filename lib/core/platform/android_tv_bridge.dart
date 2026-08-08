@@ -425,6 +425,8 @@ class AndroidTvBridge {
     required Duration position,
     required Duration duration,
     required bool playing,
+    int seekBackSeconds = 10,
+    int seekForwardSeconds = 10,
   }) async {
     if (defaultTargetPlatform != TargetPlatform.android) return;
     try {
@@ -434,9 +436,31 @@ class AndroidTvBridge {
         'positionMs': position.inMilliseconds,
         'durationMs': duration.inMilliseconds,
         'playing': playing,
+        'seekBackMs': seekBackSeconds * 1000,
+        'seekForwardMs': seekForwardSeconds * 1000,
       });
     } on PlatformException {
       // Playback must continue even when a vendor MediaSession is unavailable.
+    }
+  }
+
+  Future<void> clearMediaSession() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('clearMediaSession');
+    } on PlatformException {
+      // System media controls are optional on some vendor TV builds.
+    }
+  }
+
+  Future<void> removeWatchNext(int mediaId) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('removeWatchNext', {
+        'mediaId': mediaId,
+      });
+    } on PlatformException {
+      // Watch Next is optional and absent on Fire TV and some operator boxes.
     }
   }
 

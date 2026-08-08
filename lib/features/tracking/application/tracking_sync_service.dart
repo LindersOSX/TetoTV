@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
@@ -35,13 +36,14 @@ class TrackingSyncService {
 
   final FlutterSecureStorage _storage;
   final TokenLookup _tokenLookup;
+  Future<void> _operationTail = Future<void>.value();
 
-  Future<void> syncEpisode({
+  Future<bool> syncEpisode({
     required int completedEpisodes,
     int? anilistMediaId,
     int? malMediaId,
-  }) async {
-    await flush();
+  }) => _serialize(() async {
+    await _flushUnlocked();
     final pending = <_PendingProgress>[];
     if (anilistMediaId != null) {
       pending.add(
@@ -61,19 +63,39 @@ class TrackingSyncService {
         ),
       );
     }
-    await _syncAll(pending, preserveExistingOutbox: true);
-  }
+    if (pending.isEmpty) return false;
+    return _syncAll(pending, preserveExistingOutbox: true);
+  });
 
-  Future<void> flush() async {
+  Future<void> flush() => _serialize(_flushUnlocked);
+
+  Future<void> _flushUnlocked() async {
     final pending = await _readOutbox();
     if (pending.isEmpty) return;
     await _syncAll(pending, preserveExistingOutbox: false);
   }
 
-  Future<void> _syncAll(
+  /// Serializes outbox reads and writes so simultaneous player callbacks do
+  /// not overwrite newer progress with an older snapshot.
+  Future<T> _serialize<T>(Future<T> Function() operation) {
+    final previous = _operationTail;
+    final release = Completer<void>();
+    _operationTail = release.future;
+    return () async {
+      await previous;
+      try {
+        return await operation();
+      } finally {
+        release.complete();
+      }
+    }();
+  }
+
+  Future<bool> _syncAll(
     List<_PendingProgress> pending, {
     required bool preserveExistingOutbox,
   }) async {
+    var allSucceeded = true;
     final retry = preserveExistingOutbox
         ? await _readOutbox()
         : <_PendingProgress>[];
@@ -81,6 +103,7 @@ class TrackingSyncService {
       try {
         final token = await _tokenLookup(item.provider);
         if (token == null || token.isEmpty) {
+          allSucceeded = false;
           retry.add(item);
           continue;
         }
@@ -90,10 +113,12 @@ class TrackingSyncService {
           completedEpisodes: item.completedEpisodes,
         );
       } catch (_) {
+        allSucceeded = false;
         retry.add(item);
       }
     }
     await _writeOutbox(_deduplicate(retry));
+    return allSucceeded;
   }
 
   /// Creates a [TrackingRepository] for the given [provider] and [token].
@@ -117,6 +142,9 @@ class TrackingSyncService {
           .map(_PendingProgress.fromJson)
           .toList();
     } catch (_) {
+      // A corrupted outbox can never be retried successfully. Clear it so
+      // every future launch does not repeatedly parse the same bad payload.
+      await _storage.delete(key: _trackingOutboxKey);
       return [];
     }
   }

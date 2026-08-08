@@ -32,19 +32,20 @@ class AiringReminderReceiver : BroadcastReceiver() {
             context,
             MainActivity::class.java,
         )
+        val notificationId = ((mediaId * 31 + episode) and 0x7fffffff).toInt()
         val pending = PendingIntent.getActivity(
             context,
-            mediaId.toInt(),
+            notificationId,
             open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.tetotv_ic_notification)
             .setContentTitle("$title is airing soon")
             .setContentText("Episode $episode starts in about 10 minutes.")
             .setContentIntent(pending)
             .setAutoCancel(true)
             .build()
-        manager.notify((mediaId * 31 + episode).toInt(), notification)
+        manager.notify(notificationId, notification)
     }
 }

@@ -190,8 +190,10 @@ keytool -genkeypair -v `
 ```
 
 Copy `android\key.properties.example` to `android\key.properties`, replace all
-values, and keep both files named by the properties outside source control.
-Then build one APK per ABI:
+values, and keep the real properties and keystore outside source control. Back
+up both files securely before installing the first distributed build. The
+release task intentionally fails without them, and Android cannot update an
+installed app signed by a different key. Then build one APK per ABI:
 
 ```powershell
 flutter build apk --release --split-per-abi
@@ -213,5 +215,4 @@ the same low version code: Flutter adds ABI-specific offsets to split version
 codes, so Android can reject a later universal build as a downgrade.
 
 The current Flutter toolchain has a minimum SDK of API 24. It supports Fire OS
-6 and newer, but not Fire OS 5 devices (API 22). Do not publish the template's
-debug-signed release build.
+6 and newer, but not Fire OS 5 devices (API 22).

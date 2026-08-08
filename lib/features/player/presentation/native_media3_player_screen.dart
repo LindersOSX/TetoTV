@@ -84,14 +84,17 @@ class _NativeMedia3PlayerScreenState
     _source = widget.source;
     _release = widget.launch.selectedRelease;
     _startFromBeginning = widget.launch.episode.startFromBeginning;
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_run()));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_run());
+    });
   }
 
   Future<void> _run() async {
-    if (_running) return;
+    if (_running || !mounted) return;
     _running = true;
     try {
       await _loadResumeAndPreferences();
+      if (!mounted) return;
       final appearance = ref.read(settingsPreferencesProvider);
       // Media3 intentionally owns the fast hardware-decoding path. Preserve
       // the user's compatibility choice and send known Hi10P or delay-tuned
@@ -100,7 +103,7 @@ class _NativeMedia3PlayerScreenState
           releaseRequiresSoftwareDecoder(_release) ||
           _preferences.subtitleDelayMs != 0 ||
           _preferences.audioDelayMs != 0) {
-        widget.onUseMpv(_source, _release);
+        if (mounted) widget.onUseMpv(_source, _release);
         return;
       }
       while (mounted) {
@@ -159,15 +162,15 @@ class _NativeMedia3PlayerScreenState
             if (await _switchToCompatibleStream('Requested by the player')) {
               continue;
             }
-            widget.onUseMpv(_source, _release);
+            if (mounted) widget.onUseMpv(_source, _release);
             return;
           case 'use_vlc':
           case 'fallback_vlc':
-            widget.onUseVlc(_source, _release);
+            if (mounted) widget.onUseVlc(_source, _release);
             return;
           case 'use_mpv':
           case 'fallback_mpv':
-            widget.onUseMpv(_source, _release);
+            if (mounted) widget.onUseMpv(_source, _release);
             return;
           case 'error':
           case 'no_first_frame':
@@ -180,10 +183,10 @@ class _NativeMedia3PlayerScreenState
             }
             // MPV keeps libass and unusual-codec support as the second engine.
             // VLC remains available manually from MPV or on a future retry.
-            widget.onUseMpv(_source, _release);
+            if (mounted) widget.onUseMpv(_source, _release);
             return;
           case 'unsupported':
-            widget.onUseMpv(_source, _release);
+            if (mounted) widget.onUseMpv(_source, _release);
             return;
           case 'exit':
           case 'cancelled':
@@ -204,10 +207,12 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _loadResumeAndPreferences() async {
+    if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
     _preferences = await database.seriesPreferences(_mediaId);
-    if (_startFromBeginning) return;
+    if (!mounted || _startFromBeginning) return;
     final checkpoint = await database.checkpoint(_mediaId, _episodeNumber);
+    if (!mounted) return;
     if (checkpoint != null) {
       // Even a completed or intentionally reset checkpoint is authoritative:
       // its timestamp acts as a zero-position tombstone so an older native
@@ -223,6 +228,8 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _persistResult(NativePlaybackResult result) async {
+    if (!mounted) return;
+    final database = ref.read(tetoTvDatabaseProvider);
     final normalizedSize = result.subtitleSize?.clamp(18, 60).toDouble();
     final audioLanguage = result.audioLanguage == null
         ? null
@@ -251,9 +258,7 @@ class _NativeMedia3PlayerScreenState
     if (nextPreferences.toJson().toString() !=
         _preferences.toJson().toString()) {
       _preferences = nextPreferences;
-      await ref
-          .read(tetoTvDatabaseProvider)
-          .saveSeriesPreferences(_mediaId, _preferences);
+      await database.saveSeriesPreferences(_mediaId, _preferences);
     }
     if (result.duration <= Duration.zero) {
       return;
@@ -267,21 +272,23 @@ class _NativeMedia3PlayerScreenState
     final completed =
         result.completed ||
         position.inMilliseconds / duration.inMilliseconds >= .93;
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveCheckpoint(
-          PlaybackCheckpoint(
-            anilistMediaId: _mediaId,
-            malMediaId: _malMediaId,
-            episode: _episodeNumber,
-            title: widget.launch.episode.title,
-            coverImageUrl: widget.coverImageUrl,
-            position: completed ? duration : position,
-            duration: duration,
-            updatedAt: DateTime.now(),
-            completed: completed,
-          ),
-        );
+    await database.saveCheckpoint(
+      PlaybackCheckpoint(
+        anilistMediaId: _mediaId,
+        malMediaId: _malMediaId,
+        episode: _episodeNumber,
+        title: widget.launch.episode.title,
+        coverImageUrl: widget.coverImageUrl,
+        position: completed ? duration : position,
+        duration: duration,
+        updatedAt: DateTime.now(),
+        completed: completed,
+      ),
+    );
+    if (completed) {
+      await AndroidTvBridge.instance.removeWatchNext(_mediaId);
+    }
+    if (!mounted) return;
     ref.invalidate(recentPlaybackProvider);
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
@@ -298,6 +305,9 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _recordFailure(NativePlaybackResult result) async {
     try {
+      if (!mounted) return;
+      final database = ref.read(tetoTvDatabaseProvider);
+      final infoHash = _release.infoHash;
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
       final details = <String>[
         result.error ?? 'Native playback failed',
@@ -307,13 +317,11 @@ class _NativeMedia3PlayerScreenState
         for (final entry in result.diagnostics.entries)
           '${entry.key}=${entry.value}',
       ].join('; ');
-      await ref
-          .read(tetoTvDatabaseProvider)
-          .recordStreamFailure(
-            deviceKey: profile.key,
-            infoHash: _release.infoHash,
-            reason: details,
-          );
+      await database.recordStreamFailure(
+        deviceKey: profile.key,
+        infoHash: infoHash,
+        reason: details,
+      );
     } catch (_) {
       // Failure history improves future ranking but must never block fallback.
     }
@@ -333,6 +341,7 @@ class _NativeMedia3PlayerScreenState
         });
       }
       final ready = await _resolveRelease(candidate);
+      if (!mounted) return false;
       if (ready == null) continue;
       _source = ready.uri.toString();
       _release = candidate;
@@ -343,12 +352,15 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
-    final token = await ref
-        .read(debridTokenServiceProvider)
-        .accessToken(widget.debridService);
+    if (!mounted) return null;
+    final tokenService = ref.read(debridTokenServiceProvider);
+    final debridService = widget.debridService;
+    final episode = widget.launch.episode;
+    final token = await tokenService.accessToken(debridService);
+    if (!mounted) return null;
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
-    final resolver = switch (widget.debridService) {
+    final resolver = switch (debridService) {
       DebridService.realDebrid => RealDebridStreamResolver(
         RealDebridClient(token: token),
         source,
@@ -358,24 +370,27 @@ class _NativeMedia3PlayerScreenState
         source,
       ),
     };
-    await for (final resolution in resolver.resolve(widget.launch.episode)) {
+    await for (final resolution in resolver.resolve(episode)) {
+      if (!mounted) return null;
       if (resolution is StreamReady) return resolution;
     }
     return null;
   }
 
   Future<void> _syncProgress() async {
-    if (_syncHandled) return;
+    if (_syncHandled || !mounted) return;
     _syncHandled = true;
+    final syncService = ref.read(trackingSyncServiceProvider);
+    final completedEpisodes = _episodeNumber;
+    final anilistMediaId = _mediaId;
+    final malMediaId = _malMediaId;
     try {
-      await ref
-          .read(trackingSyncServiceProvider)
-          .syncEpisode(
-            completedEpisodes: _episodeNumber,
-            anilistMediaId: _mediaId,
-            malMediaId: _malMediaId,
-          );
-      ref.invalidate(trackingHomeProvider);
+      await syncService.syncEpisode(
+        completedEpisodes: completedEpisodes,
+        anilistMediaId: anilistMediaId,
+        malMediaId: malMediaId,
+      );
+      if (mounted) ref.invalidate(trackingHomeProvider);
     } catch (_) {
       // The tracking service queues/retries independently of video playback.
     }
@@ -398,7 +413,9 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _playNextEpisode() async {
     try {
-      final details = await ref.read(catalogClientProvider).details(_mediaId);
+      if (!mounted) return;
+      final catalog = ref.read(catalogClientProvider);
+      final details = await catalog.details(_mediaId);
       final nextEpisode = _episodeNumber + 1;
       if (details.episodes != null && nextEpisode > details.episodes!) {
         if (mounted && context.canPop()) context.pop();

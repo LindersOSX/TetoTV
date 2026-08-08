@@ -557,6 +557,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         position: position,
         duration: duration,
       );
+    } else if (completed) {
+      await AndroidTvBridge.instance.removeWatchNext(mediaId);
     }
   }
 
@@ -575,6 +577,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       position: controller.value.position,
       duration: controller.value.duration,
       playing: controller.value.isPlaying,
+      seekBackSeconds: _seekBackSeconds,
+      seekForwardSeconds: _seekForwardSeconds,
     );
   }
 
@@ -859,15 +863,19 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Future<void> _syncProgress() async {
     if (widget.episode == null) return;
     try {
-      await ref
+      final synced = await ref
           .read(trackingSyncServiceProvider)
           .syncEpisode(
             completedEpisodes: widget.episode!,
             anilistMediaId: widget.anilistMediaId,
             malMediaId: widget.malMediaId,
           );
-      ref.invalidate(trackingHomeProvider);
-      _showMessage('Episode progress saved');
+      if (synced) {
+        ref.invalidate(trackingHomeProvider);
+        _showMessage('Episode progress saved');
+      } else {
+        _showMessage('Progress will sync when the tracker reconnects');
+      }
     } catch (_) {
       _showMessage('Progress will sync when the tracker reconnects');
     }
@@ -1136,6 +1144,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         unawaited(controller.dispose());
       }
     }
+    unawaited(AndroidTvBridge.instance.clearMediaSession());
     unawaited(AndroidTvBridge.instance.clearPreferredFrameRate());
     _mediaActionSubscription?.cancel();
     _controlsTimer?.cancel();

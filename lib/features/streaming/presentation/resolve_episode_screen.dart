@@ -6,7 +6,6 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
-import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
@@ -239,13 +238,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _initialize() async {
-    final storage = ref.read(secureStorageProvider);
+    final tokenService = ref.read(debridTokenServiceProvider);
     final preferredDebrid = ref
         .read(settingsPreferencesProvider)
         .debridProvider;
     final tokensAndProfile = await Future.wait<Object?>([
-      storage.read(key: DebridService.realDebrid.tokenStorageKey),
-      storage.read(key: DebridService.torBox.tokenStorageKey),
+      _usableToken(tokenService, DebridService.realDebrid),
+      _usableToken(tokenService, DebridService.torBox),
       AndroidTvBridge.instance.getDeviceProfile(),
       TetoTvDatabase.instance
           .seriesPreferences(widget.episode.anilistMediaId)
@@ -308,6 +307,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _allowBatchStreams = preferences.allowBatchStreams;
     });
     await _loadConfiguredReleases();
+  }
+
+  Future<String?> _usableToken(
+    DebridTokenService tokenService,
+    DebridService service,
+  ) async {
+    try {
+      return await tokenService.accessToken(service);
+    } catch (_) {
+      // Expired or unrefreshable credentials are not a connected service.
+      // Resolution will remain available as soon as the user reconnects.
+      return null;
+    }
   }
 
   Future<void> _loadConfiguredReleases() async {

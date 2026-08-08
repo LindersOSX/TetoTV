@@ -47,7 +47,13 @@ class TorBoxClient {
         }),
       ),
     );
-    return _asInt(_dataMap(body)['torrent_id']);
+    final torrentId = _asInt(_dataMap(body)['torrent_id']);
+    if (torrentId <= 0) {
+      throw const TorBoxException(
+        'TorBox returned an invalid torrent ID. Try another stream.',
+      );
+    }
+    return torrentId;
   }
 
   Future<TorBoxTorrent> torrentInfo(

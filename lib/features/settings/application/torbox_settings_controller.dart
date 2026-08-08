@@ -71,6 +71,7 @@ class TorBoxSettingsController extends StateNotifier<TorBoxSettingsState> {
   }
 
   Future<bool> _validate(String token, {required bool persist}) async {
+    final hadSavedToken = state.hasSavedToken;
     try {
       final account = await _clientFactory(token).account();
       if (!account.hasApiStreaming) {
@@ -88,7 +89,7 @@ class TorBoxSettingsController extends StateNotifier<TorBoxSettingsState> {
       return true;
     } catch (error) {
       state = TorBoxSettingsState(
-        hasSavedToken: !persist,
+        hasSavedToken: hadSavedToken,
         errorMessage: error.toString(),
       );
       return false;

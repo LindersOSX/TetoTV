@@ -20,8 +20,22 @@ final appUpdateControllerProvider =
       final bridge = AndroidTvBridge.instance;
       final controller = AppUpdateController(
         ref.watch(secureStorageProvider),
-        GitHubAppReleaseSource(Dio()),
-        () async => (await bridge.getAppVersion()).name,
+        GitHubAppReleaseSource(
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 30),
+              sendTimeout: const Duration(seconds: 15),
+            ),
+          ),
+        ),
+        () async {
+          final version = await bridge.getAppVersion();
+          if (version.code <= 0 || version.name.contains('+')) {
+            return version.name;
+          }
+          return '${version.name}+${version.code}';
+        },
         () async => (await bridge.getDeviceProfile()).abis,
         getTemporaryDirectory,
         bridge.installApk,
@@ -238,23 +252,49 @@ AppReleaseAsset selectApkAsset(
 }
 
 String normalizeAppVersion(String value) {
-  final match = RegExp(r'\d+(?:\.\d+){0,3}').firstMatch(value);
+  final match = RegExp(
+    r'\d+(?:\.\d+){0,3}(?:\+[0-9A-Za-z.-]+)?',
+  ).firstMatch(value);
   return match?.group(0) ?? value.trim().replaceFirst(RegExp(r'^[vV]'), '');
 }
 
 int compareAppVersions(String left, String right) {
-  List<int> parts(String value) => normalizeAppVersion(
-    value,
-  ).split('.').map((item) => int.tryParse(item) ?? 0).toList();
+  ({List<int> core, List<int> build}) parts(String value) {
+    final normalized = normalizeAppVersion(value);
+    final split = normalized.split('+');
+    final core = split.first
+        .split('.')
+        .map((item) => int.tryParse(item) ?? 0)
+        .toList(growable: false);
+    final build = split.length < 2
+        ? const <int>[]
+        : split[1]
+              .split(RegExp(r'[^0-9]+'))
+              .where((item) => item.isNotEmpty)
+              .map((item) => int.tryParse(item) ?? 0)
+              .toList(growable: false);
+    return (core: core, build: build);
+  }
+
+  int compareParts(List<int> a, List<int> b) {
+    final length = a.length > b.length ? a.length : b.length;
+    for (var index = 0; index < length; index++) {
+      final leftPart = index < a.length ? a[index] : 0;
+      final rightPart = index < b.length ? b[index] : 0;
+      if (leftPart != rightPart) return leftPart.compareTo(rightPart);
+    }
+    return 0;
+  }
+
   final a = parts(left);
   final b = parts(right);
-  final length = a.length > b.length ? a.length : b.length;
-  for (var index = 0; index < length; index++) {
-    final leftPart = index < a.length ? a[index] : 0;
-    final rightPart = index < b.length ? b[index] : 0;
-    if (leftPart != rightPart) return leftPart.compareTo(rightPart);
-  }
-  return 0;
+  final coreResult = compareParts(a.core, b.core);
+  if (coreResult != 0) return coreResult;
+
+  // TetoTV tags may append the Android versionCode as SemVer build metadata.
+  // SemVer normally ignores this suffix for precedence, but the updater must
+  // distinguish two APK builds that share the same user-facing version name.
+  return compareParts(a.build, b.build);
 }
 
 typedef CurrentVersionLoader = Future<String> Function();
@@ -287,9 +327,20 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
 
   String _token = '';
   bool _loaded = false;
+  Future<void>? _loadRequest;
 
-  Future<void> load() async {
-    if (_loaded) return;
+  Future<void> load() {
+    if (_loaded) return Future.value();
+    final active = _loadRequest;
+    if (active != null) return active;
+    final request = _performLoad();
+    _loadRequest = request;
+    return request.whenComplete(() {
+      if (identical(_loadRequest, request)) _loadRequest = null;
+    });
+  }
+
+  Future<void> _performLoad() async {
     final values = await Future.wait([
       _storage.read(key: githubUpdateTokenStorageKey),
       _storage.read(key: automaticUpdatesStorageKey),
@@ -307,6 +358,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
     }
     _loaded = true;
+    if (!mounted) return;
     state = state.copyWith(
       currentVersion: values[2] ?? 'unknown',
       hasAccessToken: _token.isNotEmpty,
@@ -364,9 +416,9 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         key: lastAutomaticUpdateCheckStorageKey,
       );
       final lastCheck = DateTime.tryParse(saved ?? '');
-      if (lastCheck != null &&
-          DateTime.now().difference(lastCheck) < automaticCheckInterval) {
-        return;
+      if (lastCheck != null) {
+        final elapsed = DateTime.now().toUtc().difference(lastCheck.toUtc());
+        if (!elapsed.isNegative && elapsed < automaticCheckInterval) return;
       }
     }
     if (_token.isEmpty) {
@@ -387,10 +439,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         token: _token,
         deviceAbis: await _deviceAbisLoader(),
       );
-      await _storage.write(
-        key: lastAutomaticUpdateCheckStorageKey,
-        value: DateTime.now().toUtc().toIso8601String(),
-      );
       if (compareAppVersions(release.version, state.currentVersion) <= 0) {
         state = state.copyWith(
           phase: AppUpdatePhase.upToDate,
@@ -399,6 +447,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
           downloadedPath: null,
           message: 'TetoTV ${state.currentVersion} is up to date.',
         );
+        await _recordSuccessfulAutomaticCheck(automatic);
         return;
       }
       state = state.copyWith(
@@ -409,6 +458,9 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         message: 'TetoTV ${release.version} is available.',
       );
       await downloadUpdate(release: release, launchInstaller: launchInstaller);
+      if (state.phase == AppUpdatePhase.ready) {
+        await _recordSuccessfulAutomaticCheck(automatic);
+      }
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       state = state.copyWith(
@@ -422,6 +474,19 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         phase: AppUpdatePhase.error,
         message: 'Update check failed: $error',
       );
+    }
+  }
+
+  Future<void> _recordSuccessfulAutomaticCheck(bool automatic) async {
+    if (!automatic) return;
+    try {
+      await _storage.write(
+        key: lastAutomaticUpdateCheckStorageKey,
+        value: DateTime.now().toUtc().toIso8601String(),
+      );
+    } catch (_) {
+      // A failed bookkeeping write must not turn a valid update check into an
+      // error. The next launch may simply check GitHub again.
     }
   }
 

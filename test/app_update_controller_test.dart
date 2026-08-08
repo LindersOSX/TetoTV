@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
@@ -13,6 +14,35 @@ void main() {
     expect(compareAppVersions('1.10.0', '1.9.9'), greaterThan(0));
     expect(compareAppVersions('v1.7.3', '1.7.3'), 0);
     expect(compareAppVersions('1.7.2', '1.7.3'), lessThan(0));
+    expect(compareAppVersions('v1.9.0+34901', '1.9.0+34900'), greaterThan(0));
+    expect(compareAppVersions('1.9.0+34900', 'v1.9.0'), greaterThan(0));
+    expect(normalizeAppVersion('TetoTV v1.9.0+34901'), '1.9.0+34901');
+  });
+
+  test('coalesces concurrent secure-storage loads', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final version = Completer<String>();
+    var versionLoads = 0;
+    final controller = AppUpdateController(
+      storage,
+      _FakeReleaseSource(),
+      () {
+        versionLoads++;
+        return version.future;
+      },
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+    );
+
+    final first = controller.load();
+    final second = controller.load();
+    await Future<void>.delayed(Duration.zero);
+    expect(versionLoads, 1);
+
+    version.complete('1.9.0+34900');
+    await Future.wait([first, second]);
+    expect(controller.state.currentVersion, '1.9.0+34900');
   });
 
   test('selects the APK matching the TV ABI and falls back to universal', () {
@@ -125,17 +155,95 @@ void main() {
       );
     },
   );
+
+  test('failed automatic downloads remain eligible for retry', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      githubUpdateTokenStorageKey: 'read-only-token',
+    });
+    final directory = await Directory.systemTemp.createTemp('tetotv-retry-');
+    addTearDown(() => directory.delete(recursive: true));
+    final source = _FakeReleaseSource(throwOnDownload: true);
+    final controller = AppUpdateController(
+      storage,
+      source,
+      () async => '1.7.2+100',
+      () async => const ['arm64-v8a'],
+      () async => directory,
+      (_) async => 'launched',
+    );
+
+    await controller.checkForUpdates(automatic: true);
+    await controller.checkForUpdates(automatic: true);
+
+    expect(source.latestCalls, 2);
+    expect(controller.state.phase, AppUpdatePhase.error);
+    expect(await storage.read(key: lastAutomaticUpdateCheckStorageKey), isNull);
+  });
+
+  test('successful automatic checks respect the retry interval', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      githubUpdateTokenStorageKey: 'read-only-token',
+    });
+    final source = _FakeReleaseSource();
+    final controller = AppUpdateController(
+      storage,
+      source,
+      () async => '1.7.3',
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+    );
+
+    await controller.checkForUpdates(automatic: true);
+    await controller.checkForUpdates(automatic: true);
+
+    expect(source.latestCalls, 1);
+    expect(controller.state.phase, AppUpdatePhase.upToDate);
+    expect(
+      await storage.read(key: lastAutomaticUpdateCheckStorageKey),
+      isNotNull,
+    );
+  });
+
+  test('future automatic-check timestamps do not suppress retries', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      githubUpdateTokenStorageKey: 'read-only-token',
+      lastAutomaticUpdateCheckStorageKey: DateTime.now()
+          .toUtc()
+          .add(const Duration(days: 1))
+          .toIso8601String(),
+    });
+    final source = _FakeReleaseSource();
+    final controller = AppUpdateController(
+      storage,
+      source,
+      () async => '1.7.3',
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+    );
+
+    await controller.checkForUpdates(automatic: true);
+
+    expect(source.latestCalls, 1);
+    expect(controller.state.phase, AppUpdatePhase.upToDate);
+  });
 }
 
 class _FakeReleaseSource implements AppReleaseSource {
+  _FakeReleaseSource({this.throwOnDownload = false});
+
+  final bool throwOnDownload;
   String? requestedToken;
   List<String>? requestedAbis;
+  int latestCalls = 0;
 
   @override
   Future<AppReleaseInfo> latest({
     required String token,
     required List<String> deviceAbis,
   }) async {
+    latestCalls++;
     requestedToken = token;
     requestedAbis = deviceAbis;
     return const AppReleaseInfo(
@@ -157,6 +265,7 @@ class _FakeReleaseSource implements AppReleaseSource {
     required String destination,
     required void Function(int received, int total) onProgress,
   }) async {
+    if (throwOnDownload) throw StateError('simulated download failure');
     final bytes = List<int>.filled(release.asset.size, 7);
     await File(destination).writeAsBytes(bytes, flush: true);
     onProgress(bytes.length, bytes.length);

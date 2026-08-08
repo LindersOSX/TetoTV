@@ -33,25 +33,41 @@ class TrackingAccountsState {
 }
 
 class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
-  TrackingAccountsController(this._ref, this._tokenService)
-    : super(const TrackingAccountsState());
+  TrackingAccountsController(this._ref, this._tokenService, {Dio? dio})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 12),
+              receiveTimeout: const Duration(seconds: 20),
+            ),
+          ),
+      super(const TrackingAccountsState());
 
   final Ref _ref;
   final TrackingTokenService _tokenService;
+  final Dio _dio;
+  int _loadGeneration = 0;
 
   Future<void> load() async {
-    state = TrackingAccountsState(isLoading: true, usernames: state.usernames);
+    final generation = ++_loadGeneration;
+    state = TrackingAccountsState(
+      isLoading: true,
+      usernames: state.usernames,
+      errors: state.errors,
+    );
     final usernames = <TrackingProvider, String>{};
     final errors = <TrackingProvider, String>{};
     for (final provider in TrackingProvider.values) {
-      final token = await _tokenService.accessToken(provider);
-      if (token == null || token.isEmpty) continue;
       try {
+        final token = await _tokenService.accessToken(provider);
+        if (token == null || token.isEmpty) continue;
         usernames[provider] = await _username(provider, token);
       } catch (error) {
         errors[provider] = error.toString();
       }
     }
+    if (!mounted || generation != _loadGeneration) return;
     state = TrackingAccountsState(usernames: usernames, errors: errors);
   }
 
@@ -75,7 +91,7 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
   }
 
   Future<String> _anilistUsername(String token) async {
-    final response = await Dio().post<Map<String, dynamic>>(
+    final response = await _dio.post<Map<String, dynamic>>(
       'https://graphql.anilist.co',
       data: const {'query': 'query { Viewer { name } }'},
       options: Options(
@@ -93,7 +109,7 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
   }
 
   Future<String> _malUsername(String token) async {
-    final response = await Dio().get<Map<String, dynamic>>(
+    final response = await _dio.get<Map<String, dynamic>>(
       'https://api.myanimelist.net/v2/users/@me',
       options: Options(
         headers: {

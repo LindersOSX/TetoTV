@@ -26,6 +26,7 @@ class _RealDebridPairingScreenState
   String? _error;
   bool _authorized = false;
   bool _polling = false;
+  int _generation = 0;
 
   @override
   void initState() {
@@ -34,6 +35,8 @@ class _RealDebridPairingScreenState
   }
 
   Future<void> _start() async {
+    if (!mounted) return;
+    final generation = ++_generation;
     _pollTimer?.cancel();
     setState(() {
       _session = null;
@@ -42,15 +45,18 @@ class _RealDebridPairingScreenState
     });
     try {
       final session = await _client.startDeviceAuthorization();
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() => _session = session);
-      _pollTimer = Timer.periodic(session.interval, (_) => _poll());
+      _pollTimer = Timer.periodic(session.interval, (_) => _poll(generation));
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted && generation == _generation) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 
-  Future<void> _poll() async {
+  Future<void> _poll(int generation) async {
+    if (!mounted || generation != _generation) return;
     final session = _session;
     if (_polling || session == null || _authorized) return;
     if (DateTime.now().isAfter(session.expiresAt)) {
@@ -62,10 +68,29 @@ class _RealDebridPairingScreenState
     try {
       final credentials = await _client.pollCredentials(session);
       if (credentials == null) return;
+      if (!mounted || generation != _generation) return;
       final tokens = await _client.exchangeDeviceCode(
         session: session,
         credentials: credentials,
       );
+      if (!mounted || generation != _generation) return;
+      final settingsController = ref.read(
+        realDebridSettingsControllerProvider.notifier,
+      );
+      final valid = await settingsController.saveAndValidate(
+        tokens.accessToken,
+      );
+      if (!mounted || generation != _generation) return;
+      if (!valid) {
+        final message = ref
+            .read(realDebridSettingsControllerProvider)
+            .errorMessage;
+        throw StateError(message ?? 'Real-Debrid account validation failed.');
+      }
+
+      // Validation persists the access token. Add device-flow metadata only
+      // after Premium access is confirmed so unusable credentials are never
+      // treated as a connected streaming account.
       final storage = ref.read(secureStorageProvider);
       await Future.wait([
         storage.write(
@@ -89,12 +114,13 @@ class _RealDebridPairingScreenState
           value: tokens.expiresAt.toUtc().toIso8601String(),
         ),
       ]);
-      await ref.read(realDebridSettingsControllerProvider.notifier).load();
+      if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
-      if (mounted) setState(() => _authorized = true);
+      setState(() => _authorized = true);
     } catch (error) {
+      if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
-      if (mounted) setState(() => _error = error.toString());
+      setState(() => _error = error.toString());
     } finally {
       _polling = false;
     }
@@ -102,6 +128,7 @@ class _RealDebridPairingScreenState
 
   @override
   void dispose() {
+    _generation++;
     _pollTimer?.cancel();
     super.dispose();
   }

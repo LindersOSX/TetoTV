@@ -49,6 +49,7 @@ class _FakeStorage extends Fake implements FlutterSecureStorage {
 class _FakeRepo implements TrackingRepository {
   final List<({int mediaId, int episodes})> updates = [];
   bool shouldFail = false;
+  Duration updateDelay = Duration.zero;
 
   @override
   Future<List<TrackedAnime>> list(TrackingListStatus status) async => const [];
@@ -61,6 +62,7 @@ class _FakeRepo implements TrackingRepository {
     required int mediaId,
     required int completedEpisodes,
   }) async {
+    if (updateDelay > Duration.zero) await Future<void>.delayed(updateDelay);
     if (shouldFail) throw Exception('network error');
     updates.add((mediaId: mediaId, episodes: completedEpisodes));
   }
@@ -143,12 +145,13 @@ void main() {
 
   group('syncEpisode', () {
     test('syncs to both trackers when both IDs are supplied', () async {
-      await buildService().syncEpisode(
+      final synced = await buildService().syncEpisode(
         completedEpisodes: 5,
         anilistMediaId: 101,
         malMediaId: 202,
       );
 
+      expect(synced, isTrue);
       expect(anilistRepo.updates, hasLength(1));
       expect(anilistRepo.updates.first.mediaId, 101);
       expect(anilistRepo.updates.first.episodes, 5);
@@ -158,13 +161,14 @@ void main() {
     });
 
     test('skips tracker when its token is absent', () async {
-      await buildService(
+      final synced = await buildService(
         tokens: {
           TrackingProvider.anilist: null,
           TrackingProvider.myAnimeList: 'mal-tok',
         },
       ).syncEpisode(completedEpisodes: 3, anilistMediaId: 101, malMediaId: 202);
 
+      expect(synced, isFalse);
       expect(anilistRepo.updates, isEmpty);
       expect(malRepo.updates, hasLength(1));
       expect(_readOutbox(storage), hasLength(1));
@@ -179,15 +183,20 @@ void main() {
         malRepo: malRepo,
       );
 
-      await service.syncEpisode(completedEpisodes: 6, anilistMediaId: 101);
+      final synced = await service.syncEpisode(
+        completedEpisodes: 6,
+        anilistMediaId: 101,
+      );
 
+      expect(synced, isFalse);
       expect(anilistRepo.updates, isEmpty);
       expect(_readOutbox(storage).single['completed_episodes'], 6);
     });
 
     test('is a no-op when no media IDs are supplied', () async {
-      await buildService().syncEpisode(completedEpisodes: 7);
+      final synced = await buildService().syncEpisode(completedEpisodes: 7);
 
+      expect(synced, isFalse);
       expect(anilistRepo.updates, isEmpty);
       expect(malRepo.updates, isEmpty);
       expect(_readOutbox(storage), isEmpty);
@@ -196,16 +205,33 @@ void main() {
     test('writes failed sync to outbox', () async {
       anilistRepo.shouldFail = true;
 
-      await buildService().syncEpisode(
+      final synced = await buildService().syncEpisode(
         completedEpisodes: 4,
         anilistMediaId: 101,
       );
 
+      expect(synced, isFalse);
       final outbox = _readOutbox(storage);
       expect(outbox, hasLength(1));
       expect(outbox.first['media_id'], 101);
       expect(outbox.first['completed_episodes'], 4);
       expect(outbox.first['provider'], 'anilist');
+    });
+
+    test('concurrent failures retain every queued progress update', () async {
+      anilistRepo
+        ..shouldFail = true
+        ..updateDelay = const Duration(milliseconds: 10);
+      final service = buildService();
+
+      await Future.wait([
+        service.syncEpisode(completedEpisodes: 2, anilistMediaId: 101),
+        service.syncEpisode(completedEpisodes: 4, anilistMediaId: 102),
+      ]);
+
+      final outbox = _readOutbox(storage);
+      expect(outbox, hasLength(2));
+      expect(outbox.map((item) => item['media_id']), containsAll([101, 102]));
     });
   });
 
@@ -282,6 +308,7 @@ void main() {
 
       // Should not throw; should treat as empty outbox.
       await expectLater(buildService().flush(), completes);
+      expect(storage._data[_outboxKey], isNull);
     });
   });
 

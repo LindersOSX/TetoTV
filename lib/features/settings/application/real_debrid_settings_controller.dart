@@ -63,11 +63,19 @@ class RealDebridSettingsState {
 
 class RealDebridSettingsController
     extends StateNotifier<RealDebridSettingsState> {
-  RealDebridSettingsController(this._storage, this._clientFactory)
-    : super(const RealDebridSettingsState());
+  RealDebridSettingsController(
+    this._storage,
+    this._clientFactory, {
+    RealDebridOAuthClient? oauthClient,
+    DateTime Function()? now,
+  }) : _oauthClient = oauthClient ?? RealDebridOAuthClient(),
+       _now = now ?? DateTime.now,
+       super(const RealDebridSettingsState());
 
   final FlutterSecureStorage _storage;
   final RealDebridClientFactory _clientFactory;
+  final RealDebridOAuthClient _oauthClient;
+  final DateTime Function() _now;
 
   Future<void> load() async {
     var token = await _storage.read(key: realDebridTokenStorageKey);
@@ -104,8 +112,14 @@ class RealDebridSettingsController
   }
 
   Future<bool> _validate(String token, {required bool persist}) async {
+    final hadSavedToken = state.hasSavedToken;
     try {
       final account = await _clientFactory(token).account();
+      if (!account.isPremium) {
+        throw const RealDebridException(
+          'Real-Debrid streaming requires an active Premium plan.',
+        );
+      }
       if (persist) {
         // A token entered in Accounts is a standalone API token. Remove any
         // older device-flow metadata so a stale refresh token cannot later
@@ -122,7 +136,7 @@ class RealDebridSettingsController
       return true;
     } catch (error) {
       state = RealDebridSettingsState(
-        hasSavedToken: !persist,
+        hasSavedToken: hadSavedToken,
         errorMessage: error.toString(),
       );
       return false;
@@ -144,9 +158,11 @@ class RealDebridSettingsController
     final expiryValue = await _storage.read(
       key: realDebridAccessExpiryStorageKey,
     );
-    final expiry = expiryValue == null ? null : DateTime.tryParse(expiryValue);
-    if (expiry == null ||
-        expiry.isAfter(DateTime.now().add(const Duration(minutes: 5)))) {
+    final expiry = expiryValue == null
+        ? null
+        : DateTime.tryParse(expiryValue)?.toUtc();
+    final now = _now().toUtc();
+    if (expiry == null || expiry.isAfter(now.add(const Duration(minutes: 5)))) {
       return currentToken;
     }
 
@@ -156,14 +172,25 @@ class RealDebridSettingsController
       _storage.read(key: realDebridRefreshTokenStorageKey),
     ]);
     if (values.any((value) => value == null || value.isEmpty)) {
-      return currentToken;
+      if (expiry.isAfter(now)) return currentToken;
+      throw StateError(
+        'Real-Debrid authorization expired. Reconnect Real-Debrid in Accounts.',
+      );
     }
 
-    final tokens = await RealDebridOAuthClient().refresh(
-      clientId: values[0]!,
-      clientSecret: values[1]!,
-      refreshToken: values[2]!,
-    );
+    late final RealDebridTokenSet tokens;
+    try {
+      tokens = await _oauthClient.refresh(
+        clientId: values[0]!,
+        clientSecret: values[1]!,
+        refreshToken: values[2]!,
+      );
+    } catch (_) {
+      // Match the playback token service: a transient OAuth outage must not
+      // make a still-valid account appear disconnected in Settings.
+      if (expiry.isAfter(now)) return currentToken;
+      rethrow;
+    }
     await Future.wait([
       _storage.write(key: realDebridTokenStorageKey, value: tokens.accessToken),
       _storage.write(

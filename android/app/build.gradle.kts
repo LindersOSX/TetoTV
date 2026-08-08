@@ -6,6 +6,15 @@ val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (releaseTaskRequested && !keystorePropertiesFile.exists()) {
+    throw GradleException(
+        "Release signing is not configured. Restore android/key.properties " +
+            "and the original keystore before building an update.",
+    )
+}
 
 plugins {
     id("com.android.application")
@@ -53,23 +62,36 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            signingConfig = if (keystorePropertiesFile.exists()) {
-                signingConfigs.getByName("release")
-            } else {
-                // Local smoke builds only. Configure key.properties before
-                // distributing a release artifact.
-                signingConfigs.getByName("debug")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
+
+    // media_kit loads libmpv through Dart FFI and explicitly requests extracted
+    // native libraries. Honor that request for older Fire OS/Android TV loaders
+    // instead of silently overriding it with AGP's modern in-APK default.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    lint {
+        // Flutter owns and regenerates the ignored local.properties file. Its
+        // Windows path escaping is valid for Gradle but trips this lint check.
+        disable += "PropertyEscape"
+    }
 }
+
+val media3Version = "1.11.0"
 
 dependencies {
     implementation("androidx.media:media:1.8.0")
-    implementation("androidx.media3:media3-exoplayer:1.10.1")
-    implementation("androidx.media3:media3-ui:1.10.1")
-    implementation("androidx.media3:media3-datasource-okhttp:1.10.1")
-    implementation("androidx.media3:media3-session:1.10.1")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.tvprovider:tvprovider:1.1.0")
 }

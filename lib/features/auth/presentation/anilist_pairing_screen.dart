@@ -4,6 +4,9 @@ import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/pairing_session.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -69,7 +72,18 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pairing = ref.watch(pairingControllerProvider(widget.provider));
+    final provider = pairingControllerProvider(widget.provider);
+    ref.listen(provider, (previous, next) {
+      final previousStatus = previous?.valueOrNull?.status;
+      final nextStatus = next.valueOrNull?.status;
+      if (nextStatus == PairingStatus.authorized &&
+          previousStatus != PairingStatus.authorized) {
+        ref.invalidate(trackingAccountsControllerProvider);
+        ref.invalidate(trackingHomeProvider);
+        ref.invalidate(trackingOutboxFlushProvider);
+      }
+    });
+    final pairing = ref.watch(provider);
 
     return Scaffold(
       body: SafeArea(
@@ -149,6 +163,14 @@ class _PairingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final verificationUri = Uri.tryParse(session.verificationUri);
+    final malCallback = verificationUri
+        ?.replace(
+          path: '/oauth/myanimelist/callback',
+          query: null,
+          fragment: null,
+        )
+        .toString();
     if (session.status == PairingStatus.authorized) {
       return _StatusPanel(
         icon: Icons.check_circle_rounded,
@@ -234,10 +256,13 @@ class _PairingPanel extends StatelessWidget {
                 ),
                 if (provider == TrackingProvider.myAnimeList) ...[
                   const SizedBox(height: 10),
-                  const Text(
-                    'Registered callback: https://tetotv-auth.onrender.com/oauth/'
-                    'myanimelist/callback',
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  Text(
+                    'Registered callback: '
+                    '${malCallback ?? 'your broker /oauth/myanimelist/callback'}',
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ],

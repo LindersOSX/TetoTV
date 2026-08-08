@@ -293,16 +293,7 @@ class TetoTvDatabase {
 
   Future<void> saveCheckpoint(PlaybackCheckpoint checkpoint) async {
     final db = await database;
-    await db.delete(
-      'continue_watching_dismissals',
-      where: 'anilist_media_id = ?',
-      whereArgs: [checkpoint.anilistMediaId],
-    );
-    await db.insert(
-      'playback_history',
-      checkpoint.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.transaction((txn) => saveCheckpointTransaction(txn, checkpoint));
   }
 
   Future<PlaybackCheckpoint?> checkpoint(int mediaId, int episode) async {
@@ -518,6 +509,22 @@ class TetoTvDatabase {
     _database = null;
     _opening = null;
   }
+}
+
+Future<void> saveCheckpointTransaction(
+  DatabaseExecutor database,
+  PlaybackCheckpoint checkpoint,
+) async {
+  await database.delete(
+    'continue_watching_dismissals',
+    where: 'anilist_media_id = ?',
+    whereArgs: [checkpoint.anilistMediaId],
+  );
+  await database.insert(
+    'playback_history',
+    checkpoint.toMap(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 }
 
 Future<void> _createContinueDismissalsTable(DatabaseExecutor db) =>

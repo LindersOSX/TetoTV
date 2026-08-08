@@ -163,7 +163,7 @@
                     android:contentDescription="@string/tetotv_player_audio_tracks"
                     android:nextFocusLeft="@id/exo_ffwd"
                     android:nextFocusRight="@id/tetotv_caption_tracks"
-                    android:src="@drawable/exo_ic_audiotrack" />
+                    android:src="@drawable/tetotv_ic_audio_track" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -185,7 +185,7 @@
                     android:contentDescription="@string/tetotv_player_closed_captions"
                     android:nextFocusLeft="@id/tetotv_audio_tracks"
                     android:nextFocusRight="@id/tetotv_caption_size"
-                    android:src="@drawable/exo_ic_subtitle_on" />
+                    android:src="@drawable/tetotv_ic_subtitle_on" />
 
                 <TextView
                     android:layout_width="wrap_content"

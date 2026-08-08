@@ -121,7 +121,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var consumedNavigationKeyUp: Int? = null
     private var malMediaId = 0
     private var episodeNumber = 0
-    private var skipFetchStarted = false
+    private var skipFetchComplete = false
+    private var skipFetchInFlight = false
+    private var skipFetchAttempts = 0
     private var activeSkipSegment: NativeSkipSegment? = null
     private val skipSegments = mutableListOf<NativeSkipSegment>()
     private val autoFocusedSkipSegments = mutableSetOf<String>()
@@ -165,6 +167,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             }
         }
     }
+
+    private val skipFetchRetryRunnable = Runnable { fetchSkipSegmentsIfReady() }
 
     private val firstFrameWatchdog = Runnable {
         if (
@@ -241,7 +245,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             return
         }
 
-        preferredAudioLanguage = intent.getStringExtra(EXTRA_AUDIO_LANGUAGE) ?: "eng"
+        preferredAudioLanguage =
+            intent.getStringExtra(EXTRA_AUDIO_LANGUAGE)?.ifBlank { "eng" } ?: "eng"
         val audioLanguages = preferredLanguageTags(preferredAudioLanguage)
         val audioLabels = preferredAudioLabels(
             preferredAudioLanguage,
@@ -267,7 +272,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
                 .setPreferredAudioLabels(*audioLabels.toTypedArray())
                 .setPreferredTextLanguages(*subtitleLanguages.toTypedArray())
-                .setSelectUndeterminedTextLanguage(false)
+                // Anime releases frequently leave an otherwise valid English
+                // ASS/SRT track's language undefined. Prefer it only when no
+                // explicitly preferred-language track is available.
+                .setSelectUndeterminedTextLanguage(subtitlesEnabled)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitlesEnabled)
                 .build()
         }
@@ -430,11 +438,19 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             visibility = View.GONE
         }
         updateCaptionSizeDescription()
-        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).setOnClickListener {
-            seekRelative(-seekBackIncrementMs, it)
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).apply {
+            contentDescription = getString(
+                R.string.tetotv_player_rewind_seconds,
+                seekBackIncrementMs / 1_000,
+            )
+            setOnClickListener { seekRelative(-seekBackIncrementMs, it) }
         }
-        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).setOnClickListener {
-            seekRelative(seekForwardIncrementMs, it)
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).apply {
+            contentDescription = getString(
+                R.string.tetotv_player_fast_forward_seconds,
+                seekForwardIncrementMs / 1_000,
+            )
+            setOnClickListener { seekRelative(seekForwardIncrementMs, it) }
         }
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
@@ -545,10 +561,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun fetchSkipSegmentsIfReady() {
-        if (skipFetchStarted || malMediaId <= 0 || episodeNumber <= 0) return
+        if (
+            skipFetchComplete ||
+            skipFetchInFlight ||
+            skipFetchAttempts >= MAX_SKIP_FETCH_ATTEMPTS ||
+            malMediaId <= 0 ||
+            episodeNumber <= 0
+        ) return
         val durationMs = safeDurationMs()
         if (durationMs <= 0L) return
-        skipFetchStarted = true
+        skipFetchInFlight = true
+        skipFetchAttempts++
         val episodeLength = durationMs / 1_000.0
         val url = buildString {
             append("https://api.aniskip.com/v2/skip-times/")
@@ -564,29 +587,58 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
-            .header("User-Agent", "TetoTV/1.8 AndroidTV Media3")
+            .header("User-Agent", "TetoTV/1.9 AndroidTV Media3")
             .build()
         metadataClient.newCall(request).enqueue(
             object : Callback {
-                override fun onFailure(call: Call, e: IOException) = Unit
+                override fun onFailure(call: Call, e: IOException) {
+                    handler.post {
+                        if (resultSent || isFinishing || isDestroyed) return@post
+                        skipFetchInFlight = false
+                        scheduleSkipFetchRetry()
+                    }
+                }
 
                 override fun onResponse(call: Call, response: Response) {
                     response.use {
-                        if (!response.isSuccessful) return
-                        val payload = response.body?.string().orEmpty()
-                        val parsed = runCatching {
-                            parseSkipSegments(payload, durationMs)
-                        }.getOrDefault(emptyList())
-                        if (parsed.isEmpty()) return
+                        val successful = response.isSuccessful
+                        val retryableStatus = response.code == 429 || response.code >= 500
+                        val parsed = if (successful) {
+                            val payload = response.body?.string().orEmpty()
+                            runCatching { parseSkipSegments(payload, durationMs) }.getOrNull()
+                        } else {
+                            null
+                        }
                         handler.post {
                             if (resultSent || isFinishing || isDestroyed) return@post
-                            skipSegments.clear()
-                            skipSegments.addAll(parsed)
-                            updateSkipSegmentButton()
+                            skipFetchInFlight = false
+                            when {
+                                successful && parsed != null -> {
+                                    skipFetchComplete = true
+                                    skipSegments.clear()
+                                    skipSegments.addAll(parsed)
+                                    updateSkipSegmentButton()
+                                }
+                                retryableStatus || successful -> scheduleSkipFetchRetry()
+                                else -> skipFetchComplete = true
+                            }
                         }
                     }
                 }
             },
+        )
+    }
+
+    private fun scheduleSkipFetchRetry() {
+        if (skipFetchAttempts >= MAX_SKIP_FETCH_ATTEMPTS) {
+            skipFetchComplete = true
+            return
+        }
+        handler.removeCallbacks(skipFetchRetryRunnable)
+        if (!isForeground) return
+        handler.postDelayed(
+            skipFetchRetryRunnable,
+            SKIP_FETCH_RETRY_BASE_MS * skipFetchAttempts,
         )
     }
 
@@ -759,9 +811,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         captionTrackButton.isSelected = captionsSelected
         captionTrackButton.setImageResource(
             if (captionsSelected) {
-                androidx.media3.ui.R.drawable.exo_ic_subtitle_on
+                R.drawable.tetotv_ic_subtitle_on
             } else {
-                androidx.media3.ui.R.drawable.exo_ic_subtitle_off
+                R.drawable.tetotv_ic_subtitle_off
             },
         )
         captionTrackButton.contentDescription = getString(
@@ -938,8 +990,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun showExitConfirmation() {
         if (exitDialog?.isShowing == true || isFinishing || isDestroyed) return
-        val resumeAfterDialog = ::player.isInitialized && player.isPlaying
-        if (resumeAfterDialog) player.pause()
+        // isPlaying is false while buffering even though playWhenReady is true.
+        // Always pause so playback cannot start behind the confirmation dialog.
+        val resumeAfterDialog = ::player.isInitialized && player.playWhenReady
+        if (::player.isInitialized) player.pause()
         val dialog = AlertDialog.Builder(this)
             .setTitle("Exit video?")
             .setMessage("Your current playback position will be saved.")
@@ -1257,6 +1311,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private fun pauseScheduledWork() {
         handler.removeCallbacks(checkpointRunnable)
         handler.removeCallbacks(skipSegmentRunnable)
+        handler.removeCallbacks(skipFetchRetryRunnable)
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(hideControllerRunnable)
@@ -1303,6 +1358,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(checkpointRunnable)
         handler.removeCallbacks(skipSegmentRunnable)
+        handler.removeCallbacks(skipFetchRetryRunnable)
         handler.removeCallbacks(hideControllerRunnable)
         persistCheckpoint()
         val duration = safeDurationMs()
@@ -1448,6 +1504,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
         private const val SKIP_SEGMENT_POLL_MS = 300L
+        private const val MAX_SKIP_FETCH_ATTEMPTS = 3
+        private const val SKIP_FETCH_RETRY_BASE_MS = 2_000L
         private const val MIN_SKIP_SEGMENT_MS = 8_000L
         private const val MAX_SKIP_SEGMENT_MS = 240_000L
         private const val DEFAULT_SUBTITLE_SIZE = 34f

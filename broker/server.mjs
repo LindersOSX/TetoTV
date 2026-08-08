@@ -9,9 +9,12 @@ const publicBaseUrl = String(
     (selfTest ? "https://auth.example.com" : ""),
 ).replace(/\/+$/, "");
 const ttlMs = 10 * 60 * 1000;
+const rateWindowMs = 60 * 1000;
+const maxRateLimitEntries = 4096;
 const pairings = new Map();
 const codes = new Map();
 const rateLimits = new Map();
+let nextRateLimitCleanupAt = 0;
 
 function providerConfig(provider) {
   if (provider === "anilist") {
@@ -92,14 +95,20 @@ const normalizeCode = (value) =>
   String(value || "").trim().toUpperCase();
 
 function rateLimited(request) {
-  const key = String(
+  const address = String(
     request.headers["x-forwarded-for"] || request.socket.remoteAddress || "",
   )
     .split(",")[0]
-    .trim();
+    .trim()
+    .slice(0, 256);
+  const key = createHash("sha256").update(address).digest("base64url");
   const now = Date.now();
+  cleanupRateLimits(now);
   const current = rateLimits.get(key);
-  if (!current || now - current.startedAt >= 60_000) {
+  if (!current || now - current.startedAt >= rateWindowMs) {
+    // Bound memory even if untrusted forwarding headers contain a stream of
+    // unique values. Existing buckets can finish their current window.
+    if (!current && rateLimits.size >= maxRateLimitEntries) return true;
     rateLimits.set(key, { startedAt: now, count: 1 });
     return false;
   }
@@ -107,8 +116,17 @@ function rateLimited(request) {
   return current.count > 60;
 }
 
+function cleanupRateLimits(now = Date.now()) {
+  if (now < nextRateLimitCleanupAt) return;
+  nextRateLimitCleanupAt = now + rateWindowMs;
+  for (const [key, bucket] of rateLimits) {
+    if (now - bucket.startedAt >= rateWindowMs) rateLimits.delete(key);
+  }
+}
+
 function cleanup() {
   const now = Date.now();
+  cleanupRateLimits(now);
   for (const [id, pairing] of pairings) {
     if (pairing.expiresAt <= now) {
       pairings.delete(id);

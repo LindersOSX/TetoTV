@@ -16,10 +16,8 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
-import android.view.WindowManager
 import androidx.core.content.edit
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -43,11 +41,9 @@ class MainActivity : FlutterActivity() {
     private var pendingApkInstallResult: MethodChannel.Result? = null
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    }
+    private var mediaSeekBackIncrementMs = DEFAULT_SEEK_INCREMENT_MS
+    private var mediaSeekForwardIncrementMs = DEFAULT_SEEK_INCREMENT_MS
+    private var mediaSessionWasActiveBeforeNativePlayer = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -73,9 +69,17 @@ class MainActivity : FlutterActivity() {
                         updateMediaSession(call.arguments as? Map<String, Any?> ?: emptyMap())
                         result.success(null)
                     }
+                    "clearMediaSession" -> {
+                        clearMediaSession()
+                        result.success(null)
+                    }
                     "publishWatchNext" -> {
                         @Suppress("UNCHECKED_CAST")
                         result.success(publishWatchNext(call.arguments as? Map<String, Any?> ?: emptyMap()))
+                    }
+                    "removeWatchNext" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        result.success(removeWatchNext(call.arguments as? Map<String, Any?> ?: emptyMap()))
                     }
                     "scheduleReminder" -> {
                         @Suppress("UNCHECKED_CAST")
@@ -108,6 +112,12 @@ class MainActivity : FlutterActivity() {
         (data["headers"] as? Map<*, *>)?.forEach { (key, value) ->
             if (key is String && value is String) headers[key] = value
         }
+        mediaSeekBackIncrementMs =
+            ((data["seekBackMs"] as? Number)?.toLong() ?: DEFAULT_SEEK_INCREMENT_MS)
+                .coerceIn(MIN_SEEK_INCREMENT_MS, MAX_SEEK_INCREMENT_MS)
+        mediaSeekForwardIncrementMs =
+            ((data["seekForwardMs"] as? Number)?.toLong() ?: DEFAULT_SEEK_INCREMENT_MS)
+                .coerceIn(MIN_SEEK_INCREMENT_MS, MAX_SEEK_INCREMENT_MS)
         val intent = Intent(this, Media3PlayerActivity::class.java).apply {
             putExtra(Media3PlayerActivity.EXTRA_SOURCE, source)
             putExtra(Media3PlayerActivity.EXTRA_TITLE, data["title"] as? String)
@@ -118,10 +128,6 @@ class MainActivity : FlutterActivity() {
             putExtra(
                 Media3PlayerActivity.EXTRA_SUBTITLE_MIME_TYPE,
                 data["subtitleMimeType"] as? String,
-            )
-            putExtra(
-                Media3PlayerActivity.EXTRA_SUBTITLE_LANGUAGE,
-                data["subtitleLanguage"] as? String,
             )
             putExtra(Media3PlayerActivity.EXTRA_SUBTITLE_LABEL, data["subtitleLabel"] as? String)
             putExtra(Media3PlayerActivity.EXTRA_MIME_TYPE, data["mimeType"] as? String)
@@ -177,11 +183,11 @@ class MainActivity : FlutterActivity() {
             )
             putExtra(
                 Media3PlayerActivity.EXTRA_SEEK_BACK_MS,
-                (data["seekBackMs"] as? Number)?.toLong() ?: 10_000L,
+                mediaSeekBackIncrementMs,
             )
             putExtra(
                 Media3PlayerActivity.EXTRA_SEEK_FORWARD_MS,
-                (data["seekForwardMs"] as? Number)?.toLong() ?: 10_000L,
+                mediaSeekForwardIncrementMs,
             )
             putExtra(Media3PlayerActivity.EXTRA_VIDEO_FIT, data["videoFit"] as? String)
             putExtra(
@@ -200,10 +206,16 @@ class MainActivity : FlutterActivity() {
         }
         pendingNativePlayerResult = result
         try {
-            if (::mediaSession.isInitialized) mediaSession.isActive = false
+            if (::mediaSession.isInitialized) {
+                mediaSessionWasActiveBeforeNativePlayer = mediaSession.isActive
+                mediaSession.isActive = false
+            }
             startActivityForResult(intent, NATIVE_PLAYER_REQUEST_CODE)
         } catch (error: Throwable) {
-            if (::mediaSession.isInitialized) mediaSession.isActive = true
+            if (::mediaSession.isInitialized) {
+                mediaSession.isActive = mediaSessionWasActiveBeforeNativePlayer
+            }
+            mediaSessionWasActiveBeforeNativePlayer = false
             pendingNativePlayerResult = null
             throw error
         }
@@ -249,7 +261,10 @@ class MainActivity : FlutterActivity() {
             return
         }
         if (requestCode == NATIVE_PLAYER_REQUEST_CODE) {
-            if (::mediaSession.isInitialized) mediaSession.isActive = true
+            // The native player owns its own MediaSession. Leave Flutter's
+            // session inactive until Dart explicitly publishes fresh playback
+            // state; otherwise completed playback remains in system controls.
+            mediaSessionWasActiveBeforeNativePlayer = false
             val pending = pendingNativePlayerResult
             pendingNativePlayerResult = null
             if (pending == null) return
@@ -451,8 +466,9 @@ class MainActivity : FlutterActivity() {
                 override fun onSeekTo(pos: Long) = invokePlayer("seekTo", pos)
                 override fun onSkipToNext() = invokePlayer("next")
                 override fun onSkipToPrevious() = invokePlayer("previous")
-                override fun onFastForward() = invokePlayer("seekBy", 10000L)
-                override fun onRewind() = invokePlayer("seekBy", -10000L)
+                override fun onFastForward() =
+                    invokePlayer("seekBy", mediaSeekForwardIncrementMs)
+                override fun onRewind() = invokePlayer("seekBy", -mediaSeekBackIncrementMs)
             })
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             if (launchIntent != null) {
@@ -464,7 +480,7 @@ class MainActivity : FlutterActivity() {
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT,
                 ))
             }
-            isActive = true
+            isActive = false
         }
     }
 
@@ -480,6 +496,14 @@ class MainActivity : FlutterActivity() {
         val duration = (data["durationMs"] as? Number)?.toLong() ?: 0L
         val position = (data["positionMs"] as? Number)?.toLong() ?: 0L
         val playing = data["playing"] as? Boolean ?: false
+        (data["seekBackMs"] as? Number)?.toLong()?.let {
+            mediaSeekBackIncrementMs =
+                it.coerceIn(MIN_SEEK_INCREMENT_MS, MAX_SEEK_INCREMENT_MS)
+        }
+        (data["seekForwardMs"] as? Number)?.toLong()?.let {
+            mediaSeekForwardIncrementMs =
+                it.coerceIn(MIN_SEEK_INCREMENT_MS, MAX_SEEK_INCREMENT_MS)
+        }
 
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
@@ -507,6 +531,18 @@ class MainActivity : FlutterActivity() {
                 .build(),
         )
         mediaSession.isActive = true
+    }
+
+    private fun clearMediaSession() {
+        if (!::mediaSession.isInitialized) return
+        mediaSession.setMetadata(null)
+        mediaSession.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(0L)
+                .setState(PlaybackStateCompat.STATE_NONE, 0L, 0f)
+                .build(),
+        )
+        mediaSession.isActive = false
     }
 
     private fun deviceProfile(): Map<String, Any?> {
@@ -621,8 +657,12 @@ class MainActivity : FlutterActivity() {
         if (poster != null) builder.setPosterArtUri(poster)
 
         val preferences = getSharedPreferences("watch_next", Context.MODE_PRIVATE)
-        val key = "program_${mediaId}_$episode"
-        val existingId = preferences.getLong(key, -1L)
+        val key = watchNextKey(mediaId)
+        val existingId = migrateLegacyWatchNextPrograms(
+            preferences = preferences,
+            mediaId = mediaId,
+            episode = episode,
+        )
         if (existingId > 0) {
             val existingUri = ContentUris.withAppendedId(
                 TvContractCompat.WatchNextPrograms.CONTENT_URI,
@@ -638,6 +678,57 @@ class MainActivity : FlutterActivity() {
         ) ?: return null
         return ContentUris.parseId(uri).also { id -> preferences.edit { putLong(key, id) } }
     }
+
+    private fun migrateLegacyWatchNextPrograms(
+        preferences: android.content.SharedPreferences,
+        mediaId: Long,
+        episode: Int,
+    ): Long {
+        val key = watchNextKey(mediaId)
+        val legacyPrefix = "program_${mediaId}_"
+        var reusableId = preferences.getLong(key, -1L)
+        if (reusableId <= 0L) {
+            reusableId = preferences.getLong("$legacyPrefix$episode", -1L)
+        }
+        val legacyKeys = preferences.all.keys.filter { it.startsWith(legacyPrefix) }
+        if (legacyKeys.isEmpty()) return reusableId
+        val editor = preferences.edit()
+        for (legacyKey in legacyKeys) {
+            val legacyId = preferences.getLong(legacyKey, -1L)
+            if (legacyId > 0L && legacyId != reusableId) deleteWatchNextProgram(legacyId)
+            editor.remove(legacyKey)
+        }
+        if (reusableId > 0L) editor.putLong(key, reusableId)
+        editor.apply()
+        return reusableId
+    }
+
+    private fun removeWatchNext(data: Map<String, Any?>): Boolean {
+        val mediaId = (data["mediaId"] as? Number)?.toLong() ?: return false
+        val preferences = getSharedPreferences("watch_next", Context.MODE_PRIVATE)
+        val key = watchNextKey(mediaId)
+        val legacyPrefix = "program_${mediaId}_"
+        val keys = preferences.all.keys.filter { it == key || it.startsWith(legacyPrefix) }
+        var removed = false
+        val editor = preferences.edit()
+        for (storedKey in keys) {
+            val programId = preferences.getLong(storedKey, -1L)
+            if (programId > 0L) removed = deleteWatchNextProgram(programId) || removed
+            editor.remove(storedKey)
+        }
+        editor.apply()
+        return removed || keys.isNotEmpty()
+    }
+
+    private fun deleteWatchNextProgram(programId: Long): Boolean {
+        val uri = ContentUris.withAppendedId(
+            TvContractCompat.WatchNextPrograms.CONTENT_URI,
+            programId,
+        )
+        return runCatching { contentResolver.delete(uri, null, null) > 0 }.getOrDefault(false)
+    }
+
+    private fun watchNextKey(mediaId: Long) = "program_$mediaId"
 
     private fun scheduleReminder(data: Map<String, Any?>): Boolean {
         val mediaId = (data["mediaId"] as? Number)?.toLong() ?: return false
@@ -679,6 +770,12 @@ class MainActivity : FlutterActivity() {
         )
         pendingApkInstallResult = null
         pendingApkPath = null
+        pendingVoiceSearchResult?.error(
+            "VOICE_SEARCH_DESTROYED",
+            "The Android TV activity closed before voice search returned.",
+            null,
+        )
+        pendingVoiceSearchResult = null
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
     }
@@ -687,5 +784,8 @@ class MainActivity : FlutterActivity() {
         private const val NATIVE_PLAYER_REQUEST_CODE = 7314
         private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
         private const val VOICE_SEARCH_REQUEST_CODE = 7316
+        private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
+        private const val MIN_SEEK_INCREMENT_MS = 5_000L
+        private const val MAX_SEEK_INCREMENT_MS = 60_000L
     }
 }

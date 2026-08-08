@@ -136,9 +136,11 @@ Production deployment still requires:
 - a private Android release signing key;
 - codec, audio passthrough, and remote QA on the target physical TV boxes.
 
-Local release APKs are placed in `build\fire-tv`. Builds fall back to the
-machine's debug key when `android\key.properties` is absent; configure a
-private release key before distributing updates to other users.
+Local release APKs are placed in `build\fire-tv`. Release builds fail when
+`android\key.properties` is absent so an APK can never be distributed with a
+different accidental signature. Back up both that ignored properties file and
+its keystore: Android will reject every future in-place update if the signing
+identity is lost or changed.
 
 Use `adb shell getprop ro.product.cpu.abilist` before choosing a split APK.
 Many Fire TV devices, including Fire TV Stick 4K Max models, expose the

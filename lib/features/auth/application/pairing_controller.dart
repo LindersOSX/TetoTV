@@ -65,28 +65,39 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
   Timer? _pollTimer;
   bool _polling = false;
   int _consecutivePollFailures = 0;
+  int _generation = 0;
 
   Future<void> start() async {
+    final generation = ++_generation;
     _pollTimer?.cancel();
+    _activeClient = null;
     _consecutivePollFailures = 0;
     state = const AsyncLoading();
     try {
       final configuredUrl = await effectiveAuthBrokerBaseUrl(_storage);
+      if (!mounted || generation != _generation) return;
       if (configuredUrl == null) {
         throw const AuthBrokerNotConfigured();
       }
       final client = TrackingPairingClient(_provider, baseUrl: configuredUrl);
       _activeClient = client;
       await client.ensureReady();
+      if (!mounted || generation != _generation) return;
       final session = await client.createSession();
+      if (!mounted || generation != _generation) return;
       state = AsyncData(session);
-      _pollTimer = Timer.periodic(session.pollInterval, (_) => _poll());
+      _pollTimer = Timer.periodic(
+        session.pollInterval,
+        (_) => _poll(generation),
+      );
     } catch (error, stackTrace) {
+      if (!mounted || generation != _generation) return;
       state = AsyncError(error, stackTrace);
     }
   }
 
-  Future<void> _poll() async {
+  Future<void> _poll(int generation) async {
+    if (!mounted || generation != _generation) return;
     final client = _activeClient;
     if (_polling || client == null) return;
     final session = state.valueOrNull;
@@ -100,6 +111,7 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
     _polling = true;
     try {
       final result = await client.poll(session);
+      if (!mounted || generation != _generation) return;
       _consecutivePollFailures = 0;
       if (result.status == PairingStatus.authorized) {
         final token = result.accessToken;
@@ -108,26 +120,33 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
             'Pairing completed without an access token.',
           );
         }
-        await _storage.write(key: _provider.tokenStorageKey, value: token);
-        if (result.refreshToken case final refreshToken?
-            when refreshToken.isNotEmpty) {
-          await _storage.write(
-            key: _provider.refreshTokenStorageKey,
-            value: refreshToken,
-          );
-        }
-        if (result.expiresAt case final expiresAt?) {
-          await _storage.write(
-            key: _provider.expiresAtStorageKey,
-            value: expiresAt.toUtc().toIso8601String(),
-          );
-        }
+        final refreshToken = result.refreshToken;
+        final expiresAt = result.expiresAt;
+        await Future.wait([
+          _storage.write(key: _provider.tokenStorageKey, value: token),
+          if (refreshToken != null && refreshToken.isNotEmpty)
+            _storage.write(
+              key: _provider.refreshTokenStorageKey,
+              value: refreshToken,
+            )
+          else
+            _storage.delete(key: _provider.refreshTokenStorageKey),
+          if (expiresAt != null)
+            _storage.write(
+              key: _provider.expiresAtStorageKey,
+              value: expiresAt.toUtc().toIso8601String(),
+            )
+          else
+            _storage.delete(key: _provider.expiresAtStorageKey),
+        ]);
+        if (!mounted || generation != _generation) return;
         _pollTimer?.cancel();
       } else if (result.status == PairingStatus.expired) {
         _pollTimer?.cancel();
       }
       state = AsyncData(session.copyWith(status: result.status));
     } catch (error, stackTrace) {
+      if (!mounted || generation != _generation) return;
       _consecutivePollFailures++;
       if (_consecutivePollFailures >= 3 ||
           DateTime.now().isAfter(session.expiresAt)) {
@@ -141,7 +160,9 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
 
   @override
   void dispose() {
+    _generation++;
     _pollTimer?.cancel();
+    _activeClient = null;
     super.dispose();
   }
 }
