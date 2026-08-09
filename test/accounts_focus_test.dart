@@ -6,7 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('D-pad reaches Home shelves and then the debrid controls', (
+  testWidgets('D-pad reaches Home shelves and switches to streaming', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -25,6 +25,12 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.area.home',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.shelf.history',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
@@ -33,6 +39,11 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.shelf.tracking',
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
@@ -63,12 +74,9 @@ void main() {
 
     for (final key in [
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
@@ -126,16 +134,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Advanced: personal token'), findsOneWidget);
+    expect(find.text('Advanced: personal token'), findsNothing);
     expect(find.text('TorBox API token'), findsNothing);
 
-    for (var index = 0; index < 2; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pump();
-    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text('Advanced: personal token'), findsOneWidget);
     expect(find.text('Debrid provider'), findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -161,26 +172,14 @@ void main() {
 
     for (final key in [
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
-      await tester.pumpAndSettle();
-    }
-
-    for (var attempt = 0; attempt < 30; attempt++) {
-      if (FocusManager.instance.primaryFocus?.debugLabel ==
-          'accounts.updates.token') {
-        break;
-      }
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
 
@@ -200,6 +199,31 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.check',
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('organized settings sections fit a narrow mobile screen', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Settings'), findsWidgets);
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Streaming'), findsOneWidget);
+    expect(find.text('HOME & TITLES'), findsOneWidget);
+
+    await tester.tap(find.text('Streaming'));
+    await tester.pumpAndSettle();
+    expect(find.text('DEBRID STREAMING'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

@@ -40,6 +40,7 @@ class MarketplaceAddon {
     this.version,
     this.iconUri,
     this.payloadUri,
+    this.inlinePayload,
   });
 
   final String id;
@@ -54,10 +55,13 @@ class MarketplaceAddon {
   final String? version;
   final Uri? iconUri;
   final Uri? payloadUri;
+  final String? inlinePayload;
 
   bool get isOnlineStreamProvider => type == 'onlinestream-provider';
   bool get isJavascript => language.toLowerCase() == 'javascript';
-  bool get isCompatible => isOnlineStreamProvider && isJavascript;
+  bool get isTypescript => language.toLowerCase() == 'typescript';
+  bool get isCompatible =>
+      isOnlineStreamProvider && (isJavascript || isTypescript);
 
   MarketplaceAddon mergeManifest(MarketplaceAddon manifest) => MarketplaceAddon(
     id: id,
@@ -72,6 +76,7 @@ class MarketplaceAddon {
     version: manifest.version,
     iconUri: manifest.iconUri ?? iconUri,
     payloadUri: manifest.payloadUri,
+    inlinePayload: manifest.inlinePayload,
   );
 
   Map<String, Object?> toJson() => {
@@ -117,8 +122,15 @@ class MarketplaceAddon {
       version: _clean(json['version'], 32),
       iconUri: safePublicHttpsUri(json['icon']),
       payloadUri: safePublicHttpsUri(json['payloadURI']),
+      inlinePayload: _cleanPayload(json['payload']),
     );
   }
+}
+
+String? _cleanPayload(Object? value) {
+  if (value is! String || value.trim().isEmpty) return null;
+  if (utf8.encode(value).length > 768 * 1024) return null;
+  return value;
 }
 
 class InstalledStreamingAddon {

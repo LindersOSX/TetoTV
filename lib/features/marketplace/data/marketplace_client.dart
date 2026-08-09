@@ -2,28 +2,34 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/data/typescript_compiler.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:dio/dio.dart';
 
 class MarketplaceClient {
-  MarketplaceClient(this._store, {Dio? dio})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 8),
-              receiveTimeout: const Duration(seconds: 12),
-              responseType: ResponseType.plain,
-              followRedirects: false,
-              headers: const {'User-Agent': 'TetoTV/1 marketplace'},
-            ),
-          );
+  MarketplaceClient(
+    this._store, {
+    Dio? dio,
+    AddonTypescriptCompiler? typescriptCompiler,
+  }) : _typescriptCompiler = typescriptCompiler ?? AddonTypescriptCompiler(),
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 8),
+               receiveTimeout: const Duration(seconds: 12),
+               responseType: ResponseType.plain,
+               followRedirects: false,
+               headers: const {'User-Agent': 'TetoTV/1 marketplace'},
+             ),
+           );
 
   static const _maxCatalogBytes = 2 * 1024 * 1024;
   static const _maxManifestBytes = 256 * 1024;
   static const _maxPayloadBytes = 768 * 1024;
 
   final AddonStore _store;
+  final AddonTypescriptCompiler _typescriptCompiler;
   final Dio _dio;
 
   Future<List<MarketplaceAddon>> catalog(
@@ -58,15 +64,18 @@ class MarketplaceClient {
     MarketplaceAddon summary,
   ) async {
     final complete = await manifest(summary);
-    if (!complete.isCompatible || complete.payloadUri == null) {
+    if (!complete.isCompatible ||
+        (complete.payloadUri == null && complete.inlinePayload == null)) {
       throw const FormatException(
-        'This addon is not a compatible JavaScript streaming provider.',
+        'This addon is not a compatible JavaScript or TypeScript provider.',
       );
     }
-    final payload = await _getText(
-      complete.payloadUri!,
-      maximumBytes: _maxPayloadBytes,
-    );
+    final source =
+        complete.inlinePayload ??
+        await _getText(complete.payloadUri!, maximumBytes: _maxPayloadBytes);
+    final payload = complete.isTypescript
+        ? await _typescriptCompiler.compile(source)
+        : source;
     if (!_looksLikeProvider(payload)) {
       throw const FormatException(
         'The addon payload does not expose a Provider class.',

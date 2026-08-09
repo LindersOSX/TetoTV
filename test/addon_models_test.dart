@@ -34,7 +34,7 @@ void main() {
     );
   });
 
-  test('keeps TypeScript providers visible but incompatible', () {
+  test('accepts TypeScript providers for install-time compilation', () {
     final addon = MarketplaceAddon.tryParse({
       'id': 'provider-ts',
       'name': 'TS Provider',
@@ -44,6 +44,21 @@ void main() {
     }, repositoryUrl: 'https://example.com/catalog.json');
 
     expect(addon, isNotNull);
-    expect(addon!.isCompatible, isFalse);
+    expect(addon!.isCompatible, isTrue);
+    expect(addon.isTypescript, isTrue);
+  });
+
+  test('accepts a bounded inline provider payload', () {
+    final addon = MarketplaceAddon.tryParse({
+      'id': 'provider-inline',
+      'name': 'Inline Provider',
+      'manifestURI': 'https://example.com/manifest.json',
+      'type': 'onlinestream-provider',
+      'language': 'typescript',
+      'payload': 'class Provider {}',
+    }, repositoryUrl: 'https://example.com/catalog.json');
+
+    expect(addon, isNotNull);
+    expect(addon!.inlinePayload, 'class Provider {}');
   });
 }

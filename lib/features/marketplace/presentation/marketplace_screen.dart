@@ -159,8 +159,8 @@ class MarketplaceScreen extends ConsumerWidget {
                           icon: Icons.storefront_outlined,
                           title: 'Available web providers',
                           subtitle:
-                              '${state.catalog.where((item) => item.isCompatible).length} compatible JavaScript providers. '
-                              'TypeScript entries remain visible but cannot be installed yet.',
+                              '${state.catalog.where((item) => item.isCompatible).length} compatible JavaScript and TypeScript providers. '
+                              'TypeScript is compiled once during installation.',
                         ),
                         if (state.catalog.isEmpty)
                           SliverToBoxAdapter(
@@ -373,9 +373,11 @@ class _CatalogAddonCard extends StatelessWidget {
     return _AddonShell(
       addon: addon,
       badge: unsupported
-          ? 'TYPESCRIPT / UNSUPPORTED'
+          ? '${addon.language.toUpperCase()} / UNSUPPORTED'
           : installed == null
-          ? 'AVAILABLE'
+          ? addon.isTypescript
+                ? 'TYPESCRIPT'
+                : 'AVAILABLE'
           : updateAvailable
           ? 'UPDATE AVAILABLE'
           : 'INSTALLED',

@@ -48,3 +48,4 @@ app.*.map.json
 *.jks
 *.keystore
 /broker/.env
+/tool/addon_runtime/node_modules/

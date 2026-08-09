@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,5 +57,40 @@ void main() {
 
     expect(primaryCalls, 1);
     expect(secondaryCalls, 0);
+  });
+
+  testWidgets('D-pad scrolls a virtualized list when focus reaches its edge', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TvShortcuts(
+          child: Scaffold(
+            body: SizedBox(
+              height: 180,
+              child: ListView.builder(
+                itemExtent: 90,
+                itemCount: 30,
+                itemBuilder: (context, index) => TvFocusable(
+                  autofocus: index == 0,
+                  onPressed: () {},
+                  child: Text('Item $index'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (var index = 0; index < 8; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+
+    final scrollable = tester.state<ScrollableState>(find.byType(Scrollable));
+    expect(scrollable.position.pixels, greaterThan(0));
+    expect(tester.takeException(), isNull);
   });
 }

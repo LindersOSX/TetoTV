@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:flutter_js/quickjs/quickjs_runtime2.dart';
 
@@ -19,6 +20,8 @@ abstract interface class WebStreamingProvider {
 class SeanimeJavascriptProvider implements WebStreamingProvider {
   const SeanimeJavascriptProvider(this.addon);
 
+  static Future<String>? _domRuntimeSource;
+
   final InstalledStreamingAddon addon;
 
   @override
@@ -29,14 +32,21 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
 
   @override
   Future<List<WebStreamResult>> streams(EpisodeReference episode) async {
+    final domRuntime = await (_domRuntimeSource ??= rootBundle.loadString(
+      'assets/addon_runtime/linkedom.js',
+      cache: true,
+    ));
     final raw = await Isolate.run(
       () => _executeProvider({
         'id': addon.manifest.id,
         'name': addon.manifest.name,
         'payload': addon.payload,
+        'domRuntime': domRuntime,
         'title': episode.title,
         'titles': episode.alternativeTitles,
         'episode': episode.episode,
+        'anilistId': episode.anilistMediaId,
+        'malId': episode.malMediaId,
       }),
     ).timeout(const Duration(seconds: 28));
     final results = <WebStreamResult>[];
@@ -150,6 +160,13 @@ Future<List<Map<String, dynamic>>> _executeProvider(
   try {
     final bootstrap = runtime.evaluate(_networkBootstrap);
     if (bootstrap.isError) throw StateError(bootstrap.stringResult);
+    final domRuntime = runtime.evaluate(
+      input['domRuntime']! as String,
+      sourceUrl: 'asset://linkedom.js',
+    );
+    if (domRuntime.isError) throw StateError(domRuntime.stringResult);
+    final compatibility = runtime.evaluate(_seanimeCompatibilityBootstrap);
+    if (compatibility.isError) throw StateError(compatibility.stringResult);
     final payload = input['payload']! as String;
     final provider = runtime.evaluate(
       payload,
@@ -164,6 +181,15 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const titles = ${jsonEncode([input['title'], ...((input['titles'] as List?) ?? const [])])}
             .filter(Boolean).slice(0, 8);
           const episodeNumber = ${input['episode']};
+          const media = {
+            id: ${input['anilistId']},
+            idMal: ${input['malId'] ?? 'null'},
+            englishTitle: titles[0] || '',
+            romajiTitle: titles[1] || titles[0] || '',
+            nativeTitle: titles[2] || '',
+            synonyms: titles.slice(1),
+            startDate: {year: null, month: null, day: null},
+          };
           const modes = settings.supportsDub ? [false, true] : [false];
           const output = [];
           const normalize = value => String(value || '').toLowerCase()
@@ -180,7 +206,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             let selected = null;
             for (const title of titles) {
               try {
-                const matches = (await provider.search({query: title, opts: {dub}})) || [];
+                const matches = (await provider.search({query: title, dub, media, opts: {dub}})) || [];
                 const ranked = matches.slice(0, 40).map(item => ({item, points: score(item.title, title)}))
                   .sort((a, b) => b.points - a.points);
                 if (ranked.length && (!selected || ranked[0].points > selected.points)) {
@@ -208,7 +234,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 for (const source of sources) {
                   const url = source.url || source.file;
                   if (typeof url !== 'string' || !url.startsWith('https://')) continue;
-                  const subtitles = Array.isArray(source.subtitles) ? source.subtitles : [];
+                   const subtitles = Array.isArray(source.subtitles) ? source.subtitles :
+                     (resolved && Array.isArray(resolved.subtitles) ? resolved.subtitles : []);
                   const english = subtitles.find(track => /(^|\b)(en|eng|english)(\b|\$)/i.test(
                     String(track.language || track.lang || track.label || '')
                   )) || subtitles[0];
@@ -252,8 +279,10 @@ Future<Map<String, Object?>> _safeAddonRequest(dynamic raw) async {
   await validatePublicNetworkTarget(currentUri);
   final options = raw['options'] is Map ? raw['options'] as Map : const {};
   final method = '${options['method'] ?? 'GET'}'.toUpperCase();
-  if (method != 'GET' && method != 'POST') {
-    throw const FormatException('Only GET and POST requests are permitted.');
+  if (method != 'GET' && method != 'POST' && method != 'HEAD') {
+    throw const FormatException(
+      'Only GET, POST, and HEAD requests are permitted.',
+    );
   }
   final headers = <String, String>{'User-Agent': 'TetoTV addon runtime'};
   final rawHeaders = options['headers'];
@@ -346,7 +375,12 @@ const _networkBootstrap = r'''
     return new Promise((resolve, reject) => {
       const id = String(++__tetoRequestId);
       __tetoPending[id] = {resolve, reject};
-      sendMessage('TetoNetwork', JSON.stringify({id, url: String(url), options: options || {}}));
+      let requestUrl = String(url);
+      const seanimeProxy = 'http://127.0.0.1:43211/api/v1/proxy?url=';
+      if (requestUrl.startsWith(seanimeProxy)) {
+        try { requestUrl = decodeURIComponent(requestUrl.slice(seanimeProxy.length)); } catch (_) {}
+      }
+      sendMessage('TetoNetwork', JSON.stringify({id, url: requestUrl, options: options || {}}));
     });
   }
   function __tetoNetworkFinish(id, response) {
@@ -378,4 +412,210 @@ const _networkBootstrap = r'''
     }
     return output;
   }
+  function btoa(value) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let output = '', index = 0;
+    value = String(value);
+    while (index < value.length) {
+      const a = value.charCodeAt(index++) & 255;
+      const b = index < value.length ? value.charCodeAt(index++) & 255 : NaN;
+      const c = index < value.length ? value.charCodeAt(index++) & 255 : NaN;
+      output += chars[a >> 2];
+      output += chars[((a & 3) << 4) | (b >> 4)];
+      output += Number.isNaN(b) ? '=' : chars[((b & 15) << 2) | (c >> 6)];
+      output += Number.isNaN(c) ? '=' : chars[c & 63];
+    }
+    return output;
+  }
+''';
+
+const _seanimeCompatibilityBootstrap = r'''
+  if (typeof console === 'undefined') {
+    globalThis.console = {log() {}, info() {}, warn() {}, error() {}, debug() {}};
+  }
+
+  if (typeof URLSearchParams === 'undefined') {
+    globalThis.URLSearchParams = class URLSearchParams {
+      constructor(input) {
+        this.pairs = [];
+        if (typeof input === 'string') {
+          String(input).replace(/^\?/, '').split('&').forEach(part => {
+            if (!part) return;
+            const split = part.indexOf('=');
+            this.append(
+              decodeURIComponent(split < 0 ? part : part.slice(0, split)),
+              decodeURIComponent(split < 0 ? '' : part.slice(split + 1))
+            );
+          });
+        } else if (Array.isArray(input)) {
+          input.forEach(entry => this.append(entry[0], entry[1]));
+        } else if (input && typeof input === 'object') {
+          Object.keys(input).forEach(key => this.append(key, input[key]));
+        }
+      }
+      append(key, value) { this.pairs.push([String(key), String(value)]); }
+      set(key, value) {
+        this.delete(key);
+        this.append(key, value);
+      }
+      get(key) {
+        const item = this.pairs.find(entry => entry[0] === String(key));
+        return item ? item[1] : null;
+      }
+      getAll(key) {
+        return this.pairs.filter(entry => entry[0] === String(key)).map(entry => entry[1]);
+      }
+      has(key) { return this.pairs.some(entry => entry[0] === String(key)); }
+      delete(key) { this.pairs = this.pairs.filter(entry => entry[0] !== String(key)); }
+      forEach(callback) { this.pairs.forEach(entry => callback(entry[1], entry[0], this)); }
+      entries() { return this.pairs[Symbol.iterator](); }
+      keys() { return this.pairs.map(entry => entry[0])[Symbol.iterator](); }
+      values() { return this.pairs.map(entry => entry[1])[Symbol.iterator](); }
+      toString() {
+        return this.pairs.map(entry => encodeURIComponent(entry[0]) + '=' + encodeURIComponent(entry[1])).join('&');
+      }
+    };
+  }
+
+  if (typeof URL === 'undefined') {
+    globalThis.URL = class URL {
+      constructor(value, base) {
+        const input = String(value || '');
+        this.href = /^https?:\/\//i.test(input)
+          ? input
+          : String(base || '').replace(/\/$/, '') + '/' + input.replace(/^\//, '');
+        const match = /^(https?):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i.exec(this.href) || [];
+        this.protocol = match[1] ? match[1] + ':' : '';
+        this.host = match[2] || '';
+        this.hostname = this.host.split(':')[0];
+        this.origin = this.protocol && this.host ? this.protocol + '//' + this.host : '';
+        this.pathname = match[3] || '/';
+        this.search = match[4] ? '?' + match[4] : '';
+        this.hash = match[5] ? '#' + match[5] : '';
+        this.searchParams = new URLSearchParams(match[4] || '');
+      }
+      toString() { return this.href; }
+    };
+  }
+
+  function __tetoElements(value) {
+    if (value == null) return [];
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (typeof value === 'string') return Array.from(__tetoParseDocument(value).children || []);
+    if (typeof value.length === 'number' && !value.nodeType) return Array.from(value).filter(Boolean);
+    return [value];
+  }
+
+  function __tetoSelect(root, selector) {
+    let query = String(selector || '*');
+    let contains = null;
+    const match = /:contains\((?:"([^"]*)"|'([^']*)'|([^)]*))\)/.exec(query);
+    if (match) {
+      contains = match[1] || match[2] || match[3] || '';
+      query = query.replace(match[0], '') || '*';
+    }
+    let results = [];
+    try { results = Array.from(root.querySelectorAll(query)); } catch (_) { return []; }
+    return contains == null
+      ? results
+      : results.filter(node => String(node.textContent || '').includes(contains));
+  }
+
+  function __tetoSelection(value) {
+    const elements = __tetoElements(value);
+    function selection(selector) {
+      if (selector == null) return selection;
+      return __tetoSelection(elements.flatMap(node => __tetoSelect(node, selector)));
+    }
+    selection.length = elements.length;
+    elements.forEach((node, index) => { selection[index] = node; });
+    selection.toArray = () => elements.slice();
+    selection.get = index => index == null ? elements.slice() : elements[index < 0 ? elements.length + index : index];
+    selection.eq = index => __tetoSelection(selection.get(index));
+    selection.first = () => selection.eq(0);
+    selection.last = () => selection.eq(-1);
+    selection.each = callback => {
+      elements.forEach((node, index) => callback.call(node, index, node));
+      return selection;
+    };
+    selection.map = callback => ({
+      get: () => elements.map((node, index) => callback.call(node, index, node)),
+      toArray: () => elements.map((node, index) => callback.call(node, index, node)),
+    });
+    selection.text = () => elements.map(node => node.textContent || '').join('');
+    selection.html = () => elements[0] ? elements[0].innerHTML || '' : '';
+    selection.attr = name => elements[0] && elements[0].getAttribute ? elements[0].getAttribute(name) : undefined;
+    selection.data = name => selection.attr('data-' + String(name).replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()));
+    selection.val = () => elements[0] ? elements[0].value : undefined;
+    selection.hasClass = name => !!(elements[0] && elements[0].classList && elements[0].classList.contains(name));
+    selection.find = selector => __tetoSelection(elements.flatMap(node => __tetoSelect(node, selector)));
+    selection.children = selector => {
+      const children = elements.flatMap(node => Array.from(node.children || []));
+      if (!selector) return __tetoSelection(children);
+      return __tetoSelection(children.filter(node => node.matches && node.matches(selector)));
+    };
+    selection.parent = () => __tetoSelection(elements.map(node => node.parentElement));
+    selection.next = () => __tetoSelection(elements.map(node => node.nextElementSibling));
+    selection.prev = () => __tetoSelection(elements.map(node => node.previousElementSibling));
+    selection.filter = selector => __tetoSelection(elements.filter(node => node.matches && node.matches(selector)));
+    return selection;
+  }
+
+  function LoadDoc(source) {
+    const document = __tetoParseDocument(String(source || ''));
+    function loaded(selector) {
+      if (typeof selector === 'string') return __tetoSelection(__tetoSelect(document, selector));
+      return __tetoSelection(selector);
+    }
+    loaded.root = () => __tetoSelection(document.documentElement);
+    loaded.html = () => document.documentElement ? document.documentElement.outerHTML : '';
+    return loaded;
+  }
+
+  async function _makeRequest(url, options) {
+    const response = await fetch(url, options || {});
+    const body = await response.text();
+    if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
+    return {status: response.status, headers: response.headers, body, data: body, text: body, url: response.url};
+  }
+
+  async function $sleep() {}
+
+  function normalizeQuery(value) {
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function __tetoSimilarity(left, right) {
+    const a = new Set(normalizeQuery(left).split(' ').filter(Boolean));
+    const b = new Set(normalizeQuery(right).split(' ').filter(Boolean));
+    if (!a.size || !b.size) return 0;
+    let common = 0;
+    a.forEach(item => { if (b.has(item)) common++; });
+    return common / Math.max(a.size, b.size);
+  }
+
+  function filterBySimilarity(items, query) {
+    return (Array.isArray(items) ? items : []).slice().sort((left, right) =>
+      __tetoSimilarity(right.title || right.name, query) - __tetoSimilarity(left.title || left.name, query)
+    );
+  }
+
+  globalThis.$scannerUtils = {
+    normalizeQuery,
+    sanitizeQuery(value) { return normalizeQuery(value); },
+    buildSearchQuery(value) { return normalizeQuery(value); },
+    buildSmartSearchTitles(values) {
+      const titles = [];
+      (Array.isArray(values) ? values : [values]).forEach(value => {
+        const title = String(value || '').trim();
+        if (title && !titles.includes(title)) titles.push(title);
+      });
+      return {titles, season: null, part: null};
+    },
+    filterBySimilarity,
+    findBestMatch(items, query) { return filterBySimilarity(items, query)[0] || null; },
+    similarity: __tetoSimilarity,
+    compareTwoStrings: __tetoSimilarity,
+  };
 ''';

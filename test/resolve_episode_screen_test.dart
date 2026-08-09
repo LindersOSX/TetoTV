@@ -69,6 +69,14 @@ void main() {
     );
     await _pumpUntilFound(tester, find.text('Dubbed release'));
     expect(find.text('Dubbed release'), findsOneWidget);
+    expect(find.text('More filters'), findsOneWidget);
+    expect(find.text('QUALITY'), findsNothing);
+    expect(find.text('BATCHES ON'), findsNothing);
+
+    await tester.tap(find.text('More filters'));
+    await tester.pumpAndSettle();
+    expect(find.text('QUALITY'), findsOneWidget);
+    expect(find.text('BATCHES ON'), findsOneWidget);
 
     // A held/duplicated remote-select event must not add the same magnet twice.
     await tester.tap(find.text('Dubbed release'));

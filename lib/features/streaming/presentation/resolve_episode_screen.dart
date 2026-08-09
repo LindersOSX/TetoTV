@@ -211,6 +211,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   bool _loadingReleases = false;
   bool _resolving = false;
   bool _showManual = false;
+  bool _showAdvancedFilters = false;
   double _progress = 0;
   String _status = 'Preparing…';
   String? _error;
@@ -825,6 +826,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         onHdrChanged: (value) => _updatePicker(() => _hdrFilter = value),
         sortMode: _sortMode,
         onSortChanged: (value) => _updatePicker(() => _sortMode = value),
+        showAdvancedFilters: _showAdvancedFilters,
+        onAdvancedFiltersChanged: (value) =>
+            setState(() => _showAdvancedFilters = value),
         allowBatchStreams: _allowBatchStreams,
         onBatchChanged: (value) =>
             _updatePicker(() => _allowBatchStreams = value),
@@ -998,6 +1002,8 @@ class _StreamPicker extends StatelessWidget {
     required this.onHdrChanged,
     required this.sortMode,
     required this.onSortChanged,
+    required this.showAdvancedFilters,
+    required this.onAdvancedFiltersChanged,
     required this.allowBatchStreams,
     required this.onBatchChanged,
     required this.onSelected,
@@ -1029,6 +1035,8 @@ class _StreamPicker extends StatelessWidget {
   final ValueChanged<_StreamHdrFilter> onHdrChanged;
   final _StreamSortMode sortMode;
   final ValueChanged<_StreamSortMode> onSortChanged;
+  final bool showAdvancedFilters;
+  final ValueChanged<bool> onAdvancedFiltersChanged;
   final bool allowBatchStreams;
   final ValueChanged<bool> onBatchChanged;
   final ValueChanged<ReleaseCandidate> onSelected;
@@ -1040,6 +1048,13 @@ class _StreamPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final activeAdvancedFilters = [
+      qualityFilter != _StreamQualityFilter.any,
+      codecFilter != _StreamCodecFilter.any,
+      hdrFilter != _StreamHdrFilter.any,
+      !allowBatchStreams,
+      sortMode != _StreamSortMode.compatibility,
+    ].where((active) => active).length;
     return SizedBox(
       width: 1260,
       child: Column(
@@ -1072,8 +1087,10 @@ class _StreamPicker extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  if (debridEnabled) ...[
-                    for (final service in DebridService.values) ...[
+                  if (debridEnabled && connectedServices.length > 1) ...[
+                    for (final service in DebridService.values.where(
+                      connectedServices.contains,
+                    )) ...[
                       _FilterButton(
                         label: service.shortName,
                         selected: selectedService == service,
@@ -1101,6 +1118,19 @@ class _StreamPicker extends StatelessWidget {
                     const SizedBox(width: 8),
                   ],
                   _CompactAction(
+                    icon: showAdvancedFilters
+                        ? Icons.tune_rounded
+                        : Icons.tune_outlined,
+                    label: activeAdvancedFilters == 0
+                        ? (showAdvancedFilters
+                              ? 'Hide filters'
+                              : 'More filters')
+                        : 'Filters ($activeAdvancedFilters)',
+                    onPressed: () =>
+                        onAdvancedFiltersChanged(!showAdvancedFilters),
+                  ),
+                  const SizedBox(width: 8),
+                  _CompactAction(
                     icon: Icons.refresh_rounded,
                     label: 'Refresh',
                     onPressed: onRefresh,
@@ -1116,61 +1146,72 @@ class _StreamPicker extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              const _FilterLabel('QUALITY'),
-              for (final value in _StreamQualityFilter.values)
-                _FilterButton(
-                  label: switch (value) {
-                    _StreamQualityFilter.any => 'ANY',
-                    _StreamQualityFilter.p2160 => '4K',
-                    _StreamQualityFilter.p1080 => '1080P',
-                    _StreamQualityFilter.p720 => '720P',
-                  },
-                  selected: qualityFilter == value,
-                  onPressed: () => onQualityChanged(value),
-                ),
-              const _FilterLabel('CODEC'),
-              for (final value in _StreamCodecFilter.values)
-                _FilterButton(
-                  label: switch (value) {
-                    _StreamCodecFilter.any => 'ANY',
-                    _StreamCodecFilter.h264 => 'H.264',
-                    _StreamCodecFilter.hevc => 'HEVC',
-                    _StreamCodecFilter.av1 => 'AV1',
-                  },
-                  selected: codecFilter == value,
-                  onPressed: () => onCodecChanged(value),
-                ),
-              const _FilterLabel('COLOR'),
-              for (final value in _StreamHdrFilter.values)
-                _FilterButton(
-                  label: value.name.toUpperCase(),
-                  selected: hdrFilter == value,
-                  onPressed: () => onHdrChanged(value),
-                ),
-              _FilterButton(
-                label: allowBatchStreams ? 'BATCHES ON' : 'BATCHES OFF',
-                selected: allowBatchStreams,
-                onPressed: () => onBatchChanged(!allowBatchStreams),
+          if (showAdvancedFilters) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF111111),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: .08)),
               ),
-              const _FilterLabel('SORT'),
-              for (final value in _StreamSortMode.values)
-                _FilterButton(
-                  label: switch (value) {
-                    _StreamSortMode.compatibility => 'BEST',
-                    _StreamSortMode.seeders => 'SEEDERS',
-                    _StreamSortMode.size => 'SMALLEST',
-                  },
-                  selected: sortMode == value,
-                  onPressed: () => onSortChanged(value),
-                ),
-            ],
-          ),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  const _FilterLabel('QUALITY'),
+                  for (final value in _StreamQualityFilter.values)
+                    _FilterButton(
+                      label: switch (value) {
+                        _StreamQualityFilter.any => 'ANY',
+                        _StreamQualityFilter.p2160 => '4K',
+                        _StreamQualityFilter.p1080 => '1080P',
+                        _StreamQualityFilter.p720 => '720P',
+                      },
+                      selected: qualityFilter == value,
+                      onPressed: () => onQualityChanged(value),
+                    ),
+                  const _FilterLabel('CODEC'),
+                  for (final value in _StreamCodecFilter.values)
+                    _FilterButton(
+                      label: switch (value) {
+                        _StreamCodecFilter.any => 'ANY',
+                        _StreamCodecFilter.h264 => 'H.264',
+                        _StreamCodecFilter.hevc => 'HEVC',
+                        _StreamCodecFilter.av1 => 'AV1',
+                      },
+                      selected: codecFilter == value,
+                      onPressed: () => onCodecChanged(value),
+                    ),
+                  const _FilterLabel('COLOR'),
+                  for (final value in _StreamHdrFilter.values)
+                    _FilterButton(
+                      label: value.name.toUpperCase(),
+                      selected: hdrFilter == value,
+                      onPressed: () => onHdrChanged(value),
+                    ),
+                  _FilterButton(
+                    label: allowBatchStreams ? 'BATCHES ON' : 'BATCHES OFF',
+                    selected: allowBatchStreams,
+                    onPressed: () => onBatchChanged(!allowBatchStreams),
+                  ),
+                  const _FilterLabel('SORT'),
+                  for (final value in _StreamSortMode.values)
+                    _FilterButton(
+                      label: switch (value) {
+                        _StreamSortMode.compatibility => 'BEST',
+                        _StreamSortMode.seeders => 'SEEDERS',
+                        _StreamSortMode.size => 'SMALLEST',
+                      },
+                      selected: sortMode == value,
+                      onPressed: () => onSortChanged(value),
+                    ),
+                ],
+              ),
+            ),
+          ],
           if (error case final message?) ...[
             const SizedBox(height: 14),
             Container(

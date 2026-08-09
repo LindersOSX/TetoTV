@@ -1,7 +1,7 @@
 name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
-version: 1.10.0+39000
+version: 1.10.1+39001
 
 environment:
   sdk: ^3.12.2
@@ -61,5 +61,10 @@ flutter:
   assets:
     - assets/branding/tetotv_icon.png
     - assets/fonts/NotoSans-Regular.ttf
+    - assets/typescript/sucrase.js
+    - assets/typescript/SUCRASE_LICENSE.txt
+    - assets/addon_runtime/linkedom.js
+    - assets/addon_runtime/LINKEDOM_LICENSE.txt
+    - assets/addon_runtime/CRYPTO_JS_LICENSE.txt
     - assets/subtitles/libass_smoke.ass
     - assets/videos/vlc_smoke.mp4

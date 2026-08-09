@@ -18,6 +18,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+enum _SettingsArea { home, streaming, tracking, appearance, updates }
+
 class AccountsScreen extends ConsumerStatefulWidget {
   const AccountsScreen({super.key});
 
@@ -26,6 +28,7 @@ class AccountsScreen extends ConsumerStatefulWidget {
 }
 
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
+  _SettingsArea _activeArea = _SettingsArea.home;
   final _tokenController = TextEditingController();
   final _torBoxTokenController = TextEditingController();
   final _githubTokenController = TextEditingController();
@@ -63,6 +66,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.updates.automatic',
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
+  final _areaFocusNodes = {
+    for (final area in _SettingsArea.values)
+      area: FocusNode(debugLabel: 'accounts.area.${area.name}'),
+  };
   final _shelfFocusNodes = {
     for (final shelf in HomeShelf.values)
       shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
@@ -97,6 +104,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _githubSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
+    for (final node in _areaFocusNodes.values) {
+      node.dispose();
+    }
     for (final node in _shelfFocusNodes.values) {
       node.dispose();
     }
@@ -127,8 +137,30 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       for (final shelf in HomeShelf.values) _shelfFocusNodes[shelf]!,
     ];
     final shelfIndex = current == null ? -1 : shelfNodes.indexOf(current);
+    final areaNodes = [
+      for (final area in _SettingsArea.values) _areaFocusNodes[area]!,
+    ];
+    final areaIndex = current == null ? -1 : areaNodes.indexOf(current);
 
-    if (shelfIndex >= 0) {
+    if (areaIndex >= 0) {
+      if (key == LogicalKeyboardKey.arrowLeft && areaIndex > 0) {
+        target = areaNodes[areaIndex - 1];
+      }
+      if (key == LogicalKeyboardKey.arrowRight &&
+          areaIndex < areaNodes.length - 1) {
+        target = areaNodes[areaIndex + 1];
+      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _titleLanguageFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = switch (_activeArea) {
+          _SettingsArea.home => shelfNodes.first,
+          _SettingsArea.streaming => _debridProviderFocus,
+          _SettingsArea.tracking => _trackingProviderFocus,
+          _SettingsArea.appearance => _appearanceFocus,
+          _SettingsArea.updates => _githubTokenFocus,
+        };
+      }
+    } else if (shelfIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowLeft && shelfIndex > 0) {
         target = shelfNodes[shelfIndex - 1];
       }
@@ -144,20 +176,24 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     }
 
-    if (shelfIndex >= 0) {
+    if (areaIndex >= 0 || shelfIndex >= 0) {
       // Shelf navigation was handled above.
     } else if (current == _backFocus) {
       if (key == LogicalKeyboardKey.arrowRight) {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = shelfNodes.first;
+        target = _areaFocusNodes[_activeArea];
       }
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = shelfNodes.first;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _areaFocusNodes[_activeArea];
+      }
     } else if (current == _debridProviderFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = shelfNodes.first;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.streaming];
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = selectedDebridAction;
     } else if (current == _debridConnectFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
@@ -204,7 +240,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _trackingProviderFocus;
     } else if (current == _trackingProviderFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _marketplaceFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.tracking];
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = selectedTrackingAction;
     } else if (current == _anilistFocus) {
       if (key == LogicalKeyboardKey.arrowDown &&
@@ -237,7 +275,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) target = _malTokenFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
     } else if (current == _githubTokenFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _malSaveFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.updates];
+      }
       if (key == LogicalKeyboardKey.arrowRight) target = _githubSaveFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _automaticUpdatesFocus;
@@ -256,7 +296,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     }
 
-    if (target == null) return KeyEventResult.ignored;
+    if (target == null || target.context == null) {
+      return KeyEventResult.ignored;
+    }
     target.requestFocus();
     return KeyEventResult.handled;
   }
@@ -299,7 +341,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             const SizedBox(width: 12),
                             Expanded(
                               child: Text(
-                                'Accounts & streaming',
+                                'Settings',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.titleLarge,
@@ -334,7 +376,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(width: 18),
                       Expanded(
                         child: Text(
-                          'Accounts & streaming',
+                          'Settings',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.headlineSmall,
@@ -370,7 +412,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                   );
                 },
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
+              _SettingsAreaTabs(
+                selected: _activeArea,
+                focusNodes: _areaFocusNodes,
+                onSelected: (area) => setState(() => _activeArea = area),
+              ),
+              const SizedBox(height: 12),
               Expanded(
                 child: ListView(
                   keyboardDismissBehavior:
@@ -379,350 +427,443 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     bottom: MediaQuery.viewInsetsOf(context).bottom + 24,
                   ),
                   children: [
-                    _Panel(
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final label = const SizedBox(
-                            width: 150,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'HOME SHELVES',
-                                  style: TextStyle(
-                                    color: AppColors.accentBright,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w900,
+                    if (_activeArea == _SettingsArea.home) ...[
+                      const _SectionHeader(
+                        icon: Icons.home_outlined,
+                        title: 'HOME & TITLES',
+                        subtitle:
+                            'Control the shelves shown on Home. Title language is available above.',
+                      ),
+                      const SizedBox(height: 8),
+                      _Panel(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final label = const SizedBox(
+                              width: 150,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'HOME SHELVES',
+                                    style: TextStyle(
+                                      color: AppColors.accentBright,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w900,
+                                    ),
                                   ),
-                                ),
-                                SizedBox(height: 3),
-                                Text(
-                                  'Choose what appears on Home',
-                                  style: TextStyle(
-                                    color: AppColors.textMuted,
-                                    fontSize: 9,
+                                  SizedBox(height: 3),
+                                  Text(
+                                    'Choose what appears on Home',
+                                    style: TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 9,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                          final toggles = Wrap(
-                            spacing: 7,
-                            runSpacing: 7,
-                            children: [
-                              for (final shelf in HomeShelf.values)
-                                _ShelfToggle(
-                                  shelf: shelf,
-                                  enabled: homeShelves.contains(shelf),
-                                  focusNode: _shelfFocusNodes[shelf]!,
-                                  onPressed: () => ref
-                                      .read(
-                                        homeShelfPreferencesProvider.notifier,
-                                      )
-                                      .toggle(shelf),
-                                ),
-                            ],
-                          );
-                          if (constraints.maxWidth < 600) {
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                                ],
+                              ),
+                            );
+                            final toggles = Wrap(
+                              spacing: 7,
+                              runSpacing: 7,
                               children: [
-                                label,
-                                const SizedBox(height: 10),
-                                toggles,
+                                for (final shelf in HomeShelf.values)
+                                  _ShelfToggle(
+                                    shelf: shelf,
+                                    enabled: homeShelves.contains(shelf),
+                                    focusNode: _shelfFocusNodes[shelf]!,
+                                    onPressed: () => ref
+                                        .read(
+                                          homeShelfPreferencesProvider.notifier,
+                                        )
+                                        .toggle(shelf),
+                                  ),
                               ],
                             );
-                          }
-                          return Row(
-                            children: [
-                              label,
-                              Expanded(child: toggles),
-                            ],
-                          );
-                        },
+                            if (constraints.maxWidth < 600) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  label,
+                                  const SizedBox(height: 10),
+                                  toggles,
+                                ],
+                              );
+                            }
+                            return Row(
+                              children: [
+                                label,
+                                Expanded(child: toggles),
+                              ],
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    const _SectionHeader(
-                      icon: Icons.cloud_done_rounded,
-                      title: 'DEBRID STREAMING',
-                      subtitle: 'Choose the provider used to resolve streams.',
-                    ),
-                    const SizedBox(height: 8),
-                    _SettingsSelection<DebridService>(
-                      focusNode: _debridProviderFocus,
-                      label: 'Debrid provider',
-                      value: preferences.debridProvider,
-                      options: [
-                        for (final service in DebridService.values)
-                          _SettingsOption(
-                            value: service,
-                            label: service.displayName,
-                            detail:
-                                (service == DebridService.realDebrid
-                                    ? debrid.hasSavedToken
-                                    : torBox.hasSavedToken)
-                                ? 'Connected'
-                                : 'Not connected',
-                          ),
-                      ],
-                      onSelected: ref
-                          .read(settingsPreferencesProvider.notifier)
-                          .setDebridProvider,
-                    ),
-                    const SizedBox(height: 8),
-                    if (preferences.debridProvider == DebridService.realDebrid)
-                      _RealDebridPanel(
-                        state: debrid,
-                        tokenController: _tokenController,
-                        onSave: () async {
-                          final saved = await ref
+                      const SizedBox(height: 10),
+                    ],
+                    if (_activeArea == _SettingsArea.streaming) ...[
+                      const _SectionHeader(
+                        icon: Icons.cloud_done_rounded,
+                        title: 'DEBRID STREAMING',
+                        subtitle:
+                            'Choose the provider used to resolve streams.',
+                      ),
+                      const SizedBox(height: 8),
+                      _SettingsSelection<DebridService>(
+                        focusNode: _debridProviderFocus,
+                        label: 'Debrid provider',
+                        value: preferences.debridProvider,
+                        options: [
+                          for (final service in DebridService.values)
+                            _SettingsOption(
+                              value: service,
+                              label: service.displayName,
+                              detail:
+                                  (service == DebridService.realDebrid
+                                      ? debrid.hasSavedToken
+                                      : torBox.hasSavedToken)
+                                  ? 'Connected'
+                                  : 'Not connected',
+                            ),
+                        ],
+                        onSelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setDebridProvider,
+                      ),
+                      const SizedBox(height: 8),
+                      if (preferences.debridProvider ==
+                          DebridService.realDebrid)
+                        _RealDebridPanel(
+                          state: debrid,
+                          tokenController: _tokenController,
+                          onSave: () async {
+                            final saved = await ref
+                                .read(
+                                  realDebridSettingsControllerProvider.notifier,
+                                )
+                                .saveAndValidate(_tokenController.text);
+                            if (saved) _tokenController.clear();
+                          },
+                          onDisconnect: () => ref
                               .read(
                                 realDebridSettingsControllerProvider.notifier,
                               )
-                              .saveAndValidate(_tokenController.text);
-                          if (saved) _tokenController.clear();
-                        },
-                        onDisconnect: () => ref
-                            .read(realDebridSettingsControllerProvider.notifier)
-                            .disconnect(),
-                        onDeviceConnect: () => context.push('/pair/realdebrid'),
-                        connectFocusNode: _debridConnectFocus,
-                        tokenFocusNode: _tokenFocus,
-                        saveFocusNode: _tokenSaveFocus,
-                      )
-                    else
-                      _TorBoxPanel(
-                        state: torBox,
-                        tokenController: _torBoxTokenController,
-                        onSave: () async {
-                          final saved = await ref
+                              .disconnect(),
+                          onDeviceConnect: () =>
+                              context.push('/pair/realdebrid'),
+                          connectFocusNode: _debridConnectFocus,
+                          tokenFocusNode: _tokenFocus,
+                          saveFocusNode: _tokenSaveFocus,
+                        )
+                      else
+                        _TorBoxPanel(
+                          state: torBox,
+                          tokenController: _torBoxTokenController,
+                          onSave: () async {
+                            final saved = await ref
+                                .read(torBoxSettingsControllerProvider.notifier)
+                                .saveAndValidate(_torBoxTokenController.text);
+                            if (saved) _torBoxTokenController.clear();
+                          },
+                          onDisconnect: () => ref
                               .read(torBoxSettingsControllerProvider.notifier)
-                              .saveAndValidate(_torBoxTokenController.text);
-                          if (saved) _torBoxTokenController.clear();
-                        },
-                        onDisconnect: () => ref
-                            .read(torBoxSettingsControllerProvider.notifier)
-                            .disconnect(),
-                        onDeviceConnect: () async {
-                          await context.push('/pair/torbox');
+                              .disconnect(),
+                          onDeviceConnect: () async {
+                            await context.push('/pair/torbox');
+                            await ref
+                                .read(torBoxSettingsControllerProvider.notifier)
+                                .load();
+                          },
+                          actionFocusNode: _torBoxActionFocus,
+                          tokenFocusNode: _torBoxTokenFocus,
+                          saveFocusNode: _torBoxSaveFocus,
+                        ),
+                      const SizedBox(height: 14),
+                      const _SectionHeader(
+                        icon: Icons.stream_rounded,
+                        title: 'STREAM SOURCES',
+                        subtitle:
+                            'Choose which source types are searched for each episode.',
+                      ),
+                      const SizedBox(height: 8),
+                      _StreamingSourcesPanel(
+                        preferences: preferences,
+                        debridFocusNode: _debridStreamsFocus,
+                        webFocusNode: _webStreamsFocus,
+                        marketplaceFocusNode: _marketplaceFocus,
+                        onDebridChanged: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setDebridStreamsEnabled,
+                        onWebChanged: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setWebStreamsEnabled,
+                        onMarketplace: () =>
+                            context.push('/settings/marketplace'),
+                      ),
+                      const SizedBox(height: 14),
+                      const _DebridOnlyPanel(),
+                      const SizedBox(height: 10),
+                    ],
+                    if (_activeArea == _SettingsArea.tracking) ...[
+                      const _SectionHeader(
+                        icon: Icons.sync_alt_rounded,
+                        title: 'ANIME TRACKING',
+                        subtitle: 'Configure one list service at a time.',
+                      ),
+                      const SizedBox(height: 8),
+                      _SettingsSelection<TrackingProvider>(
+                        focusNode: _trackingProviderFocus,
+                        label: 'Anime-list provider',
+                        value: preferences.trackingProvider,
+                        options: [
+                          for (final provider in TrackingProvider.values)
+                            _SettingsOption(
+                              value: provider,
+                              label: provider.displayName,
+                              detail: tracking.isConnected(provider)
+                                  ? 'Connected as ${tracking.usernames[provider]}'
+                                  : 'Not connected',
+                            ),
+                        ],
+                        onSelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setTrackingProvider,
+                      ),
+                      const SizedBox(height: 8),
+                      _TrackingPanel(
+                        provider: preferences.trackingProvider,
+                        color:
+                            preferences.trackingProvider ==
+                                TrackingProvider.anilist
+                            ? AppColors.accentBright
+                            : const Color(0xFFB41F3D),
+                        description:
+                            preferences.trackingProvider ==
+                                TrackingProvider.anilist
+                            ? 'Seasonal discovery, lists, and automatic episode progress.'
+                            : 'Sync watch progress and MyAnimeList statuses automatically.',
+                        username:
+                            tracking.usernames[preferences.trackingProvider],
+                        error: tracking.errors[preferences.trackingProvider],
+                        isLoading: tracking.isLoading,
+                        onConnect: () async {
+                          await context.push(
+                            preferences.trackingProvider ==
+                                    TrackingProvider.anilist
+                                ? '/pair/anilist'
+                                : '/pair/myanimelist',
+                          );
                           await ref
-                              .read(torBoxSettingsControllerProvider.notifier)
+                              .read(trackingAccountsControllerProvider.notifier)
                               .load();
                         },
-                        actionFocusNode: _torBoxActionFocus,
-                        tokenFocusNode: _torBoxTokenFocus,
-                        saveFocusNode: _torBoxSaveFocus,
-                      ),
-                    const SizedBox(height: 14),
-                    const _SectionHeader(
-                      icon: Icons.stream_rounded,
-                      title: 'STREAM SOURCES',
-                      subtitle:
-                          'Choose which source types are searched for each episode.',
-                    ),
-                    const SizedBox(height: 8),
-                    _StreamingSourcesPanel(
-                      preferences: preferences,
-                      debridFocusNode: _debridStreamsFocus,
-                      webFocusNode: _webStreamsFocus,
-                      marketplaceFocusNode: _marketplaceFocus,
-                      onDebridChanged: ref
-                          .read(settingsPreferencesProvider.notifier)
-                          .setDebridStreamsEnabled,
-                      onWebChanged: ref
-                          .read(settingsPreferencesProvider.notifier)
-                          .setWebStreamsEnabled,
-                      onMarketplace: () =>
-                          context.push('/settings/marketplace'),
-                    ),
-                    const SizedBox(height: 14),
-                    const _SectionHeader(
-                      icon: Icons.sync_alt_rounded,
-                      title: 'ANIME TRACKING',
-                      subtitle: 'Configure one list service at a time.',
-                    ),
-                    const SizedBox(height: 8),
-                    _SettingsSelection<TrackingProvider>(
-                      focusNode: _trackingProviderFocus,
-                      label: 'Anime-list provider',
-                      value: preferences.trackingProvider,
-                      options: [
-                        for (final provider in TrackingProvider.values)
-                          _SettingsOption(
-                            value: provider,
-                            label: provider.displayName,
-                            detail: tracking.isConnected(provider)
-                                ? 'Connected as ${tracking.usernames[provider]}'
-                                : 'Not connected',
-                          ),
-                      ],
-                      onSelected: ref
-                          .read(settingsPreferencesProvider.notifier)
-                          .setTrackingProvider,
-                    ),
-                    const SizedBox(height: 8),
-                    _TrackingPanel(
-                      provider: preferences.trackingProvider,
-                      color:
-                          preferences.trackingProvider ==
-                              TrackingProvider.anilist
-                          ? AppColors.accentBright
-                          : const Color(0xFFB41F3D),
-                      description:
-                          preferences.trackingProvider ==
-                              TrackingProvider.anilist
-                          ? 'Seasonal discovery, lists, and automatic episode progress.'
-                          : 'Sync watch progress and MyAnimeList statuses automatically.',
-                      username:
-                          tracking.usernames[preferences.trackingProvider],
-                      error: tracking.errors[preferences.trackingProvider],
-                      isLoading: tracking.isLoading,
-                      onConnect: () async {
-                        await context.push(
-                          preferences.trackingProvider ==
-                                  TrackingProvider.anilist
-                              ? '/pair/anilist'
-                              : '/pair/myanimelist',
-                        );
-                        await ref
+                        onDisconnect: () => ref
                             .read(trackingAccountsControllerProvider.notifier)
-                            .load();
-                      },
-                      onDisconnect: () => ref
-                          .read(trackingAccountsControllerProvider.notifier)
-                          .disconnect(preferences.trackingProvider),
-                      onSaveToken: (token) => ref
-                          .read(trackingAccountsControllerProvider.notifier)
-                          .save(preferences.trackingProvider, token),
-                      focusNode:
-                          preferences.trackingProvider ==
-                              TrackingProvider.anilist
-                          ? _anilistFocus
-                          : _malFocus,
-                      tokenFocusNode:
-                          preferences.trackingProvider ==
-                              TrackingProvider.anilist
-                          ? _anilistTokenFocus
-                          : _malTokenFocus,
-                      saveFocusNode:
-                          preferences.trackingProvider ==
-                              TrackingProvider.anilist
-                          ? _anilistSaveFocus
-                          : _malSaveFocus,
-                    ),
-                    const SizedBox(height: 10),
-                    const _DebridOnlyPanel(),
-                    const SizedBox(height: 14),
-                    const _SectionHeader(
-                      icon: Icons.palette_outlined,
-                      title: 'APPEARANCE & CONTROLS',
-                      subtitle:
-                          'Tune captions, card density, interface scale, and seeking.',
-                    ),
-                    const SizedBox(height: 8),
-                    _AppearancePanel(
-                      preferences: preferences,
-                      firstFocusNode: _appearanceFocus,
-                      controller: ref.read(
-                        settingsPreferencesProvider.notifier,
+                            .disconnect(preferences.trackingProvider),
+                        onSaveToken: (token) => ref
+                            .read(trackingAccountsControllerProvider.notifier)
+                            .save(preferences.trackingProvider, token),
+                        focusNode:
+                            preferences.trackingProvider ==
+                                TrackingProvider.anilist
+                            ? _anilistFocus
+                            : _malFocus,
+                        tokenFocusNode:
+                            preferences.trackingProvider ==
+                                TrackingProvider.anilist
+                            ? _anilistTokenFocus
+                            : _malTokenFocus,
+                        saveFocusNode:
+                            preferences.trackingProvider ==
+                                TrackingProvider.anilist
+                            ? _anilistSaveFocus
+                            : _malSaveFocus,
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    const _SectionHeader(
-                      icon: Icons.system_update_alt_rounded,
-                      title: 'APP UPDATES',
-                      subtitle:
-                          'Private GitHub releases, downloaded directly to this TV.',
-                    ),
-                    const SizedBox(height: 8),
-                    _AppUpdatePanel(
-                      state: appUpdate,
-                      tokenController: _githubTokenController,
-                      tokenFocusNode: _githubTokenFocus,
-                      saveFocusNode: _githubSaveFocus,
-                      automaticFocusNode: _automaticUpdatesFocus,
-                      checkFocusNode: _checkUpdatesFocus,
-                      onSaveToken: () async {
-                        await ref
+                      const SizedBox(height: 10),
+                    ],
+                    if (_activeArea == _SettingsArea.appearance) ...[
+                      const _SectionHeader(
+                        icon: Icons.palette_outlined,
+                        title: 'APPEARANCE & CONTROLS',
+                        subtitle:
+                            'Tune captions, card density, interface scale, and seeking.',
+                      ),
+                      const SizedBox(height: 8),
+                      _AppearancePanel(
+                        preferences: preferences,
+                        firstFocusNode: _appearanceFocus,
+                        controller: ref.read(
+                          settingsPreferencesProvider.notifier,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    if (_activeArea == _SettingsArea.updates) ...[
+                      const _SectionHeader(
+                        icon: Icons.system_update_alt_rounded,
+                        title: 'APP UPDATES',
+                        subtitle:
+                            'Private GitHub releases, downloaded directly to this TV.',
+                      ),
+                      const SizedBox(height: 8),
+                      _AppUpdatePanel(
+                        state: appUpdate,
+                        tokenController: _githubTokenController,
+                        tokenFocusNode: _githubTokenFocus,
+                        saveFocusNode: _githubSaveFocus,
+                        automaticFocusNode: _automaticUpdatesFocus,
+                        checkFocusNode: _checkUpdatesFocus,
+                        onSaveToken: () async {
+                          await ref
+                              .read(appUpdateControllerProvider.notifier)
+                              .saveAccessToken(_githubTokenController.text);
+                          _githubTokenController.clear();
+                        },
+                        onRemoveToken: () => ref
                             .read(appUpdateControllerProvider.notifier)
-                            .saveAccessToken(_githubTokenController.text);
-                        _githubTokenController.clear();
-                      },
-                      onRemoveToken: () => ref
-                          .read(appUpdateControllerProvider.notifier)
-                          .saveAccessToken(''),
-                      onToggleAutomatic: () => ref
-                          .read(appUpdateControllerProvider.notifier)
-                          .setAutomaticUpdates(!appUpdate.automaticUpdates),
-                      onCheckOrInstall: () {
-                        final controller = ref.read(
-                          appUpdateControllerProvider.notifier,
-                        );
-                        if (appUpdate.downloadedPath != null) {
-                          controller.installDownloadedUpdate();
-                        } else {
-                          controller.checkForUpdates(launchInstaller: true);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    _Panel(
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.monitor_heart_outlined,
-                            color: AppColors.accentBright,
-                          ),
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Playback diagnostics',
-                                  style: TextStyle(fontWeight: FontWeight.w900),
-                                ),
-                                SizedBox(height: 3),
-                                Text(
-                                  'Exports device codecs, frame timings, and redacted failures. No tokens or stream URLs.',
-                                  style: TextStyle(
-                                    color: AppColors.textMuted,
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          _TvTextButton(
-                            label: 'Export report',
-                            icon: Icons.file_download_outlined,
-                            onPressed: () async {
-                              final file = await const DiagnosticsExporter()
-                                  .export();
-                              await Clipboard.setData(
-                                ClipboardData(text: file.path),
-                              );
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Saved diagnostics and copied the path: ${file.path}',
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
+                            .saveAccessToken(''),
+                        onToggleAutomatic: () => ref
+                            .read(appUpdateControllerProvider.notifier)
+                            .setAutomaticUpdates(!appUpdate.automaticUpdates),
+                        onCheckOrInstall: () {
+                          final controller = ref.read(
+                            appUpdateControllerProvider.notifier,
+                          );
+                          if (appUpdate.downloadedPath != null) {
+                            controller.installDownloadedUpdate();
+                          } else {
+                            controller.checkForUpdates(launchInstaller: true);
+                          }
+                        },
                       ),
-                    ),
+                      const SizedBox(height: 10),
+                      _Panel(
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.monitor_heart_outlined,
+                              color: AppColors.accentBright,
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Playback diagnostics',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    'Exports device codecs, frame timings, and redacted failures. No tokens or stream URLs.',
+                                    style: TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            _TvTextButton(
+                              label: 'Export report',
+                              icon: Icons.file_download_outlined,
+                              onPressed: () async {
+                                final file = await const DiagnosticsExporter()
+                                    .export();
+                                await Clipboard.setData(
+                                  ClipboardData(text: file.path),
+                                );
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Saved diagnostics and copied the path: ${file.path}',
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SettingsAreaTabs extends StatelessWidget {
+  const _SettingsAreaTabs({
+    required this.selected,
+    required this.focusNodes,
+    required this.onSelected,
+  });
+
+  final _SettingsArea selected;
+  final Map<_SettingsArea, FocusNode> focusNodes;
+  final ValueChanged<_SettingsArea> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        itemCount: _SettingsArea.values.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final area = _SettingsArea.values[index];
+          final active = area == selected;
+          final (icon, label) = switch (area) {
+            _SettingsArea.home => (Icons.home_outlined, 'Home'),
+            _SettingsArea.streaming => (Icons.play_circle_outline, 'Streaming'),
+            _SettingsArea.tracking => (Icons.sync_alt_rounded, 'Tracking'),
+            _SettingsArea.appearance => (Icons.palette_outlined, 'Appearance'),
+            _SettingsArea.updates => (
+              Icons.system_update_alt_rounded,
+              'Updates & support',
+            ),
+          };
+          return TvFocusable(
+            focusNode: focusNodes[area],
+            onPressed: () => onSelected(area),
+            focusScale: 1.02,
+            borderRadius: BorderRadius.circular(12),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: active ? AppColors.accent : AppColors.panel,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: active
+                      ? AppColors.accentBright
+                      : Colors.white.withValues(alpha: .08),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 19),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1548,6 +1689,86 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+class _ServiceAccountHeader extends StatelessWidget {
+  const _ServiceAccountHeader({
+    required this.icon,
+    required this.gradient,
+    required this.title,
+    required this.status,
+    required this.description,
+    required this.action,
+  });
+
+  final IconData icon;
+  final List<Color> gradient;
+  final String title;
+  final Widget status;
+  final String description;
+  final Widget action;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: gradient,
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: AppColors.ink, size: 24),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 10,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
+                  status,
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(description, style: Theme.of(context).textTheme.bodyMedium),
+            ],
+          ),
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 620) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              summary,
+              const SizedBox(height: 12),
+              Align(alignment: Alignment.centerRight, child: action),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: summary),
+            const SizedBox(width: 12),
+            action,
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _RealDebridPanel extends StatelessWidget {
   const _RealDebridPanel({
     required this.state,
@@ -1575,77 +1796,37 @@ class _RealDebridPanel extends StatelessWidget {
     return _Panel(
       child: Column(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppColors.accent, AppColors.cyan],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+          _ServiceAccountHeader(
+            icon: Icons.cloud_download_rounded,
+            gradient: const [AppColors.accent, AppColors.cyan],
+            title: 'Real-Debrid',
+            status: _StatusPill(
+              connected: account != null,
+              label: account == null
+                  ? state.hasSavedToken
+                        ? 'RECONNECTING'
+                        : 'NOT CONNECTED'
+                  : account.isPremium
+                  ? 'PREMIUM'
+                  : account.type.toUpperCase(),
+            ),
+            description: account == null
+                ? 'Authorize on your phone, or use a personal API token below.'
+                : 'Connected as ${account.username}. Cached torrents will '
+                      'resolve almost instantly.',
+            action: account == null
+                ? _TvTextButton(
+                    label: 'Connect by QR',
+                    icon: Icons.qr_code_rounded,
+                    onPressed: onDeviceConnect,
+                    focusNode: connectFocusNode,
+                  )
+                : _TvTextButton(
+                    label: 'Disconnect',
+                    icon: Icons.link_off_rounded,
+                    onPressed: onDisconnect,
+                    focusNode: connectFocusNode,
                   ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.cloud_download_rounded,
-                  color: AppColors.ink,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Real-Debrid',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(width: 12),
-                        _StatusPill(
-                          connected: account != null,
-                          label: account == null
-                              ? state.hasSavedToken
-                                    ? 'RECONNECTING'
-                                    : 'NOT CONNECTED'
-                              : account.isPremium
-                              ? 'PREMIUM'
-                              : account.type.toUpperCase(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      account == null
-                          ? 'Authorize on your phone, or use a personal API '
-                                'token below.'
-                          : 'Connected as ${account.username}. Cached torrents '
-                                'will resolve almost instantly.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (account == null)
-                _TvTextButton(
-                  label: 'Connect by QR',
-                  icon: Icons.qr_code_rounded,
-                  onPressed: onDeviceConnect,
-                  focusNode: connectFocusNode,
-                )
-              else
-                _TvTextButton(
-                  label: 'Disconnect',
-                  icon: Icons.link_off_rounded,
-                  onPressed: onDisconnect,
-                  focusNode: connectFocusNode,
-                ),
-            ],
           ),
           if (state.errorMessage case final error?) ...[
             const SizedBox(height: 10),
@@ -1715,75 +1896,35 @@ class _TorBoxPanel extends StatelessWidget {
     return _Panel(
       child: Column(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppColors.accent, AppColors.accentBright],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+          _ServiceAccountHeader(
+            icon: Icons.cloud_circle_rounded,
+            gradient: const [AppColors.accent, AppColors.accentBright],
+            title: 'TorBox',
+            status: _StatusPill(
+              connected: account != null,
+              label: account == null
+                  ? state.hasSavedToken
+                        ? 'RECONNECTING'
+                        : 'NOT CONNECTED'
+                  : account.planName.toUpperCase(),
+            ),
+            description: account == null
+                ? 'Authorize with a QR code, or enter a TorBox API token below.'
+                : 'Connected as ${account.email}. Torrent files are resolved '
+                      'and streamed through TorBox only.',
+            action: account == null
+                ? _TvTextButton(
+                    label: 'Connect by QR',
+                    icon: Icons.qr_code_rounded,
+                    onPressed: onDeviceConnect,
+                    focusNode: actionFocusNode,
+                  )
+                : _TvTextButton(
+                    label: 'Disconnect',
+                    icon: Icons.link_off_rounded,
+                    onPressed: onDisconnect,
+                    focusNode: actionFocusNode,
                   ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.cloud_circle_rounded,
-                  color: AppColors.ink,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'TorBox',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(width: 12),
-                        _StatusPill(
-                          connected: account != null,
-                          label: account == null
-                              ? state.hasSavedToken
-                                    ? 'RECONNECTING'
-                                    : 'NOT CONNECTED'
-                              : account.planName.toUpperCase(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      account == null
-                          ? 'Authorize with a QR code, or enter a TorBox API '
-                                'token below.'
-                          : 'Connected as ${account.email}. Torrent files are '
-                                'resolved and streamed through TorBox only.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (account == null)
-                _TvTextButton(
-                  label: 'Connect by QR',
-                  icon: Icons.qr_code_rounded,
-                  onPressed: onDeviceConnect,
-                  focusNode: actionFocusNode,
-                )
-              else
-                _TvTextButton(
-                  label: 'Disconnect',
-                  icon: Icons.link_off_rounded,
-                  onPressed: onDisconnect,
-                  focusNode: actionFocusNode,
-                ),
-            ],
           ),
           if (state.errorMessage case final error?) ...[
             const SizedBox(height: 10),

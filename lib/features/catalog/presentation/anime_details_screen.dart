@@ -283,29 +283,36 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                       children: [
                         SizedBox(
                           width: spacious ? 205 : 170,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(18),
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                NetworkArtwork(
-                                  url: anime.coverImageUrl,
-                                  cacheWidth: spacious ? 430 : 350,
-                                ),
-                                if (anime.score != null ||
-                                    anime.seasonYear != null ||
-                                    anime.durationMinutes != null)
-                                  Positioned(
-                                    left: 9,
-                                    right: 9,
-                                    bottom: 9,
-                                    child: PosterMetadataOverlay(
-                                      score: anime.score,
-                                      releaseYear: anime.seasonYear,
-                                      durationMinutes: anime.durationMinutes,
+                          child: Align(
+                            alignment: Alignment.center,
+                            child: AspectRatio(
+                              aspectRatio: 2 / 3,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(18),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    NetworkArtwork(
+                                      url: anime.coverImageUrl,
+                                      cacheWidth: spacious ? 430 : 350,
                                     ),
-                                  ),
-                              ],
+                                    if (anime.score != null ||
+                                        anime.seasonYear != null ||
+                                        anime.durationMinutes != null)
+                                      Positioned(
+                                        left: 9,
+                                        right: 9,
+                                        bottom: 9,
+                                        child: PosterMetadataOverlay(
+                                          score: anime.score,
+                                          releaseYear: anime.seasonYear,
+                                          durationMinutes:
+                                              anime.durationMinutes,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -438,12 +445,14 @@ class _RelatedCard extends StatelessWidget {
           padding: const EdgeInsets.all(6),
           child: Row(
             children: [
-              SizedBox(
-                width: 50 * thumbnailScale,
-                height: double.infinity,
-                child: NetworkArtwork(
-                  url: related.anime.coverImageUrl,
-                  cacheWidth: 110,
+              Align(
+                alignment: Alignment.center,
+                child: AspectRatio(
+                  aspectRatio: 2 / 3,
+                  child: NetworkArtwork(
+                    url: related.anime.coverImageUrl,
+                    cacheWidth: 110,
+                  ),
                 ),
               ),
               const SizedBox(width: 9),

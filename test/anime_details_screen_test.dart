@@ -62,6 +62,13 @@ void main() {
     expect(find.text('RELATED'), findsOneWidget);
     expect(find.text('The Example Hero Season 2'), findsOneWidget);
     expect(find.text('Episodes'), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is AspectRatio && (widget.aspectRatio - 2 / 3).abs() < .001,
+      ),
+      findsWidgets,
+    );
     expect(tester.takeException(), isNull);
   });
 }
