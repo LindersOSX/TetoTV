@@ -564,92 +564,107 @@ class _EpisodeActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.center,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _EpisodeActionButton(
-            label: 'Play from beginning',
-            icon: Icons.replay_rounded,
-            onPressed: onPlayFromBeginning,
-          ),
-          const SizedBox(height: 8),
-          _EpisodeActionButton(
-            label: resumePosition == null
-                ? (hasProgress ? 'Resume' : 'Start watching')
-                : 'Resume at ${_formatDuration(resumePosition!)}',
-            trailing: 'EP-$resumeEpisode',
-            icon: Icons.play_arrow_rounded,
-            primary: true,
-            autofocus: true,
-            onPressed: onResume,
-          ),
-          const SizedBox(height: 8),
-          _EpisodeActionButton(
-            label: 'Play selected',
-            trailing: 'EP-$selectedEpisode',
-            icon: Icons.skip_next_rounded,
-            onPressed: onPlaySelected,
-          ),
-          const SizedBox(height: 10),
-          Container(
-            height: 48,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: .07),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              children: [
-                _EpisodeStepButton(
-                  icon: Icons.remove_rounded,
-                  label: 'Previous episode',
-                  onPressed: onDecrease,
-                ),
-                Expanded(
-                  child: Text(
-                    'Episode $selectedEpisode / $totalEpisodes',
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                _EpisodeStepButton(
-                  icon: Icons.add_rounded,
-                  label: 'Next episode',
-                  onPressed: onIncrease,
-                ),
-              ],
-            ),
-          ),
-          if (onFranchise != null || onCredits != null) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                if (onFranchise != null)
-                  Expanded(
-                    child: _EpisodeActionButton(
-                      label: 'Franchise',
-                      icon: Icons.account_tree_rounded,
-                      onPressed: onFranchise!,
-                    ),
-                  ),
-                if (onFranchise != null && onCredits != null)
-                  const SizedBox(width: 8),
-                if (onCredits != null)
-                  Expanded(
-                    child: _EpisodeActionButton(
-                      label: 'Cast & crew',
-                      icon: Icons.groups_rounded,
-                      onPressed: onCredits!,
-                    ),
-                  ),
-              ],
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xF20A0A0A),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.accent.withValues(alpha: .5)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x99000000),
+              blurRadius: 24,
+              offset: Offset(0, 10),
             ),
           ],
-        ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _EpisodeActionButton(
+              label: 'Play from beginning',
+              icon: Icons.replay_rounded,
+              onPressed: onPlayFromBeginning,
+            ),
+            const SizedBox(height: 6),
+            _EpisodeActionButton(
+              label: resumePosition == null
+                  ? (hasProgress ? 'Resume' : 'Start watching')
+                  : 'Resume at ${_formatDuration(resumePosition!)}',
+              trailing: 'EP-$resumeEpisode',
+              icon: Icons.play_arrow_rounded,
+              primary: true,
+              autofocus: true,
+              onPressed: onResume,
+            ),
+            const SizedBox(height: 6),
+            _EpisodeActionButton(
+              label: 'Play selected',
+              trailing: 'EP-$selectedEpisode',
+              icon: Icons.skip_next_rounded,
+              onPressed: onPlaySelected,
+            ),
+            const SizedBox(height: 7),
+            Container(
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .07),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  _EpisodeStepButton(
+                    icon: Icons.remove_rounded,
+                    label: 'Previous episode',
+                    onPressed: onDecrease,
+                  ),
+                  Expanded(
+                    child: Text(
+                      'Episode $selectedEpisode / $totalEpisodes',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  _EpisodeStepButton(
+                    icon: Icons.add_rounded,
+                    label: 'Next episode',
+                    onPressed: onIncrease,
+                  ),
+                ],
+              ),
+            ),
+            if (onFranchise != null || onCredits != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  if (onFranchise != null)
+                    Expanded(
+                      child: _EpisodeActionButton(
+                        label: 'Franchise',
+                        icon: Icons.account_tree_rounded,
+                        onPressed: onFranchise!,
+                      ),
+                    ),
+                  if (onFranchise != null && onCredits != null)
+                    const SizedBox(width: 8),
+                  if (onCredits != null)
+                    Expanded(
+                      child: _EpisodeActionButton(
+                        label: 'Cast & crew',
+                        icon: Icons.groups_rounded,
+                        onPressed: onCredits!,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -680,7 +695,7 @@ class _EpisodeActionButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       onPressed: onPressed,
       child: Container(
-        height: 44,
+        height: 42,
         padding: const EdgeInsets.symmetric(horizontal: 13),
         color: primary ? AppColors.accent : const Color(0xFF1B1B1B),
         child: Row(

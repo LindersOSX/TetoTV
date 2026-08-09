@@ -139,6 +139,8 @@ class _NativeMedia3PlayerScreenState
           subtitleBackgroundColor: appearance.captionBackgroundColor,
           seekBackSeconds: appearance.seekBackSeconds,
           seekForwardSeconds: appearance.seekForwardSeconds,
+          autoSkipIntros: appearance.autoSkipIntros,
+          autoSkipOutros: appearance.autoSkipOutros,
           videoFit: _preferences.videoFit,
           malMediaId: _malMediaId,
           episodeNumber: _episodeNumber,
@@ -150,6 +152,12 @@ class _NativeMedia3PlayerScreenState
             : result.position;
         _resumeUpdatedAt = DateTime.now();
         await _persistResult(result);
+        if (result.firstFrameRendered) {
+          final profile = await AndroidTvBridge.instance.getDeviceProfile();
+          await ref
+              .read(tetoTvDatabaseProvider)
+              .recordPlayerSuccess(profile.key, 'media3');
+        }
         if (!mounted) return;
 
         switch (result.status) {
@@ -324,6 +332,11 @@ class _NativeMedia3PlayerScreenState
         deviceKey: profile.key,
         infoHash: infoHash,
         reason: details,
+      );
+      await database.recordPlayerFailure(profile.key, 'media3');
+      await database.recordDiagnosticEvent(
+        category: 'player-media3',
+        message: details,
       );
     } catch (_) {
       // Failure history improves future ranking but must never block fallback.

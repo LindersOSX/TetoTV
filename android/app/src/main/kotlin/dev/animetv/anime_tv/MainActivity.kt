@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PackageInfo
+import android.content.pm.FeatureInfo
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.graphics.Color
@@ -17,6 +19,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
+import android.os.StatFs
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.core.content.edit
@@ -32,6 +35,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.player.Media3PlayerActivity
 import java.io.File
+import java.security.MessageDigest
+import java.util.zip.ZipFile
 import kotlin.math.abs
 
 class MainActivity : FlutterActivity() {
@@ -56,6 +61,7 @@ class MainActivity : FlutterActivity() {
                     "isTelevision" -> result.success(isTelevision())
                     "getDeviceProfile" -> result.success(deviceProfile())
                     "getAppVersion" -> result.success(appVersion())
+                    "inspectApk" -> result.success(inspectApk(call.argument<String>("path")))
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
                     "startNativePlayer" -> {
@@ -194,6 +200,14 @@ class MainActivity : FlutterActivity() {
             putExtra(
                 Media3PlayerActivity.EXTRA_SEEK_FORWARD_MS,
                 mediaSeekForwardIncrementMs,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_AUTO_SKIP_INTROS,
+                data["autoSkipIntros"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_AUTO_SKIP_OUTROS,
+                data["autoSkipOutros"] as? Boolean ?: false,
             )
             putExtra(Media3PlayerActivity.EXTRA_VIDEO_FIT, data["videoFit"] as? String)
             putExtra(
@@ -411,6 +425,19 @@ class MainActivity : FlutterActivity() {
             result.error("APK_INSTALL_FILE", "The downloaded update could not be found.", null)
             return
         }
+        val inspection = inspectApk(file.absolutePath)
+        if (inspection["compatible"] != true) {
+            val issues = (inspection["issues"] as? List<*>)
+                ?.filterIsInstance<String>()
+                ?.joinToString(" ")
+                .orEmpty()
+            result.error(
+                "APK_INCOMPATIBLE",
+                issues.ifBlank { "The downloaded APK is not compatible with this device." },
+                inspection,
+            )
+            return
+        }
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !packageManager.canRequestPackageInstalls()
@@ -434,6 +461,109 @@ class MainActivity : FlutterActivity() {
         }
         launchApkInstaller(file)
         result.success("launched")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun inspectApk(path: String?): Map<String, Any?> {
+        val issues = mutableListOf<String>()
+        val file = path?.let(::File)
+        if (file == null || !file.isFile || !isUpdateCacheFile(file)) {
+            return mapOf(
+                "compatible" to false,
+                "issues" to listOf("The downloaded update file could not be found."),
+                "deviceAbis" to Build.SUPPORTED_ABIS.toList(),
+            )
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_CONFIGURATIONS
+        } else {
+            PackageManager.GET_SIGNATURES or PackageManager.GET_CONFIGURATIONS
+        }
+        val archive = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+        if (archive == null) {
+            return mapOf(
+                "compatible" to false,
+                "issues" to listOf("Android could not read this APK. The download may be damaged."),
+                "deviceAbis" to Build.SUPPORTED_ABIS.toList(),
+            )
+        }
+        val installed = packageManager.getPackageInfo(packageName, flags)
+        val archiveVersion = packageVersionCode(archive)
+        val installedVersion = packageVersionCode(installed)
+        val minSdk = archive.applicationInfo?.minSdkVersion ?: 1
+        val archiveAbis = runCatching {
+            ZipFile(file).use { zip ->
+                zip.entries().asSequence()
+                    .mapNotNull { entry ->
+                        Regex("^lib/([^/]+)/.+").find(entry.name)?.groupValues?.get(1)
+                    }
+                    .toSortedSet()
+                    .toList()
+            }
+        }.getOrElse {
+            issues.add("The APK archive is damaged and could not be inspected.")
+            emptyList()
+        }
+        val deviceAbis = Build.SUPPORTED_ABIS.toList()
+        val signerMatches = signerDigests(archive).isNotEmpty() &&
+            signerDigests(archive) == signerDigests(installed)
+
+        if (archive.packageName != packageName) {
+            issues.add("The APK belongs to ${archive.packageName}, not TetoTV.")
+        }
+        if (archiveVersion <= installedVersion) {
+            issues.add(
+                "The APK build ($archiveVersion) is not newer than the installed build ($installedVersion).",
+            )
+        }
+        if (!signerMatches) {
+            issues.add("The APK signing certificate does not match the installed TetoTV app.")
+        }
+        if (minSdk > Build.VERSION.SDK_INT) {
+            issues.add("This APK requires Android API $minSdk; this device is API ${Build.VERSION.SDK_INT}.")
+        }
+        if (archiveAbis.isNotEmpty() && archiveAbis.none(deviceAbis::contains)) {
+            issues.add(
+                "The APK supports ${archiveAbis.joinToString()}, but this device uses ${deviceAbis.joinToString()}.",
+            )
+        }
+        archive.reqFeatures.orEmpty()
+            .filter { it.name != null && it.flags and FeatureInfo.FLAG_REQUIRED != 0 }
+            .filterNot { packageManager.hasSystemFeature(it.name) }
+            .forEach { issues.add("This device is missing required feature ${it.name}.") }
+        val availableBytes = StatFs(file.parentFile?.absolutePath ?: cacheDir.absolutePath).availableBytes
+        if (availableBytes < file.length() * 2 + 20L * 1024L * 1024L) {
+            issues.add("There is not enough free storage to safely install this update.")
+        }
+        return mapOf(
+            "compatible" to issues.isEmpty(),
+            "issues" to issues,
+            "packageName" to archive.packageName,
+            "versionCode" to archiveVersion,
+            "minSdk" to minSdk,
+            "archiveAbis" to archiveAbis,
+            "deviceAbis" to deviceAbis,
+            "signerMatches" to signerMatches,
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun packageVersionCode(info: PackageInfo): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
+        else info.versionCode.toLong()
+
+    @Suppress("DEPRECATION")
+    private fun signerDigests(info: PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners.orEmpty()
+        } else {
+            info.signatures.orEmpty()
+        }
+        return signatures.mapTo(mutableSetOf()) { signature ->
+            MessageDigest.getInstance("SHA-256")
+                .digest(signature.toByteArray())
+                .joinToString("") { byte -> "%02x".format(byte) }
+        }
     }
 
     private fun isUpdateCacheFile(file: File): Boolean {

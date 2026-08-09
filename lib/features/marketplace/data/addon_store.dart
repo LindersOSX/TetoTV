@@ -130,4 +130,16 @@ class AddonStore {
     final db = await database.database;
     await db.delete('installed_addons', where: 'id = ?', whereArgs: [id]);
   }
+
+  Future<Map<String, ProviderHealth>> providerHealth() =>
+      database.providerHealth();
+
+  Future<void> recordProviderSuccess(String id) =>
+      database.recordProviderSuccess(id);
+
+  Future<ProviderHealth> recordProviderFailure(String id, Object error) =>
+      database.recordProviderFailure(id, error);
+
+  Future<void> clearProviderHealth(String id) =>
+      database.clearProviderHealth(id);
 }

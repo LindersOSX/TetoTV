@@ -72,6 +72,17 @@ void main() {
       expect(database.conflictAlgorithm, ConflictAlgorithm.replace);
     },
   );
+
+  test('diagnostic text redacts URLs, tokens, magnets, and info hashes', () {
+    final redacted = redactDiagnosticValue(
+      'Bearer secret https://cdn.example/video magnet:?xt=urn:btih:abc '
+      '0123456789abcdef0123456789abcdef01234567',
+    );
+    expect(redacted, isNot(contains('secret')));
+    expect(redacted, isNot(contains('cdn.example')));
+    expect(redacted, contains('[MAGNET]'));
+    expect(redacted, contains('[INFO_HASH]'));
+  });
 }
 
 class _RecordingDatabase implements Database {

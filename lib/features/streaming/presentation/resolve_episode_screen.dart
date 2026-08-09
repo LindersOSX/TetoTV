@@ -8,6 +8,8 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
+import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
+import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
@@ -55,6 +57,10 @@ final configuredReleaseSourceProvider = Provider<ReleaseSource?>((_) {
   ];
   return sources.isEmpty ? null : CompositeReleaseSource(sources);
 });
+
+final webStreamPreflightProvider = Provider<WebStreamPreflight>(
+  (_) => const WebStreamValidator().validate,
+);
 
 int tvPlaybackCompatibilityRank(
   ReleaseCandidate release, {
@@ -565,6 +571,38 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _openWebStream(WebStreamResult stream) async {
+    if (_resolving) return;
+    setState(() {
+      _resolving = true;
+      _status = 'Checking ${stream.providerName} stream…';
+      _error = null;
+    });
+    late final ValidatedWebStream validated;
+    try {
+      validated = await ref.read(webStreamPreflightProvider)(
+        stream.uri,
+        stream.headers,
+      );
+      await ref
+          .read(addonStoreProvider)
+          .recordProviderSuccess(stream.providerId);
+    } catch (error) {
+      await ref
+          .read(addonStoreProvider)
+          .recordProviderFailure(stream.providerId, error);
+      await TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'stream-preflight',
+        message: '${stream.providerName}: $error',
+      );
+      if (mounted) {
+        setState(() {
+          _resolving = false;
+          _status = 'Stream check failed';
+          _error = error.toString().replaceFirst('FormatException: ', '');
+        });
+      }
+      return;
+    }
     final release = ReleaseCandidate(
       infoHash: 'web:${stream.providerId}:${stream.uri.hashCode}',
       magnetUri: '',
@@ -579,9 +617,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     await _rememberStreamSelection(release);
     if (!mounted) return;
     final ready = StreamReady(
-      uri: stream.uri,
+      uri: validated.uri,
       displayName: release.releaseName,
-      headers: stream.headers,
+      headers: validated.headers,
       externalSubtitle: stream.subtitleUri,
       providerId: stream.providerId,
       providerName: '${stream.providerName} web stream',
@@ -589,7 +627,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final playerUri = Uri(
       path: '/player',
       queryParameters: {
-        'source': stream.uri.toString(),
+        'source': validated.uri.toString(),
         'title': '${widget.episode.title} / Episode ${widget.episode.episode}',
         'anilistId': '${widget.episode.anilistMediaId}',
         if (widget.episode.malMediaId != null)
@@ -597,6 +635,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         'episode': '${widget.episode.episode}',
       },
     );
+    setState(() => _resolving = false);
     context.pushReplacement(
       playerUri.toString(),
       extra: PlaybackLaunch(

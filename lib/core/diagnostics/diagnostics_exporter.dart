@@ -14,9 +14,10 @@ class DiagnosticsExporter {
     final profile = await AndroidTvBridge.instance.getDeviceProfile(
       refresh: true,
     );
+    final version = await AndroidTvBridge.instance.getAppVersion();
     final database = await TetoTvDatabase.instance.diagnosticsSnapshot();
     final payload = <String, Object?>{
-      'app': {'name': 'TetoTV', 'version': '1.5.0', 'build': 30000},
+      'app': {'name': 'TetoTV', 'version': version.name, 'build': version.code},
       'device': profile.toJson(),
       'database': database,
       'privacy':

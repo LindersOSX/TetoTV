@@ -1213,6 +1213,28 @@ class _AppearancePanel extends StatelessWidget {
                 ),
             ],
           ),
+          _PreferenceRow(
+            label: 'Auto-skip intro',
+            children: [
+              _PreferenceChip(
+                label: preferences.autoSkipIntros ? 'On' : 'Off',
+                selected: preferences.autoSkipIntros,
+                onPressed: () =>
+                    controller.setAutoSkipIntros(!preferences.autoSkipIntros),
+              ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Auto-skip outro',
+            children: [
+              _PreferenceChip(
+                label: preferences.autoSkipOutros ? 'On' : 'Off',
+                selected: preferences.autoSkipOutros,
+                onPressed: () =>
+                    controller.setAutoSkipOutros(!preferences.autoSkipOutros),
+              ),
+            ],
+          ),
           const SizedBox(height: 3),
           Align(
             alignment: Alignment.centerRight,
@@ -1558,6 +1580,38 @@ class _AppUpdatePanel extends StatelessWidget {
               fontSize: 10,
             ),
           ),
+          if (state.release?.notes.trim().isNotEmpty == true) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: .35),
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(color: Colors.white.withValues(alpha: .07)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'WHAT’S NEW',
+                    style: TextStyle(
+                      color: AppColors.accentBright,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    state.release!.notes.trim(),
+                    maxLines: 8,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, height: 1.35),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,

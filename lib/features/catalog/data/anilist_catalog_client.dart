@@ -568,11 +568,17 @@ class AniListCatalogClient {
         })
         .whereType<RelatedAnime>()
         .toList();
-    related.sort(
-      (a, b) => _relationPriority(
+    related.sort((a, b) {
+      final relation = _relationPriority(
         a.relationType,
-      ).compareTo(_relationPriority(b.relationType)),
-    );
+      ).compareTo(_relationPriority(b.relationType));
+      if (relation != 0) return relation;
+      final year = (a.anime.seasonYear ?? 9999).compareTo(
+        b.anime.seasonYear ?? 9999,
+      );
+      if (year != 0) return year;
+      return a.anime.title.toLowerCase().compareTo(b.anime.title.toLowerCase());
+    });
     return List.unmodifiable(related);
   }
 
@@ -582,8 +588,11 @@ class AniListCatalogClient {
     'PARENT' => 2,
     'SIDE STORY' => 3,
     'SPIN OFF' => 4,
-    'ALTERNATIVE' => 5,
-    _ => 6,
+    'SOURCE' || 'ADAPTATION' => 5,
+    'ALTERNATIVE' => 6,
+    'SUMMARY' => 7,
+    'CHARACTER' => 8,
+    _ => 9,
   };
 
   String _firstTitle(List<String?> values) {

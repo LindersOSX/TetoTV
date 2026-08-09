@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Dialog
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -85,6 +86,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         .retryOnConnectionFailure(true)
         .build()
 
+    private fun isTelevisionDevice(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+
     private var source = ""
     private var checkpointKey = ""
     private var firstFrameRendered = false
@@ -109,6 +114,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var subtitleBackgroundColor = Color.TRANSPARENT
     private var seekBackIncrementMs = 10_000L
     private var seekForwardIncrementMs = 10_000L
+    private var autoSkipIntros = false
+    private var autoSkipOutros = false
     private var preferredAudioOverrideApplied = false
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
@@ -127,6 +134,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var activeSkipSegment: NativeSkipSegment? = null
     private val skipSegments = mutableListOf<NativeSkipSegment>()
     private val autoFocusedSkipSegments = mutableSetOf<String>()
+    private val autoSkippedSegments = mutableSetOf<String>()
     private var exitDialog: AlertDialog? = null
 
     private data class NativeSkipSegment(
@@ -267,6 +275,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getLongExtra(EXTRA_SEEK_BACK_MS, 10_000L).coerceIn(5_000L, 60_000L)
         seekForwardIncrementMs =
             intent.getLongExtra(EXTRA_SEEK_FORWARD_MS, 10_000L).coerceIn(5_000L, 60_000L)
+        autoSkipIntros = intent.getBooleanExtra(EXTRA_AUTO_SKIP_INTROS, false)
+        autoSkipOutros = intent.getBooleanExtra(EXTRA_AUTO_SKIP_OUTROS, false)
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
@@ -361,7 +371,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             useController = true
             // Media3 otherwise keeps controls visible forever while paused.
             // TetoTV uses one deterministic inactivity policy in every state.
-            controllerAutoShow = false
+            controllerAutoShow = !isTelevisionDevice()
             controllerHideOnTouch = true
             controllerShowTimeoutMs = CONTROLLER_HIDE_TIMEOUT_MS.toInt()
             setShowPreviousButton(false)
@@ -677,6 +687,23 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
         if (active == activeSkipSegment) return
         activeSkipSegment = active
+        if (active != null) {
+            val autoSkip =
+                (active.kind == "opening" && autoSkipIntros) ||
+                    (active.kind == "ending" && autoSkipOutros)
+            val key = "${active.kind}:${active.startMs}"
+            if (autoSkip && autoSkippedSegments.add(key)) {
+                player.seekTo(active.endMs.coerceAtMost(safeDurationMs()))
+                activeSkipSegment = null
+                skipSegmentButton.visibility = View.GONE
+                Toast.makeText(
+                    this,
+                    if (active.kind == "opening") "Intro skipped" else "Outro skipped",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return
+            }
+        }
         skipSegmentButton.visibility = if (active == null) View.GONE else View.VISIBLE
         if (active != null) {
             skipSegmentButton.setText(
@@ -1462,6 +1489,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_SUBTITLE_BACKGROUND_COLOR = "subtitleBackgroundColor"
         const val EXTRA_SEEK_BACK_MS = "seekBackMs"
         const val EXTRA_SEEK_FORWARD_MS = "seekForwardMs"
+        const val EXTRA_AUTO_SKIP_INTROS = "autoSkipIntros"
+        const val EXTRA_AUTO_SKIP_OUTROS = "autoSkipOutros"
         const val EXTRA_VIDEO_FIT = "videoFit"
         const val EXTRA_START_FROM_BEGINNING = "startFromBeginning"
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"

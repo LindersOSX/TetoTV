@@ -1,13 +1,37 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/performance/performance_monitor.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    unawaited(
+      TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'flutter',
+        message: details.exceptionAsString(),
+        details: details.stack?.toString(),
+      ),
+    );
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    unawaited(
+      TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'platform',
+        message: error,
+        details: stack.toString(),
+      ),
+    );
+    return true;
+  };
   MediaKit.ensureInitialized();
   PerformanceMonitor.instance.start();
   final isTelevision = await AndroidTvBridge.instance.isTelevision().timeout(

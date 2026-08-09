@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -113,6 +114,36 @@ void main() {
     expect(controller.state.message, contains('read-only GitHub token'));
   });
 
+  test('blocks an incompatible APK before opening Android installer', () async {
+    final directory = await Directory.systemTemp.createTemp('tetotv-inspect-');
+    addTearDown(() => directory.delete(recursive: true));
+    FlutterSecureStorage.setMockInitialValues({
+      githubUpdateTokenStorageKey: 'read-only-token',
+    });
+    var installerOpened = false;
+    final controller = AppUpdateController(
+      storage,
+      _FakeReleaseSource(),
+      () async => '1.7.2',
+      () async => const ['arm64-v8a'],
+      () async => directory,
+      (_) async {
+        installerOpened = true;
+        return 'launched';
+      },
+      apkInspector: (_) async => const ApkCompatibilityInfo(
+        compatible: false,
+        issues: ['Signing certificate does not match.'],
+      ),
+    );
+
+    await controller.checkForUpdates(launchInstaller: true);
+
+    expect(controller.state.phase, AppUpdatePhase.error);
+    expect(controller.state.message, contains('Signing certificate'));
+    expect(installerOpened, isFalse);
+  });
+
   test('imports a build-provisioned token into encrypted storage', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final source = _FakeReleaseSource();
@@ -213,6 +244,39 @@ void main() {
       isNotNull,
     );
   });
+
+  test(
+    'release notes are claimed only after the update is installed',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        pendingReleaseNotesVersionStorageKey: '1.10.3',
+        pendingReleaseNotesStorageKey: 'Improved playback.',
+      });
+      final oldController = AppUpdateController(
+        storage,
+        _FakeReleaseSource(),
+        () async => '1.10.2+50001',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+      );
+      expect(await oldController.takeInstalledReleaseNotes(), isNull);
+
+      final updatedController = AppUpdateController(
+        storage,
+        _FakeReleaseSource(),
+        () async => '1.10.3+60001',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+      );
+      expect(
+        await updatedController.takeInstalledReleaseNotes(),
+        'Improved playback.',
+      );
+      expect(await updatedController.takeInstalledReleaseNotes(), isNull);
+    },
+  );
 
   test('future automatic-check timestamps do not suppress retries', () async {
     FlutterSecureStorage.setMockInitialValues({

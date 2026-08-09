@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -129,7 +130,7 @@ class MarketplaceScreen extends ConsumerWidget {
                             gridDelegate:
                                 const SliverGridDelegateWithMaxCrossAxisExtent(
                                   maxCrossAxisExtent: 540,
-                                  mainAxisExtent: 220,
+                                  mainAxisExtent: 260,
                                   crossAxisSpacing: 12,
                                   mainAxisSpacing: 12,
                                 ),
@@ -140,6 +141,10 @@ class MarketplaceScreen extends ConsumerWidget {
                               final addon = state.installed[index];
                               return _InstalledAddonCard(
                                 addon: addon,
+                                health: state.providerHealth[addon.manifest.id],
+                                message:
+                                    state.providerMessages[addon.manifest.id],
+                                busy: state.busyAddonId == addon.manifest.id,
                                 onToggle: () => controller.setAddonEnabled(
                                   addon.manifest.id,
                                   !addon.enabled,
@@ -148,6 +153,10 @@ class MarketplaceScreen extends ConsumerWidget {
                                   context,
                                   addon,
                                   controller,
+                                ),
+                                onTest: () => controller.testAddon(addon),
+                                onReset: () => controller.resetAddonHealth(
+                                  addon.manifest.id,
                                 ),
                               );
                             }, childCount: state.installed.length),
@@ -321,31 +330,79 @@ class _RepositoryTile extends StatelessWidget {
 class _InstalledAddonCard extends StatelessWidget {
   const _InstalledAddonCard({
     required this.addon,
+    required this.health,
+    required this.message,
+    required this.busy,
     required this.onToggle,
     required this.onUninstall,
+    required this.onTest,
+    required this.onReset,
   });
 
   final InstalledStreamingAddon addon;
+  final ProviderHealth? health;
+  final String? message;
+  final bool busy;
   final VoidCallback onToggle;
   final VoidCallback onUninstall;
+  final VoidCallback onTest;
+  final VoidCallback onReset;
 
   @override
   Widget build(BuildContext context) => _AddonShell(
     addon: addon.manifest,
-    badge: addon.enabled ? 'ENABLED' : 'DISABLED',
-    footer: Wrap(
-      spacing: 8,
-      runSpacing: 8,
+    badge: !addon.enabled
+        ? 'DISABLED'
+        : health?.isQuarantined == true
+        ? 'PAUSED AFTER FAILURES'
+        : health?.lastSuccessAt != null
+        ? 'HEALTHY'
+        : 'NOT TESTED',
+    footer: Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        _MarketplaceButton(
-          icon: addon.enabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          label: addon.enabled ? 'Disable' : 'Enable',
-          onPressed: onToggle,
-        ),
-        _MarketplaceButton(
-          icon: Icons.delete_outline_rounded,
-          label: 'Uninstall',
-          onPressed: onUninstall,
+        if (message != null || health?.lastError != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 7),
+            child: Text(
+              message ??
+                  '${health!.consecutiveFailures} failure(s): ${health!.lastError}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _MarketplaceButton(
+              icon: busy
+                  ? Icons.hourglass_top_rounded
+                  : Icons.health_and_safety,
+              label: busy ? 'Testing…' : 'Test',
+              onPressed: busy || !addon.enabled ? null : onTest,
+            ),
+            _MarketplaceButton(
+              icon: addon.enabled
+                  ? Icons.pause_rounded
+                  : Icons.play_arrow_rounded,
+              label: addon.enabled ? 'Disable' : 'Enable',
+              onPressed: onToggle,
+            ),
+            if (health != null)
+              _MarketplaceButton(
+                icon: Icons.restart_alt_rounded,
+                label: 'Reset',
+                onPressed: onReset,
+              ),
+            _MarketplaceButton(
+              icon: Icons.delete_outline_rounded,
+              label: 'Uninstall',
+              onPressed: onUninstall,
+            ),
+          ],
         ),
       ],
     ),

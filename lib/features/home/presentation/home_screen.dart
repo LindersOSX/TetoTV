@@ -56,12 +56,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusHero();
-      unawaited(
-        ref
-            .read(appUpdateControllerProvider.notifier)
-            .checkForUpdates(automatic: true, launchInstaller: true),
-      );
+      unawaited(_checkForUpdates());
     });
+  }
+
+  Future<void> _checkForUpdates() async {
+    final updater = ref.read(appUpdateControllerProvider.notifier);
+    await updater.checkForUpdates(automatic: true, launchInstaller: true);
+    if (!mounted) return;
+    final notes = await updater.takeInstalledReleaseNotes();
+    if (!mounted || notes == null) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: const Text('What\'s new in TetoTV'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640, maxHeight: 420),
+          child: SingleChildScrollView(child: SelectableText(notes)),
+        ),
+        actions: [
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _focusHero() {

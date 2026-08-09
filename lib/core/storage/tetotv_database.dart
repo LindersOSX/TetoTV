@@ -201,6 +201,66 @@ class SeriesPlaybackPreferences {
       );
 }
 
+class ProviderHealth {
+  const ProviderHealth({
+    required this.providerId,
+    this.consecutiveFailures = 0,
+    this.totalFailures = 0,
+    this.lastSuccessAt,
+    this.lastFailureAt,
+    this.lastError,
+    this.quarantinedUntil,
+  });
+
+  final String providerId;
+  final int consecutiveFailures;
+  final int totalFailures;
+  final DateTime? lastSuccessAt;
+  final DateTime? lastFailureAt;
+  final String? lastError;
+  final DateTime? quarantinedUntil;
+
+  bool get isQuarantined => quarantinedUntil?.isAfter(DateTime.now()) ?? false;
+
+  factory ProviderHealth.fromMap(Map<String, Object?> row) => ProviderHealth(
+    providerId: row['provider_id']! as String,
+    consecutiveFailures: row['consecutive_failures']! as int,
+    totalFailures: row['total_failures']! as int,
+    lastSuccessAt: _dateFromMilliseconds(row['last_success_at']),
+    lastFailureAt: _dateFromMilliseconds(row['last_failure_at']),
+    lastError: row['last_error'] as String?,
+    quarantinedUntil: _dateFromMilliseconds(row['quarantined_until']),
+  );
+}
+
+class DevicePlaybackProfile {
+  const DevicePlaybackProfile({
+    required this.deviceKey,
+    this.preferredEngine = 'auto',
+    this.media3Failures = 0,
+    this.mpvFailures = 0,
+    this.vlcFailures = 0,
+  });
+
+  final String deviceKey;
+  final String preferredEngine;
+  final int media3Failures;
+  final int mpvFailures;
+  final int vlcFailures;
+
+  factory DevicePlaybackProfile.fromMap(Map<String, Object?> row) =>
+      DevicePlaybackProfile(
+        deviceKey: row['device_key']! as String,
+        preferredEngine: row['preferred_engine']! as String,
+        media3Failures: row['media3_failures']! as int,
+        mpvFailures: row['mpv_failures']! as int,
+        vlcFailures: row['vlc_failures']! as int,
+      );
+}
+
+DateTime? _dateFromMilliseconds(Object? value) =>
+    value is int ? DateTime.fromMillisecondsSinceEpoch(value) : null;
+
 class TetoTvDatabase {
   TetoTvDatabase._();
 
@@ -229,7 +289,7 @@ class TetoTvDatabase {
     final root = await getDatabasesPath();
     return openDatabase(
       path.join(root, 'tetotv.db'),
-      version: 3,
+      version: 4,
       onConfigure: configureTetoTvDatabase,
       onCreate: (db, _) async {
         await db.execute('''
@@ -285,10 +345,12 @@ class TetoTvDatabase {
         ''');
         await _createContinueDismissalsTable(db);
         await _createAddonTables(db);
+        await _createReliabilityTables(db);
       },
       onUpgrade: (db, oldVersion, _) async {
         if (oldVersion < 2) await _createContinueDismissalsTable(db);
         if (oldVersion < 3) await _createAddonTables(db);
+        if (oldVersion < 4) await _createReliabilityTables(db);
       },
     );
   }
@@ -450,6 +512,180 @@ class TetoTvDatabase {
     );
   }
 
+  Future<Map<String, ProviderHealth>> providerHealth() async {
+    final db = await database;
+    final rows = await db.query('provider_health');
+    return {
+      for (final row in rows)
+        row['provider_id']! as String: ProviderHealth.fromMap(row),
+    };
+  }
+
+  Future<void> recordProviderSuccess(String providerId) async {
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.rawInsert(
+      '''
+      INSERT INTO provider_health
+        (provider_id, consecutive_failures, total_failures, last_success_at,
+         last_error, quarantined_until)
+      VALUES (?, 0, 0, ?, NULL, NULL)
+      ON CONFLICT(provider_id) DO UPDATE SET
+        consecutive_failures = 0,
+        last_success_at = excluded.last_success_at,
+        last_error = NULL,
+        quarantined_until = NULL
+      ''',
+      [providerId, now],
+    );
+  }
+
+  Future<ProviderHealth> recordProviderFailure(
+    String providerId,
+    Object error, {
+    int quarantineAfter = 3,
+    Duration quarantineFor = const Duration(minutes: 30),
+  }) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'provider_health',
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      final previous = rows.isEmpty
+          ? ProviderHealth(providerId: providerId)
+          : ProviderHealth.fromMap(rows.first);
+      final failures = previous.consecutiveFailures + 1;
+      final now = DateTime.now();
+      final quarantine = failures >= quarantineAfter
+          ? now.add(quarantineFor)
+          : null;
+      final message = redactDiagnosticValue(error.toString(), maximum: 300);
+      await txn.insert('provider_health', {
+        'provider_id': providerId,
+        'consecutive_failures': failures,
+        'total_failures': previous.totalFailures + 1,
+        'last_success_at': previous.lastSuccessAt?.millisecondsSinceEpoch,
+        'last_failure_at': now.millisecondsSinceEpoch,
+        'last_error': message,
+        'quarantined_until': quarantine?.millisecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      return ProviderHealth(
+        providerId: providerId,
+        consecutiveFailures: failures,
+        totalFailures: previous.totalFailures + 1,
+        lastSuccessAt: previous.lastSuccessAt,
+        lastFailureAt: now,
+        lastError: message,
+        quarantinedUntil: quarantine,
+      );
+    });
+  }
+
+  Future<void> clearProviderHealth(String providerId) async {
+    final db = await database;
+    await db.delete(
+      'provider_health',
+      where: 'provider_id = ?',
+      whereArgs: [providerId],
+    );
+  }
+
+  Future<DevicePlaybackProfile> devicePlaybackProfile(String deviceKey) async {
+    final db = await database;
+    final rows = await db.query(
+      'device_player_profiles',
+      where: 'device_key = ?',
+      whereArgs: [deviceKey],
+      limit: 1,
+    );
+    return rows.isEmpty
+        ? DevicePlaybackProfile(deviceKey: deviceKey)
+        : DevicePlaybackProfile.fromMap(rows.first);
+  }
+
+  Future<DevicePlaybackProfile> recordPlayerFailure(
+    String deviceKey,
+    String engine,
+  ) async {
+    final current = await devicePlaybackProfile(deviceKey);
+    var media3 = current.media3Failures;
+    var mpv = current.mpvFailures;
+    var vlc = current.vlcFailures;
+    if (engine == 'media3') media3++;
+    if (engine == 'mpv') mpv++;
+    if (engine == 'vlc') vlc++;
+    final preferred = mpv >= 2
+        ? 'vlc'
+        : media3 >= 2
+        ? 'mpv'
+        : current.preferredEngine;
+    final next = DevicePlaybackProfile(
+      deviceKey: deviceKey,
+      preferredEngine: preferred,
+      media3Failures: media3,
+      mpvFailures: mpv,
+      vlcFailures: vlc,
+    );
+    await _saveDevicePlaybackProfile(next);
+    return next;
+  }
+
+  Future<void> recordPlayerSuccess(String deviceKey, String engine) async {
+    final current = await devicePlaybackProfile(deviceKey);
+    await _saveDevicePlaybackProfile(
+      DevicePlaybackProfile(
+        deviceKey: deviceKey,
+        preferredEngine: engine,
+        media3Failures: engine == 'media3' ? 0 : current.media3Failures,
+        mpvFailures: engine == 'mpv' ? 0 : current.mpvFailures,
+        vlcFailures: engine == 'vlc' ? 0 : current.vlcFailures,
+      ),
+    );
+  }
+
+  Future<void> _saveDevicePlaybackProfile(DevicePlaybackProfile profile) async {
+    final db = await database;
+    await db.insert('device_player_profiles', {
+      'device_key': profile.deviceKey,
+      'preferred_engine': profile.preferredEngine,
+      'media3_failures': profile.media3Failures,
+      'mpv_failures': profile.mpvFailures,
+      'vlc_failures': profile.vlcFailures,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> recordDiagnosticEvent({
+    required String category,
+    required Object message,
+    Object? details,
+  }) async {
+    try {
+      final db = await database;
+      await db.insert('diagnostic_events', {
+        'category': redactDiagnosticValue(category, maximum: 48),
+        'message': redactDiagnosticValue(message.toString(), maximum: 500),
+        'details_json': details == null
+            ? null
+            : redactDiagnosticValue(
+                details is String ? details : jsonEncode(details),
+                maximum: 2000,
+              ),
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+      });
+      await db.delete(
+        'diagnostic_events',
+        where:
+            'id NOT IN (SELECT id FROM diagnostic_events ORDER BY id DESC LIMIT 100)',
+      );
+    } catch (_) {
+      // Diagnostics must never become another app failure.
+    }
+  }
+
   Future<void> cacheJson(
     String key,
     Map<String, dynamic> payload, {
@@ -491,18 +727,41 @@ class TetoTvDatabase {
       await db.rawQuery('SELECT COUNT(*) FROM playback_history'),
     );
     final failures = await db.rawQuery('''
-      SELECT info_hash, reason, failure_count, last_failed_at
+      SELECT reason, failure_count, last_failed_at
       FROM stream_failures ORDER BY last_failed_at DESC LIMIT 25
     ''');
     final timings = await db.rawQuery('''
       SELECT name, duration_us, created_at
       FROM performance_events ORDER BY created_at DESC LIMIT 100
     ''');
+    final events = await db.rawQuery('''
+      SELECT category, message, details_json, created_at
+      FROM diagnostic_events ORDER BY created_at DESC LIMIT 100
+    ''');
+    final providers = await db.rawQuery('''
+      SELECT provider_id, consecutive_failures, total_failures,
+             last_success_at, last_failure_at, last_error, quarantined_until
+      FROM provider_health ORDER BY provider_id
+    ''');
+    final playerProfiles = await db.rawQuery('''
+      SELECT device_key, preferred_engine, media3_failures, mpv_failures,
+             vlc_failures, updated_at FROM device_player_profiles
+    ''');
     return {
       'generatedAt': DateTime.now().toUtc().toIso8601String(),
       'playbackEntryCount': playback ?? 0,
-      'recentStreamFailures': failures,
+      'recentStreamFailures': [
+        for (final row in failures)
+          {
+            ...row,
+            if (row['reason'] case final String reason)
+              'reason': redactDiagnosticValue(reason),
+          },
+      ],
       'recentFrameTimings': timings,
+      'diagnosticEvents': events,
+      'providerHealth': providers,
+      'devicePlayerProfiles': playerProfiles,
     };
   }
 
@@ -540,6 +799,63 @@ Future<void> _createAddonTables(Database db) async {
       fetched_at INTEGER NOT NULL
     )
   ''');
+}
+
+Future<void> _createReliabilityTables(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS provider_health (
+      provider_id TEXT PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      total_failures INTEGER NOT NULL DEFAULT 0,
+      last_success_at INTEGER,
+      last_failure_at INTEGER,
+      last_error TEXT,
+      quarantined_until INTEGER
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS device_player_profiles (
+      device_key TEXT PRIMARY KEY,
+      preferred_engine TEXT NOT NULL DEFAULT 'auto',
+      media3_failures INTEGER NOT NULL DEFAULT 0,
+      mpv_failures INTEGER NOT NULL DEFAULT 0,
+      vlc_failures INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS diagnostic_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details_json TEXT,
+      created_at INTEGER NOT NULL
+    )
+  ''');
+}
+
+String redactDiagnosticValue(String value, {int maximum = 500}) {
+  var redacted = value
+      .replaceAll(
+        RegExp(r'''https://[^\s"']+''', caseSensitive: false),
+        '[URL]',
+      )
+      .replaceAll(
+        RegExp(r'''magnet:\?[^\s"']+''', caseSensitive: false),
+        '[MAGNET]',
+      )
+      .replaceAll(
+        RegExp(
+          r'(bearer|token|api[_ -]?key)\s*[:= ]\s*[^\s,;]+',
+          caseSensitive: false,
+        ),
+        r'$1=[REDACTED]',
+      )
+      .replaceAll(RegExp(r'\b[a-fA-F0-9]{40}\b'), '[INFO_HASH]')
+      .replaceAll(RegExp(r'[\r\n]+'), ' ')
+      .trim();
+  if (redacted.length > maximum) redacted = redacted.substring(0, maximum);
+  return redacted;
 }
 
 Future<void> saveCheckpointTransaction(

@@ -17,6 +17,8 @@ const _seekForwardSecondsKey = 'player_seek_forward_seconds';
 const _builtInKeyboardKey = 'input_use_built_in_keyboard';
 const _debridStreamsEnabledKey = 'streaming_debrid_enabled';
 const _webStreamsEnabledKey = 'streaming_web_enabled';
+const _autoSkipIntrosKey = 'player_auto_skip_intros';
+const _autoSkipOutrosKey = 'player_auto_skip_outros';
 
 enum ContentDensity { compact, standard, comfortable }
 
@@ -49,6 +51,8 @@ class SettingsPreferences {
     this.useBuiltInKeyboard = true,
     this.debridStreamsEnabled = true,
     this.webStreamsEnabled = true,
+    this.autoSkipIntros = false,
+    this.autoSkipOutros = false,
   });
 
   final DebridService debridProvider;
@@ -64,6 +68,8 @@ class SettingsPreferences {
   final bool useBuiltInKeyboard;
   final bool debridStreamsEnabled;
   final bool webStreamsEnabled;
+  final bool autoSkipIntros;
+  final bool autoSkipOutros;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -79,6 +85,8 @@ class SettingsPreferences {
     bool? useBuiltInKeyboard,
     bool? debridStreamsEnabled,
     bool? webStreamsEnabled,
+    bool? autoSkipIntros,
+    bool? autoSkipOutros,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -94,6 +102,8 @@ class SettingsPreferences {
     useBuiltInKeyboard: useBuiltInKeyboard ?? this.useBuiltInKeyboard,
     debridStreamsEnabled: debridStreamsEnabled ?? this.debridStreamsEnabled,
     webStreamsEnabled: webStreamsEnabled ?? this.webStreamsEnabled,
+    autoSkipIntros: autoSkipIntros ?? this.autoSkipIntros,
+    autoSkipOutros: autoSkipOutros ?? this.autoSkipOutros,
   );
 }
 
@@ -130,6 +140,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _storage.read(key: _builtInKeyboardKey),
         _storage.read(key: _debridStreamsEnabledKey),
         _storage.read(key: _webStreamsEnabledKey),
+        _storage.read(key: _autoSkipIntrosKey),
+        _storage.read(key: _autoSkipOutrosKey),
       ]);
       state = SettingsPreferences(
         debridProvider:
@@ -152,6 +164,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         useBuiltInKeyboard: values[10] != 'false',
         debridStreamsEnabled: values[11] != 'false',
         webStreamsEnabled: values[12] != 'false',
+        autoSkipIntros: values[13] == 'true',
+        autoSkipOutros: values[14] == 'true',
       );
     } catch (_) {
       // Appearance preferences are optional; safe defaults remain usable.
@@ -221,6 +235,16 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setWebStreamsEnabled(bool value) => _update(
     state.copyWith(webStreamsEnabled: value),
     {_webStreamsEnabledKey: value.toString()},
+  );
+
+  Future<void> setAutoSkipIntros(bool value) => _update(
+    state.copyWith(autoSkipIntros: value),
+    {_autoSkipIntrosKey: value.toString()},
+  );
+
+  Future<void> setAutoSkipOutros(bool value) => _update(
+    state.copyWith(autoSkipOutros: value),
+    {_autoSkipOutrosKey: value.toString()},
   );
 
   Future<void> resetAppearance() async {

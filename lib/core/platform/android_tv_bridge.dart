@@ -166,6 +166,46 @@ class AppVersionInfo {
   );
 }
 
+class ApkCompatibilityInfo {
+  const ApkCompatibilityInfo({
+    required this.compatible,
+    required this.issues,
+    this.packageName,
+    this.versionCode = 0,
+    this.minSdk = 0,
+    this.archiveAbis = const [],
+    this.deviceAbis = const [],
+    this.signerMatches = false,
+  });
+
+  final bool compatible;
+  final List<String> issues;
+  final String? packageName;
+  final int versionCode;
+  final int minSdk;
+  final List<String> archiveAbis;
+  final List<String> deviceAbis;
+  final bool signerMatches;
+
+  factory ApkCompatibilityInfo.fromMap(Map<Object?, Object?> value) =>
+      ApkCompatibilityInfo(
+        compatible: value['compatible'] as bool? ?? false,
+        issues: (value['issues'] as List? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        packageName: value['packageName'] as String?,
+        versionCode: (value['versionCode'] as num?)?.toInt() ?? 0,
+        minSdk: (value['minSdk'] as num?)?.toInt() ?? 0,
+        archiveAbis: (value['archiveAbis'] as List? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        deviceAbis: (value['deviceAbis'] as List? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        signerMatches: value['signerMatches'] as bool? ?? false,
+      );
+}
+
 class NativePlaybackResult {
   const NativePlaybackResult({
     required this.status,
@@ -328,6 +368,25 @@ class AndroidTvBridge {
         'launched';
   }
 
+  Future<ApkCompatibilityInfo> inspectApk(String path) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const ApkCompatibilityInfo(
+        compatible: false,
+        issues: ['APK installation is only supported on Android.'],
+      );
+    }
+    final result = await _channel.invokeMapMethod<Object?, Object?>(
+      'inspectApk',
+      {'path': path},
+    );
+    return result == null
+        ? const ApkCompatibilityInfo(
+            compatible: false,
+            issues: ['Android could not inspect the downloaded APK.'],
+          )
+        : ApkCompatibilityInfo.fromMap(result);
+  }
+
   Future<String?> voiceSearch() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
     try {
@@ -382,6 +441,8 @@ class AndroidTvBridge {
     int subtitleBackgroundColor = 0x00000000,
     int seekBackSeconds = 10,
     int seekForwardSeconds = 10,
+    bool autoSkipIntros = false,
+    bool autoSkipOutros = false,
     String videoFit = 'contain',
     int? malMediaId,
     int? episodeNumber,
@@ -420,6 +481,8 @@ class AndroidTvBridge {
             'subtitleBackgroundColor': subtitleBackgroundColor,
             'seekBackMs': seekBackSeconds * 1000,
             'seekForwardMs': seekForwardSeconds * 1000,
+            'autoSkipIntros': autoSkipIntros,
+            'autoSkipOutros': autoSkipOutros,
             'videoFit': videoFit,
             'malMediaId': ?malMediaId,
             'episodeNumber': ?episodeNumber,

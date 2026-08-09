@@ -1,7 +1,10 @@
 import 'package:anime_tv/core/storage/storage_providers.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
+import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final addonStoreProvider = Provider<AddonStore>(
@@ -18,6 +21,8 @@ class MarketplaceState {
     this.catalog = const [],
     this.installed = const [],
     this.repositoryErrors = const {},
+    this.providerHealth = const {},
+    this.providerMessages = const {},
     this.loading = true,
     this.busyAddonId,
   });
@@ -26,6 +31,8 @@ class MarketplaceState {
   final List<MarketplaceAddon> catalog;
   final List<InstalledStreamingAddon> installed;
   final Map<String, String> repositoryErrors;
+  final Map<String, ProviderHealth> providerHealth;
+  final Map<String, String> providerMessages;
   final bool loading;
   final String? busyAddonId;
 
@@ -34,6 +41,8 @@ class MarketplaceState {
     List<MarketplaceAddon>? catalog,
     List<InstalledStreamingAddon>? installed,
     Map<String, String>? repositoryErrors,
+    Map<String, ProviderHealth>? providerHealth,
+    Map<String, String>? providerMessages,
     bool? loading,
     String? busyAddonId,
     bool clearBusyAddon = false,
@@ -42,6 +51,8 @@ class MarketplaceState {
     catalog: catalog ?? this.catalog,
     installed: installed ?? this.installed,
     repositoryErrors: repositoryErrors ?? this.repositoryErrors,
+    providerHealth: providerHealth ?? this.providerHealth,
+    providerMessages: providerMessages ?? this.providerMessages,
     loading: loading ?? this.loading,
     busyAddonId: clearBusyAddon ? null : busyAddonId ?? this.busyAddonId,
   );
@@ -83,9 +94,11 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     try {
       final repositories = await _store.repositories();
       final installed = await _store.installedAddons();
+      final health = await _store.providerHealth();
       state = state.copyWith(
         repositories: repositories,
         installed: installed,
+        providerHealth: health,
         loading: true,
       );
       await refresh(refreshNetwork: false);
@@ -247,16 +260,69 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
 
   Future<void> setAddonEnabled(String id, bool enabled) async {
     await _store.setEnabled(id, enabled);
+    if (enabled) await _store.clearProviderHealth(id);
     state = state.copyWith(
       installed: [
         for (final item in state.installed)
           if (item.manifest.id == id) item.copyWith(enabled: enabled) else item,
       ],
+      providerHealth: enabled
+          ? ({...state.providerHealth}..remove(id))
+          : state.providerHealth,
     );
+  }
+
+  Future<void> testAddon(InstalledStreamingAddon addon) async {
+    final id = addon.manifest.id;
+    state = state.copyWith(
+      busyAddonId: id,
+      providerMessages: {...state.providerMessages, id: 'Testing provider…'},
+    );
+    try {
+      final streams = await SeanimeJavascriptProvider(addon).streams(
+        const EpisodeReference(
+          anilistMediaId: 5114,
+          malMediaId: 5114,
+          title: 'Fullmetal Alchemist Brotherhood',
+          alternativeTitles: ['Hagane no Renkinjutsushi Fullmetal Alchemist'],
+          episode: 1,
+        ),
+      );
+      if (streams.isEmpty) {
+        throw StateError('Provider returned no playable test streams.');
+      }
+      await _store.recordProviderSuccess(id);
+      state = state.copyWith(
+        providerHealth: await _store.providerHealth(),
+        providerMessages: {
+          ...state.providerMessages,
+          id: 'Healthy • ${streams.length} test stream(s) found',
+        },
+        clearBusyAddon: true,
+      );
+    } catch (error) {
+      final health = await _store.recordProviderFailure(id, error);
+      state = state.copyWith(
+        providerHealth: {...state.providerHealth, id: health},
+        providerMessages: {
+          ...state.providerMessages,
+          id: 'Test failed: ${_message(error)}',
+        },
+        clearBusyAddon: true,
+      );
+    }
+  }
+
+  Future<void> resetAddonHealth(String id) async {
+    await _store.clearProviderHealth(id);
+    final messages = {...state.providerMessages}..remove(id);
+    final health = {...state.providerHealth}..remove(id);
+    state = state.copyWith(providerHealth: health, providerMessages: messages);
   }
 
   Future<void> uninstall(String id) async {
     await _store.uninstall(id);
+    await _store.clearProviderHealth(id);
     state = state.copyWith(
       installed: state.installed
           .where((item) => item.manifest.id != id)

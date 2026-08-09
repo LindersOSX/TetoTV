@@ -163,6 +163,8 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
   _TvPlaybackEngine _engine = _TvPlaybackEngine.nativeMedia3;
   late String _activeSource;
   late PlaybackLaunch _activeLaunch;
+  bool _profileReady = false;
+  Duration? _resumeOverride;
 
   @override
   void initState() {
@@ -171,7 +173,26 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
     _activeLaunch = widget.launch;
     if (preferMpvForInitialStream(_activeLaunch.stream)) {
       _engine = _TvPlaybackEngine.mpv;
+      _profileReady = true;
+    } else {
+      unawaited(_loadDevicePreference());
     }
+  }
+
+  Future<void> _loadDevicePreference() async {
+    final device = await AndroidTvBridge.instance.getDeviceProfile();
+    final profile = await TetoTvDatabase.instance.devicePlaybackProfile(
+      device.key,
+    );
+    if (!mounted) return;
+    setState(() {
+      _engine = switch (profile.preferredEngine) {
+        'mpv' => _TvPlaybackEngine.mpv,
+        'vlc' => _TvPlaybackEngine.vlc,
+        _ => _TvPlaybackEngine.nativeMedia3,
+      };
+      _profileReady = true;
+    });
   }
 
   @override
@@ -186,14 +207,18 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
           : _TvPlaybackEngine.nativeMedia3;
       _activeSource = widget.source;
       _activeLaunch = widget.launch;
+      _resumeOverride = null;
+      _profileReady = preferMpvForInitialStream(widget.launch.stream);
+      if (!_profileReady) unawaited(_loadDevicePreference());
     }
   }
 
   void _switchEngine(
     _TvPlaybackEngine engine,
     String source,
-    ReleaseCandidate release,
-  ) {
+    ReleaseCandidate release, [
+    Duration? resume,
+  ]) {
     final launch = PlaybackLaunch(
       stream: StreamReady(
         uri: Uri.parse(source),
@@ -214,11 +239,18 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
       _activeSource = source;
       _activeLaunch = launch;
       _engine = engine;
+      _resumeOverride = resume;
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_profileReady) {
+      return const ColoredBox(
+        color: Colors.black,
+        child: Center(child: CircularProgressIndicator(color: AppColors.cyan)),
+      );
+    }
     if (_engine == _TvPlaybackEngine.mpv) {
       return MpvTvPlayerScreen(
         source: _activeSource,
@@ -232,6 +264,12 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         malMediaId: widget.malMediaId,
         episode: widget.episode,
         coverImageUrl: widget.coverImageUrl,
+        onUseVlc: (position) => _switchEngine(
+          _TvPlaybackEngine.vlc,
+          _activeSource,
+          _activeLaunch.selectedRelease,
+          position,
+        ),
       );
     }
     if (_engine == _TvPlaybackEngine.vlc) {
@@ -247,6 +285,7 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         malMediaId: widget.malMediaId,
         episode: widget.episode,
         coverImageUrl: widget.coverImageUrl,
+        initialPosition: _resumeOverride,
         onUseMpv: () => _switchEngine(
           _TvPlaybackEngine.mpv,
           _activeSource,
@@ -281,6 +320,7 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
     required this.title,
     required this.debridService,
     required this.launch,
+    required this.onUseVlc,
     this.subtitle,
     this.anilistMediaId,
     this.malMediaId,
@@ -293,6 +333,7 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
   final String title;
   final DebridService debridService;
   final PlaybackLaunch launch;
+  final ValueChanged<Duration> onUseVlc;
   final String? subtitle;
   final int? anilistMediaId;
   final int? malMediaId;
@@ -372,8 +413,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Color _captionTextColor = Colors.white;
   Color _captionBackgroundColor = Colors.transparent;
   final Set<String> _autoFocusedSkipSegments = {};
+  final Set<String> _autoSkippedSegments = {};
   bool _allowExit = false;
   bool _confirmingExit = false;
+  TapDownDetails? _touchDoubleTapDetails;
+  bool _requestedVlcFallback = false;
+  bool _reportedPlaybackSuccess = false;
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume;
@@ -468,7 +513,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         unawaited(_tryNextStream(message));
         return;
       }
-      if (mounted) setState(() => _playbackError = message);
+      unawaited(_fallbackToVlc(message));
     });
     _completedSubscription = _player.stream.completed.listen((completed) {
       if (completed) _offerNextEpisode();
@@ -476,6 +521,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _videoParamsSubscription = _player.stream.videoParams.listen((params) {
       if (params.w == null || params.h == null) return;
       _videoFrameSeen = true;
+      if (!_reportedPlaybackSuccess) {
+        _reportedPlaybackSuccess = true;
+        unawaited(_recordEngineSuccess());
+      }
       _videoWatchdog?.cancel();
       debugPrint('\n--- PLAYBACK DIAGNOSTICS ---');
       debugPrint('Resolution: ${params.w}x${params.h}');
@@ -625,6 +674,22 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   void _checkSkips(Duration position) {
     final active = _skips.where((skip) => skip.contains(position)).firstOrNull;
+    if (active != null) {
+      final settings = ref.read(settingsPreferencesProvider);
+      final autoSkip =
+          (active.kind == SkipSegmentKind.opening && settings.autoSkipIntros) ||
+          (active.kind == SkipSegmentKind.ending && settings.autoSkipOutros);
+      final key = '${active.kind.name}:${active.start.inMilliseconds}';
+      if (autoSkip && _autoSkippedSegments.add(key)) {
+        unawaited(_player.seek(active.end));
+        _showTrackMessage(
+          active.kind == SkipSegmentKind.opening
+              ? 'Intro skipped'
+              : 'Outro skipped',
+        );
+        return;
+      }
+    }
     final canSkip = active != null;
     if (_canSkipNow != canSkip) {
       setState(() {
@@ -996,7 +1061,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Future<void> _tryNextStream(String reason) async {
     if (_failingOver ||
         _alternativeIndex >= widget.launch.alternatives.length) {
-      if (mounted) setState(() => _playbackError = reason);
+      await _fallbackToVlc(reason);
       return;
     }
     _failingOver = true;
@@ -1039,14 +1104,40 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         }
       }
       if (mounted) {
-        setState(
-          () =>
-              _playbackError = 'Every compatible debrid stream failed. $reason',
-        );
+        await _fallbackToVlc('Every compatible debrid stream failed. $reason');
       }
     } finally {
       _failingOver = false;
     }
+  }
+
+  Future<void> _recordEngineSuccess() async {
+    final database = ref.read(tetoTvDatabaseProvider);
+    if (widget.launch.stream.providerId case final providerId?) {
+      await database.recordProviderSuccess(providerId);
+      return;
+    }
+    final device = await AndroidTvBridge.instance.getDeviceProfile();
+    await database.recordPlayerSuccess(device.key, 'mpv');
+  }
+
+  Future<void> _fallbackToVlc(String reason) async {
+    if (_requestedVlcFallback) return;
+    _requestedVlcFallback = true;
+    final database = ref.read(tetoTvDatabaseProvider);
+    if (widget.launch.stream.providerId case final providerId?) {
+      await database.recordProviderFailure(providerId, reason);
+    } else {
+      final device = await AndroidTvBridge.instance.getDeviceProfile();
+      await database.recordPlayerFailure(device.key, 'mpv');
+    }
+    await database.recordDiagnosticEvent(
+      category: 'player-mpv',
+      message: reason,
+    );
+    final position = _player.state.position;
+    await _persistPlayback(position, force: true);
+    if (mounted) widget.onUseVlc(position);
   }
 
   Future<void> _prewarmNextEpisode() async {
@@ -1687,6 +1778,29 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _playerRootFocus.requestFocus();
   }
 
+  void _handleSurfaceTap() {
+    if (_controlsVisible) {
+      _hideControls();
+    } else {
+      _showControls();
+    }
+  }
+
+  void _handleSurfaceDoubleTap() {
+    final details = _touchDoubleTapDetails;
+    if (details == null || !mounted) return;
+    final width = MediaQuery.sizeOf(context).width;
+    final x = details.localPosition.dx;
+    if (x < width / 3) {
+      unawaited(_seekBy(Duration(seconds: -_seekBackSeconds)));
+    } else if (x > width * 2 / 3) {
+      unawaited(_seekBy(Duration(seconds: _seekForwardSeconds)));
+    } else {
+      unawaited(_player.playOrPause());
+    }
+    _showControls();
+  }
+
   Future<void> _confirmExit() async {
     if (_confirmingExit || !mounted) return;
     _confirmingExit = true;
@@ -1764,173 +1878,179 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           focusNode: _playerRootFocus,
           autofocus: true,
           onKeyEvent: _handleKey,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Video(
-                controller: _controller,
-                controls: NoVideoControls,
-                fit: _videoFit,
-                subtitleViewConfiguration: SubtitleViewConfiguration(
-                  style: TextStyle(
-                    color: _captionTextColor,
-                    fontSize: _subtitleSize,
-                    height: 1.25,
-                    fontWeight: FontWeight.w600,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black,
-                        blurRadius: 5,
-                        offset: Offset(2, 2),
-                      ),
-                    ],
-                    backgroundColor: _highContrastSubtitles
-                        ? const Color(0xDD000000)
-                        : _captionBackgroundColor,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _handleSurfaceTap,
+            onDoubleTapDown: (details) => _touchDoubleTapDetails = details,
+            onDoubleTap: _handleSurfaceDoubleTap,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Video(
+                  controller: _controller,
+                  controls: NoVideoControls,
+                  fit: _videoFit,
+                  subtitleViewConfiguration: SubtitleViewConfiguration(
+                    style: TextStyle(
+                      color: _captionTextColor,
+                      fontSize: _subtitleSize,
+                      height: 1.25,
+                      fontWeight: FontWeight.w600,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black,
+                          blurRadius: 5,
+                          offset: Offset(2, 2),
+                        ),
+                      ],
+                      backgroundColor: _highContrastSubtitles
+                          ? const Color(0xDD000000)
+                          : _captionBackgroundColor,
+                    ),
                   ),
                 ),
-              ),
-              StreamBuilder<bool>(
-                stream: _player.stream.buffering,
-                initialData: _player.state.buffering,
-                builder: (context, snapshot) {
-                  if (snapshot.data != true) return const SizedBox.shrink();
-                  return const Center(
-                    child: CircularProgressIndicator(color: AppColors.cyan),
-                  );
-                },
-              ),
-              Positioned(
-                left: 34,
-                right: 34,
-                top: 28,
-                child: StreamBuilder<bool>(
-                  stream: _player.stream.playing,
-                  initialData: _player.state.playing,
+                StreamBuilder<bool>(
+                  stream: _player.stream.buffering,
+                  initialData: _player.state.buffering,
                   builder: (context, snapshot) {
-                    if (snapshot.data == true) return const SizedBox.shrink();
-                    return Text(
-                      widget.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(
-                            shadows: const [
-                              Shadow(color: Colors.black, blurRadius: 12),
-                            ],
-                          ),
+                    if (snapshot.data != true) return const SizedBox.shrink();
+                    return const Center(
+                      child: CircularProgressIndicator(color: AppColors.cyan),
                     );
                   },
                 ),
-              ),
-              ExcludeFocus(
-                excluding: !_controlsVisible,
-                child: IgnorePointer(
-                  ignoring: !_controlsVisible,
-                  child: AnimatedOpacity(
-                    opacity: _controlsVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: _PlayerChrome(
-                      player: _player,
-                      title: widget.title,
-                      streamLabel:
-                          widget.launch.stream.providerName ??
-                          '${widget.debridService.displayName} stream',
-                      decoderMode: _decoderMode,
-                      playFocusNode: _playControlFocus,
-                      skipFocusNode: _skipControlFocus,
-                      seekBackSeconds: _seekBackSeconds,
-                      seekForwardSeconds: _seekForwardSeconds,
-                      onRewind: () =>
-                          _seekBy(Duration(seconds: -_seekBackSeconds)),
-                      onPlayPause: _player.playOrPause,
-                      onForward: () =>
-                          _seekBy(Duration(seconds: _seekForwardSeconds)),
-                      canSkip: _canSkipNow,
-                      skipLabel: _activeSkip?.actionLabel,
-                      onSkip: _skipCurrentSegment,
-                      onAudio: _openAudioTrackPicker,
-                      onSubtitles: _openSubtitleTrackPicker,
-                      onFit: _cycleFit,
-                      onCompatibility: () {
-                        if (_softwareFallbackUsed) {
-                          _showTrackMessage(
-                            'Software compatibility is already enabled',
-                          );
-                        } else {
-                          unawaited(_restartWithSoftwareDecoder());
-                        }
-                      },
-                      onOptions: _openPlaybackMenu,
-                    ),
-                  ),
-                ),
-              ),
-              if (_playbackError case final error?)
                 Positioned(
                   left: 34,
                   right: 34,
-                  bottom: 110,
-                  child: _PlaybackError(message: error),
+                  top: 28,
+                  child: StreamBuilder<bool>(
+                    stream: _player.stream.playing,
+                    initialData: _player.state.playing,
+                    builder: (context, snapshot) {
+                      if (snapshot.data == true) return const SizedBox.shrink();
+                      return Text(
+                        widget.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              shadows: const [
+                                Shadow(color: Colors.black, blurRadius: 12),
+                              ],
+                            ),
+                      );
+                    },
+                  ),
                 ),
-              if (_trackMessage case final message?)
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xEE0A0A0A),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      message,
-                      style: Theme.of(context).textTheme.titleMedium,
+                ExcludeFocus(
+                  excluding: !_controlsVisible,
+                  child: IgnorePointer(
+                    ignoring: !_controlsVisible,
+                    child: AnimatedOpacity(
+                      opacity: _controlsVisible ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: _PlayerChrome(
+                        player: _player,
+                        title: widget.title,
+                        streamLabel:
+                            widget.launch.stream.providerName ??
+                            '${widget.debridService.displayName} stream',
+                        decoderMode: _decoderMode,
+                        playFocusNode: _playControlFocus,
+                        skipFocusNode: _skipControlFocus,
+                        seekBackSeconds: _seekBackSeconds,
+                        seekForwardSeconds: _seekForwardSeconds,
+                        onRewind: () =>
+                            _seekBy(Duration(seconds: -_seekBackSeconds)),
+                        onPlayPause: _player.playOrPause,
+                        onForward: () =>
+                            _seekBy(Duration(seconds: _seekForwardSeconds)),
+                        canSkip: _canSkipNow,
+                        skipLabel: _activeSkip?.actionLabel,
+                        onSkip: _skipCurrentSegment,
+                        onAudio: _openAudioTrackPicker,
+                        onSubtitles: _openSubtitleTrackPicker,
+                        onFit: _cycleFit,
+                        onCompatibility: () {
+                          if (_softwareFallbackUsed) {
+                            _showTrackMessage(
+                              'Software compatibility is already enabled',
+                            );
+                          } else {
+                            unawaited(_restartWithSoftwareDecoder());
+                          }
+                        },
+                        onOptions: _openPlaybackMenu,
+                      ),
                     ),
                   ),
                 ),
-              if (_seekPreview case final preview?)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 116,
-                  child: Center(
+                if (_playbackError case final error?)
+                  Positioned(
+                    left: 34,
+                    right: 34,
+                    bottom: 110,
+                    child: _PlaybackError(message: error),
+                  ),
+                if (_trackMessage case final message?)
+                  Center(
                     child: Container(
-                      width: 210,
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.black,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppColors.accentBright),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          AspectRatio(
-                            aspectRatio: 16 / 9,
-                            child: Image.memory(
-                              preview,
-                              fit: BoxFit.cover,
-                              gaplessPlayback: true,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            _formatPlayerDuration(
-                              _seekPreviewPosition ?? Duration.zero,
-                            ),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
+                      decoration: BoxDecoration(
+                        color: const Color(0xEE0A0A0A),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        message,
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
                   ),
-                ),
-            ],
+                if (_seekPreview case final preview?)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 116,
+                    child: Center(
+                      child: Container(
+                        width: 210,
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.accentBright),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AspectRatio(
+                              aspectRatio: 16 / 9,
+                              child: Image.memory(
+                                preview,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              _formatPlayerDuration(
+                                _seekPreviewPosition ?? Duration.zero,
+                              ),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

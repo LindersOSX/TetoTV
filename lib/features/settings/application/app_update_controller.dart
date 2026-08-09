@@ -13,6 +13,8 @@ const bundledGitHubUpdateTokenDisabledStorageKey =
     'bundled_github_update_token_disabled';
 const automaticUpdatesStorageKey = 'automatic_app_updates';
 const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
+const pendingReleaseNotesVersionStorageKey = 'pending_release_notes_version';
+const pendingReleaseNotesStorageKey = 'pending_release_notes';
 const tetoTvRepository = 'LindersOSX/TetoTV';
 
 final appUpdateControllerProvider =
@@ -39,6 +41,7 @@ final appUpdateControllerProvider =
         () async => (await bridge.getDeviceProfile()).abis,
         getTemporaryDirectory,
         bridge.installApk,
+        apkInspector: bridge.inspectApk,
       );
       Future.microtask(controller.load);
       return controller;
@@ -136,12 +139,14 @@ class AppReleaseInfo {
     required this.version,
     required this.name,
     required this.asset,
+    this.notes = '',
   });
 
   final String tagName;
   final String version;
   final String name;
   final AppReleaseAsset asset;
+  final String notes;
 }
 
 abstract class AppReleaseSource {
@@ -197,6 +202,7 @@ class GitHubAppReleaseSource implements AppReleaseSource {
       version: normalizeAppVersion(tag),
       name: data['name'] as String? ?? tag,
       asset: asset,
+      notes: data['body'] as String? ?? '',
     );
   }
 
@@ -314,6 +320,7 @@ typedef CurrentVersionLoader = Future<String> Function();
 typedef DeviceAbisLoader = Future<List<String>> Function();
 typedef CacheDirectoryLoader = Future<Directory> Function();
 typedef ApkInstaller = Future<String> Function(String path);
+typedef ApkInspector = Future<ApkCompatibilityInfo> Function(String path);
 
 class AppUpdateController extends StateNotifier<AppUpdateState> {
   AppUpdateController(
@@ -327,6 +334,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     this.bundledAccessToken = const String.fromEnvironment(
       'TETOTV_GITHUB_UPDATE_TOKEN',
     ),
+    this.apkInspector,
   }) : super(const AppUpdateState());
 
   final FlutterSecureStorage _storage;
@@ -337,6 +345,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   final ApkInstaller _apkInstaller;
   final Duration automaticCheckInterval;
   final String bundledAccessToken;
+  final ApkInspector? apkInspector;
 
   String _token = '';
   bool _loaded = false;
@@ -415,6 +424,27 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
           ? 'Automatic update checks are on.'
           : 'Automatic update checks are off.',
     );
+  }
+
+  /// Returns release notes once, after Android has successfully installed the
+  /// version they belong to. Merely downloading an APK never triggers them.
+  Future<String?> takeInstalledReleaseNotes() async {
+    await load();
+    final values = await Future.wait([
+      _storage.read(key: pendingReleaseNotesVersionStorageKey),
+      _storage.read(key: pendingReleaseNotesStorageKey),
+    ]);
+    final targetVersion = (values[0] ?? '').trim();
+    final notes = (values[1] ?? '').trim();
+    if (targetVersion.isEmpty || notes.isEmpty) return null;
+    if (compareAppVersions(state.currentVersion, targetVersion) < 0) {
+      return null;
+    }
+    await Future.wait([
+      _storage.delete(key: pendingReleaseNotesVersionStorageKey),
+      _storage.delete(key: pendingReleaseNotesStorageKey),
+    ]);
+    return notes;
   }
 
   Future<void> checkForUpdates({
@@ -546,6 +576,28 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       if (size < 1024 * 1024 || (expected > 0 && size != expected)) {
         await file.delete().catchError((_) => file);
         throw StateError('The downloaded APK was incomplete.');
+      }
+      final inspection = await apkInspector?.call(destination);
+      if (inspection != null && !inspection.compatible) {
+        throw StateError(
+          'This APK is not compatible: ${inspection.issues.join(' ')}',
+        );
+      }
+      if (selected.notes.trim().isNotEmpty) {
+        try {
+          await Future.wait([
+            _storage.write(
+              key: pendingReleaseNotesVersionStorageKey,
+              value: selected.version,
+            ),
+            _storage.write(
+              key: pendingReleaseNotesStorageKey,
+              value: selected.notes.trim(),
+            ),
+          ]);
+        } catch (_) {
+          // Release-note bookkeeping must never block a valid app update.
+        }
       }
       state = state.copyWith(
         phase: AppUpdatePhase.ready,

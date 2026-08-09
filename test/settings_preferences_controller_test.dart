@@ -13,12 +13,16 @@ void main() {
     await controller.setDebridStreamsEnabled(false);
     await controller.setWebStreamsEnabled(false);
     await controller.setUseBuiltInKeyboard(false);
+    await controller.setAutoSkipIntros(true);
+    await controller.setAutoSkipOutros(true);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
     expect(restored.state.debridStreamsEnabled, isFalse);
     expect(restored.state.webStreamsEnabled, isFalse);
     expect(restored.state.useBuiltInKeyboard, isFalse);
+    expect(restored.state.autoSkipIntros, isTrue);
+    expect(restored.state.autoSkipOutros, isTrue);
   });
 
   test('existing users retain both stream sources by default', () async {
@@ -31,5 +35,7 @@ void main() {
     expect(controller.state.debridStreamsEnabled, isTrue);
     expect(controller.state.webStreamsEnabled, isTrue);
     expect(controller.state.useBuiltInKeyboard, isTrue);
+    expect(controller.state.autoSkipIntros, isFalse);
+    expect(controller.state.autoSkipOutros, isFalse);
   });
 }
