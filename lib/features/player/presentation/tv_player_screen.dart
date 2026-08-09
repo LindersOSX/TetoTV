@@ -1172,6 +1172,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       final next = EpisodeReference(
         anilistMediaId: widget.launch.episode.anilistMediaId,
         malMediaId: widget.launch.episode.malMediaId,
+        year: widget.launch.episode.year,
         title: widget.launch.episode.title,
         alternativeTitles: widget.launch.episode.alternativeTitles,
         coverImageUrl: widget.launch.episode.coverImageUrl,

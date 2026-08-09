@@ -119,6 +119,7 @@ final appRouter = GoRouter(
           episode: EpisodeReference(
             anilistMediaId: int.parse(query['anilistId']!),
             malMediaId: int.tryParse(query['malId'] ?? ''),
+            year: int.tryParse(query['year'] ?? ''),
             title: query['title'] ?? 'Anime',
             episode: int.parse(query['episode'] ?? '1'),
             alternativeTitles:

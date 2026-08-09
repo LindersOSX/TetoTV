@@ -6,6 +6,21 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('no-match provider outcomes are not treated as runtime failures', () {
+    expect(
+      isSeanimeProviderNoMatch(
+        StateError('NO_MATCH: This provider has no matching title.'),
+      ),
+      isTrue,
+    );
+    expect(
+      isSeanimeProviderNoMatch(
+        StateError('NO_STREAM: The provider returned no compatible stream.'),
+      ),
+      isFalse,
+    );
+  });
+
   test(
     'isolated JavaScript provider resolves a typed web stream',
     () async {

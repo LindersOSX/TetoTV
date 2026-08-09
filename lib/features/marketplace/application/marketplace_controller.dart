@@ -301,6 +301,16 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         clearBusyAddon: true,
       );
     } catch (error) {
+      if (isSeanimeProviderNoMatch(error)) {
+        state = state.copyWith(
+          providerMessages: {
+            ...state.providerMessages,
+            id: 'Runtime ready - the test title is not available here',
+          },
+          clearBusyAddon: true,
+        );
+        return;
+      }
       final health = await _store.recordProviderFailure(id, error);
       state = state.copyWith(
         providerHealth: {...state.providerHealth, id: health},

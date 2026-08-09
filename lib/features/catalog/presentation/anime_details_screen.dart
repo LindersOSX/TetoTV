@@ -128,7 +128,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           minimum: context.responsiveScreenPadding,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              if (constraints.maxWidth < 700) {
+              final useCompactLayout =
+                  constraints.maxWidth < 700 ||
+                  (constraints.maxWidth < 900 && constraints.maxHeight < 520);
+              if (useCompactLayout) {
+                final posterWidth = constraints.maxWidth < 430 ? 112.0 : 128.0;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -153,8 +157,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 SizedBox(
-                                  width: 112,
-                                  height: 168,
+                                  width: posterWidth,
+                                  height: posterWidth * 1.5,
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(12),
                                     child: NetworkArtwork(
@@ -177,10 +181,6 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           context,
                                         ).textTheme.headlineSmall,
                                       ),
-                                      const SizedBox(height: 9),
-                                      _MetadataRow(anime: anime),
-                                      const SizedBox(height: 9),
-                                      _MediaFactsRow(anime: anime),
                                       if (anime.status case final status?) ...[
                                         const SizedBox(height: 9),
                                         Text(
@@ -197,6 +197,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                 ),
                               ],
                             ),
+                            const SizedBox(height: 14),
+                            _MetadataRow(anime: anime),
+                            const SizedBox(height: 12),
+                            _MediaFactsRow(anime: anime),
                             const SizedBox(height: 16),
                             Text(
                               anime.description.isEmpty
@@ -937,6 +941,11 @@ void _openEpisode(
   int episode, {
   bool restart = false,
 }) {
+  final alternativeTitles = <String?>{
+    anime.titleEnglish,
+    anime.titleRomaji,
+    ...anime.synonyms,
+  }.whereType<String>().toSet()..remove(anime.title);
   context.push(
     Uri(
       path: '/resolve',
@@ -945,9 +954,11 @@ void _openEpisode(
         if (anime.idMal != null) 'malId': '${anime.idMal}',
         'title': anime.title,
         'episode': '$episode',
+        if (anime.seasonYear != null) 'year': '${anime.seasonYear}',
         if (anime.coverImageUrl != null) 'cover': anime.coverImageUrl!,
         if (restart) 'restart': '1',
-        if (anime.synonyms.isNotEmpty) 'synonyms': anime.synonyms.join('|'),
+        if (alternativeTitles.isNotEmpty)
+          'synonyms': alternativeTitles.join('|'),
       },
     ).toString(),
   );

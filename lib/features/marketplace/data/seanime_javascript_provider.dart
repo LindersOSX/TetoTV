@@ -47,8 +47,9 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'episode': episode.episode,
         'anilistId': episode.anilistMediaId,
         'malId': episode.malMediaId,
+        'year': episode.year,
       }),
-    ).timeout(const Duration(seconds: 28));
+    ).timeout(const Duration(seconds: 38));
     final results = <WebStreamResult>[];
     final publicHosts = <String, bool>{};
     Future<bool> allowed(Uri uri) async {
@@ -97,16 +98,24 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         ),
       );
     }
+    if (results.isEmpty && raw.isNotEmpty) {
+      throw StateError(
+        'NO_STREAM: Provider streams failed URL or network safety validation.',
+      );
+    }
     return results;
   }
 }
+
+bool isSeanimeProviderNoMatch(Object error) =>
+    error.toString().contains('NO_MATCH:');
 
 Future<List<Map<String, dynamic>>> _executeProvider(
   Map<String, Object?> input,
 ) async {
   final runtime = QuickJsRuntime2(
-    timeout: 3500,
-    memoryLimit: 32 * 1024 * 1024,
+    timeout: 6000,
+    memoryLimit: 48 * 1024 * 1024,
     stackSize: 512 * 1024,
   );
   var disposed = false;
@@ -177,7 +186,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       (async function() {
         try {
           const provider = new Provider();
-          const settings = (await provider.getSettings()) || {};
+          const settings = typeof provider.getSettings === 'function'
+            ? ((await provider.getSettings()) || {}) : {};
           const titles = ${jsonEncode([input['title'], ...((input['titles'] as List?) ?? const [])])}
             .filter(Boolean).slice(0, 8);
           const episodeNumber = ${input['episode']};
@@ -188,10 +198,14 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             romajiTitle: titles[1] || titles[0] || '',
             nativeTitle: titles[2] || '',
             synonyms: titles.slice(1),
-            startDate: {year: null, month: null, day: null},
+            startDate: {year: ${input['year'] ?? 'null'}, month: null, day: null},
+            seasonYear: ${input['year'] ?? 'null'},
           };
           const modes = settings.supportsDub ? [false, true] : [false];
           const output = [];
+          const errors = [];
+          let foundTitle = false;
+          let foundEpisode = false;
           const normalize = value => String(value || '').toLowerCase()
             .normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
           const score = (candidate, query) => {
@@ -202,58 +216,161 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             const words = new Set(b.split(' ').filter(x => x.length > 1));
             return a.split(' ').reduce((sum, word) => sum + (words.has(word) ? 20 : 0), 0);
           };
+          const listFrom = (value, keys) => {
+            if (Array.isArray(value)) return value;
+            if (!value || typeof value !== 'object') return [];
+            for (const key of keys) {
+              if (Array.isArray(value[key])) return value[key];
+            }
+            if (value.data && typeof value.data === 'object') {
+              for (const key of keys) {
+                if (Array.isArray(value.data[key])) return value.data[key];
+              }
+            }
+            return [];
+          };
+          const episodeNumberOf = item => {
+            const raw = item && (item.number != null ? item.number :
+              (item.episodeNumber != null ? item.episodeNumber :
+              (item.episode != null ? item.episode : item.num)));
+            const direct = Number(raw);
+            if (Number.isFinite(direct)) return direct;
+            const match = String(raw || (item && (item.title || item.id)) || '').match(/(?:episode|ep)?\\s*([0-9]+(?:\\.[0-9]+)?)/i);
+            return match ? Number(match[1]) : NaN;
+          };
+          const toHttps = (value, bases) => {
+            if (typeof value !== 'string' || !value.trim()) return null;
+            const raw = value.trim();
+            try {
+              const direct = new URL(raw);
+              if (direct.protocol === 'https:') return direct.toString();
+            } catch (_) {}
+            for (const base of bases) {
+              if (typeof base !== 'string' || !base.startsWith('https://')) continue;
+              try {
+                const absolute = new URL(raw, base);
+                if (absolute.protocol === 'https:') return absolute.toString();
+              } catch (_) {}
+            }
+            return null;
+          };
+          const englishTrack = tracks => {
+            if (!tracks.length) return null;
+            return tracks.find(track => {
+              const value = normalize(track && (track.language || track.lang || track.label || track.name));
+              return value === 'en' || value === 'eng' || value.includes('english');
+            }) || tracks[0];
+          };
           for (const dub of modes) {
             let selected = null;
             for (const title of titles) {
               try {
-                const matches = (await provider.search({query: title, dub, media, opts: {dub}})) || [];
+                const searchInput = {
+                  query: title,
+                  dub,
+                  year: ${input['year'] ?? 'null'},
+                  media,
+                  opts: {dub, year: ${input['year'] ?? 'null'}, media},
+                };
+                let rawMatches = await provider.search(searchInput);
+                let matches = listFrom(rawMatches, ['results', 'items', 'data']);
+                if (!matches.length) {
+                  try {
+                    rawMatches = await provider.search(title, {dub, year: ${input['year'] ?? 'null'}, media});
+                    matches = listFrom(rawMatches, ['results', 'items', 'data']);
+                  } catch (error) { errors.push(String(error && error.message || error)); }
+                }
                 const ranked = matches.slice(0, 40).map(item => ({item, points: score(item.title, title)}))
                   .sort((a, b) => b.points - a.points);
                 if (ranked.length && (!selected || ranked[0].points > selected.points)) {
                   selected = ranked[0];
                 }
                 if (selected && selected.points >= 700) break;
-              } catch (_) {}
+              } catch (error) { errors.push(String(error && error.message || error)); }
             }
             if (!selected) continue;
-            const episodes = (await provider.findEpisodes(selected.item.id)) || [];
-            const episode = episodes.find(item => Math.abs(Number(item.number) - episodeNumber) < 0.01);
+            foundTitle = true;
+            let episodes = [];
+            try {
+              const rawEpisodes = await provider.findEpisodes(
+                selected.item.id || selected.item.url || selected.item.slug
+              );
+              episodes = listFrom(rawEpisodes, ['episodes', 'items', 'results']);
+            } catch (error) {
+              errors.push(String(error && error.message || error));
+            }
+            let episode = episodes.find(item => Math.abs(episodeNumberOf(item) - episodeNumber) < 0.01);
+            if (!episode && episodes.length === 1 && episodeNumber === 1) episode = episodes[0];
             if (!episode) continue;
-            let servers = Array.isArray(settings.episodeServers) ? settings.episodeServers.slice(0, 12) : ['default'];
-            const dubbedServers = servers.filter(server => /dub/i.test(String(server)));
+            foundEpisode = true;
+            let servers = Array.isArray(settings.episodeServers) && settings.episodeServers.length
+              ? settings.episodeServers.slice(0, 12) : [null];
+            const serverName = server => server && typeof server === 'object'
+              ? String(server.name || server.label || server.id || server.value || 'Default')
+              : String(server || 'Default');
+            const serverValue = server => server && typeof server === 'object'
+              ? (server.value || server.id || server.name || server.label) : server;
+            const dubbedServers = servers.filter(server => /dub/i.test(serverName(server)));
             if (settings.supportsDub && dubbedServers.length) {
-              servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(String(server)));
+              servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(serverName(server)));
             }
             for (const server of servers) {
               try {
-                const resolved = await provider.findEpisodeServer(episode, server);
+                let resolved = null;
+                const attempts = [
+                  () => provider.findEpisodeServer(episode, serverValue(server)),
+                  () => provider.findEpisodeServer(episode.id || episode.url || episode, serverValue(server)),
+                  () => provider.findEpisodeServer(episode),
+                ];
+                for (const attempt of attempts) {
+                  try {
+                    resolved = await attempt();
+                    if (resolved) break;
+                  } catch (error) { errors.push(String(error && error.message || error)); }
+                }
+                if (!resolved) continue;
                 const serverHeaders = resolved && resolved.headers && typeof resolved.headers === 'object'
                   ? resolved.headers : {};
-                const sources = resolved && Array.isArray(resolved.videoSources)
-                  ? resolved.videoSources.slice(0, 20) : [];
-                for (const source of sources) {
-                  const url = source.url || source.file;
-                  if (typeof url !== 'string' || !url.startsWith('https://')) continue;
-                   const subtitles = Array.isArray(source.subtitles) ? source.subtitles :
-                     (resolved && Array.isArray(resolved.subtitles) ? resolved.subtitles : []);
-                  const english = subtitles.find(track => /(^|\b)(en|eng|english)(\b|\$)/i.test(
-                    String(track.language || track.lang || track.label || '')
-                  )) || subtitles[0];
+                let sources = listFrom(resolved, ['videoSources', 'sources', 'streams']);
+                if (!sources.length && (typeof resolved === 'string' || resolved.url || resolved.file || resolved.src)) {
+                  sources = [resolved];
+                }
+                for (const rawSource of sources.slice(0, 20)) {
+                  const source = typeof rawSource === 'string' ? {url: rawSource} : rawSource;
+                  if (!source || typeof source !== 'object') continue;
+                  const bases = [source.baseUrl, resolved.baseUrl, resolved.url, episode.url, selected.item.url];
+                  const url = toHttps(
+                    source.url || source.file || source.src || source.link || source.manifest,
+                    bases,
+                  );
+                  if (!url) continue;
+                  const subtitles = listFrom(source.subtitles || source.tracks, ['subtitles', 'tracks'])
+                    .concat(listFrom(resolved.subtitles || resolved.tracks, ['subtitles', 'tracks']));
+                  const english = englishTrack(subtitles);
+                  const subtitleUrl = english && toHttps(
+                    english.url || english.file || english.src || english.link,
+                    bases,
+                  );
                   output.push({
-                    title: String(server || resolved.server || 'Web') + ' / ' +
+                    title: serverName(server || resolved.server) + ' / ' +
                       String(source.quality || source.label || 'Auto'),
                     quality: String(source.quality || source.label || 'Auto'),
                     url,
                     headers: Object.assign({}, serverHeaders, source.headers || {}),
-                    subtitleUrl: english && (english.url || english.file),
+                    subtitleUrl,
                     subtitleLanguage: english && String(english.language || english.lang || english.label || ''),
-                    isDubbed: dub || /dub/i.test(String(selected.item.subOrDub || server || '')),
+                    isDubbed: dub || /dub/i.test(String(selected.item.subOrDub || serverName(server))),
                   });
                 }
-              } catch (_) {}
+              } catch (error) { errors.push(String(error && error.message || error)); }
             }
           }
-          if (!output.length) throw new Error('No playable stream was returned for this episode.');
+          if (!output.length) {
+            const detail = errors.length ? ' Last error: ' + errors[errors.length - 1] : '';
+            if (!foundTitle) throw new Error('NO_MATCH: This provider has no matching title.' + detail);
+            if (!foundEpisode) throw new Error('NO_MATCH: This provider has no matching episode.' + detail);
+            throw new Error('NO_STREAM: The provider found the episode but returned no compatible stream.' + detail);
+          }
           sendMessage('TetoDone', JSON.stringify({ok: true, result: output}));
         } catch (error) {
           sendMessage('TetoDone', JSON.stringify({ok: false, error: String(error && error.message || error)}));
@@ -262,7 +379,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     ''', sourceUrl: 'tetotv://provider-runner.js');
     if (invocation.isError) throw StateError(invocation.stringResult);
     await runtime.dispatch();
-    return await completed.future.timeout(const Duration(seconds: 24));
+    return await completed.future.timeout(const Duration(seconds: 34));
   } finally {
     disposed = true;
     runtime.dispose();

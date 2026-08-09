@@ -124,4 +124,67 @@ void main() {
     expect(find.text('7.8 / 10'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  for (final size in const [Size(390, 844), Size(844, 390)]) {
+    testWidgets(
+      'episode action layout fits mobile ${size.width.toInt()}x${size.height.toInt()}',
+      (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        const anime = AnimeSummary(
+          id: 1,
+          title: 'A Long Example Anime Title for a Small Mobile Screen',
+          description:
+              'A synopsis that remains readable while the compact page scrolls '
+              'instead of forcing the television columns into a phone viewport.',
+          episodes: 12,
+          score: 8.2,
+          genres: ['Action', 'Adventure', 'Fantasy'],
+          format: 'TV',
+          status: 'RELEASING',
+          durationMinutes: 24,
+          seasonYear: 2026,
+          relatedAnime: [
+            RelatedAnime(
+              relationType: 'SEQUEL',
+              anime: AnimeSummary(
+                id: 2,
+                title: 'Example Season Two',
+                description: '',
+                episodes: 12,
+                score: 8,
+              ),
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              animeDetailsProvider.overrideWith((_, _) async => anime),
+              trackingHomeProvider.overrideWith(
+                (_) async => const TrackingHomeData(
+                  watching: [],
+                  planToWatch: [],
+                  completed: [],
+                ),
+              ),
+            ],
+            child: const MaterialApp(home: AnimeDetailsScreen(animeId: 1)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Start watching'), findsOneWidget);
+        expect(find.text('Play from beginning'), findsOneWidget);
+        expect(find.text('Play selected'), findsOneWidget);
+        expect(find.text('Related series'), findsOneWidget);
+        expect(find.text('EP 1 / 12'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }

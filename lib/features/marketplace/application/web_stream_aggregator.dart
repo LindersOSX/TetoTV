@@ -35,6 +35,15 @@ class WebStreamAggregator {
           }
           return (streams: streams, failure: null as WebProviderFailure?);
         } catch (error) {
+          if (isSeanimeProviderNoMatch(error)) {
+            return (
+              streams: const <WebStreamResult>[],
+              failure: WebProviderFailure(
+                providerName: provider.name,
+                message: 'No matching title or episode from this provider.',
+              ),
+            );
+          }
           await _store.recordProviderFailure(provider.id, error);
           await _store.database.recordDiagnosticEvent(
             category: 'provider',

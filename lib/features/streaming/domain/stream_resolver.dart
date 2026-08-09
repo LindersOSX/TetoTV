@@ -6,6 +6,7 @@ class EpisodeReference {
     required this.title,
     required this.episode,
     this.malMediaId,
+    this.year,
     this.alternativeTitles = const [],
     this.coverImageUrl,
     this.startFromBeginning = false,
@@ -14,6 +15,7 @@ class EpisodeReference {
 
   final int anilistMediaId;
   final int? malMediaId;
+  final int? year;
   final String title;
   final int episode;
   final List<String> alternativeTitles;
