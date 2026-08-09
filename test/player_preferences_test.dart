@@ -2,12 +2,29 @@ import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
+import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
+  test('opens marketplace web streams with the defensive MPV path', () {
+    final web = StreamReady(
+      uri: Uri.parse('https://cdn.example.test/episode.m3u8'),
+      displayName: 'Marketplace stream',
+      providerId: 'fixture',
+    );
+    final debrid = StreamReady(
+      uri: Uri.parse('https://cdn.example.test/episode.mkv'),
+      displayName: 'Debrid stream',
+      debridService: DebridService.realDebrid,
+    );
+
+    expect(preferMpvForInitialStream(web), isTrue);
+    expect(preferMpvForInitialStream(debrid), isFalse);
+  });
+
   test('prefers English dub audio over Japanese default audio', () {
     const tracks = [
       AudioTrack('1', 'Japanese', 'jpn', isDefault: true),

@@ -45,15 +45,24 @@ void main() {
     expect(controller.state.currentVersion, '1.9.0+34900');
   });
 
-  test('selects the APK matching the TV ABI and falls back to universal', () {
+  test('prefers the universal APK across TV device ABIs', () {
     const assets = [
       AppReleaseAsset(name: 'TetoTV-universal.apk', apiUrl: 'u', size: 1),
       AppReleaseAsset(name: 'TetoTV-arm64-v8a.apk', apiUrl: 'a64', size: 1),
       AppReleaseAsset(name: 'TetoTV-armeabi-v7a.apk', apiUrl: 'a32', size: 1),
     ];
+    expect(selectApkAsset(assets, const ['arm64-v8a']).apiUrl, 'u');
+    expect(selectApkAsset(assets, const ['armeabi-v7a']).apiUrl, 'u');
+    expect(selectApkAsset(assets, const ['mips']).apiUrl, 'u');
+  });
+
+  test('selects a named ABI asset only when universal is unavailable', () {
+    const assets = [
+      AppReleaseAsset(name: 'TetoTV-arm64.apk', apiUrl: 'a64', size: 1),
+      AppReleaseAsset(name: 'TetoTV-fire-tv-32bit.apk', apiUrl: 'a32', size: 1),
+    ];
     expect(selectApkAsset(assets, const ['arm64-v8a']).apiUrl, 'a64');
     expect(selectApkAsset(assets, const ['armeabi-v7a']).apiUrl, 'a32');
-    expect(selectApkAsset(assets, const ['mips']).apiUrl, 'u');
   });
 
   test('downloads a newer private release and opens the installer', () async {

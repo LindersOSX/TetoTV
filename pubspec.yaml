@@ -1,7 +1,10 @@
 name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
-version: 1.10.1+39001
+# Reserve 10,000 version-code values per public release. Flutter adds an
+# ABI-specific offset to split APKs, so the next universal APK must still be
+# newer than every split APK from the previous release.
+version: 1.10.2+50001
 
 environment:
   sdk: ^3.12.2

@@ -90,6 +90,12 @@ bool resumeSeekNeedsRetry(Duration target, Duration actual) =>
     target > const Duration(seconds: 15) &&
     actual + const Duration(seconds: 5) < target;
 
+/// Marketplace streams often use HLS manifests, CDN referrers, and host
+/// quirks that libmpv handles more defensively than a vendor MediaCodec path.
+/// Keep debrid files on native Media3, but do not expose third-party web
+/// responses to a device-specific native player crash on first open.
+bool preferMpvForInitialStream(StreamReady stream) => stream.isWebStream;
+
 bool isLikelyVideoDecodeFailure(String message) {
   final value = message.toLowerCase();
   return const [
@@ -163,6 +169,9 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
     super.initState();
     _activeSource = widget.source;
     _activeLaunch = widget.launch;
+    if (preferMpvForInitialStream(_activeLaunch.stream)) {
+      _engine = _TvPlaybackEngine.mpv;
+    }
   }
 
   @override
@@ -172,7 +181,9 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         oldWidget.episode != widget.episode ||
         oldWidget.launch.selectedRelease.infoHash !=
             widget.launch.selectedRelease.infoHash) {
-      _engine = _TvPlaybackEngine.nativeMedia3;
+      _engine = preferMpvForInitialStream(widget.launch.stream)
+          ? _TvPlaybackEngine.mpv
+          : _TvPlaybackEngine.nativeMedia3;
       _activeSource = widget.source;
       _activeLaunch = widget.launch;
     }

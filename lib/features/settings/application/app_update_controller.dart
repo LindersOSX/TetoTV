@@ -223,7 +223,7 @@ class GitHubAppReleaseSource implements AppReleaseSource {
   static Map<String, String> _headers(String token, String accept) => {
     'Accept': accept,
     'Authorization': 'Bearer $token',
-    'X-GitHub-Api-Version': '2026-03-10',
+    'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'TetoTV-AndroidTV-Updater',
   };
 }
@@ -232,6 +232,12 @@ AppReleaseAsset selectApkAsset(
   List<AppReleaseAsset> assets,
   List<String> deviceAbis,
 ) {
+  // Prefer one cross-device artifact for in-app updates. Besides avoiding
+  // inaccurate ABI reports on vendor TV firmware, this lets a device move
+  // safely between an older split APK and the newer universal APK.
+  for (final asset in assets) {
+    if (asset.name.toLowerCase().contains('universal')) return asset;
+  }
   final normalizedAbis = deviceAbis.map((abi) => abi.toLowerCase()).toList();
   final preferredMarker = normalizedAbis.any((abi) => abi.contains('arm64'))
       ? 'arm64-v8a'
@@ -244,9 +250,16 @@ AppReleaseAsset selectApkAsset(
     for (final asset in assets) {
       if (asset.name.toLowerCase().contains(preferredMarker)) return asset;
     }
-  }
-  for (final asset in assets) {
-    if (asset.name.toLowerCase().contains('universal')) return asset;
+    final aliases = switch (preferredMarker) {
+      'arm64-v8a' => const ['arm64'],
+      'armeabi-v7a' => const ['fire-tv-32bit', 'arm32'],
+      _ => const <String>[],
+    };
+    for (final alias in aliases) {
+      for (final asset in assets) {
+        if (asset.name.toLowerCase().contains(alias)) return asset;
+      }
+    }
   }
   return assets.first;
 }
