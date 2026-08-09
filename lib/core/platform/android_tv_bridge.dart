@@ -36,23 +36,35 @@ class TvCodecCapability {
     required this.name,
     required this.mime,
     required this.hardware,
+    this.tenBit = false,
+    this.maxWidth = 0,
+    this.maxHeight = 0,
   });
 
   final String name;
   final String mime;
   final bool hardware;
+  final bool tenBit;
+  final int maxWidth;
+  final int maxHeight;
 
   factory TvCodecCapability.fromMap(Map<Object?, Object?> value) =>
       TvCodecCapability(
         name: value['name'] as String? ?? '',
         mime: value['mime'] as String? ?? '',
         hardware: value['hardware'] as bool? ?? false,
+        tenBit: value['tenBit'] as bool? ?? false,
+        maxWidth: value['maxWidth'] as int? ?? 0,
+        maxHeight: value['maxHeight'] as int? ?? 0,
       );
 
   Map<String, Object?> toJson() => {
     'name': name,
     'mime': mime,
     'hardware': hardware,
+    'tenBit': tenBit,
+    'maxWidth': maxWidth,
+    'maxHeight': maxHeight,
   };
 }
 

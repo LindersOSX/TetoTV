@@ -13,6 +13,9 @@ import 'package:anime_tv/features/home/presentation/home_screen.dart';
 import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
+import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
+import 'package:anime_tv/features/settings/presentation/diagnostics_screen.dart';
+import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -22,6 +25,10 @@ import 'package:go_router/go_router.dart';
 final appRouter = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
+    GoRoute(
+      path: '/setup',
+      builder: (context, state) => const InitialSetupScreen(),
+    ),
     GoRoute(
       path: '/my-list',
       builder: (context, state) => const MyListScreen(),
@@ -91,6 +98,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings/accounts',
       builder: (context, state) => const AccountsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/device-setup',
+      builder: (context, state) => const DeviceSetupScreen(),
+    ),
+    GoRoute(
+      path: '/settings/diagnostics',
+      builder: (context, state) => const DiagnosticsScreen(),
     ),
     GoRoute(
       path: '/settings/marketplace',

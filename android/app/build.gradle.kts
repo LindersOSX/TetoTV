@@ -1,5 +1,4 @@
 import java.io.FileInputStream
-import java.util.Base64
 import java.util.Properties
 
 val keystoreProperties = Properties()
@@ -10,28 +9,10 @@ if (keystorePropertiesFile.exists()) {
 val releaseTaskRequested = gradle.startParameter.taskNames.any {
     it.contains("release", ignoreCase = true)
 }
-val bundledUpdateTokenDefined = providers.gradleProperty("dart-defines")
-    .orNull
-    ?.split(',')
-    ?.mapNotNull { encoded ->
-        runCatching {
-            String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
-        }.getOrNull()
-    }
-    ?.any { define ->
-        define.startsWith("TETOTV_GITHUB_UPDATE_TOKEN=") &&
-            define.substringAfter('=').isNotBlank()
-    } == true
 if (releaseTaskRequested && !keystorePropertiesFile.exists()) {
     throw GradleException(
         "Release signing is not configured. Restore android/key.properties " +
             "and the original keystore before building an update.",
-    )
-}
-if (releaseTaskRequested && !bundledUpdateTokenDefined) {
-    throw GradleException(
-        "Release updater access is not provisioned. Build with a non-empty " +
-            "--dart-define=TETOTV_GITHUB_UPDATE_TOKEN=<read-only token>.",
     )
 }
 

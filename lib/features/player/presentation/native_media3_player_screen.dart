@@ -217,6 +217,18 @@ class _NativeMedia3PlayerScreenState
     }
   }
 
+  Future<void> _retryAfterFailure() async {
+    if (mounted) setState(() => _diagnostic = null);
+    await _run();
+  }
+
+  Future<void> _nextStreamAfterFailure() async {
+    final switched = await _switchToCompatibleStream(
+      _diagnostic ?? 'Selected after playback failure',
+    );
+    if (switched) await _run();
+  }
+
   Future<void> _loadResumeAndPreferences() async {
     if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
@@ -469,14 +481,21 @@ class _NativeMedia3PlayerScreenState
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFFE63B55),
-                    strokeWidth: 4,
+                if (_diagnostic == null)
+                  const SizedBox(
+                    width: 42,
+                    height: 42,
+                    child: CircularProgressIndicator(
+                      color: Color(0xFFE63B55),
+                      strokeWidth: 4,
+                    ),
+                  )
+                else
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: Color(0xFFFF929B),
+                    size: 46,
                   ),
-                ),
                 const SizedBox(height: 22),
                 Text(
                   _status,
@@ -494,6 +513,34 @@ class _NativeMedia3PlayerScreenState
                   ),
                 ],
                 const SizedBox(height: 24),
+                if (_diagnostic != null) ...[
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      FilledButton.icon(
+                        autofocus: true,
+                        onPressed: _retryAfterFailure,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Retry stream'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _nextStreamAfterFailure,
+                        icon: const Icon(Icons.skip_next_rounded),
+                        label: const Text('Try another stream'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          if (context.canPop()) context.pop();
+                        },
+                        icon: const Icon(Icons.list_rounded),
+                        label: const Text('Choose stream'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 OutlinedButton(
                   onPressed: () => widget.onUseMpv(_source, _release),
                   child: const Text('Use MPV compatibility player'),

@@ -26,14 +26,57 @@ class NetworkArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final source = url;
-    if (source == null || source.isEmpty) return _Fallback(icon: icon);
-    return CachedNetworkImage(
-      imageUrl: source,
-      fit: fit,
-      memCacheWidth: cacheWidth ?? 800,
-      fadeInDuration: Duration.zero,
-      placeholder: (_, _) => _Fallback(icon: icon),
-      errorWidget: (_, _, _) => _Fallback(icon: icon),
+    if (source == null || source.isEmpty) {
+      return SizedBox.expand(child: _Fallback(icon: icon));
+    }
+    return SizedBox.expand(
+      child: CachedNetworkImage(
+        imageUrl: source,
+        width: double.infinity,
+        height: double.infinity,
+        fit: fit,
+        memCacheWidth: cacheWidth ?? 800,
+        fadeInDuration: const Duration(milliseconds: 120),
+        placeholder: (_, _) => const ArtworkSkeleton(),
+        errorWidget: (_, _, _) => _Fallback(icon: icon),
+      ),
+    );
+  }
+}
+
+/// A fixed-size artwork placeholder. Its parent owns the final dimensions, so
+/// poster rows never jump or stretch while an image is downloading.
+class ArtworkSkeleton extends StatelessWidget {
+  const ArtworkSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: 'Loading artwork',
+      child: SizedBox.expand(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppColors.panelRaised,
+            gradient: LinearGradient(
+              colors: [
+                AppColors.panelRaised,
+                Colors.white.withValues(alpha: .055),
+                AppColors.panelRaised,
+              ],
+              stops: const [0, .52, 1],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: const Center(
+            child: Icon(
+              Icons.image_outlined,
+              color: Color(0xFF57575F),
+              size: 32,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -47,7 +90,9 @@ class _Fallback extends StatelessWidget {
   Widget build(BuildContext context) {
     return ColoredBox(
       color: AppColors.panelRaised,
-      child: Center(child: Icon(icon, color: AppColors.textMuted, size: 42)),
+      child: SizedBox.expand(
+        child: Center(child: Icon(icon, color: AppColors.textMuted, size: 42)),
+      ),
     );
   }
 }

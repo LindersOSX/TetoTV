@@ -921,6 +921,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
+  Future<void> _returnToStreamPicker() async {
+    final position = _controller?.value.position ?? Duration.zero;
+    await _persistPlayback(position, force: true);
+    if (mounted && context.canPop()) context.pop();
+  }
+
   Future<void> _syncProgress() async {
     if (widget.episode == null) return;
     try {
@@ -1394,7 +1400,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     child: _VlcPlaybackError(
                       message: error,
                       onRetry: () => unawaited(_restart(_decoderMode)),
+                      onNextStream: () =>
+                          unawaited(_tryNextStream('Selected after failure')),
                       onUseMpv: widget.onUseMpv,
+                      onChooseStream: () => unawaited(_returnToStreamPicker()),
                     ),
                   ),
                 if (_trackMessage case final message?)
@@ -1708,12 +1717,16 @@ class _VlcPlaybackError extends StatelessWidget {
   const _VlcPlaybackError({
     required this.message,
     required this.onRetry,
+    required this.onNextStream,
     required this.onUseMpv,
+    required this.onChooseStream,
   });
 
   final String message;
   final VoidCallback onRetry;
+  final VoidCallback onNextStream;
   final VoidCallback onUseMpv;
+  final VoidCallback onChooseStream;
 
   @override
   Widget build(BuildContext context) {
@@ -1724,22 +1737,36 @@ class _VlcPlaybackError extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.accent),
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           const Icon(Icons.error_outline, color: AppColors.accentBright),
-          const SizedBox(width: 12),
-          Expanded(child: Text(message, maxLines: 3)),
+          SizedBox(
+            width: 300,
+            child: Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
+          ),
           _VlcControl(
             icon: Icons.refresh_rounded,
             label: 'Retry VLC',
             primary: true,
             onPressed: onRetry,
           ),
-          const SizedBox(width: 8),
+          _VlcControl(
+            icon: Icons.skip_next_rounded,
+            label: 'Next stream',
+            onPressed: onNextStream,
+          ),
           _VlcControl(
             icon: Icons.swap_horiz_rounded,
             label: 'Use MPV',
             onPressed: onUseMpv,
+          ),
+          _VlcControl(
+            icon: Icons.list_rounded,
+            label: 'Choose stream',
+            onPressed: onChooseStream,
           ),
         ],
       ),

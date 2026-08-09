@@ -701,11 +701,35 @@ class MainActivity : FlutterActivity() {
                 info.supportedTypes
                     .filter { it.startsWith("video/") }
                     .forEach { mime ->
+                        val capabilities = runCatching {
+                            info.getCapabilitiesForType(mime)
+                        }.getOrNull()
+                        val videoCapabilities = capabilities?.videoCapabilities
+                        val profiles = capabilities?.profileLevels
+                            ?.map { level -> level.profile }
+                            .orEmpty()
+                        val normalizedMime = mime.lowercase()
+                        val tenBit = when (normalizedMime) {
+                            "video/hevc", "video/av01" ->
+                                profiles.any { profile -> profile != 1 }
+                            "video/x-vnd.on2.vp9" ->
+                                profiles.any { profile ->
+                                    profile == 4 || profile == 8 || profile >= 4096
+                                }
+                            else -> false
+                        }
                         codecs.add(
                             mapOf(
                                 "name" to info.name,
-                                "mime" to mime.lowercase(),
+                                "mime" to normalizedMime,
                                 "hardware" to isHardwareAccelerated(info),
+                                "tenBit" to tenBit,
+                                "maxWidth" to runCatching {
+                                    videoCapabilities?.supportedWidths?.upper ?: 0
+                                }.getOrDefault(0),
+                                "maxHeight" to runCatching {
+                                    videoCapabilities?.supportedHeights?.upper ?: 0
+                                }.getOrDefault(0),
                             ),
                         )
                     }

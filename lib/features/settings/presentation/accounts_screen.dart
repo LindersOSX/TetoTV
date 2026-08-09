@@ -3,7 +3,6 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
-import 'package:anime_tv/core/diagnostics/diagnostics_exporter.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
@@ -18,7 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-enum _SettingsArea { home, streaming, tracking, appearance, updates }
+enum _SettingsArea { customize, streaming, tracking, appearance, system }
 
 class AccountsScreen extends ConsumerStatefulWidget {
   const AccountsScreen({super.key});
@@ -28,7 +27,7 @@ class AccountsScreen extends ConsumerStatefulWidget {
 }
 
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
-  _SettingsArea _activeArea = _SettingsArea.home;
+  _SettingsArea _activeArea = _SettingsArea.customize;
   final _tokenController = TextEditingController();
   final _torBoxTokenController = TextEditingController();
   final _githubTokenController = TextEditingController();
@@ -48,6 +47,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.streaming.marketplace',
   );
   final _appearanceFocus = FocusNode(debugLabel: 'accounts.appearance.first');
+  final _customizationFocus = FocusNode(
+    debugLabel: 'accounts.customization.first',
+  );
+  final _setupFocus = FocusNode(debugLabel: 'accounts.system.setup');
+  final _calibrationFocus = FocusNode(
+    debugLabel: 'accounts.system.calibration',
+  );
+  final _diagnosticsFocus = FocusNode(
+    debugLabel: 'accounts.system.diagnostics',
+  );
   final _debridConnectFocus = FocusNode(debugLabel: 'accounts.debrid.connect');
   final _tokenFocus = FocusNode(debugLabel: 'accounts.debrid.token');
   final _tokenSaveFocus = FocusNode(debugLabel: 'accounts.debrid.save');
@@ -88,6 +97,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
     _appearanceFocus.dispose();
+    _customizationFocus.dispose();
+    _setupFocus.dispose();
+    _calibrationFocus.dispose();
+    _diagnosticsFocus.dispose();
     _debridConnectFocus.dispose();
     _tokenFocus.dispose();
     _tokenSaveFocus.dispose();
@@ -153,11 +166,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) target = _titleLanguageFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = switch (_activeArea) {
-          _SettingsArea.home => shelfNodes.first,
+          _SettingsArea.customize => shelfNodes.first,
           _SettingsArea.streaming => _debridProviderFocus,
           _SettingsArea.tracking => _trackingProviderFocus,
           _SettingsArea.appearance => _appearanceFocus,
-          _SettingsArea.updates => _githubTokenFocus,
+          _SettingsArea.system => _setupFocus,
         };
       }
     } else if (shelfIndex >= 0) {
@@ -172,7 +185,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _debridProviderFocus;
+        target = _customizationFocus;
       }
     }
 
@@ -274,9 +287,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _malTokenFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
+    } else if (current == _setupFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.system];
+      }
+      if (key == LogicalKeyboardKey.arrowRight) target = _calibrationFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+    } else if (current == _calibrationFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.system];
+      }
+      if (key == LogicalKeyboardKey.arrowLeft) target = _setupFocus;
+      if (key == LogicalKeyboardKey.arrowRight) target = _diagnosticsFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+    } else if (current == _diagnosticsFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.system];
+      }
+      if (key == LogicalKeyboardKey.arrowLeft) target = _calibrationFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
     } else if (current == _githubTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _areaFocusNodes[_SettingsArea.updates];
+        target = _setupFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight) target = _githubSaveFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -300,6 +332,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       return KeyEventResult.ignored;
     }
     target.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final targetContext = target?.context;
+      if (targetContext != null) {
+        Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 160),
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        );
+      }
+    });
     return KeyEventResult.handled;
   }
 
@@ -427,12 +469,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     bottom: MediaQuery.viewInsetsOf(context).bottom + 24,
                   ),
                   children: [
-                    if (_activeArea == _SettingsArea.home) ...[
+                    if (_activeArea == _SettingsArea.customize) ...[
                       const _SectionHeader(
-                        icon: Icons.home_outlined,
-                        title: 'HOME & TITLES',
+                        icon: Icons.tune_rounded,
+                        title: 'CUSTOMIZE TETOTV',
                         subtitle:
-                            'Control the shelves shown on Home. Title language is available above.',
+                            'Choose navigation shortcuts, Home layout, and visible content.',
                       ),
                       const SizedBox(height: 8),
                       _Panel(
@@ -497,6 +539,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             );
                           },
                         ),
+                      ),
+                      const SizedBox(height: 10),
+                      _CustomizationPanel(
+                        preferences: preferences,
+                        controller: ref.read(
+                          settingsPreferencesProvider.notifier,
+                        ),
+                        firstFocusNode: _customizationFocus,
                       ),
                       const SizedBox(height: 10),
                     ],
@@ -697,12 +747,53 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       const SizedBox(height: 10),
                     ],
-                    if (_activeArea == _SettingsArea.updates) ...[
+                    if (_activeArea == _SettingsArea.system) ...[
+                      const _SectionHeader(
+                        icon: Icons.memory_rounded,
+                        title: 'SYSTEM & SUPPORT',
+                        subtitle:
+                            'Setup, device compatibility, diagnostics, and app updates.',
+                      ),
+                      const SizedBox(height: 8),
+                      _Panel(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final actions = [
+                              _TvTextButton(
+                                label: 'Run setup again',
+                                icon: Icons.auto_awesome_rounded,
+                                focusNode: _setupFocus,
+                                onPressed: () => context.push('/setup'),
+                              ),
+                              _TvTextButton(
+                                label: 'Device calibration',
+                                icon: Icons.tune_rounded,
+                                focusNode: _calibrationFocus,
+                                onPressed: () =>
+                                    context.push('/settings/device-setup'),
+                              ),
+                              _TvTextButton(
+                                label: 'Diagnostics',
+                                icon: Icons.monitor_heart_outlined,
+                                focusNode: _diagnosticsFocus,
+                                onPressed: () =>
+                                    context.push('/settings/diagnostics'),
+                              ),
+                            ];
+                            return Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: actions,
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.system_update_alt_rounded,
                         title: 'APP UPDATES',
                         subtitle:
-                            'Private GitHub releases, downloaded directly to this TV.',
+                            'Private GitHub releases, downloaded directly to this device.',
                       ),
                       const SizedBox(height: 8),
                       _AppUpdatePanel(
@@ -734,59 +825,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             controller.checkForUpdates(launchInstaller: true);
                           }
                         },
-                      ),
-                      const SizedBox(height: 10),
-                      _Panel(
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.monitor_heart_outlined,
-                              color: AppColors.accentBright,
-                            ),
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Playback diagnostics',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    'Exports device codecs, frame timings, and redacted failures. No tokens or stream URLs.',
-                                    style: TextStyle(
-                                      color: AppColors.textMuted,
-                                      fontSize: 10,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            _TvTextButton(
-                              label: 'Export report',
-                              icon: Icons.file_download_outlined,
-                              onPressed: () async {
-                                final file = await const DiagnosticsExporter()
-                                    .export();
-                                await Clipboard.setData(
-                                  ClipboardData(text: file.path),
-                                );
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Saved diagnostics and copied the path: ${file.path}',
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
                       ),
                     ],
                   ],
@@ -824,14 +862,11 @@ class _SettingsAreaTabs extends StatelessWidget {
           final area = _SettingsArea.values[index];
           final active = area == selected;
           final (icon, label) = switch (area) {
-            _SettingsArea.home => (Icons.home_outlined, 'Home'),
+            _SettingsArea.customize => (Icons.tune_rounded, 'Customize'),
             _SettingsArea.streaming => (Icons.play_circle_outline, 'Streaming'),
             _SettingsArea.tracking => (Icons.sync_alt_rounded, 'Tracking'),
             _SettingsArea.appearance => (Icons.palette_outlined, 'Appearance'),
-            _SettingsArea.updates => (
-              Icons.system_update_alt_rounded,
-              'Updates & support',
-            ),
+            _SettingsArea.system => (Icons.memory_rounded, 'System'),
           };
           return TvFocusable(
             focusNode: focusNodes[area],
@@ -1072,6 +1107,129 @@ class _SettingsSelection<T> extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CustomizationPanel extends StatelessWidget {
+  const _CustomizationPanel({
+    required this.preferences,
+    required this.controller,
+    required this.firstFocusNode,
+  });
+
+  final SettingsPreferences preferences;
+  final SettingsPreferencesController controller;
+  final FocusNode firstFocusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget toggle({
+      required String label,
+      required bool value,
+      required ValueChanged<bool> onChanged,
+      FocusNode? focusNode,
+    }) => _PreferenceChip(
+      label: '$label ${value ? 'ON' : 'OFF'}',
+      selected: value,
+      focusNode: focusNode,
+      onPressed: () => onChanged(!value),
+    );
+
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MiniSectionLabel('HOME LAYOUT'),
+          _PreferenceRow(
+            label: 'Layout style',
+            children: [
+              for (final layout in HomeLayout.values)
+                _PreferenceChip(
+                  label: layout.displayName,
+                  selected: preferences.homeLayout == layout,
+                  onPressed: () => controller.setHomeLayout(layout),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Home content',
+            children: [
+              toggle(
+                label: 'Featured',
+                value: preferences.showHero,
+                onChanged: controller.setShowHero,
+              ),
+              toggle(
+                label: 'Poster badges',
+                value: preferences.showPosterMetadata,
+                onChanged: controller.setShowPosterMetadata,
+              ),
+              toggle(
+                label: 'Card details',
+                value: preferences.showCardSubtitles,
+                onChanged: controller.setShowCardSubtitles,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Divider(color: Colors.white.withValues(alpha: .07), height: 1),
+          const SizedBox(height: 8),
+          const _MiniSectionLabel('TOP NAVIGATION'),
+          _PreferenceRow(
+            label: 'Visible shortcuts',
+            children: [
+              toggle(
+                label: 'Search',
+                value: preferences.showSearch,
+                onChanged: controller.setShowSearch,
+                focusNode: firstFocusNode,
+              ),
+              toggle(
+                label: 'My List',
+                value: preferences.showMyList,
+                onChanged: controller.setShowMyList,
+              ),
+              toggle(
+                label: 'Discover',
+                value: preferences.showDiscover,
+                onChanged: controller.setShowDiscover,
+              ),
+              toggle(
+                label: 'Calendar',
+                value: preferences.showCalendar,
+                onChanged: controller.setShowCalendar,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _TvTextButton(
+              label: 'Reset customization',
+              icon: Icons.restart_alt_rounded,
+              onPressed: controller.resetCustomization,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniSectionLabel extends StatelessWidget {
+  const _MiniSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    label,
+    style: const TextStyle(
+      color: AppColors.accentBright,
+      fontSize: 9,
+      fontWeight: FontWeight.w900,
+      letterSpacing: 1.1,
+    ),
+  );
 }
 
 class _AppearancePanel extends StatelessWidget {

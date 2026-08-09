@@ -25,7 +25,7 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.area.home',
+      'accounts.area.customize',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
@@ -178,6 +178,7 @@ void main() {
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
       await tester.pumpAndSettle();
@@ -217,9 +218,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Settings'), findsWidgets);
-    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Customize'), findsOneWidget);
     expect(find.text('Streaming'), findsOneWidget);
-    expect(find.text('HOME & TITLES'), findsOneWidget);
+    expect(find.text('CUSTOMIZE TETOTV'), findsOneWidget);
 
     await tester.tap(find.text('Streaming'));
     await tester.pumpAndSettle();

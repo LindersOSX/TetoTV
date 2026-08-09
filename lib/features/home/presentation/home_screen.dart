@@ -13,6 +13,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -38,15 +39,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ),
   ];
 
-  static const _seasonalFallback = [
-    _ShelfItem('Jujutsu Kaisen', 'Action • Supernatural', AppColors.accent),
-    _ShelfItem('Frieren', 'Adventure • Fantasy', Color(0xFF8E2038)),
-    _ShelfItem('Demon Slayer', 'Action • Historical', Color(0xFFB62A47)),
-    _ShelfItem('Attack on Titan', 'Action • Drama', Color(0xFF75172A)),
-    _ShelfItem('My Hero Academia', 'Action • Hero', Color(0xFFD23A58)),
-  ];
-
   final _heroFocus = FocusNode(debugLabel: 'home.watch-now');
+  final _homeNavFocus = FocusNode(debugLabel: 'home.navigation.home');
   final _scrollController = ScrollController();
   bool _catalogFocusSettled = false;
 
@@ -56,8 +50,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusHero();
-      unawaited(_checkForUpdates());
+      unawaited(_runStartup());
     });
+  }
+
+  Future<void> _runStartup() async {
+    final setup = ref.read(setupProgressProvider.notifier);
+    await setup.load();
+    if (!mounted) return;
+    if (!ref.read(setupProgressProvider).completed) {
+      await context.push('/setup');
+      if (!mounted) return;
+    }
+    await _checkForUpdates();
   }
 
   Future<void> _checkForUpdates() async {
@@ -88,7 +93,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _focusHero() {
     if (!mounted) return;
-    _heroFocus.requestFocus();
+    if (_heroFocus.context != null) {
+      _heroFocus.requestFocus();
+    } else {
+      _homeNavFocus.requestFocus();
+    }
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
   }
 
@@ -139,6 +148,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void dispose() {
     _heroFocus.dispose();
+    _homeNavFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -161,8 +171,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
     });
 
-    final trending = ref.watch(trendingAnimeProvider).valueOrNull;
-    final seasonal = ref.watch(seasonalAnimeProvider).valueOrNull;
+    final trendingAsync = ref.watch(trendingAnimeProvider);
+    final seasonalAsync = ref.watch(seasonalAnimeProvider);
+    final trending = trendingAsync.valueOrNull;
+    final seasonal = seasonalAsync.valueOrNull;
     final tracking = ref.watch(trackingHomeProvider).valueOrNull;
     final localHistory = ref.watch(recentPlaybackProvider).valueOrNull;
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
@@ -173,7 +185,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         const <int>{};
     final hero = trending?.firstOrNull;
     final seasonalItems = seasonal == null || seasonal.isEmpty
-        ? _seasonalFallback
+        ? const <_ShelfItem>[]
         : seasonal
               .map((anime) => _ShelfItem.fromAnime(anime, titlePreference))
               .toList(growable: false);
@@ -227,16 +239,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           controller: _scrollController,
           slivers: [
             SliverToBoxAdapter(
-              child: _Header(onMyList: () => context.push('/my-list')),
-            ),
-            SliverToBoxAdapter(
-              child: _HeroPanel(
-                anime: hero,
-                focusNode: _heroFocus,
-                titlePreference: titlePreference,
+              child: _Header(
+                preferences: preferences,
+                homeFocusNode: _homeNavFocus,
               ),
             ),
-            const SliverToBoxAdapter(child: SizedBox(height: 18)),
+            if (preferences.showHero)
+              SliverToBoxAdapter(
+                child: _HeroPanel(
+                  anime: hero,
+                  isLoading: trendingAsync.isLoading,
+                  focusNode: _heroFocus,
+                  titlePreference: titlePreference,
+                  preferences: preferences,
+                ),
+              ),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: preferences.homeLayout == HomeLayout.compact ? 10 : 18,
+              ),
+            ),
             if (enabledShelves.contains(HomeShelf.tracking))
               SliverToBoxAdapter(
                 child: _MediaShelf(
@@ -257,13 +279,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   onRemove: _removeFromLocalHistory,
                 ),
               ),
-            SliverToBoxAdapter(
-              child: _MediaShelf(
-                title: 'Recently released',
-                items: seasonalItems,
-                preferences: preferences,
+            if (seasonalAsync.isLoading)
+              SliverToBoxAdapter(
+                child: _MediaShelfSkeleton(
+                  title: 'Recently released',
+                  preferences: preferences,
+                ),
+              )
+            else if (seasonalItems.isNotEmpty)
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: 'Recently released',
+                  items: seasonalItems,
+                  preferences: preferences,
+                ),
               ),
-            ),
             if (enabledShelves.contains(HomeShelf.trending) &&
                 trendingItems != null &&
                 trendingItems.isNotEmpty)
@@ -312,9 +342,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onMyList});
+  const _Header({required this.preferences, required this.homeFocusNode});
 
-  final VoidCallback onMyList;
+  final SettingsPreferences preferences;
+  final FocusNode homeFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -340,41 +371,51 @@ class _Header extends StatelessWidget {
           if (!compact || MediaQuery.sizeOf(context).width >= 420)
             Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
           SizedBox(width: compact ? 4 : 14),
-          _HeaderAction(
-            icon: Icons.search_rounded,
-            label: 'Search',
-            compact: true,
-            onPressed: () => context.push('/search'),
-          ),
-          SizedBox(width: compact ? 2 : 6),
+          if (preferences.showSearch) ...[
+            _HeaderAction(
+              icon: Icons.search_rounded,
+              label: 'Search',
+              compact: true,
+              onPressed: () => context.push('/search'),
+            ),
+            SizedBox(width: compact ? 2 : 6),
+          ],
           _HeaderAction(
             icon: Icons.home_rounded,
             label: 'Home',
             compact: true,
             active: true,
+            autofocus: !preferences.showHero,
+            focusNode: homeFocusNode,
             onPressed: () {},
           ),
-          SizedBox(width: compact ? 2 : 6),
-          _HeaderAction(
-            icon: Icons.video_library_rounded,
-            label: 'My List',
-            compact: compact,
-            onPressed: onMyList,
-          ),
-          SizedBox(width: compact ? 2 : 6),
-          _HeaderAction(
-            icon: Icons.explore_rounded,
-            label: 'Discover',
-            compact: true,
-            onPressed: () => context.push('/discover'),
-          ),
-          SizedBox(width: compact ? 2 : 6),
-          _HeaderAction(
-            icon: Icons.calendar_month_rounded,
-            label: 'Calendar',
-            compact: true,
-            onPressed: () => context.push('/calendar'),
-          ),
+          if (preferences.showMyList) ...[
+            SizedBox(width: compact ? 2 : 6),
+            _HeaderAction(
+              icon: Icons.video_library_rounded,
+              label: 'My List',
+              compact: compact,
+              onPressed: () => context.push('/my-list'),
+            ),
+          ],
+          if (preferences.showDiscover) ...[
+            SizedBox(width: compact ? 2 : 6),
+            _HeaderAction(
+              icon: Icons.explore_rounded,
+              label: 'Discover',
+              compact: true,
+              onPressed: () => context.push('/discover'),
+            ),
+          ],
+          if (preferences.showCalendar) ...[
+            SizedBox(width: compact ? 2 : 6),
+            _HeaderAction(
+              icon: Icons.calendar_month_rounded,
+              label: 'Calendar',
+              compact: true,
+              onPressed: () => context.push('/calendar'),
+            ),
+          ],
           const Spacer(),
           _HeaderAction(
             icon: Icons.settings_rounded,
@@ -392,19 +433,24 @@ class _HeroPanel extends StatelessWidget {
   const _HeroPanel({
     required this.focusNode,
     required this.titlePreference,
+    required this.preferences,
+    required this.isLoading,
     this.anime,
   });
 
   final AnimeSummary? anime;
   final FocusNode focusNode;
   final TitleLanguagePreference titlePreference;
+  final SettingsPreferences preferences;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
     final route = anime == null ? '/search?q=Frieren' : '/anime/${anime!.id}';
     final compact = context.isCompactWidth;
+    final dense = preferences.homeLayout == HomeLayout.compact;
     return Container(
-      height: compact ? 340 : 292,
+      height: dense ? (compact ? 270 : 224) : (compact ? 340 : 292),
       clipBehavior: Clip.hardEdge,
       decoration: const BoxDecoration(color: AppColors.panel),
       child: Stack(
@@ -419,7 +465,9 @@ class _HeroPanel extends StatelessWidget {
               ),
             ),
           ),
-          if (anime?.bannerImageUrl != null)
+          if (isLoading)
+            const ArtworkSkeleton()
+          else if (anime?.bannerImageUrl != null)
             NetworkArtwork(url: anime!.bannerImageUrl!, cacheWidth: 1280),
           const DecoratedBox(
             decoration: BoxDecoration(
@@ -477,7 +525,7 @@ class _HeroPanel extends StatelessWidget {
                         ? anime!.description
                         : 'An elven mage retraces a legendary journey and '
                               'discovers what the brief lives of her friends meant.',
-                    maxLines: compact ? 5 : 4,
+                    maxLines: dense ? 2 : (compact ? 5 : 4),
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: AppColors.textPrimary,
@@ -602,10 +650,15 @@ class _MediaShelf extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = context.isCompactWidth;
-    final posterHeight = compact ? 238.0 : 205.0;
-    final posterWidth = compact ? 126.0 : 106.0;
+    final dense = preferences.homeLayout == HomeLayout.compact;
+    final posterHeight = dense
+        ? (compact ? 198.0 : 170.0)
+        : (compact ? 238.0 : 205.0);
+    final posterWidth = dense
+        ? (compact ? 104.0 : 88.0)
+        : (compact ? 126.0 : 106.0);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -624,6 +677,7 @@ class _MediaShelf extends StatelessWidget {
                 return _PosterCard(
                   item: item,
                   width: posterWidth * preferences.thumbnailScale,
+                  preferences: preferences,
                   onPressed: () => item.route != null
                       ? context.push(item.route!)
                       : item.animeId == null
@@ -645,11 +699,89 @@ class _MediaShelf extends StatelessWidget {
   }
 }
 
+class _MediaShelfSkeleton extends StatelessWidget {
+  const _MediaShelfSkeleton({required this.title, required this.preferences});
+
+  final String title;
+  final SettingsPreferences preferences;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = context.isCompactWidth;
+    final dense = preferences.homeLayout == HomeLayout.compact;
+    final posterHeight = dense
+        ? (compact ? 198.0 : 170.0)
+        : (compact ? 238.0 : 205.0);
+    final posterWidth = dense
+        ? (compact ? 104.0 : 88.0)
+        : (compact ? 126.0 : 106.0);
+    final width = posterWidth * preferences.thumbnailScale;
+    return Padding(
+      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          SizedBox(height: 9 * preferences.contentDensity.spacingScale),
+          SizedBox(
+            height: posterHeight * preferences.thumbnailScale,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: 8,
+              separatorBuilder: (_, _) =>
+                  SizedBox(width: 10 * preferences.contentDensity.spacingScale),
+              itemBuilder: (_, _) => SizedBox(
+                width: width,
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.all(Radius.circular(4)),
+                        child: ArtworkSkeleton(),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    _SkeletonLine(widthFactor: .88),
+                    SizedBox(height: 5),
+                    _SkeletonLine(widthFactor: .58),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SkeletonLine extends StatelessWidget {
+  const _SkeletonLine({required this.widthFactor});
+
+  final double widthFactor;
+
+  @override
+  Widget build(BuildContext context) => FractionallySizedBox(
+    alignment: Alignment.centerLeft,
+    widthFactor: widthFactor,
+    child: Container(
+      height: 7,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(99),
+      ),
+    ),
+  );
+}
+
 class _PosterCard extends StatelessWidget {
   const _PosterCard({
     required this.item,
     required this.width,
     required this.onPressed,
+    required this.preferences,
     this.onLongPress,
   });
 
@@ -657,6 +789,7 @@ class _PosterCard extends StatelessWidget {
   final VoidCallback onPressed;
   final VoidCallback? onLongPress;
   final double width;
+  final SettingsPreferences preferences;
 
   @override
   Widget build(BuildContext context) {
@@ -694,7 +827,8 @@ class _PosterCard extends StatelessWidget {
                           url: item.coverImageUrl,
                           cacheWidth: 190,
                         ),
-                      if (item.hasPosterMetadata)
+                      if (preferences.showPosterMetadata &&
+                          item.hasPosterMetadata)
                         Positioned(
                           left: 4,
                           right: 4,
@@ -721,7 +855,8 @@ class _PosterCard extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              if (item.subtitle.isNotEmpty) ...[
+              if (preferences.showCardSubtitles &&
+                  item.subtitle.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(
                   item.subtitle,
@@ -806,6 +941,8 @@ class _HeaderAction extends StatelessWidget {
     required this.onPressed,
     this.active = false,
     this.compact = false,
+    this.autofocus = false,
+    this.focusNode,
   });
 
   final IconData icon;
@@ -813,10 +950,14 @@ class _HeaderAction extends StatelessWidget {
   final VoidCallback onPressed;
   final bool active;
   final bool compact;
+  final bool autofocus;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
+      autofocus: autofocus,
+      focusNode: focusNode,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(7),
       focusScale: 1.02,

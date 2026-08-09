@@ -646,6 +646,19 @@ class TetoTvDatabase {
     );
   }
 
+  Future<void> setPreferredPlayer(String deviceKey, String engine) async {
+    final current = await devicePlaybackProfile(deviceKey);
+    await _saveDevicePlaybackProfile(
+      DevicePlaybackProfile(
+        deviceKey: deviceKey,
+        preferredEngine: engine,
+        media3Failures: current.media3Failures,
+        mpvFailures: current.mpvFailures,
+        vlcFailures: current.vlcFailures,
+      ),
+    );
+  }
+
   Future<void> _saveDevicePlaybackProfile(DevicePlaybackProfile profile) async {
     final db = await database;
     await db.insert('device_player_profiles', {

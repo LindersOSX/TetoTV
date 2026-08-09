@@ -1111,6 +1111,22 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
+  Future<void> _retryCurrentStream() async {
+    final position = _player.state.position;
+    if (mounted) setState(() => _playbackError = null);
+    try {
+      await _openMedia(resume: position);
+      _showTrackMessage('Stream restarted');
+    } catch (error) {
+      if (mounted) setState(() => _playbackError = error.toString());
+    }
+  }
+
+  Future<void> _returnToStreamPicker() async {
+    await _persistPlayback(_player.state.position, force: true);
+    if (mounted && context.canPop()) context.pop();
+  }
+
   Future<void> _recordEngineSuccess() async {
     final database = ref.read(tetoTvDatabaseProvider);
     if (widget.launch.stream.providerId case final providerId?) {
@@ -1990,7 +2006,16 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     left: 34,
                     right: 34,
                     bottom: 110,
-                    child: _PlaybackError(message: error),
+                    child: _PlaybackError(
+                      message: error,
+                      onRetry: () => unawaited(_retryCurrentStream()),
+                      onNextStream: () =>
+                          unawaited(_tryNextStream('Selected after failure')),
+                      onSwitchEngine: () => unawaited(
+                        _fallbackToVlc('VLC selected after playback failure'),
+                      ),
+                      onChooseStream: () => unawaited(_returnToStreamPicker()),
+                    ),
                   ),
                 if (_trackMessage case final message?)
                   Center(
@@ -2679,9 +2704,19 @@ class _NextEpisodeDialogState extends State<_NextEpisodeDialog> {
 }
 
 class _PlaybackError extends StatelessWidget {
-  const _PlaybackError({required this.message});
+  const _PlaybackError({
+    required this.message,
+    required this.onRetry,
+    required this.onNextStream,
+    required this.onSwitchEngine,
+    required this.onChooseStream,
+  });
 
   final String message;
+  final VoidCallback onRetry;
+  final VoidCallback onNextStream;
+  final VoidCallback onSwitchEngine;
+  final VoidCallback onChooseStream;
 
   @override
   Widget build(BuildContext context) {
@@ -2694,23 +2729,99 @@ class _PlaybackError extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFFFF929B)),
         ),
-        child: Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.error_outline_rounded, color: Color(0xFFFF929B)),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(
-                message,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
+            Row(
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: Color(0xFFFF929B),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    message,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _RecoveryAction(
+                  label: 'Retry stream',
+                  icon: Icons.refresh_rounded,
+                  primary: true,
+                  onPressed: onRetry,
+                ),
+                _RecoveryAction(
+                  label: 'Next stream',
+                  icon: Icons.skip_next_rounded,
+                  onPressed: onNextStream,
+                ),
+                _RecoveryAction(
+                  label: 'Use VLC',
+                  icon: Icons.swap_horiz_rounded,
+                  onPressed: onSwitchEngine,
+                ),
+                _RecoveryAction(
+                  label: 'Choose stream',
+                  icon: Icons.list_rounded,
+                  onPressed: onChooseStream,
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _RecoveryAction extends StatelessWidget {
+  const _RecoveryAction({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.primary = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool primary;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(7),
+    child: Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: primary ? AppColors.accent : const Color(0xFF202026),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: Colors.white.withValues(alpha: .12)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 17),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class DebridOnlyPlaybackScreen extends StatelessWidget {

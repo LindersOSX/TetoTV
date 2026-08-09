@@ -19,6 +19,23 @@ const _debridStreamsEnabledKey = 'streaming_debrid_enabled';
 const _webStreamsEnabledKey = 'streaming_web_enabled';
 const _autoSkipIntrosKey = 'player_auto_skip_intros';
 const _autoSkipOutrosKey = 'player_auto_skip_outros';
+const _homeLayoutKey = 'appearance_home_layout';
+const _showSearchKey = 'navigation_show_search';
+const _showMyListKey = 'navigation_show_my_list';
+const _showDiscoverKey = 'navigation_show_discover';
+const _showCalendarKey = 'navigation_show_calendar';
+const _showHeroKey = 'home_show_featured_hero';
+const _showPosterMetadataKey = 'home_show_poster_metadata';
+const _showCardSubtitlesKey = 'home_show_card_subtitles';
+
+enum HomeLayout { cinematic, compact }
+
+extension HomeLayoutLabel on HomeLayout {
+  String get displayName => switch (this) {
+    HomeLayout.cinematic => 'Cinematic',
+    HomeLayout.compact => 'Compact',
+  };
+}
 
 enum ContentDensity { compact, standard, comfortable }
 
@@ -53,6 +70,14 @@ class SettingsPreferences {
     this.webStreamsEnabled = true,
     this.autoSkipIntros = false,
     this.autoSkipOutros = false,
+    this.homeLayout = HomeLayout.cinematic,
+    this.showSearch = true,
+    this.showMyList = true,
+    this.showDiscover = true,
+    this.showCalendar = true,
+    this.showHero = true,
+    this.showPosterMetadata = true,
+    this.showCardSubtitles = true,
   });
 
   final DebridService debridProvider;
@@ -70,6 +95,14 @@ class SettingsPreferences {
   final bool webStreamsEnabled;
   final bool autoSkipIntros;
   final bool autoSkipOutros;
+  final HomeLayout homeLayout;
+  final bool showSearch;
+  final bool showMyList;
+  final bool showDiscover;
+  final bool showCalendar;
+  final bool showHero;
+  final bool showPosterMetadata;
+  final bool showCardSubtitles;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -87,6 +120,14 @@ class SettingsPreferences {
     bool? webStreamsEnabled,
     bool? autoSkipIntros,
     bool? autoSkipOutros,
+    HomeLayout? homeLayout,
+    bool? showSearch,
+    bool? showMyList,
+    bool? showDiscover,
+    bool? showCalendar,
+    bool? showHero,
+    bool? showPosterMetadata,
+    bool? showCardSubtitles,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -104,6 +145,14 @@ class SettingsPreferences {
     webStreamsEnabled: webStreamsEnabled ?? this.webStreamsEnabled,
     autoSkipIntros: autoSkipIntros ?? this.autoSkipIntros,
     autoSkipOutros: autoSkipOutros ?? this.autoSkipOutros,
+    homeLayout: homeLayout ?? this.homeLayout,
+    showSearch: showSearch ?? this.showSearch,
+    showMyList: showMyList ?? this.showMyList,
+    showDiscover: showDiscover ?? this.showDiscover,
+    showCalendar: showCalendar ?? this.showCalendar,
+    showHero: showHero ?? this.showHero,
+    showPosterMetadata: showPosterMetadata ?? this.showPosterMetadata,
+    showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
   );
 }
 
@@ -142,6 +191,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _storage.read(key: _webStreamsEnabledKey),
         _storage.read(key: _autoSkipIntrosKey),
         _storage.read(key: _autoSkipOutrosKey),
+        _storage.read(key: _homeLayoutKey),
+        _storage.read(key: _showSearchKey),
+        _storage.read(key: _showMyListKey),
+        _storage.read(key: _showDiscoverKey),
+        _storage.read(key: _showCalendarKey),
+        _storage.read(key: _showHeroKey),
+        _storage.read(key: _showPosterMetadataKey),
+        _storage.read(key: _showCardSubtitlesKey),
       ]);
       state = SettingsPreferences(
         debridProvider:
@@ -166,6 +223,17 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         webStreamsEnabled: values[12] != 'false',
         autoSkipIntros: values[13] == 'true',
         autoSkipOutros: values[14] == 'true',
+        homeLayout: HomeLayout.values.firstWhere(
+          (layout) => layout.name == values[15],
+          orElse: () => HomeLayout.cinematic,
+        ),
+        showSearch: values[16] != 'false',
+        showMyList: values[17] != 'false',
+        showDiscover: values[18] != 'false',
+        showCalendar: values[19] != 'false',
+        showHero: values[20] != 'false',
+        showPosterMetadata: values[21] != 'false',
+        showCardSubtitles: values[22] != 'false',
       );
     } catch (_) {
       // Appearance preferences are optional; safe defaults remain usable.
@@ -246,6 +314,70 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     state.copyWith(autoSkipOutros: value),
     {_autoSkipOutrosKey: value.toString()},
   );
+
+  Future<void> setHomeLayout(HomeLayout value) =>
+      _update(state.copyWith(homeLayout: value), {_homeLayoutKey: value.name});
+
+  Future<void> setShowSearch(bool value) => _update(
+    state.copyWith(showSearch: value),
+    {_showSearchKey: value.toString()},
+  );
+
+  Future<void> setShowMyList(bool value) => _update(
+    state.copyWith(showMyList: value),
+    {_showMyListKey: value.toString()},
+  );
+
+  Future<void> setShowDiscover(bool value) => _update(
+    state.copyWith(showDiscover: value),
+    {_showDiscoverKey: value.toString()},
+  );
+
+  Future<void> setShowCalendar(bool value) => _update(
+    state.copyWith(showCalendar: value),
+    {_showCalendarKey: value.toString()},
+  );
+
+  Future<void> setShowHero(bool value) => _update(
+    state.copyWith(showHero: value),
+    {_showHeroKey: value.toString()},
+  );
+
+  Future<void> setShowPosterMetadata(bool value) => _update(
+    state.copyWith(showPosterMetadata: value),
+    {_showPosterMetadataKey: value.toString()},
+  );
+
+  Future<void> setShowCardSubtitles(bool value) => _update(
+    state.copyWith(showCardSubtitles: value),
+    {_showCardSubtitlesKey: value.toString()},
+  );
+
+  Future<void> resetCustomization() async {
+    const defaults = SettingsPreferences();
+    state = state.copyWith(
+      homeLayout: defaults.homeLayout,
+      showSearch: defaults.showSearch,
+      showMyList: defaults.showMyList,
+      showDiscover: defaults.showDiscover,
+      showCalendar: defaults.showCalendar,
+      showHero: defaults.showHero,
+      showPosterMetadata: defaults.showPosterMetadata,
+      showCardSubtitles: defaults.showCardSubtitles,
+    );
+    for (final key in const [
+      _homeLayoutKey,
+      _showSearchKey,
+      _showMyListKey,
+      _showDiscoverKey,
+      _showCalendarKey,
+      _showHeroKey,
+      _showPosterMetadataKey,
+      _showCardSubtitlesKey,
+    ]) {
+      await _storage.delete(key: key);
+    }
+  }
 
   Future<void> resetAppearance() async {
     const defaults = SettingsPreferences();
