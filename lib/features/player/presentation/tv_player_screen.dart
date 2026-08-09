@@ -187,7 +187,11 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
       stream: StreamReady(
         uri: Uri.parse(source),
         displayName: release.releaseName,
-        debridService: widget.debridService,
+        debridService: _activeLaunch.stream.debridService,
+        headers: _activeLaunch.stream.headers,
+        externalSubtitle: _activeLaunch.stream.externalSubtitle,
+        providerId: _activeLaunch.stream.providerId,
+        providerName: _activeLaunch.stream.providerName,
       ),
       episode: _activeLaunch.episode,
       selectedRelease: release,
@@ -210,7 +214,9 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         title: widget.title,
         debridService: widget.debridService,
         launch: _activeLaunch,
-        subtitle: widget.subtitle,
+        subtitle:
+            _activeLaunch.stream.externalSubtitle?.toString() ??
+            widget.subtitle,
         anilistMediaId: widget.anilistMediaId,
         malMediaId: widget.malMediaId,
         episode: widget.episode,
@@ -223,7 +229,9 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         title: widget.title,
         debridService: widget.debridService,
         launch: _activeLaunch,
-        subtitle: widget.subtitle,
+        subtitle:
+            _activeLaunch.stream.externalSubtitle?.toString() ??
+            widget.subtitle,
         anilistMediaId: widget.anilistMediaId,
         malMediaId: widget.malMediaId,
         episode: widget.episode,
@@ -240,7 +248,8 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
       title: widget.title,
       debridService: widget.debridService,
       launch: _activeLaunch,
-      subtitle: widget.subtitle,
+      subtitle:
+          _activeLaunch.stream.externalSubtitle?.toString() ?? widget.subtitle,
       anilistMediaId: widget.anilistMediaId,
       malMediaId: widget.malMediaId,
       episode: widget.episode,
@@ -286,6 +295,12 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
 class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
+
+  Map<String, String> get _httpHeaders => {
+    'Accept': '*/*',
+    'User-Agent': 'TetoTV/1.10 Android libmpv',
+    ...widget.launch.stream.headers,
+  };
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
   final _skipControlFocus = FocusNode(debugLabel: 'player.skip-segment');
@@ -727,16 +742,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (resume != null) _playbackPersistenceReady = false;
     try {
       await _configureNativePlayback();
-      await _player.open(
-        Media(
-          _source,
-          httpHeaders: const {
-            'Accept': '*/*',
-            'User-Agent': 'TetoTV/1.5 AndroidTV libmpv',
-          },
-        ),
-        play: true,
-      );
+      await _player.open(Media(_source, httpHeaders: _httpHeaders), play: true);
       await _applySubtitle();
       if (resume != null) await _restoreResumePosition(resume);
       _startVideoWatchdog();
@@ -1279,13 +1285,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _preferredSubtitleSelected = false;
       _videoFrameSeen = false;
       await _player.open(
-        Media(
-          _source,
-          httpHeaders: const {
-            'Accept': '*/*',
-            'User-Agent': 'TetoTV/1.5 AndroidTV libmpv',
-          },
-        ),
+        Media(_source, httpHeaders: _httpHeaders),
         play: automatic || wasPlaying,
       );
       if (position > Duration.zero) await _restoreResumePosition(position);
@@ -1321,13 +1321,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _videoFrameSeen = false;
       await _configureNativePlayback();
       await _player.open(
-        Media(
-          _source,
-          httpHeaders: const {
-            'Accept': '*/*',
-            'User-Agent': 'TetoTV/1.5 AndroidTV libmpv',
-          },
-        ),
+        Media(_source, httpHeaders: _httpHeaders),
         play: wasPlaying,
       );
       if (position > Duration.zero) await _restoreResumePosition(position);
@@ -1828,7 +1822,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     child: _PlayerChrome(
                       player: _player,
                       title: widget.title,
-                      debridService: widget.debridService,
+                      streamLabel:
+                          widget.launch.stream.providerName ??
+                          '${widget.debridService.displayName} stream',
                       decoderMode: _decoderMode,
                       playFocusNode: _playControlFocus,
                       skipFocusNode: _skipControlFocus,
@@ -1935,7 +1931,7 @@ class _PlayerChrome extends StatelessWidget {
   const _PlayerChrome({
     required this.player,
     required this.title,
-    required this.debridService,
+    required this.streamLabel,
     required this.decoderMode,
     required this.playFocusNode,
     required this.skipFocusNode,
@@ -1956,7 +1952,7 @@ class _PlayerChrome extends StatelessWidget {
 
   final Player player;
   final String title;
-  final DebridService debridService;
+  final String streamLabel;
   final PlaybackDecoderMode decoderMode;
   final FocusNode playFocusNode;
   final FocusNode skipFocusNode;
@@ -2018,7 +2014,7 @@ class _PlayerChrome extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      '${debridService.displayName} stream',
+                      streamLabel,
                       style: const TextStyle(
                         color: AppColors.accentBright,
                         fontWeight: FontWeight.w800,

@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -96,29 +97,65 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 34),
+        minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const _MyListHeader(),
-            Row(
-              children: [
-                Text(
-                  'My List',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(width: 22),
-                for (final status in TrackingListStatus.values) ...[
-                  _StatusTab(
-                    status: status,
-                    selected: status == _status,
-                    onPressed: () => setState(() => _status = status),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                const Spacer(),
-                _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final tabs = Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final status in TrackingListStatus.values) ...[
+                      _StatusTab(
+                        status: status,
+                        selected: status == _status,
+                        onPressed: () => setState(() => _status = status),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ],
+                );
+                if (constraints.maxWidth < 700) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'My List',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const Spacer(),
+                          _SortButton(
+                            sort: sort,
+                            compact: true,
+                            onPressed: () => _chooseSort(sort),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: tabs,
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Text(
+                      'My List',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(width: 22),
+                    tabs,
+                    const Spacer(),
+                    _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 18),
             Expanded(
@@ -188,8 +225,9 @@ class _MyListHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = context.isCompactWidth;
     return SizedBox(
-      height: 70,
+      height: compact ? 62 : 70,
       child: Row(
         children: [
           Container(
@@ -205,24 +243,28 @@ class _MyListHeader extends StatelessWidget {
               filterQuality: FilterQuality.low,
             ),
           ),
-          const SizedBox(width: 10),
-          Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(width: 28),
+          SizedBox(width: compact ? 7 : 10),
+          if (!compact || MediaQuery.sizeOf(context).width >= 420)
+            Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
+          SizedBox(width: compact ? 4 : 28),
           _NavButton(
             icon: Icons.search_rounded,
             label: 'Search',
+            compact: compact,
             onPressed: () => context.push('/search'),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _NavButton(
             icon: Icons.home_rounded,
             label: 'Home',
+            compact: compact,
             onPressed: () => context.go('/'),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _NavButton(
             icon: Icons.video_library_rounded,
             label: 'My List',
+            compact: compact,
             active: true,
             onPressed: () {},
           ),
@@ -230,6 +272,7 @@ class _MyListHeader extends StatelessWidget {
           _NavButton(
             icon: Icons.settings_rounded,
             label: 'Settings',
+            compact: compact,
             onPressed: () => context.push('/settings/accounts'),
           ),
         ],
@@ -244,12 +287,14 @@ class _NavButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.active = false,
+    this.compact = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
   final bool active;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -258,7 +303,10 @@ class _NavButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(7),
       focusScale: 1.02,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 8 : 11,
+          vertical: 8,
+        ),
         decoration: BoxDecoration(
           color: active ? const Color(0x22E52B50) : Colors.transparent,
           border: Border(
@@ -275,8 +323,10 @@ class _NavButton extends StatelessWidget {
               size: 18,
               color: active ? AppColors.accentBright : AppColors.textPrimary,
             ),
-            const SizedBox(width: 6),
-            Text(label, style: Theme.of(context).textTheme.labelLarge),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              Text(label, style: Theme.of(context).textTheme.labelLarge),
+            ],
           ],
         ),
       ),
@@ -321,10 +371,15 @@ class _StatusTab extends StatelessWidget {
 }
 
 class _SortButton extends StatelessWidget {
-  const _SortButton({required this.sort, required this.onPressed});
+  const _SortButton({
+    required this.sort,
+    required this.onPressed,
+    this.compact = false,
+  });
 
   final MyListSort sort;
   final VoidCallback onPressed;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -345,7 +400,7 @@ class _SortButton extends StatelessWidget {
             const Icon(Icons.sort_rounded, size: 18),
             const SizedBox(width: 7),
             Text(
-              'Sort: ${sort.displayName}',
+              compact ? sort.displayName : 'Sort: ${sort.displayName}',
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
             ),
             const SizedBox(width: 5),

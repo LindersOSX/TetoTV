@@ -82,12 +82,22 @@ class StreamReady extends StreamResolution {
   const StreamReady({
     required this.uri,
     required this.displayName,
-    required this.debridService,
+    this.debridService,
+    this.headers = const {},
+    this.externalSubtitle,
+    this.providerId,
+    this.providerName,
   });
 
   final Uri uri;
   final String displayName;
-  final DebridService debridService;
+  final DebridService? debridService;
+  final Map<String, String> headers;
+  final Uri? externalSubtitle;
+  final String? providerId;
+  final String? providerName;
+
+  bool get isWebStream => debridService == null;
 }
 
 class StreamCaching extends StreamResolution {

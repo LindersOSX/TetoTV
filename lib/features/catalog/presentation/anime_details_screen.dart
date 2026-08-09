@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -85,6 +86,32 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       1,
       knownEpisodes,
     );
+    final episodeActions = _EpisodeActions(
+      selectedEpisode: selectedEpisode,
+      resumeEpisode: targetEpisode,
+      totalEpisodes: knownEpisodes,
+      hasProgress: progress > 0 || localResume,
+      resumePosition: localResume ? localPlayback.position : null,
+      onDecrease: selectedEpisode > 1
+          ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
+          : null,
+      onIncrease: selectedEpisode < knownEpisodes
+          ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
+          : null,
+      onPlayFromBeginning: () =>
+          _openEpisode(context, anime, selectedEpisode, restart: true),
+      onResume: () => _openEpisode(context, anime, targetEpisode),
+      onPlaySelected: () => _openEpisode(context, anime, selectedEpisode),
+      onFranchise: anime.relatedAnime.isEmpty
+          ? null
+          : () => context.push('/anime/${anime.id}/franchise'),
+      onCredits:
+          anime.studios.isEmpty &&
+              anime.staff.isEmpty &&
+              anime.characters.isEmpty
+          ? null
+          : () => context.push('/anime/${anime.id}/credits'),
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -103,9 +130,133 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           ),
         ),
         SafeArea(
-          minimum: const EdgeInsets.fromLTRB(38, 24, 38, 26),
+          minimum: context.responsiveScreenPadding,
           child: LayoutBuilder(
             builder: (context, constraints) {
+              if (constraints.maxWidth < 700) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _DetailsBack(onPressed: context.pop),
+                        const Spacer(),
+                        Text(
+                          'EP $selectedEpisode / $knownEpisodes',
+                          style: const TextStyle(
+                            color: AppColors.textMuted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 112,
+                                  height: 168,
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: NetworkArtwork(
+                                      url: anime.coverImageUrl,
+                                      cacheWidth: 240,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        anime.displayTitle(titlePreference),
+                                        maxLines: 4,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.headlineSmall,
+                                      ),
+                                      const SizedBox(height: 9),
+                                      _MetadataRow(anime: anime),
+                                      if (anime.status case final status?) ...[
+                                        const SizedBox(height: 9),
+                                        Text(
+                                          'Status: ${status.replaceAll('_', ' ')}',
+                                          style: const TextStyle(
+                                            color: AppColors.textMuted,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              anime.description.isEmpty
+                                  ? 'No synopsis is available.'
+                                  : anime.description,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: 18),
+                            episodeActions,
+                            if (anime.relatedAnime.isNotEmpty) ...[
+                              const SizedBox(height: 20),
+                              const Text(
+                                'RELATED',
+                                style: TextStyle(
+                                  color: AppColors.accentBright,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: 96 * preferences.thumbnailScale,
+                                child: ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: anime.relatedAnime.length,
+                                  separatorBuilder: (_, _) => SizedBox(
+                                    width:
+                                        10 *
+                                        preferences.contentDensity.spacingScale,
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final related = anime.relatedAnime[index];
+                                    return _RelatedCard(
+                                      related: related,
+                                      titlePreference: titlePreference,
+                                      thumbnailScale:
+                                          preferences.thumbnailScale,
+                                      onPressed: () => context.push(
+                                        '/anime/${related.anime.id}',
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }
               final spacious = constraints.maxWidth >= 1080;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -203,50 +354,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                         SizedBox(width: spacious ? 28 : 20),
                         SizedBox(
                           width: spacious ? 305 : 252,
-                          child: _EpisodeActions(
-                            selectedEpisode: selectedEpisode,
-                            resumeEpisode: targetEpisode,
-                            totalEpisodes: knownEpisodes,
-                            hasProgress: progress > 0 || localResume,
-                            resumePosition: localResume
-                                ? localPlayback.position
-                                : null,
-                            onDecrease: selectedEpisode > 1
-                                ? () => setState(
-                                    () =>
-                                        _selectedEpisode = selectedEpisode - 1,
-                                  )
-                                : null,
-                            onIncrease: selectedEpisode < knownEpisodes
-                                ? () => setState(
-                                    () =>
-                                        _selectedEpisode = selectedEpisode + 1,
-                                  )
-                                : null,
-                            onPlayFromBeginning: () => _openEpisode(
-                              context,
-                              anime,
-                              selectedEpisode,
-                              restart: true,
-                            ),
-                            onResume: () =>
-                                _openEpisode(context, anime, targetEpisode),
-                            onPlaySelected: () =>
-                                _openEpisode(context, anime, selectedEpisode),
-                            onFranchise: anime.relatedAnime.isEmpty
-                                ? null
-                                : () => context.push(
-                                    '/anime/${anime.id}/franchise',
-                                  ),
-                            onCredits:
-                                anime.studios.isEmpty &&
-                                    anime.staff.isEmpty &&
-                                    anime.characters.isEmpty
-                                ? null
-                                : () => context.push(
-                                    '/anime/${anime.id}/credits',
-                                  ),
-                          ),
+                          child: episodeActions,
                         ),
                       ],
                     ),

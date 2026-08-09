@@ -70,6 +70,8 @@ void main() {
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
     ]) {
       await tester.sendKeyEvent(key);

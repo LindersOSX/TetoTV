@@ -229,7 +229,7 @@ class TetoTvDatabase {
     final root = await getDatabasesPath();
     return openDatabase(
       path.join(root, 'tetotv.db'),
-      version: 2,
+      version: 3,
       onConfigure: configureTetoTvDatabase,
       onCreate: (db, _) async {
         await db.execute('''
@@ -284,9 +284,11 @@ class TetoTvDatabase {
           )
         ''');
         await _createContinueDismissalsTable(db);
+        await _createAddonTables(db);
       },
       onUpgrade: (db, oldVersion, _) async {
         if (oldVersion < 2) await _createContinueDismissalsTable(db);
+        if (oldVersion < 3) await _createAddonTables(db);
       },
     );
   }
@@ -509,6 +511,35 @@ class TetoTvDatabase {
     _database = null;
     _opening = null;
   }
+}
+
+Future<void> _createAddonTables(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS addon_repositories (
+      url TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS installed_addons (
+      id TEXT PRIMARY KEY,
+      manifest_json TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      repository_url TEXT NOT NULL,
+      installed_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS marketplace_cache (
+      repository_url TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL
+    )
+  ''');
 }
 
 Future<void> saveCheckpointTransaction(

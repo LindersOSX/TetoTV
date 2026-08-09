@@ -1,7 +1,9 @@
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 void main() {
   testWidgets('opens an app-owned keyboard without an EditableText', (
@@ -11,12 +13,14 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 500,
-              child: TvTextInput(controller: controller, labelText: 'Search'),
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 500,
+                child: TvTextInput(controller: controller, labelText: 'Search'),
+              ),
             ),
           ),
         ),
@@ -45,12 +49,14 @@ void main() {
     String? submitted;
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TvTextInput(
-            controller: controller,
-            labelText: 'Search',
-            onSubmitted: (value) => submitted = value,
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: TvTextInput(
+              controller: controller,
+              labelText: 'Search',
+              onSubmitted: (value) => submitted = value,
+            ),
           ),
         ),
       ),
@@ -64,5 +70,29 @@ void main() {
     expect(find.byType(TvKeyboardDialog), findsNothing);
     expect(submitted, 'Naruto');
     expect(controller.text, 'Naruto');
+  });
+
+  testWidgets('can use the device keyboard preference', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'false',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: TvTextInput(controller: controller, labelText: 'Search'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EditableText), findsOneWidget);
+    await tester.tap(find.byType(EditableText));
+    await tester.pumpAndSettle();
+    expect(find.byType(TvKeyboardDialog), findsNothing);
   });
 }

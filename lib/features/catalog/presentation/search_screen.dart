@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -121,13 +122,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(42, 28, 42, 34),
+        minimum: context.responsiveScreenPadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                TvFocusable(
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final back = TvFocusable(
                   onPressed: context.pop,
                   borderRadius: BorderRadius.circular(10),
                   child: const ColoredBox(
@@ -137,27 +138,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       child: Icon(Icons.arrow_back_rounded, size: 20),
                     ),
                   ),
-                ),
-                const SizedBox(width: 18),
-                Text(
-                  'Search anime',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(width: 28),
-                Expanded(
-                  child: TvTextInput(
-                    focusNode: _searchFocusNode,
-                    controller: _queryController,
-                    labelText: 'Search',
-                    hintText: 'Title, synonym, or Japanese name',
-                    keyboardTitle: 'Search anime',
-                    autofocus: true,
-                    onChanged: _queueSearch,
-                    onSubmitted: _submitSearch,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                TvFocusable(
+                );
+                final input = TvTextInput(
+                  focusNode: _searchFocusNode,
+                  controller: _queryController,
+                  labelText: 'Search',
+                  hintText: 'Title, synonym, or Japanese name',
+                  keyboardTitle: 'Search anime',
+                  autofocus: true,
+                  onChanged: _queueSearch,
+                  onSubmitted: _submitSearch,
+                );
+                final voice = TvFocusable(
                   onPressed: () => unawaited(_voiceSearch()),
                   borderRadius: BorderRadius.circular(12),
                   focusScale: 1.03,
@@ -172,10 +164,45 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       size: 25,
                     ),
                   ),
-                ),
-              ],
+                );
+                if (constraints.maxWidth < 620) {
+                  return Column(
+                    children: [
+                      Row(
+                        children: [
+                          back,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Search anime',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                          ),
+                          voice,
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      input,
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    back,
+                    const SizedBox(width: 18),
+                    Text(
+                      'Search anime',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(width: 28),
+                    Expanded(child: input),
+                    const SizedBox(width: 10),
+                    voice,
+                  ],
+                );
+              },
             ),
-            const SizedBox(height: 34),
+            SizedBox(height: context.isCompactWidth ? 20 : 34),
             Text(
               !_hasSearched
                   ? 'Start typing to search anime'
@@ -214,6 +241,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   title: 'Find your next show',
                   body: 'Search results will appear here.',
                 );
+        }
+        if (context.isCompactWidth) {
+          return GridView.builder(
+            padding: const EdgeInsets.fromLTRB(2, 2, 2, 24),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              mainAxisExtent: 225,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 14,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final anime = items[index];
+              return _SearchCard(
+                anime: anime,
+                titlePreference: titlePreference,
+                onPressed: () => context.push('/anime/${anime.id}'),
+              );
+            },
+          );
         }
         return ListView.separated(
           scrollDirection: Axis.horizontal,

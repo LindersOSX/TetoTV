@@ -1,7 +1,7 @@
 name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
-version: 1.9.1+34901
+version: 1.10.0+39000
 
 environment:
   sdk: ^3.12.2
@@ -22,6 +22,12 @@ dependencies:
   path: ^1.9.1
   path_provider: ^2.1.5
   sqflite: ^2.4.2
+  # Local compatibility patch: the Android library exports QuickJS's standard
+  # JS_SetMemoryLimit symbol while flutter_js 0.8.7 only looks for a lowercase
+  # wrapper name. Keeping the patched package in-tree makes release builds
+  # reproducible and preserves the addon sandbox memory limit.
+  flutter_js:
+    path: third_party/flutter_js
 
 # flutter_vlc_player 7.4.4 was published with Android Pigeon channels from its
 # release tag but pub.dev's platform-interface archive contains the older

@@ -209,6 +209,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   VlcPlayerController _createController(String source, VlcDecoderMode mode) {
+    final streamHeaders = widget.launch.stream.headers;
+    final userAgent =
+        streamHeaders['User-Agent'] ??
+        streamHeaders['user-agent'] ??
+        'TetoTV/1.10 Android libVLC';
+    final referer = streamHeaders['Referer'] ?? streamHeaders['referer'];
     final options = VlcPlayerOptions(
       advanced: VlcAdvancedOptions([
         VlcAdvancedOptions.networkCaching(5000),
@@ -218,7 +224,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       http: VlcHttpOptions([
         VlcHttpOptions.httpReconnect(true),
         VlcHttpOptions.httpContinuous(true),
-        VlcHttpOptions.httpUserAgent('TetoTV/1.7 AndroidTV libVLC'),
+        VlcHttpOptions.httpUserAgent(userAgent),
       ]),
       video: VlcVideoOptions([
         VlcVideoOptions.dropLateFrames(true),
@@ -241,10 +247,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           VlcSubtitleColor(_captionBackgroundColor & 0x00FFFFFF),
         ),
       ]),
-      extras: const [
+      extras: [
         '--no-video-title-show',
         '--avcodec-fast',
         '--file-caching=5000',
+        if (referer != null && referer.isNotEmpty) '--http-referrer=$referer',
       ],
     );
     final controller = source.startsWith('asset:///')

@@ -14,6 +14,9 @@ const _interfaceScaleKey = 'appearance_interface_scale';
 const _contentDensityKey = 'appearance_content_density';
 const _seekBackSecondsKey = 'player_seek_back_seconds';
 const _seekForwardSecondsKey = 'player_seek_forward_seconds';
+const _builtInKeyboardKey = 'input_use_built_in_keyboard';
+const _debridStreamsEnabledKey = 'streaming_debrid_enabled';
+const _webStreamsEnabledKey = 'streaming_web_enabled';
 
 enum ContentDensity { compact, standard, comfortable }
 
@@ -43,6 +46,9 @@ class SettingsPreferences {
     this.contentDensity = ContentDensity.standard,
     this.seekBackSeconds = 10,
     this.seekForwardSeconds = 10,
+    this.useBuiltInKeyboard = true,
+    this.debridStreamsEnabled = true,
+    this.webStreamsEnabled = true,
   });
 
   final DebridService debridProvider;
@@ -55,6 +61,9 @@ class SettingsPreferences {
   final ContentDensity contentDensity;
   final int seekBackSeconds;
   final int seekForwardSeconds;
+  final bool useBuiltInKeyboard;
+  final bool debridStreamsEnabled;
+  final bool webStreamsEnabled;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -67,6 +76,9 @@ class SettingsPreferences {
     ContentDensity? contentDensity,
     int? seekBackSeconds,
     int? seekForwardSeconds,
+    bool? useBuiltInKeyboard,
+    bool? debridStreamsEnabled,
+    bool? webStreamsEnabled,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -79,6 +91,9 @@ class SettingsPreferences {
     contentDensity: contentDensity ?? this.contentDensity,
     seekBackSeconds: seekBackSeconds ?? this.seekBackSeconds,
     seekForwardSeconds: seekForwardSeconds ?? this.seekForwardSeconds,
+    useBuiltInKeyboard: useBuiltInKeyboard ?? this.useBuiltInKeyboard,
+    debridStreamsEnabled: debridStreamsEnabled ?? this.debridStreamsEnabled,
+    webStreamsEnabled: webStreamsEnabled ?? this.webStreamsEnabled,
   );
 }
 
@@ -112,6 +127,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _storage.read(key: _contentDensityKey),
         _storage.read(key: _seekBackSecondsKey),
         _storage.read(key: _seekForwardSecondsKey),
+        _storage.read(key: _builtInKeyboardKey),
+        _storage.read(key: _debridStreamsEnabledKey),
+        _storage.read(key: _webStreamsEnabledKey),
       ]);
       state = SettingsPreferences(
         debridProvider:
@@ -131,6 +149,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
         seekBackSeconds: _seekValue(values[8]),
         seekForwardSeconds: _seekValue(values[9]),
+        useBuiltInKeyboard: values[10] != 'false',
+        debridStreamsEnabled: values[11] != 'false',
+        webStreamsEnabled: values[12] != 'false',
       );
     } catch (_) {
       // Appearance preferences are optional; safe defaults remain usable.
@@ -185,6 +206,21 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setSeekForwardSeconds(int value) => _update(
     state.copyWith(seekForwardSeconds: value),
     {_seekForwardSecondsKey: value.toString()},
+  );
+
+  Future<void> setUseBuiltInKeyboard(bool value) => _update(
+    state.copyWith(useBuiltInKeyboard: value),
+    {_builtInKeyboardKey: value.toString()},
+  );
+
+  Future<void> setDebridStreamsEnabled(bool value) => _update(
+    state.copyWith(debridStreamsEnabled: value),
+    {_debridStreamsEnabledKey: value.toString()},
+  );
+
+  Future<void> setWebStreamsEnabled(bool value) => _update(
+    state.copyWith(webStreamsEnabled: value),
+    {_webStreamsEnabledKey: value.toString()},
   );
 
   Future<void> resetAppearance() async {

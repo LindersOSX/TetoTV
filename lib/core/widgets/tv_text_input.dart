@@ -1,13 +1,13 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// A text input that never invokes Android's full-screen/overlay IME.
-///
-/// Selecting the field opens a TV-sized keyboard that supports D-pad, gamepad,
-/// mouse, clipboard paste, and a connected physical keyboard.
-class TvTextInput extends StatelessWidget {
+/// Uses TetoTV's remote keyboard or the Android device keyboard according to
+/// the saved input preference.
+class TvTextInput extends ConsumerWidget {
   const TvTextInput({
     required this.controller,
     required this.labelText,
@@ -58,7 +58,50 @@ class TvTextInput extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final useBuiltInKeyboard = ref.watch(
+      settingsPreferencesProvider.select(
+        (preferences) => preferences.useBuiltInKeyboard,
+      ),
+    );
+    if (!useBuiltInKeyboard) {
+      return TextField(
+        controller: controller,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        obscureText: obscureText,
+        autocorrect: !obscureText,
+        enableSuggestions: !obscureText,
+        textInputAction: TextInputAction.done,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+        cursorColor: AppColors.accentBright,
+        decoration: InputDecoration(
+          labelText: labelText,
+          hintText: hintText,
+          labelStyle: const TextStyle(color: AppColors.textMuted),
+          hintStyle: const TextStyle(color: AppColors.textMuted),
+          filled: true,
+          fillColor: AppColors.ink.withValues(alpha: .82),
+          suffixIcon: const Icon(
+            Icons.keyboard_alt_outlined,
+            color: AppColors.cyan,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: .14)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(
+              color: AppColors.accentBright,
+              width: 2,
+            ),
+          ),
+        ),
+      );
+    }
     final value = controller.text;
     final visibleValue = obscureText && value.isNotEmpty
         ? List.filled(value.length.clamp(1, 48), '\u2022').join()
@@ -219,16 +262,22 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
         ? List.filled(_value.length, '\u2022').join()
         : _value;
     final rows = _symbols ? _symbolRows : _letterRows;
+    final availableWidth = MediaQuery.sizeOf(context).width;
     return Dialog(
       alignment: Alignment.bottomCenter,
-      insetPadding: const EdgeInsets.fromLTRB(24, 160, 24, 18),
+      insetPadding: EdgeInsets.fromLTRB(
+        availableWidth < 600 ? 10 : 24,
+        availableWidth < 600 ? 48 : 160,
+        availableWidth < 600 ? 10 : 24,
+        18,
+      ),
       backgroundColor: Colors.transparent,
       child: Focus(
         canRequestFocus: false,
         onKeyEvent: _handlePhysicalKeyboard,
         child: Container(
           key: const ValueKey('tv-keyboard-panel'),
-          width: 560,
+          width: availableWidth < 600 ? availableWidth - 20 : 560,
           padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
           decoration: BoxDecoration(
             color: const Color(0xF7080808),

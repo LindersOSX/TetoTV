@@ -1,4 +1,5 @@
 import 'package:anime_tv/app/router.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -18,6 +19,7 @@ class TetoTvApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final preferences = ref.watch(settingsPreferencesProvider);
+    final isTelevision = ref.watch(isTelevisionProvider);
     ref.watch(trackingOutboxFlushProvider);
     return MaterialApp.router(
       title: 'TetoTV',
@@ -26,6 +28,15 @@ class TetoTvApp extends ConsumerWidget {
       routerConfig: appRouter,
       builder: (context, child) {
         final mq = MediaQuery.of(context);
+        final content = TvShortcuts(child: child ?? const SizedBox.shrink());
+        if (!isTelevision) {
+          return MediaQuery(
+            data: mq.copyWith(
+              textScaler: TextScaler.linear(preferences.interfaceScale),
+            ),
+            child: content,
+          );
+        }
         final physicalWidth = View.of(context).physicalSize.width;
         final canvasWidth = tvCanvasWidthForPhysicalPixels(physicalWidth);
         final scale =
@@ -46,7 +57,7 @@ class TetoTvApp extends ConsumerWidget {
             child: SizedBox(
               width: mq.size.width / scale,
               height: mq.size.height / scale,
-              child: TvShortcuts(child: child ?? const SizedBox.shrink()),
+              child: content,
             ),
           ),
         );

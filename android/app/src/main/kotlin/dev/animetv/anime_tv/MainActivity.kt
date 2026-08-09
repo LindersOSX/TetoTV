@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.graphics.Color
 import android.media.AudioDeviceInfo
@@ -52,6 +53,7 @@ class MainActivity : FlutterActivity() {
         channel.setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
+                    "isTelevision" -> result.success(isTelevision())
                     "getDeviceProfile" -> result.success(deviceProfile())
                     "getAppVersion" -> result.success(appVersion())
                     "installApk" -> installApk(call.argument<String>("path"), result)
@@ -96,6 +98,10 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    private fun isTelevision(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
 
     @Suppress("DEPRECATION")
     private fun startNativePlayer(data: Map<String, Any?>, result: MethodChannel.Result) {

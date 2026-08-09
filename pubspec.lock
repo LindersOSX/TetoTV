@@ -195,6 +195,13 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_js:
+    dependency: "direct main"
+    description:
+      path: "third_party/flutter_js"
+      relative: true
+    source: path
+    version: "0.8.7+tetotv.1"
   flutter_launcher_icons:
     dependency: "direct dev"
     description:

@@ -256,8 +256,24 @@ class AndroidTvBridge {
   static const _channel = MethodChannel('dev.tetotv/android_tv');
   final _mediaActions = StreamController<MediaAction>.broadcast();
   TvDeviceProfile? _cachedProfile;
+  bool? _cachedIsTelevision;
 
   Stream<MediaAction> get mediaActions => _mediaActions.stream;
+
+  Future<bool> isTelevision({bool refresh = false}) async {
+    if (!refresh && _cachedIsTelevision != null) {
+      return _cachedIsTelevision!;
+    }
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      return _cachedIsTelevision =
+          await _channel.invokeMethod<bool>('isTelevision') ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
 
   Future<dynamic> _handleMethod(MethodCall call) async {
     if (call.method != 'mediaAction') return;
@@ -369,6 +385,7 @@ class AndroidTvBridge {
     String videoFit = 'contain',
     int? malMediaId,
     int? episodeNumber,
+    Map<String, String> headers = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return const NativePlaybackResult(
@@ -406,6 +423,7 @@ class AndroidTvBridge {
             'videoFit': videoFit,
             'malMediaId': ?malMediaId,
             'episodeNumber': ?episodeNumber,
+            if (headers.isNotEmpty) 'headers': headers,
           });
       return value == null
           ? const NativePlaybackResult(

@@ -1,0 +1,290 @@
+import 'package:anime_tv/core/storage/storage_providers.dart';
+import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final addonStoreProvider = Provider<AddonStore>(
+  (ref) => AddonStore(ref.watch(tetoTvDatabaseProvider)),
+);
+
+final marketplaceClientProvider = Provider<MarketplaceClient>(
+  (ref) => MarketplaceClient(ref.watch(addonStoreProvider)),
+);
+
+class MarketplaceState {
+  const MarketplaceState({
+    this.repositories = const [],
+    this.catalog = const [],
+    this.installed = const [],
+    this.repositoryErrors = const {},
+    this.loading = true,
+    this.busyAddonId,
+  });
+
+  final List<AddonRepository> repositories;
+  final List<MarketplaceAddon> catalog;
+  final List<InstalledStreamingAddon> installed;
+  final Map<String, String> repositoryErrors;
+  final bool loading;
+  final String? busyAddonId;
+
+  MarketplaceState copyWith({
+    List<AddonRepository>? repositories,
+    List<MarketplaceAddon>? catalog,
+    List<InstalledStreamingAddon>? installed,
+    Map<String, String>? repositoryErrors,
+    bool? loading,
+    String? busyAddonId,
+    bool clearBusyAddon = false,
+  }) => MarketplaceState(
+    repositories: repositories ?? this.repositories,
+    catalog: catalog ?? this.catalog,
+    installed: installed ?? this.installed,
+    repositoryErrors: repositoryErrors ?? this.repositoryErrors,
+    loading: loading ?? this.loading,
+    busyAddonId: clearBusyAddon ? null : busyAddonId ?? this.busyAddonId,
+  );
+
+  InstalledStreamingAddon? installedById(String id) {
+    for (final addon in installed) {
+      if (addon.manifest.id == id) return addon;
+    }
+    return null;
+  }
+
+  bool updateAvailable(MarketplaceAddon addon) {
+    final current = installedById(addon.id)?.manifest.version;
+    final next = addon.version;
+    return current != null &&
+        next != null &&
+        _compareVersions(next, current) > 0;
+  }
+}
+
+final marketplaceControllerProvider =
+    StateNotifierProvider<MarketplaceController, MarketplaceState>((ref) {
+      final controller = MarketplaceController(
+        ref.watch(addonStoreProvider),
+        ref.watch(marketplaceClientProvider),
+      );
+      Future.microtask(controller.load);
+      return controller;
+    });
+
+class MarketplaceController extends StateNotifier<MarketplaceState> {
+  MarketplaceController(this._store, this._client)
+    : super(const MarketplaceState());
+
+  final AddonStore _store;
+  final MarketplaceClient _client;
+
+  Future<void> load() async {
+    try {
+      final repositories = await _store.repositories();
+      final installed = await _store.installedAddons();
+      state = state.copyWith(
+        repositories: repositories,
+        installed: installed,
+        loading: true,
+      );
+      await refresh(refreshNetwork: false);
+    } catch (error) {
+      state = state.copyWith(
+        loading: false,
+        repositoryErrors: {'local': _message(error)},
+      );
+    }
+  }
+
+  Future<void> refresh({bool refreshNetwork = true}) async {
+    state = state.copyWith(loading: true);
+    final enabled = state.repositories.where((item) => item.enabled).toList();
+    final results = await Future.wait(
+      enabled.map((repository) async {
+        try {
+          final addons = await _client.catalog(
+            repository,
+            refresh: refreshNetwork,
+          );
+          return (
+            repository: repository,
+            addons: addons,
+            error: null as String?,
+          );
+        } catch (error) {
+          return (
+            repository: repository,
+            addons: const <MarketplaceAddon>[],
+            error: _message(error),
+          );
+        }
+      }),
+    );
+    final combined = <String, MarketplaceAddon>{};
+    final errors = <String, String>{};
+    for (final result in results) {
+      if (result.error != null) errors[result.repository.url] = result.error!;
+      for (final addon in result.addons) {
+        combined.putIfAbsent(addon.id, () => addon);
+      }
+    }
+    var catalog = combined.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final installedIds = state.installed
+        .map((addon) => addon.manifest.id)
+        .toSet();
+    if (installedIds.isNotEmpty) {
+      catalog = await Future.wait(
+        catalog.map((addon) async {
+          if (!installedIds.contains(addon.id)) return addon;
+          try {
+            return await _client.manifest(addon);
+          } catch (_) {
+            return addon;
+          }
+        }),
+      );
+    }
+    state = state.copyWith(
+      catalog: catalog,
+      repositoryErrors: errors,
+      loading: false,
+    );
+  }
+
+  Future<String?> addRepository(String rawUrl) async {
+    final uri = safePublicHttpsUri(rawUrl);
+    if (uri == null) return 'Enter a public HTTPS repository URL.';
+    final normalized = uri.toString();
+    if (state.repositories.any((item) => item.url == normalized)) {
+      return 'That repository is already added.';
+    }
+    final repository = AddonRepository(
+      url: normalized,
+      updatedAt: DateTime.now(),
+    );
+    await _store.saveRepository(repository);
+    state = state.copyWith(repositories: [...state.repositories, repository]);
+    await refresh();
+    return null;
+  }
+
+  Future<void> restoreDefaultRepository() async {
+    final existing = state.repositories
+        .where((item) => item.url == defaultMarketplaceRepositoryUrl)
+        .firstOrNull;
+    if (existing != null) {
+      if (!existing.enabled) await setRepositoryEnabled(existing, true);
+      return;
+    }
+    final repository = AddonRepository(
+      url: defaultMarketplaceRepositoryUrl,
+      isDefault: true,
+      updatedAt: DateTime.now(),
+    );
+    await _store.saveRepository(repository);
+    state = state.copyWith(repositories: [repository, ...state.repositories]);
+    await refresh();
+  }
+
+  Future<void> setRepositoryEnabled(
+    AddonRepository repository,
+    bool enabled,
+  ) async {
+    final next = repository.copyWith(
+      enabled: enabled,
+      updatedAt: DateTime.now(),
+    );
+    await _store.saveRepository(next);
+    state = state.copyWith(
+      repositories: [
+        for (final item in state.repositories)
+          if (item.url == repository.url) next else item,
+      ],
+    );
+    await refresh(refreshNetwork: false);
+  }
+
+  Future<void> removeRepository(AddonRepository repository) async {
+    await _store.removeRepository(repository.url);
+    state = state.copyWith(
+      repositories: state.repositories
+          .where((item) => item.url != repository.url)
+          .toList(),
+    );
+    await refresh(refreshNetwork: false);
+  }
+
+  Future<void> install(MarketplaceAddon addon) async {
+    if (!addon.isCompatible) {
+      throw const FormatException('This provider runtime is not supported.');
+    }
+    state = state.copyWith(busyAddonId: addon.id);
+    try {
+      final downloaded = await _client.downloadAddon(addon);
+      final previous = state.installedById(addon.id);
+      final installed = InstalledStreamingAddon(
+        manifest: downloaded.manifest,
+        payload: downloaded.payload,
+        enabled: previous?.enabled ?? true,
+        installedAt: previous?.installedAt ?? downloaded.installedAt,
+        updatedAt: DateTime.now(),
+      );
+      await _store.install(installed);
+      state = state.copyWith(
+        installed: [
+          ...state.installed.where((item) => item.manifest.id != addon.id),
+          installed,
+        ]..sort((a, b) => a.manifest.name.compareTo(b.manifest.name)),
+        clearBusyAddon: true,
+      );
+    } catch (_) {
+      state = state.copyWith(clearBusyAddon: true);
+      rethrow;
+    }
+  }
+
+  Future<void> setAddonEnabled(String id, bool enabled) async {
+    await _store.setEnabled(id, enabled);
+    state = state.copyWith(
+      installed: [
+        for (final item in state.installed)
+          if (item.manifest.id == id) item.copyWith(enabled: enabled) else item,
+      ],
+    );
+  }
+
+  Future<void> uninstall(String id) async {
+    await _store.uninstall(id);
+    state = state.copyWith(
+      installed: state.installed
+          .where((item) => item.manifest.id != id)
+          .toList(),
+    );
+  }
+}
+
+int _compareVersions(String left, String right) {
+  List<int> numbers(String value) => RegExp(r'\d+')
+      .allMatches(value)
+      .take(4)
+      .map((match) => int.tryParse(match.group(0)!) ?? 0)
+      .toList();
+  final a = numbers(left);
+  final b = numbers(right);
+  for (var index = 0; index < 4; index++) {
+    final av = index < a.length ? a[index] : 0;
+    final bv = index < b.length ? b[index] : 0;
+    if (av != bv) return av.compareTo(bv);
+  }
+  return 0;
+}
+
+String _message(Object error) {
+  final text = error.toString().replaceFirst(
+    RegExp(r'^[A-Za-z]+Exception:\s*'),
+    '',
+  );
+  return text.length > 180 ? '${text.substring(0, 180)}…' : text;
+}

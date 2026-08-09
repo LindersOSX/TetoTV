@@ -10,6 +10,7 @@ import 'package:anime_tv/features/catalog/presentation/franchise_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/credits_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_collection_screen.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
+import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
@@ -92,6 +93,10 @@ final appRouter = GoRouter(
       builder: (context, state) => const AccountsScreen(),
     ),
     GoRoute(
+      path: '/settings/marketplace',
+      builder: (context, state) => const MarketplaceScreen(),
+    ),
+    GoRoute(
       path: '/resolve',
       builder: (context, state) {
         final query = state.uri.queryParameters;
@@ -121,24 +126,30 @@ final appRouter = GoRouter(
         final source = query['source'];
         final service = DebridService.fromSlug(query['debrid']);
         final resolved = state.extra;
+        final validTypedStream =
+            resolved is PlaybackLaunch &&
+            resolved.stream.uri.toString() == source &&
+            ((resolved.stream.debridService != null &&
+                    resolved.stream.debridService == service) ||
+                (resolved.stream.isWebStream &&
+                    service == null &&
+                    resolved.stream.providerId?.isNotEmpty == true));
         if (source == null ||
             !source.startsWith('https://') ||
-            service == null ||
-            resolved is! PlaybackLaunch ||
-            resolved.stream.uri.toString() != source ||
-            resolved.stream.debridService != service) {
+            !validTypedStream) {
           return const DebridOnlyPlaybackScreen();
         }
+        final launch = resolved;
         return TvPlayerScreen(
-          launch: resolved,
-          source: resolved.stream.uri.toString(),
+          launch: launch,
+          source: launch.stream.uri.toString(),
           subtitle: query['subtitle'],
           title: query['title'] ?? 'Anime playback',
-          debridService: service,
-          anilistMediaId: resolved.episode.anilistMediaId,
-          malMediaId: resolved.episode.malMediaId,
-          episode: resolved.episode.episode,
-          coverImageUrl: resolved.episode.coverImageUrl,
+          debridService: service ?? DebridService.realDebrid,
+          anilistMediaId: launch.episode.anilistMediaId,
+          malMediaId: launch.episode.malMediaId,
+          episode: launch.episode.episode,
+          coverImageUrl: launch.episode.coverImageUrl,
         );
       },
     ),

@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
@@ -212,6 +215,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   String _status = 'Preparing…';
   String? _error;
   List<ReleaseCandidate> _releases = const [];
+  List<WebStreamResult> _webStreams = const [];
+  List<WebProviderFailure> _webFailures = const [];
   Set<DebridService> _connectedServices = const {};
   DebridService _debridService = DebridService.realDebrid;
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
@@ -229,7 +234,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   final Set<String> _failedResolveHashes = {};
   int _automaticResolveFallbacks = 0;
 
-  bool get _hasDebrid => _connectedServices.contains(_debridService);
+  bool get _hasDebrid =>
+      ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
+      _connectedServices.contains(_debridService);
 
   @override
   void initState() {
@@ -322,26 +329,66 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     }
   }
 
-  Future<void> _loadConfiguredReleases() async {
-    final source = ref.read(configuredReleaseSourceProvider);
-    if (source != null) await _loadReleases(source);
+  Future<void> _openSourceSettings(String route) async {
+    await context.push(route);
+    if (!mounted) return;
+    setState(() => _loadingAccount = true);
+    await _initialize();
   }
 
-  Future<void> _loadReleases(ReleaseSource source) async {
+  Future<void> _loadConfiguredReleases() async {
     if (_loadingReleases) return;
+    final preferences = ref.read(settingsPreferencesProvider);
+    final source = ref.read(configuredReleaseSourceProvider);
     setState(() {
       _loadingReleases = true;
-      _status = 'Searching every available release…';
+      _status = 'Searching enabled stream sources…';
       _error = null;
     });
+    String? debridError;
     try {
-      final releases = await source.search(widget.episode);
+      final outcomes = await Future.wait<Object>([
+        if (preferences.debridStreamsEnabled && source != null)
+          source.search(widget.episode).catchError((Object error) {
+            debridError = error.toString();
+            return <ReleaseCandidate>[];
+          })
+        else
+          Future<List<ReleaseCandidate>>.value(const []),
+        if (preferences.webStreamsEnabled)
+          ref
+              .read(webStreamAggregatorProvider)
+              .search(widget.episode)
+              .catchError(
+                (Object error) => WebStreamAggregation(
+                  failures: [
+                    WebProviderFailure(
+                      providerName: 'Web providers',
+                      message: error.toString(),
+                    ),
+                  ],
+                ),
+              )
+        else
+          Future<WebStreamAggregation>.value(const WebStreamAggregation()),
+      ]);
+      final releases = outcomes[0] as List<ReleaseCandidate>;
+      final web = outcomes[1] as WebStreamAggregation;
       if (!mounted) return;
       setState(() {
         _releases = releases;
+        _webStreams = web.streams;
+        _webFailures = web.failures;
         if (widget.episode.autoPlay) _loadingReleases = false;
-        if (releases.isEmpty) {
-          _error = 'No releases were returned for this episode.';
+        if (releases.isEmpty && web.streams.isEmpty) {
+          if (!preferences.debridStreamsEnabled &&
+              !preferences.webStreamsEnabled) {
+            _error = 'Both Debrid Streams and Web Streams are disabled.';
+          } else if (debridError != null && web.failures.isNotEmpty) {
+            _error = 'No enabled source completed successfully.';
+          } else {
+            _error = 'No playable streams were returned for this episode.';
+          }
         }
       });
       if (widget.episode.autoPlay && releases.isNotEmpty && _hasDebrid) {
@@ -350,6 +397,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ? filtered
             : _filteredAndSortedReleases(releases, ignoreOptionalFilters: true);
         await _resolveCandidate(candidates.first);
+      } else if (widget.episode.autoPlay && web.streams.isNotEmpty) {
+        final filtered = _filteredWebStreams(web.streams);
+        await _openWebStream(filtered.firstOrNull ?? web.streams.first);
       }
     } catch (error) {
       if (mounted) {
@@ -417,7 +467,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                 if (widget.episode.malMediaId != null)
                   'malId': '${widget.episode.malMediaId}',
                 'episode': '${widget.episode.episode}',
-                'debrid': state.debridService.slug,
+                if (state.debridService != null)
+                  'debrid': state.debridService!.slug,
               },
             );
             final alternatives = [..._releases]
@@ -486,6 +537,73 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         setState(() => _resolving = false);
       }
     }
+  }
+
+  List<WebStreamResult> _filteredWebStreams(Iterable<WebStreamResult> input) {
+    final result = input.where((stream) {
+      if (_languageFilter == _StreamLanguageFilter.dub && !stream.isDubbed) {
+        return false;
+      }
+      if (_languageFilter == _StreamLanguageFilter.sub && stream.isDubbed) {
+        return false;
+      }
+      final quality = (stream.quality ?? stream.title).toLowerCase();
+      return switch (_qualityFilter) {
+        _StreamQualityFilter.any => true,
+        _StreamQualityFilter.p2160 =>
+          quality.contains('2160') || quality.contains('4k'),
+        _StreamQualityFilter.p1080 => quality.contains('1080'),
+        _StreamQualityFilter.p720 => quality.contains('720'),
+      };
+    }).toList();
+    result.sort((a, b) {
+      final provider = a.providerName.compareTo(b.providerName);
+      return provider != 0 ? provider : a.title.compareTo(b.title);
+    });
+    return result;
+  }
+
+  Future<void> _openWebStream(WebStreamResult stream) async {
+    final release = ReleaseCandidate(
+      infoHash: 'web:${stream.providerId}:${stream.uri.hashCode}',
+      magnetUri: '',
+      releaseName: '${stream.providerName} / ${stream.title}',
+      seeders: 0,
+      sourceId: 'web:${stream.providerId}',
+      quality: stream.quality,
+      provider: stream.providerName,
+      isDubbed: stream.isDubbed,
+      hasSubtitles: stream.subtitleUri != null,
+    );
+    await _rememberStreamSelection(release);
+    if (!mounted) return;
+    final ready = StreamReady(
+      uri: stream.uri,
+      displayName: release.releaseName,
+      headers: stream.headers,
+      externalSubtitle: stream.subtitleUri,
+      providerId: stream.providerId,
+      providerName: '${stream.providerName} web stream',
+    );
+    final playerUri = Uri(
+      path: '/player',
+      queryParameters: {
+        'source': stream.uri.toString(),
+        'title': '${widget.episode.title} / Episode ${widget.episode.episode}',
+        'anilistId': '${widget.episode.anilistMediaId}',
+        if (widget.episode.malMediaId != null)
+          'malId': '${widget.episode.malMediaId}',
+        'episode': '${widget.episode.episode}',
+      },
+    );
+    context.pushReplacement(
+      playerUri.toString(),
+      extra: PlaybackLaunch(
+        stream: ready,
+        episode: widget.episode,
+        selectedRelease: release,
+      ),
+    );
   }
 
   void _resolveManual() {
@@ -587,7 +705,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(42, 28, 42, 36),
+        minimum: context.responsiveScreenPadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -628,7 +746,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             Text(_status, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
-              'Matching AniList metadata to Stremio anime streams.',
+              'Matching this episode across Debrid and installed web providers.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
@@ -664,11 +782,34 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         ),
       );
     }
-    if (_releases.isNotEmpty && !_showManual) {
+    final sourcePreferences = ref.read(settingsPreferencesProvider);
+    if (!sourcePreferences.debridStreamsEnabled &&
+        !sourcePreferences.webStreamsEnabled) {
+      return _Message(
+        icon: Icons.toggle_off_rounded,
+        title: 'Stream sources are disabled',
+        body:
+            'Enable Debrid Streams, Web Streams, or both in Settings before searching again.',
+        action: _ActionButton(
+          label: 'Open settings',
+          icon: Icons.settings_rounded,
+          onPressed: () => _openSourceSettings('/settings/accounts'),
+        ),
+      );
+    }
+    if ((_releases.isNotEmpty || _webStreams.isNotEmpty) && !_showManual) {
       final filtered = _filteredAndSortedReleases(_releases);
+      final filteredWeb = _filteredWebStreams(_webStreams);
+      final sourcePreferences = ref.read(settingsPreferencesProvider);
       return _StreamPicker(
         releases: filtered,
         totalCount: _releases.length,
+        webStreams: filteredWeb,
+        webTotalCount: _webStreams.length,
+        failedWebProviders: _webFailures.length,
+        webFailures: _webFailures,
+        debridEnabled: sourcePreferences.debridStreamsEnabled,
+        webEnabled: sourcePreferences.webStreamsEnabled,
         connectedServices: _connectedServices,
         selectedService: _debridService,
         onServiceChanged: (value) => setState(() => _debridService = value),
@@ -688,6 +829,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         onBatchChanged: (value) =>
             _updatePicker(() => _allowBatchStreams = value),
         onSelected: _resolveCandidate,
+        onWebSelected: _openWebStream,
         error: _error,
         onRetry: _lastAttemptedRelease == null
             ? null
@@ -696,17 +838,25 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         onManual: () => setState(() => _showManual = true),
       );
     }
-    if (!_hasDebrid) {
+    if (!_hasDebrid && _webStreams.isEmpty) {
       return _Message(
-        icon: Icons.cloud_off_rounded,
-        title: 'Connect a debrid service first',
-        body:
-            'A valid Real-Debrid or TorBox account is required. TetoTV '
-            'never streams a torrent directly from peers.',
+        icon: Icons.stream_rounded,
+        title: 'No stream source is ready',
+        body: sourcePreferences.webStreamsEnabled
+            ? 'Connect Real-Debrid or TorBox, or install a compatible Web '
+                  'Stream provider from Marketplace.'
+            : 'Connect Real-Debrid or TorBox. TetoTV never streams a torrent '
+                  'directly from peers.',
         action: _ActionButton(
-          label: 'Open accounts',
+          label: sourcePreferences.webStreamsEnabled
+              ? 'Open marketplace'
+              : 'Open accounts',
           icon: Icons.settings_rounded,
-          onPressed: () => context.push('/settings/accounts'),
+          onPressed: () => _openSourceSettings(
+            sourcePreferences.webStreamsEnabled
+                ? '/settings/marketplace'
+                : '/settings/accounts',
+          ),
         ),
       );
     }
@@ -760,25 +910,39 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               ),
               const SizedBox(height: 14),
             ],
-            Row(
-              children: [
-                Expanded(
-                  child: TvTextInput(
-                    controller: _magnetController,
-                    autofocus: true,
-                    labelText: 'Magnet URI',
-                    hintText: 'Select to type or paste a magnet link',
-                    keyboardTitle: 'Enter magnet URI',
-                    onSubmitted: (_) => _resolveManual(),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                _ActionButton(
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final input = TvTextInput(
+                  controller: _magnetController,
+                  autofocus: true,
+                  labelText: 'Magnet URI',
+                  hintText: 'Select to type or paste a magnet link',
+                  keyboardTitle: 'Enter magnet URI',
+                  onSubmitted: (_) => _resolveManual(),
+                );
+                final action = _ActionButton(
                   label: 'Send to ${_debridService.displayName}',
                   icon: Icons.play_arrow_rounded,
                   onPressed: _resolveManual,
-                ),
-              ],
+                );
+                if (constraints.maxWidth < 600) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      input,
+                      const SizedBox(height: 10),
+                      Align(alignment: Alignment.centerRight, child: action),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: input),
+                    const SizedBox(width: 14),
+                    action,
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -815,6 +979,12 @@ class _StreamPicker extends StatelessWidget {
   const _StreamPicker({
     required this.releases,
     required this.totalCount,
+    required this.webStreams,
+    required this.webTotalCount,
+    required this.failedWebProviders,
+    required this.webFailures,
+    required this.debridEnabled,
+    required this.webEnabled,
     required this.connectedServices,
     required this.selectedService,
     required this.onServiceChanged,
@@ -831,6 +1001,7 @@ class _StreamPicker extends StatelessWidget {
     required this.allowBatchStreams,
     required this.onBatchChanged,
     required this.onSelected,
+    required this.onWebSelected,
     required this.error,
     required this.onRetry,
     required this.onRefresh,
@@ -839,6 +1010,12 @@ class _StreamPicker extends StatelessWidget {
 
   final List<ReleaseCandidate> releases;
   final int totalCount;
+  final List<WebStreamResult> webStreams;
+  final int webTotalCount;
+  final int failedWebProviders;
+  final List<WebProviderFailure> webFailures;
+  final bool debridEnabled;
+  final bool webEnabled;
   final Set<DebridService> connectedServices;
   final DebridService selectedService;
   final ValueChanged<DebridService> onServiceChanged;
@@ -855,6 +1032,7 @@ class _StreamPicker extends StatelessWidget {
   final bool allowBatchStreams;
   final ValueChanged<bool> onBatchChanged;
   final ValueChanged<ReleaseCandidate> onSelected;
+  final ValueChanged<WebStreamResult> onWebSelected;
   final String? error;
   final VoidCallback? onRetry;
   final VoidCallback onRefresh;
@@ -867,69 +1045,76 @@ class _StreamPicker extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Choose your stream',
-                      style: Theme.of(context).textTheme.headlineSmall,
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: context.isCompactWidth ? 820 : 1260,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Choose your stream',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
+                          ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
+                          '${failedWebProviders > 0 ? ' • $failedWebProviders provider issue(s)' : ''}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      connectedServices.contains(selectedService)
-                          ? '$totalCount Torrentio releases • '
-                                '${selectedService.displayName} ready'
-                          : '$totalCount Torrentio releases • Connect '
-                                'Real-Debrid or TorBox to play',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(width: 16),
+                  if (debridEnabled) ...[
+                    for (final service in DebridService.values) ...[
+                      _FilterButton(
+                        label: service.shortName,
+                        selected: selectedService == service,
+                        onPressed: () => onServiceChanged(service),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Container(
+                      width: 1,
+                      height: 32,
+                      color: Colors.white.withValues(alpha: .12),
                     ),
+                    const SizedBox(width: 8),
                   ],
-                ),
+                  for (final value in _StreamLanguageFilter.values) ...[
+                    _FilterButton(
+                      label: switch (value) {
+                        _StreamLanguageFilter.all => 'ALL',
+                        _StreamLanguageFilter.sub => 'SUB',
+                        _StreamLanguageFilter.dub => 'DUB',
+                      },
+                      selected: filter == value,
+                      onPressed: () => onFilterChanged(value),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _CompactAction(
+                    icon: Icons.refresh_rounded,
+                    label: 'Refresh',
+                    onPressed: onRefresh,
+                  ),
+                  const SizedBox(width: 8),
+                  if (debridEnabled)
+                    _CompactAction(
+                      icon: Icons.add_link_rounded,
+                      label: 'Magnet',
+                      onPressed: onManual,
+                    ),
+                ],
               ),
-              const SizedBox(width: 16),
-              for (final service in DebridService.values) ...[
-                _FilterButton(
-                  label: service.shortName,
-                  selected: selectedService == service,
-                  onPressed: () => onServiceChanged(service),
-                ),
-                const SizedBox(width: 8),
-              ],
-              Container(
-                width: 1,
-                height: 32,
-                color: Colors.white.withValues(alpha: .12),
-              ),
-              const SizedBox(width: 8),
-              for (final value in _StreamLanguageFilter.values) ...[
-                _FilterButton(
-                  label: switch (value) {
-                    _StreamLanguageFilter.all => 'ALL',
-                    _StreamLanguageFilter.sub => 'SUB',
-                    _StreamLanguageFilter.dub => 'DUB',
-                  },
-                  selected: filter == value,
-                  onPressed: () => onFilterChanged(value),
-                ),
-                const SizedBox(width: 8),
-              ],
-              _CompactAction(
-                icon: Icons.refresh_rounded,
-                label: 'Refresh',
-                onPressed: onRefresh,
-              ),
-              const SizedBox(width: 8),
-              _CompactAction(
-                icon: Icons.add_link_rounded,
-                label: 'Magnet',
-                onPressed: onManual,
-              ),
-            ],
+            ),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -1025,33 +1210,206 @@ class _StreamPicker extends StatelessWidget {
               ),
             ),
           ],
+          if (webFailures.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181818),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: .12)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.extension_off_rounded,
+                    color: Color(0xFFFFA0A8),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      webFailures
+                          .map(
+                            (failure) =>
+                                '${failure.providerName}: ${failure.message}',
+                          )
+                          .join('\n'),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Color(0xFFD5D5D5)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 18),
           Expanded(
-            child: releases.isEmpty
+            child: releases.isEmpty && webStreams.isEmpty
                 ? Center(
                     child: Text(
-                      'No releases match the selected filters.',
+                      'No streams match the selected filters.',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 8,
-                    ),
-                    itemCount: releases.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) {
-                      final release = releases[index];
-                      return _ReleaseCard(
-                        release: release,
-                        recommended: index == 0,
-                        onPressed: () => onSelected(release),
-                      );
-                    },
+                : CustomScrollView(
+                    slivers: [
+                      if (releases.isNotEmpty) ...[
+                        const SliverToBoxAdapter(
+                          child: _StreamSectionHeader(
+                            icon: Icons.cloud_done_rounded,
+                            title: 'DEBRID STREAMS',
+                          ),
+                        ),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+                          sliver: SliverList.builder(
+                            itemCount: releases.length,
+                            itemBuilder: (context, index) {
+                              final release = releases[index];
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _ReleaseCard(
+                                  release: release,
+                                  recommended: index == 0,
+                                  onPressed: () => onSelected(release),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                      if (webStreams.isNotEmpty)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 18),
+                          sliver: SliverList.builder(
+                            itemCount: webStreams.length,
+                            itemBuilder: (context, index) {
+                              final stream = webStreams[index];
+                              final beginsProvider =
+                                  index == 0 ||
+                                  webStreams[index - 1].providerId !=
+                                      stream.providerId;
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (beginsProvider)
+                                    _StreamSectionHeader(
+                                      icon: Icons.language_rounded,
+                                      title:
+                                          'WEB STREAMS / ${stream.providerName.toUpperCase()}',
+                                    ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: 8,
+                                      bottom: 12,
+                                    ),
+                                    child: _WebStreamCard(
+                                      stream: stream,
+                                      onPressed: () => onWebSelected(stream),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                    ],
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StreamSectionHeader extends StatelessWidget {
+  const _StreamSectionHeader({required this.icon, required this.title});
+
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.accentBright),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WebStreamCard extends StatelessWidget {
+  const _WebStreamCard({required this.stream, required this.onPressed});
+
+  final WebStreamResult stream;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(18),
+      focusScale: 1.015,
+      child: Container(
+        height: 104,
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: .18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.play_circle_outline_rounded),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stream.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '${stream.isDubbed ? 'DUB' : 'SUB'}'
+                    '${stream.quality == null ? '' : ' / ${stream.quality}'}'
+                    '${stream.subtitleUri == null ? '' : ' / English captions'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+          ],
+        ),
       ),
     );
   }

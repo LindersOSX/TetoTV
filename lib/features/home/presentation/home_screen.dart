@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -199,7 +200,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 34),
+        minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
         child: CustomScrollView(
           controller: _scrollController,
           slivers: [
@@ -295,8 +296,9 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = context.isCompactWidth;
     return SizedBox(
-      height: 70,
+      height: compact ? 62 : 70,
       child: Row(
         children: [
           Container(
@@ -312,16 +314,17 @@ class _Header extends StatelessWidget {
               filterQuality: FilterQuality.low,
             ),
           ),
-          const SizedBox(width: 10),
-          Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(width: 14),
+          SizedBox(width: compact ? 7 : 10),
+          if (!compact || MediaQuery.sizeOf(context).width >= 420)
+            Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
+          SizedBox(width: compact ? 4 : 14),
           _HeaderAction(
             icon: Icons.search_rounded,
             label: 'Search',
             compact: true,
             onPressed: () => context.push('/search'),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _HeaderAction(
             icon: Icons.home_rounded,
             label: 'Home',
@@ -329,20 +332,21 @@ class _Header extends StatelessWidget {
             active: true,
             onPressed: () {},
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _HeaderAction(
             icon: Icons.video_library_rounded,
             label: 'My List',
+            compact: compact,
             onPressed: onMyList,
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _HeaderAction(
             icon: Icons.explore_rounded,
             label: 'Discover',
             compact: true,
             onPressed: () => context.push('/discover'),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: compact ? 2 : 6),
           _HeaderAction(
             icon: Icons.calendar_month_rounded,
             label: 'Calendar',
@@ -353,6 +357,7 @@ class _Header extends StatelessWidget {
           _HeaderAction(
             icon: Icons.settings_rounded,
             label: 'Settings',
+            compact: compact,
             onPressed: () => context.push('/settings/accounts'),
           ),
         ],
@@ -375,8 +380,9 @@ class _HeroPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final route = anime == null ? '/search?q=Frieren' : '/anime/${anime!.id}';
+    final compact = context.isCompactWidth;
     return Container(
-      height: 292,
+      height: compact ? 340 : 292,
       clipBehavior: Clip.hardEdge,
       decoration: const BoxDecoration(color: AppColors.panel),
       child: Stack(
@@ -417,33 +423,39 @@ class _HeroPanel extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 22, 24, 22),
+            padding: EdgeInsets.fromLTRB(
+              compact ? 15 : 18,
+              compact ? 18 : 22,
+              compact ? 15 : 24,
+              compact ? 16 : 22,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const _Eyebrow(text: 'FEATURED NOW'),
                 const SizedBox(height: 8),
                 SizedBox(
-                  width: 620,
+                  width: compact ? double.infinity : 620,
                   child: Text(
                     anime?.displayTitle(titlePreference) ??
                         'Frieren: Beyond Journey’s End',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.displaySmall?.copyWith(fontSize: 40, height: 1),
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                      fontSize: compact ? 30 : 40,
+                      height: 1,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
-                  width: 610,
+                  width: compact ? double.infinity : 610,
                   child: Text(
                     anime?.description.isNotEmpty == true
                         ? anime!.description
                         : 'An elven mage retraces a legendary journey and '
                               'discovers what the brief lives of her friends meant.',
-                    maxLines: 4,
+                    maxLines: compact ? 5 : 4,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: AppColors.textPrimary,
@@ -452,7 +464,10 @@ class _HeroPanel extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                Row(
+                Wrap(
+                  spacing: compact ? 8 : 0,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     _TvButton(
                       focusNode: focusNode,
@@ -461,7 +476,7 @@ class _HeroPanel extends StatelessWidget {
                       label: 'Watch now',
                       onPressed: () => context.push(route),
                     ),
-                    const SizedBox(width: 16),
+                    SizedBox(width: compact ? 2 : 16),
                     if (anime?.score case final score?)
                       _HeroMeta(
                         icon: Icons.star_rounded,
@@ -480,18 +495,19 @@ class _HeroPanel extends StatelessWidget {
               ],
             ),
           ),
-          const Positioned(
-            right: 20,
-            bottom: 18,
-            child: Row(
-              children: [
-                _HeroDot(active: true),
-                _HeroDot(),
-                _HeroDot(),
-                _HeroDot(),
-              ],
+          if (!compact)
+            const Positioned(
+              right: 20,
+              bottom: 18,
+              child: Row(
+                children: [
+                  _HeroDot(active: true),
+                  _HeroDot(),
+                  _HeroDot(),
+                  _HeroDot(),
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -563,6 +579,9 @@ class _MediaShelf extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = context.isCompactWidth;
+    final posterHeight = compact ? 238.0 : 205.0;
+    final posterWidth = compact ? 126.0 : 106.0;
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
       child: Column(
@@ -571,7 +590,7 @@ class _MediaShelf extends StatelessWidget {
           Text(title, style: Theme.of(context).textTheme.titleLarge),
           SizedBox(height: 9 * preferences.contentDensity.spacingScale),
           SizedBox(
-            height: 205 * preferences.thumbnailScale,
+            height: posterHeight * preferences.thumbnailScale,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
@@ -582,7 +601,7 @@ class _MediaShelf extends StatelessWidget {
                 final item = items[index];
                 return _PosterCard(
                   item: item,
-                  width: 106 * preferences.thumbnailScale,
+                  width: posterWidth * preferences.thumbnailScale,
                   onPressed: () => item.route != null
                       ? context.push(item.route!)
                       : item.animeId == null

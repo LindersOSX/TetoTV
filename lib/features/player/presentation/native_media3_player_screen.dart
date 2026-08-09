@@ -121,7 +121,10 @@ class _NativeMedia3PlayerScreenState
           resumePosition: _resumePosition,
           resumeUpdatedAt: _resumeUpdatedAt,
           startFromBeginning: _startFromBeginning,
-          externalSubtitle: widget.subtitle,
+          externalSubtitle:
+              widget.launch.stream.externalSubtitle?.toString() ??
+              widget.subtitle,
+          headers: widget.launch.stream.headers,
           audioLanguage: _preferences.audioLanguage,
           subtitleLanguage: _preferences.subtitleLanguage,
           subtitlesEnabled: _preferences.subtitlePreferenceSet
