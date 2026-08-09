@@ -1,4 +1,3 @@
-import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -9,7 +8,6 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
-import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,7 +54,6 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
-    final preferences = ref.watch(settingsPreferencesProvider);
     final knownEpisodes = (anime.episodes != null && anime.episodes! > 0)
         ? anime.episodes!
         : ((anime.nextAiringEpisode ?? 1) - 1).clamp(1, 999);
@@ -102,16 +99,14 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           _openEpisode(context, anime, selectedEpisode, restart: true),
       onResume: () => _openEpisode(context, anime, targetEpisode),
       onPlaySelected: () => _openEpisode(context, anime, selectedEpisode),
-      onFranchise: anime.relatedAnime.isEmpty
-          ? null
-          : () => context.push('/anime/${anime.id}/franchise'),
-      onCredits:
-          anime.studios.isEmpty &&
-              anime.staff.isEmpty &&
-              anime.characters.isEmpty
-          ? null
-          : () => context.push('/anime/${anime.id}/credits'),
     );
+    final onFranchise = anime.relatedAnime.isEmpty
+        ? null
+        : () => context.push('/anime/${anime.id}/franchise');
+    final onCredits =
+        anime.studios.isEmpty && anime.staff.isEmpty && anime.characters.isEmpty
+        ? null
+        : () => context.push('/anime/${anime.id}/credits');
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -141,13 +136,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                       children: [
                         _DetailsBack(onPressed: context.pop),
                         const Spacer(),
-                        Text(
-                          'EP $selectedEpisode / $knownEpisodes',
-                          style: const TextStyle(
-                            color: AppColors.textMuted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                          ),
+                        _EpisodeCounterBadge(
+                          selectedEpisode: selectedEpisode,
+                          totalEpisodes: knownEpisodes,
+                          compact: true,
                         ),
                       ],
                     ),
@@ -187,6 +179,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                       ),
                                       const SizedBox(height: 9),
                                       _MetadataRow(anime: anime),
+                                      const SizedBox(height: 9),
+                                      _MediaFactsRow(anime: anime),
                                       if (anime.status case final status?) ...[
                                         const SizedBox(height: 9),
                                         Text(
@@ -212,43 +206,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                             ),
                             const SizedBox(height: 18),
                             episodeActions,
-                            if (anime.relatedAnime.isNotEmpty) ...[
-                              const SizedBox(height: 20),
-                              const Text(
-                                'RELATED',
-                                style: TextStyle(
-                                  color: AppColors.accentBright,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.2,
-                                ),
+                            if (onFranchise != null || onCredits != null) ...[
+                              const SizedBox(height: 12),
+                              _InformationActions(
+                                onFranchise: onFranchise,
+                                onCredits: onCredits,
                               ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                height: 96 * preferences.thumbnailScale,
-                                child: ListView.separated(
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: anime.relatedAnime.length,
-                                  separatorBuilder: (_, _) => SizedBox(
-                                    width:
-                                        10 *
-                                        preferences.contentDensity.spacingScale,
-                                  ),
-                                  itemBuilder: (context, index) {
-                                    final related = anime.relatedAnime[index];
-                                    return _RelatedCard(
-                                      related: related,
-                                      titlePreference: titlePreference,
-                                      thumbnailScale:
-                                          preferences.thumbnailScale,
-                                      onPressed: () => context.push(
-                                        '/anime/${related.anime.id}',
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                              const SizedBox(height: 20),
                             ],
                           ],
                         ),
@@ -257,7 +220,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                   ],
                 );
               }
+              final wide = constraints.maxWidth >= 1500;
               final spacious = constraints.maxWidth >= 1080;
+              final posterWidth = wide ? 360.0 : (spacious ? 255.0 : 175.0);
+              final actionWidth = wide ? 460.0 : (spacious ? 350.0 : 252.0);
+              final columnGap = wide ? 48.0 : (spacious ? 30.0 : 20.0);
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -265,61 +232,72 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                     children: [
                       _DetailsBack(onPressed: context.pop, autofocus: false),
                       const Spacer(),
-                      Text(
-                        'EPISODE $selectedEpisode OF $knownEpisodes',
-                        style: const TextStyle(
-                          color: AppColors.textMuted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.2,
-                        ),
+                      _EpisodeCounterBadge(
+                        selectedEpisode: selectedEpisode,
+                        totalEpisodes: knownEpisodes,
+                        large: wide,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
+                  SizedBox(height: wide ? 38 : 14),
                   Expanded(
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         SizedBox(
-                          width: spacious ? 205 : 170,
-                          child: Align(
-                            alignment: Alignment.center,
-                            child: AspectRatio(
-                              aspectRatio: 2 / 3,
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(18),
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    NetworkArtwork(
-                                      url: anime.coverImageUrl,
-                                      cacheWidth: spacious ? 430 : 350,
+                          width: posterWidth,
+                          child: Padding(
+                            padding: EdgeInsets.only(top: wide ? 35 : 0),
+                            child: Align(
+                              alignment: Alignment.topCenter,
+                              child: AspectRatio(
+                                aspectRatio: wide ? .625 : 2 / 3,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: .2),
                                     ),
-                                    if (anime.score != null ||
-                                        anime.seasonYear != null ||
-                                        anime.durationMinutes != null)
-                                      Positioned(
-                                        left: 9,
-                                        right: 9,
-                                        bottom: 9,
-                                        child: PosterMetadataOverlay(
-                                          score: anime.score,
-                                          releaseYear: anime.seasonYear,
-                                          durationMinutes:
-                                              anime.durationMinutes,
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(19),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        NetworkArtwork(
+                                          url: anime.coverImageUrl,
+                                          cacheWidth: wide
+                                              ? 760
+                                              : (spacious ? 540 : 360),
                                         ),
-                                      ),
-                                  ],
+                                        if (anime.score != null ||
+                                            anime.seasonYear != null ||
+                                            anime.durationMinutes != null)
+                                          Positioned(
+                                            left: wide ? 18 : 9,
+                                            right: wide ? 18 : 9,
+                                            bottom: wide ? 18 : 9,
+                                            child: PosterMetadataOverlay(
+                                              score: anime.score,
+                                              releaseYear: anime.seasonYear,
+                                              durationMinutes:
+                                                  anime.durationMinutes,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                        SizedBox(width: spacious ? 28 : 22),
+                        SizedBox(width: columnGap),
                         Expanded(
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            padding: EdgeInsets.symmetric(
+                              vertical: wide ? 28 : 8,
+                            ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -327,169 +305,78 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                   anime.displayTitle(titlePreference),
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.displaySmall,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .displaySmall
+                                      ?.copyWith(
+                                        fontSize: wide
+                                            ? 58
+                                            : (spacious ? 44 : 34),
+                                        height: 1,
+                                        fontWeight: FontWeight.w900,
+                                      ),
                                 ),
-                                const SizedBox(height: 10),
+                                SizedBox(height: wide ? 20 : 10),
                                 _MetadataRow(anime: anime),
-                                const SizedBox(height: 12),
-                                Expanded(
+                                SizedBox(height: wide ? 18 : 10),
+                                _MediaFactsRow(anime: anime),
+                                SizedBox(height: wide ? 24 : 12),
+                                Flexible(
                                   child: Text(
                                     anime.description.isEmpty
                                         ? 'No synopsis is available.'
                                         : anime.description,
-                                    maxLines: spacious ? 9 : 6,
+                                    maxLines: wide ? 8 : (spacious ? 7 : 5),
                                     overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
+                                    style: Theme.of(context).textTheme.bodyLarge
+                                        ?.copyWith(
+                                          color: AppColors.textPrimary,
+                                          fontSize: wide ? 18 : 15,
+                                          height: 1.48,
+                                        ),
                                   ),
                                 ),
-                                if (anime.status case final status?)
+                                if (anime.status case final status?) ...[
+                                  SizedBox(height: wide ? 20 : 10),
                                   Text(
-                                    'Status: ${status.replaceAll('_', ' ')}',
-                                    style: const TextStyle(
-                                      color: AppColors.textMuted,
-                                      fontWeight: FontWeight.w700,
+                                    'Status:  ${status.replaceAll('_', ' ')}',
+                                    style: TextStyle(
+                                      color: AppColors.accentBright,
+                                      fontSize: wide ? 17 : 13,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
+                                ],
+                                if (onFranchise != null ||
+                                    onCredits != null) ...[
+                                  SizedBox(height: wide ? 22 : 12),
+                                  _InformationActions(
+                                    onFranchise: onFranchise,
+                                    onCredits: onCredits,
+                                    large: wide,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
                         ),
-                        SizedBox(width: spacious ? 28 : 20),
+                        SizedBox(width: columnGap),
                         SizedBox(
-                          width: spacious ? 305 : 252,
-                          child: episodeActions,
+                          width: actionWidth,
+                          child: Padding(
+                            padding: EdgeInsets.only(top: wide ? 68 : 0),
+                            child: episodeActions,
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  if (anime.relatedAnime.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        const Text(
-                          'RELATED',
-                          style: TextStyle(
-                            color: AppColors.accentBright,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          'Sequels, prequels, and connected stories',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 7),
-                    SizedBox(
-                      height: 88 * preferences.thumbnailScale,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        clipBehavior: Clip.none,
-                        itemCount: anime.relatedAnime.length,
-                        separatorBuilder: (_, _) => SizedBox(
-                          width: 10 * preferences.contentDensity.spacingScale,
-                        ),
-                        itemBuilder: (context, index) {
-                          final related = anime.relatedAnime[index];
-                          return _RelatedCard(
-                            related: related,
-                            titlePreference: titlePreference,
-                            thumbnailScale: preferences.thumbnailScale,
-                            onPressed: () =>
-                                context.push('/anime/${related.anime.id}'),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
                 ],
               );
             },
           ),
         ),
       ],
-    );
-  }
-}
-
-class _RelatedCard extends StatelessWidget {
-  const _RelatedCard({
-    required this.related,
-    required this.titlePreference,
-    required this.onPressed,
-    required this.thumbnailScale,
-  });
-
-  final RelatedAnime related;
-  final TitleLanguagePreference titlePreference;
-  final VoidCallback onPressed;
-  final double thumbnailScale;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 210 * thumbnailScale,
-      child: TvFocusable(
-        onPressed: onPressed,
-        focusScale: 1.02,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          color: const Color(0xF20B0B0B),
-          padding: const EdgeInsets.all(6),
-          child: Row(
-            children: [
-              Align(
-                alignment: Alignment.center,
-                child: AspectRatio(
-                  aspectRatio: 2 / 3,
-                  child: NetworkArtwork(
-                    url: related.anime.coverImageUrl,
-                    cacheWidth: 110,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      related.relationType,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.accentBright,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      related.anime.displayTitle(titlePreference),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        height: 1.08,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -503,13 +390,13 @@ class _MetadataRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final values = <String>[
       if (anime.format case final format?) format.replaceAll('_', ' '),
-      if (anime.episodes case final episodes?) '$episodes episodes',
+      ...anime.genres.take(3),
     ];
     return Wrap(
       spacing: 10,
       runSpacing: 8,
       children: [
-        for (final value in [...values, ...anime.genres.take(3)])
+        for (final value in values)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
@@ -531,6 +418,203 @@ class _MetadataRow extends StatelessWidget {
   }
 }
 
+class _EpisodeCounterBadge extends StatelessWidget {
+  const _EpisodeCounterBadge({
+    required this.selectedEpisode,
+    required this.totalEpisodes,
+    this.large = false,
+    this.compact = false,
+  });
+
+  final int selectedEpisode;
+  final int totalEpisodes;
+  final bool large;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: large ? 20 : (compact ? 10 : 14),
+        vertical: large ? 11 : (compact ? 7 : 8),
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xD9111111),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: .16)),
+      ),
+      child: Text(
+        compact
+            ? 'EP $selectedEpisode / $totalEpisodes'
+            : 'EPISODE $selectedEpisode OF $totalEpisodes',
+        style: TextStyle(
+          color: AppColors.textPrimary,
+          fontSize: large ? 15 : (compact ? 10 : 12),
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.1,
+        ),
+      ),
+    );
+  }
+}
+
+class _MediaFactsRow extends StatelessWidget {
+  const _MediaFactsRow({required this.anime});
+
+  final AnimeSummary anime;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final large = width >= 1500;
+    return Wrap(
+      spacing: large ? 22 : 14,
+      runSpacing: 8,
+      children: [
+        if (anime.seasonYear case final year?)
+          _MediaFact(
+            icon: Icons.calendar_today_outlined,
+            label: '$year',
+            large: large,
+          ),
+        if (anime.durationMinutes case final minutes?)
+          _MediaFact(
+            icon: Icons.schedule_rounded,
+            label: '${minutes}m',
+            large: large,
+          ),
+        if (anime.score case final score?)
+          _MediaFact(
+            icon: Icons.star_border_rounded,
+            label: '${score.toStringAsFixed(1)} / 10',
+            large: large,
+            accent: true,
+          ),
+      ],
+    );
+  }
+}
+
+class _MediaFact extends StatelessWidget {
+  const _MediaFact({
+    required this.icon,
+    required this.label,
+    required this.large,
+    this.accent = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool large;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: large ? 22 : 17,
+          color: accent ? AppColors.accentBright : AppColors.textMuted,
+        ),
+        SizedBox(width: large ? 8 : 5),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: large ? 17 : 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InformationActions extends StatelessWidget {
+  const _InformationActions({
+    required this.onFranchise,
+    required this.onCredits,
+    this.large = false,
+  });
+
+  final VoidCallback? onFranchise;
+  final VoidCallback? onCredits;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      children: [
+        if (onCredits != null)
+          _InformationButton(
+            label: 'Cast & crew',
+            icon: Icons.groups_rounded,
+            onPressed: onCredits!,
+            large: large,
+          ),
+        if (onFranchise != null)
+          _InformationButton(
+            label: 'Related series',
+            icon: Icons.account_tree_rounded,
+            onPressed: onFranchise!,
+            large: large,
+          ),
+      ],
+    );
+  }
+}
+
+class _InformationButton extends StatelessWidget {
+  const _InformationButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    required this.large,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      onPressed: onPressed,
+      focusScale: 1.025,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        height: large ? 58 : 42,
+        padding: EdgeInsets.symmetric(horizontal: large ? 20 : 13),
+        decoration: BoxDecoration(
+          color: const Color(0xEE171717),
+          border: Border.all(color: Colors.white.withValues(alpha: .15)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: large ? 23 : 18),
+            SizedBox(width: large ? 10 : 7),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: large ? 16 : 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            SizedBox(width: large ? 12 : 7),
+            Icon(Icons.chevron_right_rounded, size: large ? 22 : 17),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EpisodeActions extends StatelessWidget {
   const _EpisodeActions({
     required this.selectedEpisode,
@@ -543,8 +627,6 @@ class _EpisodeActions extends StatelessWidget {
     required this.onPlayFromBeginning,
     required this.onResume,
     required this.onPlaySelected,
-    required this.onFranchise,
-    required this.onCredits,
   });
 
   final int selectedEpisode;
@@ -557,36 +639,22 @@ class _EpisodeActions extends StatelessWidget {
   final VoidCallback onPlayFromBeginning;
   final VoidCallback onResume;
   final VoidCallback onPlaySelected;
-  final VoidCallback? onFranchise;
-  final VoidCallback? onCredits;
 
   @override
   Widget build(BuildContext context) {
+    final large = MediaQuery.sizeOf(context).width >= 1500;
     return Align(
-      alignment: Alignment.center,
+      alignment: large ? Alignment.topCenter : Alignment.center,
       child: Container(
-        padding: const EdgeInsets.all(8),
+        padding: EdgeInsets.all(large ? 22 : 8),
         decoration: BoxDecoration(
-          color: const Color(0xF20A0A0A),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .5)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x99000000),
-              blurRadius: 24,
-              offset: Offset(0, 10),
-            ),
-          ],
+          color: const Color(0xF5111111),
+          borderRadius: BorderRadius.circular(large ? 20 : 14),
+          border: Border.all(color: Colors.white.withValues(alpha: .18)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _EpisodeActionButton(
-              label: 'Play from beginning',
-              icon: Icons.replay_rounded,
-              onPressed: onPlayFromBeginning,
-            ),
-            const SizedBox(height: 6),
             _EpisodeActionButton(
               label: resumePosition == null
                   ? (hasProgress ? 'Resume' : 'Start watching')
@@ -596,20 +664,43 @@ class _EpisodeActions extends StatelessWidget {
               primary: true,
               autofocus: true,
               onPressed: onResume,
+              large: large,
             ),
-            const SizedBox(height: 6),
+            SizedBox(height: large ? 14 : 6),
+            _EpisodeActionButton(
+              label: 'Play from beginning',
+              icon: Icons.replay_rounded,
+              onPressed: onPlayFromBeginning,
+              large: large,
+            ),
+            SizedBox(height: large ? 14 : 6),
             _EpisodeActionButton(
               label: 'Play selected',
               trailing: 'EP-$selectedEpisode',
               icon: Icons.skip_next_rounded,
               onPressed: onPlaySelected,
+              large: large,
             ),
-            const SizedBox(height: 7),
+            SizedBox(height: large ? 22 : 7),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'EPISODE',
+                style: TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: large ? 13 : 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+            SizedBox(height: large ? 10 : 5),
             Container(
-              height: 44,
+              height: large ? 68 : 44,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: .07),
+                color: const Color(0xFF191919),
                 borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withValues(alpha: .14)),
               ),
               child: Row(
                 children: [
@@ -620,13 +711,13 @@ class _EpisodeActions extends StatelessWidget {
                   ),
                   Expanded(
                     child: Text(
-                      'Episode $selectedEpisode / $totalEpisodes',
+                      'Episode $selectedEpisode of $totalEpisodes',
                       textAlign: TextAlign.center,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        fontSize: 13,
+                        fontSize: large ? 16 : 13,
                       ),
                     ),
                   ),
@@ -638,31 +729,6 @@ class _EpisodeActions extends StatelessWidget {
                 ],
               ),
             ),
-            if (onFranchise != null || onCredits != null) ...[
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  if (onFranchise != null)
-                    Expanded(
-                      child: _EpisodeActionButton(
-                        label: 'Franchise',
-                        icon: Icons.account_tree_rounded,
-                        onPressed: onFranchise!,
-                      ),
-                    ),
-                  if (onFranchise != null && onCredits != null)
-                    const SizedBox(width: 8),
-                  if (onCredits != null)
-                    Expanded(
-                      child: _EpisodeActionButton(
-                        label: 'Cast & crew',
-                        icon: Icons.groups_rounded,
-                        onPressed: onCredits!,
-                      ),
-                    ),
-                ],
-              ),
-            ],
           ],
         ),
       ),
@@ -678,6 +744,7 @@ class _EpisodeActionButton extends StatelessWidget {
     this.trailing,
     this.primary = false,
     this.autofocus = false,
+    this.large = false,
   });
 
   final String label;
@@ -686,6 +753,7 @@ class _EpisodeActionButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool primary;
   final bool autofocus;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
@@ -695,27 +763,31 @@ class _EpisodeActionButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       onPressed: onPressed,
       child: Container(
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 13),
+        height: large ? 76 : 42,
+        padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
         color: primary ? AppColors.accent : const Color(0xFF1B1B1B),
         child: Row(
           children: [
-            Icon(icon, size: 19),
-            const SizedBox(width: 8),
+            Icon(icon, size: large ? 29 : 19),
+            SizedBox(width: large ? 16 : 8),
             Expanded(
               child: Text(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: large ? 18 : 14,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
             if (trailing case final value?)
               Text(
                 value,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white70,
-                  fontSize: 11,
+                  fontSize: large ? 14 : 11,
                   fontWeight: FontWeight.w800,
                 ),
               ),

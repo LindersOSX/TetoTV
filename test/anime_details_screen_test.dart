@@ -58,9 +58,10 @@ void main() {
 
     expect(find.text('Play from beginning'), findsOneWidget);
     expect(find.text('Start watching'), findsOneWidget);
-    expect(find.text('Episode 1 / 24'), findsOneWidget);
-    expect(find.text('RELATED'), findsOneWidget);
-    expect(find.text('The Example Hero Season 2'), findsOneWidget);
+    expect(find.text('Episode 1 of 24'), findsOneWidget);
+    expect(find.text('Related series'), findsOneWidget);
+    expect(find.text('RELATED'), findsNothing);
+    expect(find.text('The Example Hero Season 2'), findsNothing);
     expect(find.text('Episodes'), findsNothing);
     expect(
       find.byWidgetPredicate(
@@ -69,6 +70,58 @@ void main() {
       ),
       findsWidgets,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('episode action layout scales up on a full HD TV canvas', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const anime = AnimeSummary(
+      id: 1,
+      title: 'Black Torch',
+      description:
+          'A detailed synopsis that remains readable beside the poster and '
+          'playback controls on a full resolution television layout.',
+      episodes: 24,
+      score: 7.8,
+      genres: ['Action', 'Adventure', 'Fantasy'],
+      format: 'TV',
+      status: 'RELEASING',
+      durationMinutes: 24,
+      seasonYear: 2026,
+      staff: [AnimePerson(id: 10, name: 'Example Director')],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 1)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('EPISODE 1 OF 24'), findsOneWidget);
+    expect(find.text('Start watching'), findsOneWidget);
+    expect(find.text('Play from beginning'), findsOneWidget);
+    expect(find.text('Play selected'), findsOneWidget);
+    expect(find.text('Cast & crew'), findsOneWidget);
+    expect(find.text('2026'), findsWidgets);
+    expect(find.text('24m'), findsWidgets);
+    expect(find.text('7.8 / 10'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
