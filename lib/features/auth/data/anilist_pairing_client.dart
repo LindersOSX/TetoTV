@@ -110,7 +110,7 @@ class TrackingPairingClient {
 
   Future<TrackingTokenSet> refresh(String refreshToken) async {
     if (_provider != TrackingProvider.myAnimeList) {
-      throw UnsupportedError('Only MyAnimeList uses refresh tokens.');
+      throw UnsupportedError('Only MAL uses refresh tokens.');
     }
     final response = await _dio.post<Map<String, dynamic>>(
       'v1/myanimelist/token/refresh',

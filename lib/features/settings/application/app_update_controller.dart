@@ -534,8 +534,8 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         phase: AppUpdatePhase.error,
         message: status == 401 || status == 403 || status == 404
             ? _token.isEmpty
-                  ? 'No public release is available. If this repository is private, add a read-only token in Updates.'
-                  : 'GitHub denied private-release access. Replace the saved read-only token.'
+                  ? 'No public TetoTV release is available right now.'
+                  : 'GitHub release access was denied. Try again later.'
             : 'Update check failed: ${error.message ?? 'network error'}',
       );
     } catch (error) {

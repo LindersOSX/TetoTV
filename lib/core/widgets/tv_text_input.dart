@@ -579,7 +579,7 @@ class _KeyboardKey extends StatelessWidget {
       child: Container(
         height: 26,
         alignment: Alignment.center,
-        color: const Color(0xFF171717),
+        color: AppColors.selectableSurface,
         child: Text(
           label,
           style: TextStyle(
@@ -625,7 +625,7 @@ class _KeyboardAction extends StatelessWidget {
               ? AppColors.accent
               : selected
               ? AppColors.accent.withValues(alpha: .45)
-              : const Color(0xFF202020),
+              : AppColors.selectableSurface,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
@@ -671,7 +671,7 @@ class _AutofillChip extends StatelessWidget {
         child: Container(
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 7),
-          color: const Color(0xFF181818),
+          color: AppColors.selectableSurface,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

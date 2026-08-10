@@ -119,6 +119,6 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
       ),
     );
     return response.data?['name'] as String? ??
-        (throw StateError('MyAnimeList account could not be verified.'));
+        (throw StateError('MAL account could not be verified.'));
   }
 }

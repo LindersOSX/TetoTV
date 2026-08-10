@@ -74,6 +74,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('Optional private-repository token'), findsNothing);
+    expect(find.text('Read-only GitHub token'), findsNothing);
+
     for (final key in [
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
@@ -158,7 +161,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('D-pad reaches private update token and check controls', (
+  testWidgets('D-pad reaches automatic and manual update controls', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -187,13 +190,13 @@ void main() {
 
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.token',
+      'accounts.updates.automatic',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.save',
+      'accounts.updates.check',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
@@ -202,13 +205,12 @@ void main() {
       'accounts.system.setup',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.save',
+      'accounts.updates.automatic',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,

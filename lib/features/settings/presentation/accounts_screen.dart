@@ -34,7 +34,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
-  final _githubTokenController = TextEditingController();
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
   final _debridProviderFocus = FocusNode(
@@ -91,8 +90,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _anilistSaveFocus = FocusNode(debugLabel: 'accounts.anilist.save');
   final _malTokenFocus = FocusNode(debugLabel: 'accounts.myanimelist.token');
   final _malSaveFocus = FocusNode(debugLabel: 'accounts.myanimelist.save');
-  final _githubTokenFocus = FocusNode(debugLabel: 'accounts.updates.token');
-  final _githubSaveFocus = FocusNode(debugLabel: 'accounts.updates.save');
   final _automaticUpdatesFocus = FocusNode(
     debugLabel: 'accounts.updates.automatic',
   );
@@ -113,7 +110,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
-    _githubTokenController.dispose();
     _backFocus.dispose();
     _titleLanguageFocus.dispose();
     _debridProviderFocus.dispose();
@@ -144,8 +140,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _anilistSaveFocus.dispose();
     _malTokenFocus.dispose();
     _malSaveFocus.dispose();
-    _githubTokenFocus.dispose();
-    _githubSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
     _legalFocus.dispose();
@@ -343,37 +337,31 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _areaFocusNodes[_SettingsArea.system];
       }
       if (key == LogicalKeyboardKey.arrowRight) target = _calibrationFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _automaticUpdatesFocus;
+      }
     } else if (current == _calibrationFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.system];
       }
       if (key == LogicalKeyboardKey.arrowLeft) target = _setupFocus;
       if (key == LogicalKeyboardKey.arrowRight) target = _diagnosticsFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _automaticUpdatesFocus;
+      }
     } else if (current == _diagnosticsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.system];
       }
       if (key == LogicalKeyboardKey.arrowLeft) target = _calibrationFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _githubTokenFocus;
-    } else if (current == _githubTokenFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _setupFocus;
-      }
-      if (key == LogicalKeyboardKey.arrowRight) target = _githubSaveFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _automaticUpdatesFocus;
       }
-    } else if (current == _githubSaveFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
-      if (key == LogicalKeyboardKey.arrowLeft) target = _githubTokenFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _checkUpdatesFocus;
     } else if (current == _automaticUpdatesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _githubTokenFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
       if (key == LogicalKeyboardKey.arrowRight) target = _checkUpdatesFocus;
     } else if (current == _checkUpdatesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _githubSaveFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
       if (key == LogicalKeyboardKey.arrowLeft) {
         target = _automaticUpdatesFocus;
       }
@@ -808,7 +796,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             preferences.trackingProvider ==
                                 TrackingProvider.anilist
                             ? 'Seasonal discovery, lists, and automatic episode progress.'
-                            : 'Sync watch progress and MyAnimeList statuses automatically.',
+                            : 'Sync watch progress and MAL statuses automatically.',
                         username:
                             tracking.usernames[preferences.trackingProvider],
                         error: tracking.errors[preferences.trackingProvider],
@@ -925,20 +913,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                       _AppUpdatePanel(
                         state: appUpdate,
-                        tokenController: _githubTokenController,
-                        tokenFocusNode: _githubTokenFocus,
-                        saveFocusNode: _githubSaveFocus,
                         automaticFocusNode: _automaticUpdatesFocus,
                         checkFocusNode: _checkUpdatesFocus,
-                        onSaveToken: () async {
-                          await ref
-                              .read(appUpdateControllerProvider.notifier)
-                              .saveAccessToken(_githubTokenController.text);
-                          _githubTokenController.clear();
-                        },
-                        onRemoveToken: () => ref
-                            .read(appUpdateControllerProvider.notifier)
-                            .saveAccessToken(''),
                         onToggleAutomatic: () => ref
                             .read(appUpdateControllerProvider.notifier)
                             .setAutomaticUpdates(!appUpdate.automaticUpdates),
@@ -1822,25 +1798,15 @@ class _PreferenceChip extends StatelessWidget {
 class _AppUpdatePanel extends StatelessWidget {
   const _AppUpdatePanel({
     required this.state,
-    required this.tokenController,
-    required this.tokenFocusNode,
-    required this.saveFocusNode,
     required this.automaticFocusNode,
     required this.checkFocusNode,
-    required this.onSaveToken,
-    required this.onRemoveToken,
     required this.onToggleAutomatic,
     required this.onCheckOrInstall,
   });
 
   final AppUpdateState state;
-  final TextEditingController tokenController;
-  final FocusNode tokenFocusNode;
-  final FocusNode saveFocusNode;
   final FocusNode automaticFocusNode;
   final FocusNode checkFocusNode;
-  final VoidCallback onSaveToken;
-  final VoidCallback onRemoveToken;
   final VoidCallback onToggleAutomatic;
   final VoidCallback onCheckOrInstall;
 
@@ -1893,58 +1859,20 @@ class _AppUpdatePanel extends StatelessWidget {
                         ),
                         _StatusPill(
                           connected: true,
-                          label: state.hasAccessToken
-                              ? 'PUBLIC + PRIVATE READY'
-                              : 'PUBLIC UPDATES READY',
+                          label: 'SECURE UPDATES READY',
                         ),
                       ],
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Public updates need no secret. An optional fine-grained '
-                      'read-only token can be stored for a private repository.',
+                      'Signed releases download securely from the official '
+                      'TetoTV repository.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 10),
-          Divider(color: Colors.white.withValues(alpha: .08), height: 1),
-          const SizedBox(height: 10),
-          _ResponsiveTokenRow(
-            title: 'Optional private-repository token',
-            input: TvTextInput(
-              focusNode: tokenFocusNode,
-              controller: tokenController,
-              labelText: 'Read-only GitHub token',
-              hintText: state.hasAccessToken
-                  ? 'Saved — select to replace'
-                  : 'Select to enter or paste',
-              keyboardTitle: 'Private GitHub update token',
-              obscureText: true,
-              onSubmitted: (_) => onSaveToken(),
-            ),
-            action: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _TvTextButton(
-                  label: state.hasAccessToken ? 'Replace' : 'Save token',
-                  icon: Icons.lock_rounded,
-                  onPressed: onSaveToken,
-                  focusNode: saveFocusNode,
-                ),
-                if (state.hasAccessToken) ...[
-                  const SizedBox(width: 7),
-                  _TvTextButton(
-                    label: 'Remove',
-                    icon: Icons.delete_rounded,
-                    onPressed: onRemoveToken,
-                  ),
-                ],
-              ],
-            ),
           ),
           const SizedBox(height: 10),
           Text(
@@ -2313,7 +2241,7 @@ class _LegalNoticesPanel extends StatelessWidget {
         builder: (context, constraints) {
           const notice =
               'TetoTV is an independent, unofficial client. It is not '
-              'affiliated with or endorsed by AniList, MyAnimeList, debrid '
+              'affiliated with or endorsed by AniList, MAL, debrid '
               'services, addon authors, or media rights holders. Users add '
               'and are responsible for their own services and repositories.';
           const attribution = '重音テト © 線 / 小山乃舞世 / TWINDRILL';

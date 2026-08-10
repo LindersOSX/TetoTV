@@ -438,7 +438,7 @@ class _BrokerSetupPanel extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            'AniList and MyAnimeList do not provide a native TV device-code '
+            'AniList and MAL do not provide a native TV device-code '
             'login. Deploy the included broker with your registered OAuth '
             'clients, then enter its public address here. Provider secrets '
             'stay on the server and never enter the APK.',

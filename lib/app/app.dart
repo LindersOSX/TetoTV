@@ -37,28 +37,10 @@ class TetoTvApp extends ConsumerWidget {
           userScale: preferences.interfaceScale,
         );
 
-        if ((scale - 1).abs() < .001) {
-          return MediaQuery(data: mq, child: content);
-        }
-
-        return MediaQuery(
-          data: mq.copyWith(
-            size: Size(mq.size.width / scale, mq.size.height / scale),
-            devicePixelRatio: mq.devicePixelRatio * scale,
-            padding: mq.padding / scale,
-            viewPadding: mq.viewPadding / scale,
-            viewInsets: mq.viewInsets / scale,
-            systemGestureInsets: mq.systemGestureInsets / scale,
-          ),
-          child: Transform.scale(
-            scale: scale,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: mq.size.width / scale,
-              height: mq.size.height / scale,
-              child: content,
-            ),
-          ),
+        return InterfaceScaleViewport(
+          mediaQuery: mq,
+          scale: scale,
+          child: content,
         );
       },
     );

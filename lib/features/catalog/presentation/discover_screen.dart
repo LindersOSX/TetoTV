@@ -191,7 +191,9 @@ class _FilterRow extends StatelessWidget {
                   child: Container(
                     alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(horizontal: 11),
-                    color: active ? AppColors.accent : const Color(0xFF181818),
+                    color: active
+                        ? AppColors.accent
+                        : AppColors.selectableSurface,
                     child: Text(
                       (value ?? 'ANY').replaceAll('_', ' '),
                       style: const TextStyle(
@@ -218,7 +220,7 @@ class _Back extends StatelessWidget {
   Widget build(BuildContext context) => TvFocusable(
     onPressed: onPressed,
     child: const ColoredBox(
-      color: Color(0xFF181818),
+      color: AppColors.selectableSurface,
       child: Padding(
         padding: EdgeInsets.symmetric(horizontal: 13, vertical: 9),
         child: Row(

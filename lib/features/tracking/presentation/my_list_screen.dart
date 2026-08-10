@@ -268,7 +268,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                             icon: Icons.video_library_outlined,
                             title: '${_status.displayName} is empty',
                             body:
-                                'Connect AniList or MyAnimeList, or change '
+                                'Connect AniList or MAL, or change '
                                 'a title to this status.',
                           );
                         }

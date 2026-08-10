@@ -89,7 +89,7 @@ void main() {
         isA<StateError>().having(
           (error) => error.message,
           'message',
-          contains('Reconnect MyAnimeList'),
+          contains('Reconnect MAL'),
         ),
       ),
     );

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -37,6 +38,8 @@ class TvFocusable extends StatefulWidget {
 class _TvFocusableState extends State<TvFocusable> {
   late final FocusNode _fallbackFocusNode;
   bool _focused = false;
+  bool _hovered = false;
+  bool _pressed = false;
   bool _navigationSoundsEnabled = true;
   bool _clickSoundsEnabled = true;
   Timer? _holdTimer;
@@ -127,8 +130,18 @@ class _TvFocusableState extends State<TvFocusable> {
         pressed.contains(LogicalKeyboardKey.arrowDown);
   }
 
+  void _handleHover(bool hovering) {
+    if (_hovered != hovering) setState(() => _hovered = hovering);
+    if (hovering) _focusNode.requestFocus();
+  }
+
+  void _handlePress(bool pressed) {
+    if (_pressed != pressed) setState(() => _pressed = pressed);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final highlighted = _focused || _hovered || _pressed;
     return Semantics(
       button: true,
       child: Focus(
@@ -143,9 +156,7 @@ class _TvFocusableState extends State<TvFocusable> {
             focusNode: _focusNode,
             autofocus: widget.autofocus,
             onFocusChange: _handleFocus,
-            onShowHoverHighlight: (hovering) {
-              if (hovering) _focusNode.requestFocus();
-            },
+            onShowHoverHighlight: _handleHover,
             actions: <Type, Action<Intent>>{
               ActivateIntent: CallbackAction<ActivateIntent>(
                 onInvoke: (_) {
@@ -165,6 +176,9 @@ class _TvFocusableState extends State<TvFocusable> {
               cursor: SystemMouseCursors.click,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
+                onTapDown: (_) => _handlePress(true),
+                onTapCancel: () => _handlePress(false),
+                onTapUp: (_) => _handlePress(false),
                 onTap: () {
                   _focusNode.requestFocus();
                   _activate(widget.onPressed);
@@ -173,38 +187,68 @@ class _TvFocusableState extends State<TvFocusable> {
                     ? null
                     : () => _activate(widget.onLongPress),
                 child: AnimatedScale(
-                  scale: _focused ? widget.focusScale : 1,
+                  scale: highlighted ? widget.focusScale : 1,
                   duration: const Duration(milliseconds: 80),
                   curve: Curves.easeOutCubic,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 80),
                     decoration: BoxDecoration(
                       borderRadius: widget.borderRadius,
-                      border: Border.all(
-                        color: _focused ? Colors.white : Colors.transparent,
-                        width: 3,
-                      ),
-                      boxShadow: _focused
+                      boxShadow: highlighted
                           ? [
-                              // A dark outer keyline keeps the white ring
-                              // visible on pale artwork, while the white ring
-                              // remains clear on Teto red controls.
+                              // The dark outer keyline keeps the Teto-red ring
+                              // distinct from primary red buttons; the red glow
+                              // remains visible on black and pale artwork.
                               const BoxShadow(
                                 color: Color(0xE6000000),
                                 blurRadius: 0,
                                 spreadRadius: 2,
                               ),
                               const BoxShadow(
-                                color: Color(0x66FFFFFF),
-                                blurRadius: 9,
-                                spreadRadius: 1,
+                                color: AppColors.focusGlow,
+                                blurRadius: 11,
+                                spreadRadius: 2,
                               ),
                             ]
                           : const [],
                     ),
+                    foregroundDecoration: BoxDecoration(
+                      borderRadius: widget.borderRadius,
+                      border: Border.all(
+                        color: highlighted
+                            ? AppColors.focusRing
+                            : Colors.transparent,
+                        width: 3,
+                      ),
+                    ),
                     child: ClipRRect(
                       borderRadius: widget.borderRadius,
-                      child: widget.child,
+                      child: Stack(
+                        fit: StackFit.passthrough,
+                        children: [
+                          widget.child,
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: AnimatedOpacity(
+                                opacity: highlighted ? 1 : 0,
+                                duration: const Duration(milliseconds: 80),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(3),
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      borderRadius: widget.borderRadius,
+                                      border: Border.all(
+                                        color: AppColors.focusInnerKeyline,
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),

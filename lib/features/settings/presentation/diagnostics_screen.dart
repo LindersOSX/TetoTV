@@ -331,7 +331,7 @@ class _DiagnosticsAction extends StatelessWidget {
       height: 41,
       padding: const EdgeInsets.symmetric(horizontal: 13),
       decoration: BoxDecoration(
-        color: primary ? AppColors.accent : AppColors.panelRaised,
+        color: primary ? AppColors.accent : AppColors.selectableSurface,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withValues(alpha: .1)),
       ),

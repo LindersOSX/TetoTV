@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -6,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('focus ring stays high contrast over red or pale controls', (
+  testWidgets('focus ring uses bright Teto red with dark contrast keylines', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -29,8 +30,88 @@ void main() {
       find.byType(AnimatedContainer),
     );
     final decoration = animated.decoration! as BoxDecoration;
-    expect(decoration.border!.top.color, Colors.white);
+    final foreground = animated.foregroundDecoration! as BoxDecoration;
+    expect(foreground.border!.top.color, AppColors.focusRing);
     expect(decoration.boxShadow, hasLength(2));
+    expect(decoration.boxShadow!.last.color, AppColors.focusGlow);
+    expect(
+      decoration.boxShadow!.map((shadow) => shadow.color),
+      isNot(contains(Colors.white)),
+    );
+  });
+
+  testWidgets('mouse hover receives the same Teto-red focus treatment', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: TvFocusable(
+              onPressed: () {},
+              child: const SizedBox(width: 100, height: 60),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    tester
+        .widget<FocusableActionDetector>(find.byType(FocusableActionDetector))
+        .onShowHoverHighlight!(true);
+    await tester.pumpAndSettle();
+
+    final animated = tester.widget<AnimatedContainer>(
+      find.byType(AnimatedContainer),
+    );
+    final foreground = animated.foregroundDecoration! as BoxDecoration;
+    expect(foreground.border!.top.color, AppColors.focusRing);
+  });
+
+  testWidgets('touch press keeps activation and uses the shared red state', (
+    tester,
+  ) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: TvFocusable(
+              onPressed: () => calls++,
+              child: const SizedBox(width: 100, height: 60),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final touch = await tester.startGesture(
+      tester.getCenter(find.byType(TvFocusable)),
+    );
+    await tester.pump();
+    final pressed = tester.widget<AnimatedContainer>(
+      find.byType(AnimatedContainer),
+    );
+    final foreground = pressed.foregroundDecoration! as BoxDecoration;
+    expect(foreground.border!.top.color, AppColors.focusRing);
+
+    await touch.up();
+    await tester.pump();
+    expect(calls, 1);
+  });
+
+  test('shared Material controls use dark-red idle and bright-red focus', () {
+    final style = AppTheme.dark.outlinedButtonTheme.style!;
+    expect(style.backgroundColor!.resolve({}), AppColors.selectableSurface);
+    expect(
+      style.backgroundColor!.resolve({WidgetState.hovered}),
+      AppColors.selectableSurfaceHover,
+    );
+    expect(
+      style.side!.resolve({WidgetState.focused})!.color,
+      AppColors.focusRing,
+    );
   });
 
   testWidgets('TV activation plays the platform click sound', (tester) async {

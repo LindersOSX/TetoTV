@@ -8,7 +8,7 @@ enum TrackingProvider {
   ),
   myAnimeList(
     slug: 'myanimelist',
-    displayName: 'MyAnimeList',
+    displayName: 'MAL',
     tokenStorageKey: 'myanimelist_access_token',
     refreshTokenStorageKey: 'myanimelist_refresh_token',
     expiresAtStorageKey: 'myanimelist_token_expires_at',

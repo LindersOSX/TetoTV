@@ -18,7 +18,7 @@ class AuthBrokerNotConfigured implements Exception {
 
   @override
   String toString() =>
-      'AniList and MyAnimeList QR login requires the TetoTV OAuth broker.';
+      'AniList and MAL QR login requires the TetoTV OAuth broker.';
 }
 
 String? normalizeAuthBrokerBaseUrl(String value) {

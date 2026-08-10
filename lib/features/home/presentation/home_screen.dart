@@ -34,7 +34,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   static const _connectTracking = [
     _ShelfItem(
       'Connect your tracker',
-      'AniList or MyAnimeList',
+      'AniList or MAL',
       AppColors.accent,
       route: '/settings/accounts',
     ),
@@ -135,7 +135,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         title: const Text('Remove from this TV?'),
         content: Text(
           'Remove “${item.title}” from local Watch History and Continue '
-          'Watching? AniList and MyAnimeList will not be changed.',
+          'Watching? AniList and MAL will not be changed.',
         ),
         actions: [
           TextButton(

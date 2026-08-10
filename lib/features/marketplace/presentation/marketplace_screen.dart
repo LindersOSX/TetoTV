@@ -687,7 +687,7 @@ class _MarketplaceButton extends StatelessWidget {
             child: Container(
               constraints: const BoxConstraints(minHeight: 42),
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-              color: AppColors.panelRaised,
+              color: AppColors.selectableSurface,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [

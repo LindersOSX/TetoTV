@@ -81,8 +81,8 @@ class TrackingTokenService {
     if (refreshToken == null || refreshToken.isEmpty || brokerUrl == null) {
       if (!expiresAt.toUtc().isAfter(now)) {
         throw StateError(
-          'The MyAnimeList session expired and cannot be refreshed. '
-          'Reconnect MyAnimeList in Settings.',
+          'The MAL session expired and cannot be refreshed. '
+          'Reconnect MAL in Settings.',
         );
       }
       return accessToken;

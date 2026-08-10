@@ -186,10 +186,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Available show'), findsOneWidget);
-    expect(
-      find.textContaining('MyAnimeList could not be refreshed'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('MAL could not be refreshed'), findsOneWidget);
     expect(find.text('Watching is empty'), findsNothing);
   });
 
