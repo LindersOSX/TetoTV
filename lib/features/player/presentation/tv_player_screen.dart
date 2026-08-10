@@ -16,16 +16,14 @@ import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart'
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
+import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/torbox_client.dart';
-import 'package:anime_tv/features/streaming/data/torbox_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
-import 'package:anime_tv/features/streaming/data/torrentio_release_source.dart';
-import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:go_router/go_router.dart';
@@ -553,7 +551,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _player = Player(
       configuration: const PlayerConfiguration(
         title: 'TetoTV',
-        // Real-Debrid/TorBox are seekable HTTP sources; a 48 MiB cache keeps
+        // Debrid streams are seekable HTTP sources; a 48 MiB cache keeps
         // playback smooth without starving low-memory Fire TV devices.
         bufferSize: 48 * 1024 * 1024,
         libass: true,
@@ -1120,16 +1118,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         .accessToken(widget.debridService);
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
-    final resolver = switch (widget.debridService) {
-      DebridService.realDebrid => RealDebridStreamResolver(
-        RealDebridClient(token: token),
-        source,
-      ),
-      DebridService.torBox => TorBoxStreamResolver(
-        TorBoxClient(token: token),
-        source,
-      ),
-    };
+    final resolver = createDebridStreamResolver(
+      service: widget.debridService,
+      token: token,
+      source: source,
+    );
     await for (final resolution in resolver.resolve(episode)) {
       if (resolution is StreamReady) return resolution;
     }
@@ -1284,11 +1277,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_prewarming || _prewarmed || widget.episode == null) return;
     _prewarming = true;
     try {
+      await ref.read(userTorrentSourcesControllerProvider.notifier).load();
+      final userManifests = ref
+          .read(userTorrentSourcesControllerProvider)
+          .manifestUrls;
       final sources = <ReleaseSource>[
-        if (AppConfig.hasStremioAddon)
-          TorrentioReleaseSource(
-            manifestUrl: AppConfig.stremioAddonManifestUrl,
-          ),
+        for (final manifestUrl in userManifests)
+          StremioTorrentReleaseSource(manifestUrl: manifestUrl),
         if (AppConfig.hasReleaseResolver)
           HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
       ];
@@ -1587,10 +1582,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Stream<WebStreamSearchProgress> _webSourceSearch({bool refresh = false}) =>
       ref
           .read(webStreamAggregatorProvider)
-          .watchSearchIncrementally(
-            widget.launch.episode,
-            refresh: refresh,
-          );
+          .watchSearchIncrementally(widget.launch.episode, refresh: refresh);
 
   Future<void> _startWebSourceDiscovery({bool restart = false}) async {
     if (!_currentStream.isWebStream ||
@@ -3159,7 +3151,7 @@ class DebridOnlyPlaybackScreen extends StatelessWidget {
               width: 620,
               child: Text(
                 'TetoTV only accepts streams resolved through a connected '
-                'Real-Debrid or TorBox account.',
+                'supported debrid account.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textMuted, fontSize: 18),
               ),

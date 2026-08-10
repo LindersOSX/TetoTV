@@ -11,15 +11,14 @@ class AddonStore {
 
   Future<List<AddonRepository>> repositories() async {
     final db = await database.database;
-    await db.insert('addon_repositories', {
-      'url': defaultMarketplaceRepositoryUrl,
-      'enabled': 1,
-      'is_default': 1,
-      'updated_at': DateTime.now().millisecondsSinceEpoch,
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    // Older private builds seeded a third-party catalog. Public builds never
+    // ship, restore, or silently enable a source catalog. Remove only records
+    // marked as the legacy app default; user-added repositories and explicitly
+    // installed providers remain untouched.
+    await db.transaction(removeLegacyDefaultRepositories);
     final rows = await db.query(
       'addon_repositories',
-      orderBy: 'is_default DESC, url COLLATE NOCASE',
+      orderBy: 'url COLLATE NOCASE',
     );
     return rows
         .map(
@@ -142,4 +141,28 @@ class AddonStore {
 
   Future<void> clearProviderHealth(String id) =>
       database.clearProviderHealth(id);
+}
+
+/// Removes only repositories marked by an older app build as app-provided.
+///
+/// The public build does not retain the retired URL (even as a migration
+/// string). The `is_default` bit was never user-settable, so it uniquely
+/// identifies the old seeded record without deleting user-added repositories
+/// or anything from `installed_addons`.
+Future<void> removeLegacyDefaultRepositories(DatabaseExecutor database) async {
+  final legacyDefaults = await database.query(
+    'addon_repositories',
+    columns: ['url'],
+    where: 'is_default = 1',
+  );
+  for (final row in legacyDefaults) {
+    final url = row['url'] as String?;
+    if (url == null) continue;
+    await database.delete(
+      'marketplace_cache',
+      where: 'repository_url = ?',
+      whereArgs: [url],
+    );
+  }
+  await database.delete('addon_repositories', where: 'is_default = 1');
 }

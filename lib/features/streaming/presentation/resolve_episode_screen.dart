@@ -12,13 +12,11 @@ import 'package:anime_tv/features/marketplace/application/marketplace_controller
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/torrentio_release_source.dart';
-import 'package:anime_tv/features/streaming/data/torbox_client.dart';
-import 'package:anime_tv/features/streaming/data/torbox_stream_resolver.dart';
+import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
@@ -35,23 +33,14 @@ typedef DebridStreamResolverFactory =
 
 final debridStreamResolverFactoryProvider =
     Provider<DebridStreamResolverFactory>((_) {
-      return ({required service, required token, required source}) =>
-          switch (service) {
-            DebridService.realDebrid => RealDebridStreamResolver(
-              RealDebridClient(token: token),
-              source,
-            ),
-            DebridService.torBox => TorBoxStreamResolver(
-              TorBoxClient(token: token),
-              source,
-            ),
-          };
+      return createDebridStreamResolver;
     });
 
-final configuredReleaseSourceProvider = Provider<ReleaseSource?>((_) {
+final configuredReleaseSourceProvider = Provider<ReleaseSource?>((ref) {
+  final userSources = ref.watch(userTorrentSourcesControllerProvider);
   final sources = <ReleaseSource>[
-    if (AppConfig.hasStremioAddon)
-      TorrentioReleaseSource(manifestUrl: AppConfig.stremioAddonManifestUrl),
+    for (final manifestUrl in userSources.manifestUrls)
+      StremioTorrentReleaseSource(manifestUrl: manifestUrl),
     if (AppConfig.hasReleaseResolver)
       HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
   ];
@@ -284,34 +273,36 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _initialize() async {
+    await ref.read(userTorrentSourcesControllerProvider.notifier).load();
     final tokenService = ref.read(debridTokenServiceProvider);
     final preferredDebrid = ref
         .read(settingsPreferencesProvider)
         .debridProvider;
+    final services = DebridService.values;
     final tokensAndProfile = await Future.wait<Object?>([
-      _usableToken(tokenService, DebridService.realDebrid),
-      _usableToken(tokenService, DebridService.torBox),
+      for (final service in services) _usableToken(tokenService, service),
       AndroidTvBridge.instance.getDeviceProfile(),
       TetoTvDatabase.instance
           .seriesPreferences(widget.episode.anilistMediaId)
           .catchError((_) => const SeriesPlaybackPreferences()),
     ]);
     final tokens = [
-      tokensAndProfile[0] as String?,
-      tokensAndProfile[1] as String?,
+      for (var index = 0; index < services.length; index++)
+        tokensAndProfile[index] as String?,
     ];
-    final profile = tokensAndProfile[2] as TvDeviceProfile;
-    final preferences = tokensAndProfile[3] as SeriesPlaybackPreferences;
+    final profile = tokensAndProfile[services.length] as TvDeviceProfile;
+    final preferences =
+        tokensAndProfile[services.length + 1] as SeriesPlaybackPreferences;
     Map<String, int> failures = const {};
     try {
       failures = await TetoTvDatabase.instance.failureCounts(profile.key);
     } catch (_) {
       // Compatibility history improves sorting but is never required to find
-      // or play a stream. A local database problem must not block Torrentio.
+      // or play a stream. A local database problem must not block discovery.
     }
     final connected = <DebridService>{
-      if (tokens[0]?.isNotEmpty == true) DebridService.realDebrid,
-      if (tokens[1]?.isNotEmpty == true) DebridService.torBox,
+      for (var index = 0; index < services.length; index++)
+        if (tokens[index]?.isNotEmpty == true) services[index],
     };
     if (!mounted) return;
     setState(() {
@@ -1039,9 +1030,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         icon: Icons.stream_rounded,
         title: 'No stream source is ready',
         body: sourcePreferences.webStreamsEnabled
-            ? 'Connect Real-Debrid or TorBox, or install a compatible Web '
+            ? 'Connect a supported debrid service, or install a compatible Web '
                   'Stream provider from Marketplace.'
-            : 'Connect Real-Debrid or TorBox. TetoTV never streams a torrent '
+            : 'Connect a supported debrid service. TetoTV never streams a torrent '
                   'directly from peers.',
         action: _ActionButton(
           label: sourcePreferences.webStreamsEnabled
@@ -1086,11 +1077,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             Text(
               _releases.isNotEmpty
                   ? 'Use a magnet for content you are authorized to access.'
-                  : AppConfig.hasReleaseResolver || AppConfig.hasStremioAddon
+                  : ref.read(configuredReleaseSourceProvider) != null
                   ? 'Automatic matching did not return a playable stream. '
                         'You can provide a magnet manually.'
-                  : 'No release resolver is configured. Paste a magnet for '
-                        'content you are authorized to access.',
+                  : 'No torrent source is configured. Add a source manifest '
+                        'in Marketplace, or paste a magnet for content you are '
+                        'authorized to access.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             if (_error case final error?) ...[
@@ -1811,7 +1803,7 @@ class _ReleaseCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 7),
                   Text(
-                    release.provider ?? 'Torrentio',
+                    release.provider ?? 'User source',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

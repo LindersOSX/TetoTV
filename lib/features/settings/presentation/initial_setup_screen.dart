@@ -4,7 +4,9 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
+import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
@@ -311,10 +313,14 @@ class _DebridStep extends ConsumerWidget {
     final preferences = ref.watch(settingsPreferencesProvider);
     final realDebrid = ref.watch(realDebridSettingsControllerProvider);
     final torBox = ref.watch(torBoxSettingsControllerProvider);
-    final selectedConnected =
-        preferences.debridProvider == DebridService.realDebrid
-        ? realDebrid.hasSavedToken
-        : torBox.hasSavedToken;
+    final allDebrid = ref.watch(allDebridSettingsControllerProvider);
+    final premiumize = ref.watch(premiumizeSettingsControllerProvider);
+    final selectedConnected = switch (preferences.debridProvider) {
+      DebridService.realDebrid => realDebrid.hasSavedToken,
+      DebridService.torBox => torBox.hasSavedToken,
+      DebridService.allDebrid => allDebrid.hasSavedToken,
+      DebridService.premiumize => premiumize.hasSavedToken,
+    };
     return _SetupPage(
       icon: Icons.cloud_done_rounded,
       title: 'Choose your debrid service',
@@ -344,11 +350,12 @@ class _DebridStep extends ConsumerWidget {
                 ? Icons.check_rounded
                 : Icons.qr_code_rounded,
             primary: !selectedConnected,
-            onPressed: () => context.push(
-              preferences.debridProvider == DebridService.realDebrid
-                  ? '/pair/realdebrid'
-                  : '/pair/torbox',
-            ),
+            onPressed: () => context.push(switch (preferences.debridProvider) {
+              DebridService.realDebrid => '/pair/realdebrid',
+              DebridService.torBox => '/pair/torbox',
+              DebridService.allDebrid => '/pair/alldebrid',
+              DebridService.premiumize => '/pair/premiumize',
+            }),
           ),
         ],
       ),
@@ -642,9 +649,15 @@ class _SetupButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 19),
+          Icon(icon, size: 19, color: primary ? Colors.white : null),
           const SizedBox(width: 7),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+          Text(
+            label,
+            style: TextStyle(
+              color: primary ? Colors.white : null,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
         ],
       ),
     ),

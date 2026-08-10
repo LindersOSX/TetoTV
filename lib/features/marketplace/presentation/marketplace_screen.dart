@@ -5,6 +5,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -16,6 +17,10 @@ class MarketplaceScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(marketplaceControllerProvider);
     final controller = ref.read(marketplaceControllerProvider.notifier);
+    final torrentSources = ref.watch(userTorrentSourcesControllerProvider);
+    final torrentSourceController = ref.read(
+      userTorrentSourcesControllerProvider.notifier,
+    );
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -68,6 +73,51 @@ class MarketplaceScreen extends ConsumerWidget {
                       slivers: [
                         _section(
                           context,
+                          icon: Icons.cloud_download_outlined,
+                          title: 'Torrent source manifests',
+                          subtitle:
+                              'Optional Stremio-compatible manifests you add yourself. TetoTV does not include or recommend a torrent catalog.',
+                        ),
+                        if (torrentSources.manifestUrls.isEmpty)
+                          const SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                'No torrent sources added. Debrid searches stay unavailable until you explicitly add one.',
+                                style: TextStyle(color: AppColors.textMuted),
+                              ),
+                            ),
+                          )
+                        else
+                          SliverList.builder(
+                            itemCount: torrentSources.manifestUrls.length,
+                            itemBuilder: (context, index) {
+                              final url = torrentSources.manifestUrls[index];
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: _TorrentSourceTile(
+                                  url: url,
+                                  onRemove: () =>
+                                      torrentSourceController.remove(url),
+                                ),
+                              );
+                            },
+                          ),
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 4, bottom: 24),
+                            child: _MarketplaceButton(
+                              icon: Icons.add_link_rounded,
+                              label: 'Add torrent manifest',
+                              onPressed: () => _addTorrentSource(
+                                context,
+                                torrentSourceController,
+                              ),
+                            ),
+                          ),
+                        ),
+                        _section(
+                          context,
                           icon: Icons.hub_outlined,
                           title: 'Repositories',
                           subtitle:
@@ -107,12 +157,6 @@ class MarketplaceScreen extends ConsumerWidget {
                                   label: 'Add repository',
                                   onPressed: () =>
                                       _addRepository(context, controller),
-                                ),
-                                _MarketplaceButton(
-                                  icon: Icons.restore_rounded,
-                                  label: 'Restore default',
-                                  onPressed:
-                                      controller.restoreDefaultRepository,
                                 ),
                               ],
                             ),
@@ -280,9 +324,7 @@ class _RepositoryTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  repository.isDefault
-                      ? 'Default repository'
-                      : 'Custom repository',
+                  'User repository',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 Text(
@@ -325,6 +367,51 @@ class _RepositoryTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _TorrentSourceTile extends StatelessWidget {
+  const _TorrentSourceTile({required this.url, required this.onRemove});
+
+  final String url;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+    decoration: BoxDecoration(
+      color: AppColors.panel,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.white.withValues(alpha: .08)),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.cloud_done_outlined, color: AppColors.cyan),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'User torrent source',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              Text(
+                url,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        _MarketplaceButton(
+          icon: Icons.delete_outline_rounded,
+          label: context.isCompactWidth ? null : 'Remove',
+          onPressed: onRemove,
+        ),
+      ],
+    ),
+  );
 }
 
 class _InstalledAddonCard extends StatelessWidget {
@@ -684,6 +771,58 @@ Future<void> _addRepository(
   }
 }
 
+Future<void> _addTorrentSource(
+  BuildContext context,
+  UserTorrentSourcesController controller,
+) async {
+  final input = TextEditingController();
+  try {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: const Text('Add torrent source'),
+        content: SizedBox(
+          width: 680,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Only add a Stremio-compatible torrent manifest you trust and use it for content you are authorized to access.',
+              ),
+              const SizedBox(height: 14),
+              TvTextInput(
+                controller: input,
+                autofocus: true,
+                labelText: 'HTTPS manifest URL',
+                hintText: 'https://example.com/addon/manifest.json',
+                keyboardTitle: 'Torrent manifest URL',
+                onSubmitted: (_) => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('ADD'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !context.mounted) return;
+    final error = await controller.add(input.text.trim());
+    if (error != null && context.mounted) _notice(context, error);
+  } finally {
+    input.dispose();
+  }
+}
+
 Future<void> _confirmInstall(
   BuildContext context,
   MarketplaceAddon addon,
@@ -729,7 +868,7 @@ Future<void> _confirmRepositoryRemoval(
     context,
     title: 'Remove repository?',
     body:
-        'Already installed providers remain installed. You can restore the default repository later.',
+        'Already installed providers remain installed. Add the repository URL again later if you want its catalog back.',
     action: 'REMOVE',
   )) {
     await controller.removeRepository(repository);

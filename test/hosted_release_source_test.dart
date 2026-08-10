@@ -49,7 +49,7 @@ void main() {
             'quality': '1080p',
             'codec': 'HEVC',
             'size_label': '4.2 GB',
-            'provider': 'NyaaSi',
+            'provider': 'UserProvider',
             'preferred_file_index': 7,
           },
         ]),
@@ -68,7 +68,7 @@ void main() {
       expect(r.quality, '1080p');
       expect(r.codec, 'HEVC');
       expect(r.sizeLabel, '4.2 GB');
-      expect(r.provider, 'NyaaSi');
+      expect(r.provider, 'UserProvider');
       expect(r.preferredFileIndex, 7);
     });
 

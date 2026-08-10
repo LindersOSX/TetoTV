@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -37,6 +37,8 @@ class TvFocusable extends StatefulWidget {
 class _TvFocusableState extends State<TvFocusable> {
   late final FocusNode _fallbackFocusNode;
   bool _focused = false;
+  bool _navigationSoundsEnabled = true;
+  bool _clickSoundsEnabled = true;
   Timer? _holdTimer;
   bool _holdTriggered = false;
 
@@ -44,7 +46,9 @@ class _TvFocusableState extends State<TvFocusable> {
 
   void _activate(VoidCallback? action) {
     if (action == null) return;
-    unawaited(SystemSound.play(SystemSoundType.click));
+    if (_clickSoundsEnabled) {
+      unawaited(SystemSound.play(SystemSoundType.click));
+    }
     action();
   }
 
@@ -59,6 +63,14 @@ class _TvFocusableState extends State<TvFocusable> {
     _holdTimer?.cancel();
     _fallbackFocusNode.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final soundScope = InteractionSoundScope.maybeOf(context);
+    _navigationSoundsEnabled = soundScope?.navigationEnabled ?? true;
+    _clickSoundsEnabled = soundScope?.clickEnabled ?? true;
   }
 
   KeyEventResult _handleRemoteActivation(FocusNode node, KeyEvent event) {
@@ -92,6 +104,9 @@ class _TvFocusableState extends State<TvFocusable> {
     setState(() => _focused = focused);
     widget.onFocusChanged?.call(focused);
     if (focused) {
+      if (_navigationSoundsEnabled && _directionalKeyIsPressed()) {
+        unawaited(SystemSound.play(SystemSoundType.click));
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         Scrollable.ensureVisible(
@@ -102,6 +117,14 @@ class _TvFocusableState extends State<TvFocusable> {
         );
       });
     }
+  }
+
+  bool _directionalKeyIsPressed() {
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+    return pressed.contains(LogicalKeyboardKey.arrowLeft) ||
+        pressed.contains(LogicalKeyboardKey.arrowRight) ||
+        pressed.contains(LogicalKeyboardKey.arrowUp) ||
+        pressed.contains(LogicalKeyboardKey.arrowDown);
   }
 
   @override
@@ -158,11 +181,26 @@ class _TvFocusableState extends State<TvFocusable> {
                     decoration: BoxDecoration(
                       borderRadius: widget.borderRadius,
                       border: Border.all(
-                        color: _focused
-                            ? AppColors.accentBright
-                            : Colors.transparent,
+                        color: _focused ? Colors.white : Colors.transparent,
                         width: 3,
                       ),
+                      boxShadow: _focused
+                          ? [
+                              // A dark outer keyline keeps the white ring
+                              // visible on pale artwork, while the white ring
+                              // remains clear on Teto red controls.
+                              const BoxShadow(
+                                color: Color(0xE6000000),
+                                blurRadius: 0,
+                                spreadRadius: 2,
+                              ),
+                              const BoxShadow(
+                                color: Color(0x66FFFFFF),
+                                blurRadius: 9,
+                                spreadRadius: 1,
+                              ),
+                            ]
+                          : const [],
                     ),
                     child: ClipRRect(
                       borderRadius: widget.borderRadius,

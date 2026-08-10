@@ -10,6 +10,12 @@ String? animeAiringStatusLabel(String? status) {
   return switch (normalized) {
     'RELEASING' || 'CURRENTLY_AIRING' || 'AIRING' => 'AIRING',
     'FINISHED' || 'FINISHED_AIRING' => 'FINISHED',
+    'NOT_YET_RELEASED' ||
+    'NOT_YET_AIRED' ||
+    'UPCOMING' ||
+    'UNRELEASED' ||
+    'NOT_RELEASED' ||
+    'TBA' => 'UNRELEASED',
     _ => null,
   };
 }
@@ -24,9 +30,14 @@ class PosterAiringStatusBadge extends StatelessWidget {
     final label = animeAiringStatusLabel(status);
     if (label == null) return const SizedBox.shrink();
     final airing = label == 'AIRING';
+    final unreleased = label == 'UNRELEASED';
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: airing ? const Color(0xE61A7A45) : const Color(0xE61B1B1B),
+        color: airing
+            ? const Color(0xF21A7A45)
+            : unreleased
+            ? const Color(0xF2591120)
+            : const Color(0xF21B1B1B),
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: Colors.white.withValues(alpha: .22)),
       ),

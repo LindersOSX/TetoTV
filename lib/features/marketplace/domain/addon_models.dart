@@ -1,9 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-const defaultMarketplaceRepositoryUrl =
-    'https://raw.githubusercontent.com/ASleepyDrink/Seanime-Stuff/refs/heads/main/marketplace.json';
-
 class AddonRepository {
   const AddonRepository({
     required this.url,
@@ -246,7 +243,12 @@ class WebStreamAggregation {
 Uri? safePublicHttpsUri(Object? value) {
   if (value is! String || value.length > 2048) return null;
   final uri = Uri.tryParse(value.trim());
-  if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) return null;
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      !uri.hasAuthority ||
+      uri.userInfo.isNotEmpty) {
+    return null;
+  }
   final host = uri.host.toLowerCase();
   if (host.isEmpty ||
       host == 'localhost' ||
@@ -258,11 +260,16 @@ Uri? safePublicHttpsUri(Object? value) {
   return uri;
 }
 
-Future<void> validatePublicNetworkTarget(Uri uri) async {
+typedef PublicHostLookup = Future<List<InternetAddress>> Function(String host);
+
+Future<List<InternetAddress>> resolvePublicNetworkTarget(
+  Uri uri, {
+  PublicHostLookup? lookup,
+}) async {
   if (safePublicHttpsUri(uri.toString()) == null) {
     throw const FormatException('Only public HTTPS resources are allowed.');
   }
-  final addresses = await InternetAddress.lookup(
+  final addresses = await (lookup ?? InternetAddress.lookup)(
     uri.host,
   ).timeout(const Duration(seconds: 4));
   if (addresses.isEmpty || addresses.any(_isNonPublicAddress)) {
@@ -270,6 +277,75 @@ Future<void> validatePublicNetworkTarget(Uri uri) async {
       'The resource host does not resolve to a public address.',
     );
   }
+  return List<InternetAddress>.unmodifiable(addresses);
+}
+
+Future<void> validatePublicNetworkTarget(
+  Uri uri, {
+  PublicHostLookup? lookup,
+}) async {
+  await resolvePublicNetworkTarget(uri, lookup: lookup);
+}
+
+/// Creates an HTTPS client whose socket is connected to the exact public IP
+/// address that was validated for the request. This closes the DNS-rebinding
+/// gap between a preflight lookup and the operating system's later connect.
+///
+/// TLS still authenticates [Uri.host] (including SNI); certificates are never
+/// accepted for the pinned IP address and no bad-certificate callback is used.
+HttpClient createPinnedPublicHttpsClient({PublicHostLookup? lookup}) {
+  final client = HttpClient();
+  client.findProxy = (_) => 'DIRECT';
+  client.connectionFactory = (uri, proxyHost, proxyPort) async {
+    if (proxyHost != null || proxyPort != null) {
+      throw const FormatException(
+        'Network proxies are not permitted for addon resources.',
+      );
+    }
+    final addresses = await resolvePublicNetworkTarget(uri, lookup: lookup);
+    ConnectionTask<Socket>? activeTask;
+    Socket? connectedSocket;
+    var cancelled = false;
+    final secureSocket = () async {
+      Object? lastError;
+      StackTrace? lastStack;
+      for (final address in addresses) {
+        if (cancelled) {
+          throw const SocketException('Connection attempt was cancelled.');
+        }
+        try {
+          activeTask = await Socket.startConnect(address, uri.port);
+          final socket = await activeTask!.socket;
+          connectedSocket = socket;
+          if (cancelled) {
+            socket.destroy();
+            throw const SocketException('Connection attempt was cancelled.');
+          }
+          return await SecureSocket.secure(
+            socket,
+            host: uri.host,
+            supportedProtocols: const ['http/1.1'],
+          );
+        } catch (error, stackTrace) {
+          connectedSocket?.destroy();
+          connectedSocket = null;
+          if (cancelled) rethrow;
+          lastError = error;
+          lastStack = stackTrace;
+        }
+      }
+      Error.throwWithStackTrace(
+        lastError ?? const SocketException('No public address was available.'),
+        lastStack ?? StackTrace.current,
+      );
+    }();
+    return ConnectionTask.fromSocket<Socket>(secureSocket, () {
+      cancelled = true;
+      activeTask?.cancel();
+      connectedSocket?.destroy();
+    });
+  };
+  return client;
 }
 
 bool _literalAddressIsNonPublic(String host) {

@@ -8,6 +8,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
+import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
@@ -15,10 +16,6 @@ import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/torbox_client.dart';
-import 'package:anime_tv/features/streaming/data/torbox_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -928,16 +925,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         .accessToken(widget.debridService);
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
-    final resolver = switch (widget.debridService) {
-      DebridService.realDebrid => RealDebridStreamResolver(
-        RealDebridClient(token: token),
-        source,
-      ),
-      DebridService.torBox => TorBoxStreamResolver(
-        TorBoxClient(token: token),
-        source,
-      ),
-    };
+    final resolver = createDebridStreamResolver(
+      service: widget.debridService,
+      token: token,
+      source: source,
+    );
     await for (final resolution in resolver.resolve(widget.launch.episode)) {
       if (resolution is StreamReady) return resolution;
     }
@@ -1090,10 +1082,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Stream<WebStreamSearchProgress> _webSourceSearch({bool refresh = false}) =>
       ref
           .read(webStreamAggregatorProvider)
-          .watchSearchIncrementally(
-            widget.launch.episode,
-            refresh: refresh,
-          );
+          .watchSearchIncrementally(widget.launch.episode, refresh: refresh);
 
   Future<void> _startWebSourceDiscovery({bool restart = false}) async {
     if (!_currentStream.isWebStream ||

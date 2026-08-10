@@ -9,8 +9,6 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 const githubUpdateTokenStorageKey = 'github_update_token';
-const bundledGitHubUpdateTokenDisabledStorageKey =
-    'bundled_github_update_token_disabled';
 const automaticUpdatesStorageKey = 'automatic_app_updates';
 const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
 const pendingReleaseNotesVersionStorageKey = 'pending_release_notes_version';
@@ -125,11 +123,13 @@ class AppReleaseAsset {
   const AppReleaseAsset({
     required this.name,
     required this.apiUrl,
+    required this.publicUrl,
     required this.size,
   });
 
   final String name;
   final String apiUrl;
+  final String publicUrl;
   final int size;
 }
 
@@ -173,10 +173,16 @@ class GitHubAppReleaseSource implements AppReleaseSource {
     required String token,
     required List<String> deviceAbis,
   }) async {
-    final response = await _dio.get<Map<String, dynamic>>(
-      'https://api.github.com/repos/$tetoTvRepository/releases/latest',
-      options: Options(headers: _headers(token, 'application/vnd.github+json')),
-    );
+    late final Response<Map<String, dynamic>> response;
+    try {
+      response = await _latestResponse(token);
+    } on DioException catch (error) {
+      if (token.trim().isEmpty || !_isGitHubAccessDenied(error)) rethrow;
+      // A saved private-repository token can later expire or be revoked after
+      // the repository becomes public. Retry without it so that stale optional
+      // credentials never break the built-in public update path.
+      response = await _latestResponse('');
+    }
     final data = response.data;
     if (data == null) throw StateError('GitHub returned an empty release.');
     final assets = (data['assets'] as List? ?? const [])
@@ -187,10 +193,16 @@ class GitHubAppReleaseSource implements AppReleaseSource {
           (item) => AppReleaseAsset(
             name: item['name'] as String? ?? '',
             apiUrl: item['url'] as String? ?? '',
+            publicUrl: item['browser_download_url'] as String? ?? '',
             size: (item['size'] as num?)?.toInt() ?? 0,
           ),
         )
-        .where((asset) => asset.name.isNotEmpty && asset.apiUrl.isNotEmpty)
+        .where(
+          (asset) =>
+              asset.name.isNotEmpty &&
+              asset.apiUrl.isNotEmpty &&
+              asset.publicUrl.isNotEmpty,
+        )
         .toList(growable: false);
     if (assets.isEmpty) {
       throw StateError('The latest GitHub release has no APK attached.');
@@ -212,26 +224,67 @@ class GitHubAppReleaseSource implements AppReleaseSource {
     required String token,
     required String destination,
     required void Function(int received, int total) onProgress,
-  }) {
-    return _dio.download(
-      release.asset.apiUrl,
-      destination,
-      options: Options(
-        headers: _headers(token, 'application/octet-stream'),
-        followRedirects: true,
-        receiveTimeout: const Duration(minutes: 20),
-      ),
-      onReceiveProgress: onProgress,
-      deleteOnError: true,
-    );
+  }) async {
+    final authenticated = token.trim().isNotEmpty;
+    try {
+      await _download(
+        url: authenticated ? release.asset.apiUrl : release.asset.publicUrl,
+        token: token,
+        destination: destination,
+        onProgress: onProgress,
+      );
+    } on DioException catch (error) {
+      if (!authenticated || !_isGitHubAccessDenied(error)) rethrow;
+      // Some HTTP stacks may leave a short partial file even when
+      // `deleteOnError` is enabled. Never append or compare an authenticated
+      // error body with the anonymous public-release retry.
+      final partial = File(destination);
+      if (await partial.exists()) await partial.delete();
+      await _download(
+        url: release.asset.publicUrl,
+        token: '',
+        destination: destination,
+        onProgress: onProgress,
+      );
+    }
   }
+
+  Future<Response<Map<String, dynamic>>> _latestResponse(String token) =>
+      _dio.get<Map<String, dynamic>>(
+        'https://api.github.com/repos/$tetoTvRepository/releases/latest',
+        options: Options(
+          headers: _headers(token, 'application/vnd.github+json'),
+        ),
+      );
+
+  Future<void> _download({
+    required String url,
+    required String token,
+    required String destination,
+    required void Function(int received, int total) onProgress,
+  }) => _dio.download(
+    url,
+    destination,
+    options: Options(
+      headers: _headers(token, 'application/octet-stream'),
+      followRedirects: true,
+      receiveTimeout: const Duration(minutes: 20),
+    ),
+    onReceiveProgress: onProgress,
+    deleteOnError: true,
+  );
 
   static Map<String, String> _headers(String token, String accept) => {
     'Accept': accept,
-    'Authorization': 'Bearer $token',
+    if (token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'TetoTV-AndroidTV-Updater',
   };
+}
+
+bool _isGitHubAccessDenied(DioException error) {
+  final status = error.response?.statusCode;
+  return status == 401 || status == 403 || status == 404;
 }
 
 AppReleaseAsset selectApkAsset(
@@ -331,9 +384,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     this._cacheDirectoryLoader,
     this._apkInstaller, {
     this.automaticCheckInterval = const Duration(hours: 12),
-    this.bundledAccessToken = const String.fromEnvironment(
-      'TETOTV_GITHUB_UPDATE_TOKEN',
-    ),
     this.apkInspector,
   }) : super(const AppUpdateState());
 
@@ -344,7 +394,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   final CacheDirectoryLoader _cacheDirectoryLoader;
   final ApkInstaller _apkInstaller;
   final Duration automaticCheckInterval;
-  final String bundledAccessToken;
   final ApkInspector? apkInspector;
 
   String _token = '';
@@ -367,18 +416,8 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       _storage.read(key: githubUpdateTokenStorageKey),
       _storage.read(key: automaticUpdatesStorageKey),
       _currentVersionLoader(),
-      _storage.read(key: bundledGitHubUpdateTokenDisabledStorageKey),
     ]);
-    final storedToken = (values[0] ?? '').trim();
-    final provisionedToken = bundledAccessToken.trim();
-    final bundledTokenDisabled = values[3] == 'true';
-    _token = storedToken;
-    if (_token.isEmpty &&
-        provisionedToken.isNotEmpty &&
-        !bundledTokenDisabled) {
-      _token = provisionedToken;
-      await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
-    }
+    _token = (values[0] ?? '').trim();
     _loaded = true;
     if (!mounted) return;
     state = state.copyWith(
@@ -393,22 +432,15 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     _token = token.trim();
     if (_token.isEmpty) {
       await _storage.delete(key: githubUpdateTokenStorageKey);
-      if (bundledAccessToken.trim().isNotEmpty) {
-        await _storage.write(
-          key: bundledGitHubUpdateTokenDisabledStorageKey,
-          value: 'true',
-        );
-      }
     } else {
       await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
-      await _storage.delete(key: bundledGitHubUpdateTokenDisabledStorageKey);
     }
     state = state.copyWith(
       phase: AppUpdatePhase.idle,
       hasAccessToken: _token.isNotEmpty,
       message: _token.isEmpty
-          ? 'Private GitHub access removed.'
-          : 'Private GitHub access saved securely on this TV.',
+          ? 'Private-release credential removed. Public updates need no token.'
+          : 'Private-release access saved in encrypted device storage.',
     );
   }
 
@@ -454,7 +486,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     await load();
     if (state.isBusy) return;
     if (automatic) {
-      if (!state.automaticUpdates || _token.isEmpty) return;
+      if (!state.automaticUpdates) return;
       final saved = await _storage.read(
         key: lastAutomaticUpdateCheckStorageKey,
       );
@@ -464,18 +496,10 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         if (!elapsed.isNegative && elapsed < automaticCheckInterval) return;
       }
     }
-    if (_token.isEmpty) {
-      state = state.copyWith(
-        phase: AppUpdatePhase.error,
-        message:
-            'Add a read-only GitHub token before checking this private repository.',
-      );
-      return;
-    }
     state = state.copyWith(
       phase: AppUpdatePhase.checking,
       progress: 0,
-      message: automatic ? null : 'Checking the private GitHub release…',
+      message: automatic ? null : 'Checking for a signed GitHub release…',
     );
     try {
       final release = await _releaseSource.latest(
@@ -509,13 +533,15 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       state = state.copyWith(
         phase: AppUpdatePhase.error,
         message: status == 401 || status == 403 || status == 404
-            ? 'GitHub could not open the private release. Check the read-only token.'
+            ? _token.isEmpty
+                  ? 'No public release is available. If this repository is private, add a read-only token in Updates.'
+                  : 'GitHub denied private-release access. Replace the saved read-only token.'
             : 'Update check failed: ${error.message ?? 'network error'}',
       );
     } catch (error) {
       state = state.copyWith(
         phase: AppUpdatePhase.error,
-        message: 'Update check failed: $error',
+        message: 'Update check failed: ${_safeUpdateError(error)}',
       );
     }
   }
@@ -609,7 +635,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     } catch (error) {
       state = state.copyWith(
         phase: AppUpdatePhase.error,
-        message: 'Update download failed: $error',
+        message: 'Update download failed: ${_safeUpdateError(error)}',
       );
     }
   }
@@ -634,4 +660,26 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       );
     }
   }
+}
+
+String _safeUpdateError(Object error) {
+  if (error is DioException) {
+    final status = error.response?.statusCode;
+    return status == null ? 'network error' : 'GitHub returned HTTP $status';
+  }
+  if (error is StateError || error is FormatException) {
+    var message = error.toString();
+    message = message
+        .replaceFirst(RegExp(r'^(Bad state|FormatException):\s*'), '')
+        .replaceAll(RegExp(r'github_pat_[A-Za-z0-9_]+'), '[redacted]')
+        .replaceAll(
+          RegExp(
+            r'(authorization|token)\s*[:=]\s*[^\s,;]+',
+            caseSensitive: false,
+          ),
+          r'$1=[redacted]',
+        );
+    return message.length <= 240 ? message : '${message.substring(0, 240)}…';
+  }
+  return 'unexpected error';
 }

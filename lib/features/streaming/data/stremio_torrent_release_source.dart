@@ -1,24 +1,28 @@
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 
 /// Reads any Stremio-compatible stream add-on that returns torrent info hashes.
 ///
-/// The default app configuration points at Torrentio's public manifest, but
-/// callers may provide another compatible manifest URL. Real-Debrid credentials
-/// are intentionally not sent to this source; selected hashes are resolved by
-/// the app's own authenticated Real-Debrid client.
-class TorrentioReleaseSource implements ReleaseSource {
-  TorrentioReleaseSource({
+/// No manifest is bundled or discovered automatically. The user must enter a
+/// trusted HTTPS manifest URL explicitly. Debrid credentials are never sent to
+/// the add-on; only the selected magnet is passed to the chosen debrid service.
+class StremioTorrentReleaseSource implements ReleaseSource {
+  StremioTorrentReleaseSource({
     required String manifestUrl,
     Dio? addonDio,
     Dio? kitsuDio,
+    Future<void> Function(Uri uri)? targetValidator,
   }) : _manifestUri = _validateManifestUrl(manifestUrl),
+       _targetValidator = targetValidator ?? validatePublicNetworkTarget,
        _addonDio =
            addonDio ??
-           Dio(
+           createPinnedPublicHttpsDio(
              BaseOptions(
                connectTimeout: const Duration(seconds: 12),
                receiveTimeout: const Duration(seconds: 30),
+               followRedirects: false,
                headers: const {
                  'Accept': 'application/json',
                  'User-Agent':
@@ -44,10 +48,11 @@ class TorrentioReleaseSource implements ReleaseSource {
   final Uri _manifestUri;
   final Dio _addonDio;
   final Dio _kitsuDio;
+  final Future<void> Function(Uri uri) _targetValidator;
   final Map<int, String> _kitsuIds = {};
 
   @override
-  String get id => 'stremio-torrentio';
+  String get id => 'stremio:${_manifestUri.host}${_manifestUri.path}';
 
   @override
   Future<List<ReleaseCandidate>> search(EpisodeReference episode) async {
@@ -56,7 +61,20 @@ class TorrentioReleaseSource implements ReleaseSource {
     final streamUri = _manifestUri.resolve(
       'stream/anime/${Uri.encodeComponent(videoId)}.json',
     );
-    final response = await _addonDio.getUri<dynamic>(streamUri);
+    await _targetValidator(streamUri);
+    final response = await _addonDio.getUri<dynamic>(
+      streamUri,
+      options: Options(
+        followRedirects: false,
+        validateStatus: (status) =>
+            status != null && status >= 200 && status < 400,
+      ),
+    );
+    if ((response.statusCode ?? 500) >= 300) {
+      throw const FormatException(
+        'Torrent source redirects are not accepted. Enter its final public HTTPS manifest URL.',
+      );
+    }
     final body = response.data;
     if (body is! Map<String, dynamic>) {
       throw const FormatException(
@@ -147,7 +165,7 @@ class TorrentioReleaseSource implements ReleaseSource {
       final infoHash = value['infoHash']?.toString().trim() ?? '';
       if (!RegExp(r'^[a-fA-F0-9]{40}$').hasMatch(infoHash)) continue;
 
-      final name = value['name']?.toString() ?? 'Torrentio';
+      final name = value['name']?.toString() ?? 'Torrent source';
       final title = value['title']?.toString() ?? name;
       final hints = value['behaviorHints'];
       final filename = hints is Map<String, dynamic>
@@ -190,7 +208,9 @@ class TorrentioReleaseSource implements ReleaseSource {
           magnetUri: 'magnet:?xt=urn:btih:${infoHash.toLowerCase()}',
           releaseName: title,
           seeders: seeders,
-          sourceId: provider == null ? 'torrentio' : 'torrentio:$provider',
+          sourceId: provider == null
+              ? 'stremio:${infoHash.toLowerCase()}'
+              : 'stremio:$provider',
           isBatch:
               lower.contains('batch') ||
               RegExp(r'\b\d{1,3}\s*-\s*\d{1,3}\b').hasMatch(lower),
@@ -216,11 +236,8 @@ class TorrentioReleaseSource implements ReleaseSource {
   }
 
   static Uri _validateManifestUrl(String value) {
-    final uri = Uri.tryParse(value.trim());
-    if (uri == null ||
-        uri.scheme != 'https' ||
-        uri.host.isEmpty ||
-        !uri.path.endsWith('manifest.json')) {
+    final uri = safePublicHttpsUri(value.trim());
+    if (uri == null || !uri.path.endsWith('manifest.json')) {
       throw ArgumentError.value(
         value,
         'manifestUrl',

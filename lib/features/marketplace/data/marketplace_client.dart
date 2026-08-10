@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/marketplace/data/typescript_compiler.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:dio/dio.dart';
@@ -14,7 +15,7 @@ class MarketplaceClient {
   }) : _typescriptCompiler = typescriptCompiler ?? AddonTypescriptCompiler(),
        _dio =
            dio ??
-           Dio(
+           createPinnedPublicHttpsDio(
              BaseOptions(
                connectTimeout: const Duration(seconds: 8),
                receiveTimeout: const Duration(seconds: 12),

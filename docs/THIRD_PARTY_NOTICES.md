@@ -34,3 +34,21 @@ When redistributing an APK, retain those notices and comply with the source,
 relinking, attribution, and other requirements that apply to the exact native
 binaries in that build. This summary is not a replacement for the full license
 texts.
+
+## Kasane Teto name and artwork
+
+TetoTV is an independent, unofficial application and is not endorsed by the
+Kasane Teto rights holders. The launcher artwork, character name, and related
+branding must be used in accordance with the official Kasane Teto character
+guidelines: <https://kasaneteto.jp/guidelines/>.
+
+Required character attribution retained by the app:
+
+```text
+重音テト © 線 / 小山乃舞世 / TWINDRILL
+```
+
+Those guidelines and any separate commercial-use permissions apply in
+addition to the software licenses above. A distributor is responsible for
+confirming that its particular release, artwork, territory, and monetization
+model are permitted.

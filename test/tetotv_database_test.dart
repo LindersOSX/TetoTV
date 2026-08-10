@@ -28,7 +28,7 @@ void main() {
       preferredHdrMode: 'sdr',
       allowBatchStreams: false,
       streamSortMode: 'seeders',
-      preferredReleaseProvider: 'Torrentio',
+      preferredReleaseProvider: 'User source',
     );
 
     final restored = SeriesPlaybackPreferences.fromJson(preferences.toJson());
@@ -42,7 +42,7 @@ void main() {
     expect(restored.preferredHdrMode, 'sdr');
     expect(restored.allowBatchStreams, isFalse);
     expect(restored.streamSortMode, 'seeders');
-    expect(restored.preferredReleaseProvider, 'Torrentio');
+    expect(restored.preferredReleaseProvider, 'User source');
   });
 
   test(

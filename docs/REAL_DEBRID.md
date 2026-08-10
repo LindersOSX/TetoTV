@@ -26,7 +26,7 @@ resolved by a supported debrid backend are rejected before MPV is created.
    select Sub, Dub/Dual Audio, resolution, codec, size, and provider;
 2. `POST /torrents/addMagnet`;
 3. `GET /torrents/info/{id}`;
-4. select the exact Stremio `fileIdx` when supplied, or match the episode
+4. select an exact source-provided file index when supplied, or match the episode
    filename with `POST /torrents/selectFiles/{id}`;
 5. poll torrent info and emit progress;
 6. use the first selected file link after status becomes `downloaded`;
@@ -38,12 +38,11 @@ remain on the progress screen until Real-Debrid finishes or the resolver's
 timeout is reached. The removed/undocumented instant-availability endpoint is
 not used.
 
-`TorrentioReleaseSource` reads a configurable Stremio add-on manifest. The
-default development value is `https://torrentio.strem.fun/manifest.json`.
-It only accepts torrent `infoHash` results; Real-Debrid credentials remain in
-the app and are never placed in the add-on URL. Set
-`STREMIO_ADDON_MANIFEST_URL` to another HTTPS `manifest.json` URL or an empty
-value to disable it. Use only sources and content you are authorized to access.
+TetoTV ships without a torrent index, source repository, or preconfigured
+Stremio add-on. A user may explicitly add a compatible HTTPS manifest in the
+app. The adapter only accepts torrent `infoHash` results; Real-Debrid
+credentials remain on the device and are never placed in an add-on URL. Use
+only sources and content you are authorized to access.
 
 The included `HostedReleaseSource` calls:
 

@@ -1,5 +1,4 @@
 {
   "AUTH_BROKER_BASE_URL": "https://your-real-broker.example",
-  "RELEASE_RESOLVER_BASE_URL": "https://resolver.your-domain.example",
-  "STREMIO_ADDON_MANIFEST_URL": "https://torrentio.strem.fun/manifest.json"
+  "RELEASE_RESOLVER_BASE_URL": ""
 }

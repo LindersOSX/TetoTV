@@ -9,6 +9,7 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -69,6 +70,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _runStartup() async {
+    final preferences = ref.read(settingsPreferencesProvider.notifier);
+    await preferences.load();
+    if (!mounted) return;
     final setup = ref.read(setupProgressProvider.notifier);
     await setup.load();
     if (!mounted) return;
@@ -76,7 +80,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       await context.push('/setup');
       if (!mounted) return;
     }
-    await _checkForUpdates();
+    final landingRoute = preferences.takeInitialLandingRoute();
+    // A release check can take tens of seconds on a slow or offline TV. Start
+    // it in the background so the configured landing page is never held behind
+    // network I/O. `_checkForUpdates` already stops UI work after disposal.
+    unawaited(_checkForUpdates());
+    if (landingRoute != null && mounted) context.go(landingRoute);
   }
 
   Future<void> _checkForUpdates() async {
@@ -194,6 +203,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final localHistory = ref.watch(recentPlaybackProvider).valueOrNull;
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final enabledShelves = ref.watch(homeShelfPreferencesProvider);
+    final shelfOrder = ref.watch(homeShelfOrderProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
     final dismissedIds =
         ref.watch(dismissedContinueWatchingProvider).valueOrNull ??
@@ -213,16 +223,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ?.skip(1)
         .map((anime) => _ShelfItem.fromAnime(anime, titlePreference))
         .toList(growable: false);
-    final trackedWatchingItems = tracking?.watching.isNotEmpty == true
-        ? tracking!.watching
-              .where(
-                (item) =>
-                    item.anilistId == null ||
-                    !dismissedIds.contains(item.anilistId),
-              )
-              .map((item) => _ShelfItem.fromTracked(item, titlePreference))
-              .toList(growable: false)
-        : _connectTracking;
     final plannedItems = tracking?.planToWatch.isNotEmpty == true
         ? tracking!.planToWatch
               .map((item) => _ShelfItem.fromTracked(item, titlePreference))
@@ -234,13 +234,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final historyItems = localHistory
         ?.map(_ShelfItem.fromCheckpoint)
         .toList(growable: false);
-    final localContinueItems = localHistory
-        ?.where((checkpoint) => !checkpoint.completed)
-        .map(_ShelfItem.fromCheckpoint)
-        .toList(growable: false);
-    final watchingItems = localContinueItems?.isNotEmpty == true
-        ? localContinueItems!
-        : trackedWatchingItems;
+    final watchingItems = _mergeContinueWatching(
+      localHistory: localHistory,
+      trackedWatching: tracking?.watching,
+      dismissedIds: dismissedIds,
+      titlePreference: titlePreference,
+    );
     final airingItems = seasonal
         ?.where((anime) => anime.nextAiringEpisode != null)
         .take(20)
@@ -250,6 +249,112 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         )
         .toList(growable: false);
+    final shelfSlivers = <Widget>[];
+    for (final shelf in shelfOrder) {
+      if (!enabledShelves.contains(shelf)) continue;
+      switch (shelf) {
+        case HomeShelf.tracking:
+          shelfSlivers.add(
+            SliverToBoxAdapter(
+              child: _MediaShelf(
+                title: shelf.displayName,
+                items: watchingItems,
+                preferences: preferences,
+                onRemove: _removeFromLocalHistory,
+              ),
+            ),
+          );
+          break;
+        case HomeShelf.history:
+          if (historyItems != null && historyItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: historyItems,
+                  preferences: preferences,
+                  onRemove: _removeFromLocalHistory,
+                ),
+              ),
+            );
+          }
+          break;
+        case HomeShelf.recentlyReleased:
+          if (seasonalAsync.isLoading) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelfSkeleton(
+                  title: shelf.displayName,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          } else if (seasonalItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: seasonalItems,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          }
+          break;
+        case HomeShelf.trending:
+          if (trendingItems != null && trendingItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: trendingItems,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          }
+          break;
+        case HomeShelf.planned:
+          if (plannedItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: plannedItems,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          }
+          break;
+        case HomeShelf.airing:
+          if (airingItems != null && airingItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: airingItems,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          }
+          break;
+        case HomeShelf.completed:
+          if (completedItems != null && completedItems.isNotEmpty) {
+            shelfSlivers.add(
+              SliverToBoxAdapter(
+                child: _MediaShelf(
+                  title: shelf.displayName,
+                  items: completedItems,
+                  preferences: preferences,
+                ),
+              ),
+            );
+          }
+          break;
+      }
+    }
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -281,80 +386,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 height: preferences.homeLayout == HomeLayout.compact ? 10 : 18,
               ),
             ),
-            if (enabledShelves.contains(HomeShelf.tracking))
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Continue watching',
-                  items: watchingItems,
-                  preferences: preferences,
-                  onRemove: _removeFromLocalHistory,
-                ),
-              ),
-            if (enabledShelves.contains(HomeShelf.history) &&
-                historyItems != null &&
-                historyItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Watch history',
-                  items: historyItems,
-                  preferences: preferences,
-                  onRemove: _removeFromLocalHistory,
-                ),
-              ),
-            if (seasonalAsync.isLoading)
-              SliverToBoxAdapter(
-                child: _MediaShelfSkeleton(
-                  title: 'Recently released',
-                  preferences: preferences,
-                ),
-              )
-            else if (seasonalItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Recently released',
-                  items: seasonalItems,
-                  preferences: preferences,
-                ),
-              ),
-            if (enabledShelves.contains(HomeShelf.trending) &&
-                trendingItems != null &&
-                trendingItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Trending now',
-                  items: trendingItems,
-                  preferences: preferences,
-                ),
-              ),
-            if (enabledShelves.contains(HomeShelf.planned) &&
-                plannedItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Plan to watch',
-                  items: plannedItems,
-                  preferences: preferences,
-                ),
-              ),
-            if (enabledShelves.contains(HomeShelf.airing) &&
-                airingItems != null &&
-                airingItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Airing soon',
-                  items: airingItems,
-                  preferences: preferences,
-                ),
-              ),
-            if (enabledShelves.contains(HomeShelf.completed) &&
-                completedItems != null &&
-                completedItems.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: 'Recently completed',
-                  items: completedItems,
-                  preferences: preferences,
-                ),
-              ),
+            ...shelfSlivers,
             const SliverToBoxAdapter(child: SizedBox(height: 42)),
           ],
         ),
@@ -705,7 +737,7 @@ class _MediaShelf extends StatelessWidget {
         : (compact ? 126.0 : 106.0);
     final cardHeight = posterHeight * preferences.thumbnailScale;
     final artworkHeight =
-        cardHeight - (preferences.showCardSubtitles ? 55.0 : 40.0);
+        cardHeight - (preferences.showCardSubtitles ? 60.0 : 46.0);
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
@@ -768,7 +800,7 @@ class _MediaShelfSkeleton extends StatelessWidget {
     final width = posterWidth * preferences.thumbnailScale;
     final cardHeight = posterHeight * preferences.thumbnailScale;
     final artworkHeight =
-        cardHeight - (preferences.showCardSubtitles ? 55.0 : 40.0);
+        cardHeight - (preferences.showCardSubtitles ? 60.0 : 46.0);
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
@@ -1090,6 +1122,51 @@ class _Eyebrow extends StatelessWidget {
       ),
     );
   }
+}
+
+List<_ShelfItem> _mergeContinueWatching({
+  required List<PlaybackCheckpoint>? localHistory,
+  required List<HomeTrackedAnime>? trackedWatching,
+  required Set<int> dismissedIds,
+  required TitleLanguagePreference titlePreference,
+}) {
+  final merged = <_ShelfItem>[];
+  final localAniListIds = <int>{};
+  final localMalIds = <int>{};
+
+  // Recent local playback contains the most useful resume position, so it is
+  // deliberately added first and wins whenever the tracker has the same media
+  // ID. A local checkpoint must not hide unrelated titles from MAL or AniList.
+  for (final checkpoint in localHistory ?? const <PlaybackCheckpoint>[]) {
+    if (checkpoint.completed ||
+        !localAniListIds.add(checkpoint.anilistMediaId)) {
+      continue;
+    }
+    if (checkpoint.malMediaId case final malId?) localMalIds.add(malId);
+    merged.add(_ShelfItem.fromCheckpoint(checkpoint));
+  }
+
+  final seenTrackerIds = <String>{};
+  for (final tracked in trackedWatching ?? const <HomeTrackedAnime>[]) {
+    final aniListId = tracked.anilistId;
+    if (aniListId != null && dismissedIds.contains(aniListId)) continue;
+
+    final matchesLocal = switch (tracked.provider) {
+      TrackingProvider.anilist => localAniListIds.contains(
+        aniListId ?? tracked.tracked.mediaId,
+      ),
+      TrackingProvider.myAnimeList => localMalIds.contains(
+        tracked.tracked.mediaId,
+      ),
+    };
+    if (matchesLocal) continue;
+
+    final trackerKey = '${tracked.provider.name}:${tracked.tracked.mediaId}';
+    if (!seenTrackerIds.add(trackerKey)) continue;
+    merged.add(_ShelfItem.fromTracked(tracked, titlePreference));
+  }
+
+  return merged.isEmpty ? _HomeScreenState._connectTracking : merged;
 }
 
 class _ShelfItem {

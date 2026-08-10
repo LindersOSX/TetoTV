@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +25,11 @@ void main() {
     await controller.setShowPosterMetadata(false);
     await controller.setShowCardSubtitles(false);
     await controller.setTrackerUpdateThreshold(TrackerUpdateThreshold.halfway);
+    await controller.setInterfaceMode(InterfaceMode.phone);
+    await controller.setInterfaceScale(.8);
+    await controller.setNavigationSounds(false);
+    await controller.setClickSounds(false);
+    await controller.setDefaultLandingPage(LandingPage.myList);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
@@ -42,6 +49,11 @@ void main() {
       restored.state.trackerUpdateThreshold,
       TrackerUpdateThreshold.halfway,
     );
+    expect(restored.state.interfaceMode, InterfaceMode.phone);
+    expect(restored.state.interfaceScale, .8);
+    expect(restored.state.navigationSounds, isFalse);
+    expect(restored.state.clickSounds, isFalse);
+    expect(restored.state.defaultLandingPage, LandingPage.myList);
   });
 
   test('existing users retain both stream sources by default', () async {
@@ -57,6 +69,10 @@ void main() {
     expect(controller.state.autoSkipIntros, isFalse);
     expect(controller.state.autoSkipOutros, isFalse);
     expect(controller.state.homeLayout, HomeLayout.cinematic);
+    expect(controller.state.interfaceMode, InterfaceMode.automatic);
+    expect(controller.state.navigationSounds, isTrue);
+    expect(controller.state.clickSounds, isTrue);
+    expect(controller.state.defaultLandingPage, LandingPage.home);
     expect(controller.state.showMyList, isTrue);
     expect(controller.state.showDiscover, isTrue);
     expect(controller.state.showCalendar, isTrue);
@@ -65,6 +81,86 @@ void main() {
       TrackerUpdateThreshold.nearlyFinished,
     );
   });
+
+  test('hidden navigation route cannot remain the landing page', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.setDefaultLandingPage(LandingPage.search);
+    expect(controller.state.defaultLandingPage, LandingPage.search);
+    await controller.setShowSearch(false);
+
+    expect(controller.state.showSearch, isFalse);
+    expect(controller.state.defaultLandingPage, LandingPage.home);
+    expect(controller.takeInitialLandingRoute(), isNull);
+  });
+
+  test('configured landing page is consumed only once per launch', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+    await controller.setDefaultLandingPage(LandingPage.calendar);
+
+    expect(controller.takeInitialLandingRoute(), '/calendar');
+    expect(controller.takeInitialLandingRoute(), isNull);
+  });
+
+  test('one failed storage read does not discard other preferences', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+      readValue: (key) async {
+        if (key == 'appearance_caption_text_size') {
+          throw StateError('one encrypted value is unavailable');
+        }
+        return const {
+          'streaming_web_enabled': 'false',
+          'audio_navigation_sounds': 'false',
+          'navigation_default_landing_page': 'search',
+        }[key];
+      },
+    );
+
+    await controller.load();
+
+    expect(controller.state.captionTextSize, 34);
+    expect(controller.state.webStreamsEnabled, isFalse);
+    expect(controller.state.navigationSounds, isFalse);
+    expect(controller.state.defaultLandingPage, LandingPage.search);
+  });
+
+  test(
+    'startup load is single-flight and preserves an early mutation',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final gate = Completer<void>();
+      var reads = 0;
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+        readValue: (key) async {
+          reads++;
+          await gate.future;
+          return const {
+            'streaming_web_enabled': 'false',
+            'audio_navigation_sounds': 'false',
+          }[key];
+        },
+      );
+
+      final firstLoad = controller.load();
+      final duplicateLoad = controller.load();
+      await controller.setWebStreamsEnabled(true);
+      gate.complete();
+      await Future.wait([firstLoad, duplicateLoad]);
+
+      expect(reads, 28, reason: 'duplicate startup loads must be coalesced');
+      expect(controller.state.webStreamsEnabled, isTrue);
+      expect(controller.state.navigationSounds, isFalse);
+    },
+  );
 
   test('tracker threshold only completes a whole episode when crossed', () {
     const duration = Duration(minutes: 24);

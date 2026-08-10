@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,9 +50,24 @@ void main() {
 
   test('prefers the universal APK across TV device ABIs', () {
     const assets = [
-      AppReleaseAsset(name: 'TetoTV-universal.apk', apiUrl: 'u', size: 1),
-      AppReleaseAsset(name: 'TetoTV-arm64-v8a.apk', apiUrl: 'a64', size: 1),
-      AppReleaseAsset(name: 'TetoTV-armeabi-v7a.apk', apiUrl: 'a32', size: 1),
+      AppReleaseAsset(
+        name: 'TetoTV-universal.apk',
+        apiUrl: 'u',
+        publicUrl: 'pu',
+        size: 1,
+      ),
+      AppReleaseAsset(
+        name: 'TetoTV-arm64-v8a.apk',
+        apiUrl: 'a64',
+        publicUrl: 'pa64',
+        size: 1,
+      ),
+      AppReleaseAsset(
+        name: 'TetoTV-armeabi-v7a.apk',
+        apiUrl: 'a32',
+        publicUrl: 'pa32',
+        size: 1,
+      ),
     ];
     expect(selectApkAsset(assets, const ['arm64-v8a']).apiUrl, 'u');
     expect(selectApkAsset(assets, const ['armeabi-v7a']).apiUrl, 'u');
@@ -59,12 +76,183 @@ void main() {
 
   test('selects a named ABI asset only when universal is unavailable', () {
     const assets = [
-      AppReleaseAsset(name: 'TetoTV-arm64.apk', apiUrl: 'a64', size: 1),
-      AppReleaseAsset(name: 'TetoTV-fire-tv-32bit.apk', apiUrl: 'a32', size: 1),
+      AppReleaseAsset(
+        name: 'TetoTV-arm64.apk',
+        apiUrl: 'a64',
+        publicUrl: 'pa64',
+        size: 1,
+      ),
+      AppReleaseAsset(
+        name: 'TetoTV-fire-tv-32bit.apk',
+        apiUrl: 'a32',
+        publicUrl: 'pa32',
+        size: 1,
+      ),
     ];
     expect(selectApkAsset(assets, const ['arm64-v8a']).apiUrl, 'a64');
     expect(selectApkAsset(assets, const ['armeabi-v7a']).apiUrl, 'a32');
   });
+
+  test('GitHub public-release checks omit Authorization', () async {
+    String? authorization;
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            authorization = options.headers['Authorization']?.toString();
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: _githubReleasePayload,
+              ),
+            );
+          },
+        ),
+      );
+
+    final release = await GitHubAppReleaseSource(
+      dio,
+    ).latest(token: '', deviceAbis: const ['arm64-v8a']);
+
+    expect(authorization, isNull);
+    expect(release.asset.publicUrl, 'https://example.com/TetoTV.apk');
+  });
+
+  test('GitHub private-release checks use the optional saved token', () async {
+    String? authorization;
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            authorization = options.headers['Authorization']?.toString();
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: _githubReleasePayload,
+              ),
+            );
+          },
+        ),
+      );
+
+    await GitHubAppReleaseSource(
+      dio,
+    ).latest(token: 'private-read-token', deviceAbis: const ['arm64-v8a']);
+
+    expect(authorization, 'Bearer private-read-token');
+  });
+
+  test('stale private token retries the public release anonymously', () async {
+    final authorizations = <String?>[];
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            final authorization = options.headers['Authorization']?.toString();
+            authorizations.add(authorization);
+            if (authorization != null) {
+              handler.reject(
+                DioException.badResponse(
+                  statusCode: 404,
+                  requestOptions: options,
+                  response: Response<void>(
+                    requestOptions: options,
+                    statusCode: 404,
+                  ),
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: _githubReleasePayload,
+              ),
+            );
+          },
+        ),
+      );
+
+    final release = await GitHubAppReleaseSource(
+      dio,
+    ).latest(token: 'expired-private-token', deviceAbis: const ['arm64-v8a']);
+
+    expect(release.version, '1.7.3');
+    expect(authorizations, ['Bearer expired-private-token', null]);
+  });
+
+  test('public release downloads use the public URL without a token', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'tetotv-public-download-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final adapter = _RecordingDownloadAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+
+    await GitHubAppReleaseSource(dio).download(
+      release: _downloadRelease,
+      token: '',
+      destination: destination,
+      onProgress: (_, _) {},
+    );
+
+    expect(adapter.authorizations, [null]);
+    expect(adapter.uris.single.toString(), _downloadRelease.asset.publicUrl);
+    expect(await File(destination).readAsBytes(), adapter.payload);
+  });
+
+  test('private release downloads use the optional read-only token', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'tetotv-private-download-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final adapter = _RecordingDownloadAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+
+    await GitHubAppReleaseSource(dio).download(
+      release: _downloadRelease,
+      token: 'private-read-token',
+      destination: destination,
+      onProgress: (_, _) {},
+    );
+
+    expect(adapter.authorizations, ['Bearer private-read-token']);
+    expect(adapter.uris.single.toString(), _downloadRelease.asset.apiUrl);
+    expect(await File(destination).readAsBytes(), adapter.payload);
+  });
+
+  test(
+    'stale private download access retries the public URL cleanly',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'tetotv-stale-download-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final adapter = _RecordingDownloadAdapter(rejectAuthenticated: true);
+      final dio = Dio()..httpClientAdapter = adapter;
+      final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+      await File(destination).writeAsBytes(const [9, 9, 9]);
+
+      await GitHubAppReleaseSource(dio).download(
+        release: _downloadRelease,
+        token: 'expired-private-token',
+        destination: destination,
+        onProgress: (_, _) {},
+      );
+
+      expect(adapter.authorizations, ['Bearer expired-private-token', null]);
+      expect(adapter.uris.map((uri) => uri.toString()), [
+        _downloadRelease.asset.apiUrl,
+        _downloadRelease.asset.publicUrl,
+      ]);
+      expect(await File(destination).readAsBytes(), adapter.payload);
+    },
+  );
 
   test('downloads a newer private release and opens the installer', () async {
     final directory = await Directory.systemTemp.createTemp('tetotv-update-');
@@ -97,12 +285,12 @@ void main() {
     expect(File(installedPath!).lengthSync(), 2 * 1024 * 1024);
   });
 
-  test('manual checks explain that a private token is required', () async {
+  test('fresh installs check public releases without a token', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = AppUpdateController(
       storage,
       _FakeReleaseSource(),
-      () async => '1.7.2',
+      () async => '1.7.3',
       () async => const ['arm64-v8a'],
       Directory.systemTemp.createTemp,
       (_) async => 'launched',
@@ -110,8 +298,8 @@ void main() {
 
     await controller.checkForUpdates();
 
-    expect(controller.state.phase, AppUpdatePhase.error);
-    expect(controller.state.message, contains('read-only GitHub token'));
+    expect(controller.state.phase, AppUpdatePhase.upToDate);
+    expect(controller.state.hasAccessToken, isFalse);
   });
 
   test('blocks an incompatible APK before opening Android installer', () async {
@@ -144,8 +332,10 @@ void main() {
     expect(installerOpened, isFalse);
   });
 
-  test('imports a build-provisioned token into encrypted storage', () async {
-    FlutterSecureStorage.setMockInitialValues({});
+  test('preserves an optional private-repository token across load', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      githubUpdateTokenStorageKey: 'user-entered-read-token',
+    });
     final source = _FakeReleaseSource();
     final controller = AppUpdateController(
       storage,
@@ -154,24 +344,25 @@ void main() {
       () async => const ['arm64-v8a'],
       Directory.systemTemp.createTemp,
       (_) async => 'launched',
-      bundledAccessToken: 'bundled-read-token',
     );
 
     await controller.load();
     await controller.checkForUpdates();
 
     expect(controller.state.hasAccessToken, isTrue);
-    expect(source.requestedToken, 'bundled-read-token');
+    expect(source.requestedToken, 'user-entered-read-token');
     expect(
       await storage.read(key: githubUpdateTokenStorageKey),
-      'bundled-read-token',
+      'user-entered-read-token',
     );
   });
 
   test(
-    'removing a provisioned token remains respected after restart',
+    'removing an optional private token remains respected after restart',
     () async {
-      FlutterSecureStorage.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({
+        githubUpdateTokenStorageKey: 'user-entered-read-token',
+      });
       AppUpdateController createController() => AppUpdateController(
         storage,
         _FakeReleaseSource(),
@@ -179,7 +370,6 @@ void main() {
         () async => const ['arm64-v8a'],
         Directory.systemTemp.createTemp,
         (_) async => 'launched',
-        bundledAccessToken: 'bundled-read-token',
       );
 
       final first = createController();
@@ -189,10 +379,7 @@ void main() {
       await restarted.load();
 
       expect(restarted.state.hasAccessToken, isFalse);
-      expect(
-        await storage.read(key: bundledGitHubUpdateTokenDisabledStorageKey),
-        'true',
-      );
+      expect(await storage.read(key: githubUpdateTokenStorageKey), isNull);
     },
   );
 
@@ -303,6 +490,71 @@ void main() {
   });
 }
 
+const _githubReleasePayload = <String, dynamic>{
+  'tag_name': 'v1.7.3',
+  'name': 'TetoTV 1.7.3',
+  'body': 'Update notes',
+  'assets': [
+    {
+      'name': 'TetoTV-v1.7.3-universal.apk',
+      'url': 'https://api.github.com/assets/1',
+      'browser_download_url': 'https://example.com/TetoTV.apk',
+      'size': 2097152,
+    },
+  ],
+};
+
+const _downloadRelease = AppReleaseInfo(
+  tagName: 'v1.7.3',
+  version: '1.7.3',
+  name: 'TetoTV 1.7.3',
+  asset: AppReleaseAsset(
+    name: 'TetoTV-v1.7.3-universal.apk',
+    apiUrl: 'https://api.github.com/repos/example/releases/assets/1',
+    publicUrl: 'https://github.com/example/releases/download/app.apk',
+    size: 4,
+  ),
+);
+
+class _RecordingDownloadAdapter implements HttpClientAdapter {
+  _RecordingDownloadAdapter({this.rejectAuthenticated = false});
+
+  final bool rejectAuthenticated;
+  final payload = const [1, 2, 3, 4];
+  final authorizations = <String?>[];
+  final uris = <Uri>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final authorization = options.headers['Authorization']?.toString();
+    authorizations.add(authorization);
+    uris.add(options.uri);
+    if (rejectAuthenticated && authorization != null) {
+      return ResponseBody.fromBytes(
+        const [9, 9],
+        404,
+        headers: {
+          Headers.contentLengthHeader: const ['2'],
+        },
+      );
+    }
+    return ResponseBody.fromBytes(
+      payload,
+      200,
+      headers: {
+        Headers.contentLengthHeader: [payload.length.toString()],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 class _FakeReleaseSource implements AppReleaseSource {
   _FakeReleaseSource({this.throwOnDownload = false});
 
@@ -326,6 +578,7 @@ class _FakeReleaseSource implements AppReleaseSource {
       asset: AppReleaseAsset(
         name: 'TetoTV-1.7.3-arm64-v8a.apk',
         apiUrl: 'asset',
+        publicUrl: 'https://example.com/TetoTV.apk',
         size: 2 * 1024 * 1024,
       ),
     );

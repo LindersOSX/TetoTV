@@ -11,11 +11,11 @@ final debridTokenServiceProvider = Provider<DebridTokenService>(
 
 /// Returns a usable access token for a configured debrid service.
 ///
-/// TorBox API tokens do not expire. Real-Debrid device-flow access tokens do,
-/// so every playback entry point must come through this service instead of
-/// reading secure storage directly. Refreshes are single-flight to prevent a
-/// repeated remote-control activation from rotating the same refresh token
-/// more than once.
+/// Direct API keys for TorBox, AllDebrid, and Premiumize do not expire on a
+/// schedule known to TetoTV. Real-Debrid device-flow access tokens do, so every
+/// playback entry point must come through this service instead of reading
+/// secure storage directly. Refreshes are single-flight to prevent repeated
+/// remote-control activation from rotating the same refresh token twice.
 class DebridTokenService {
   DebridTokenService(
     this._storage, {
@@ -31,7 +31,7 @@ class DebridTokenService {
   Future<String?>? _realDebridRequest;
 
   Future<String?> accessToken(DebridService service) {
-    if (service == DebridService.torBox) {
+    if (service != DebridService.realDebrid) {
       return _readToken(service.tokenStorageKey);
     }
 

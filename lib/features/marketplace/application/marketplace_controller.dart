@@ -184,24 +184,6 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     return null;
   }
 
-  Future<void> restoreDefaultRepository() async {
-    final existing = state.repositories
-        .where((item) => item.url == defaultMarketplaceRepositoryUrl)
-        .firstOrNull;
-    if (existing != null) {
-      if (!existing.enabled) await setRepositoryEnabled(existing, true);
-      return;
-    }
-    final repository = AddonRepository(
-      url: defaultMarketplaceRepositoryUrl,
-      isDefault: true,
-      updatedAt: DateTime.now(),
-    );
-    await _store.saveRepository(repository);
-    state = state.copyWith(repositories: [repository, ...state.repositories]);
-    await refresh();
-  }
-
   Future<void> setRepositoryEnabled(
     AddonRepository repository,
     bool enabled,

@@ -6,11 +6,8 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/torbox_client.dart';
-import 'package:anime_tv/features/streaming/data/torbox_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -439,16 +436,11 @@ class _NativeMedia3PlayerScreenState
     if (!mounted) return null;
     if (token == null || token.isEmpty) return null;
     final source = SingleReleaseSource(release);
-    final resolver = switch (debridService) {
-      DebridService.realDebrid => RealDebridStreamResolver(
-        RealDebridClient(token: token),
-        source,
-      ),
-      DebridService.torBox => TorBoxStreamResolver(
-        TorBoxClient(token: token),
-        source,
-      ),
-    };
+    final resolver = createDebridStreamResolver(
+      service: debridService,
+      token: token,
+      source: source,
+    );
     await for (final resolution in resolver.resolve(episode)) {
       if (!mounted) return null;
       if (resolution is StreamReady) return resolution;

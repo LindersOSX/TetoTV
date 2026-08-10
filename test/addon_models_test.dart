@@ -1,8 +1,10 @@
+import 'dart:io';
+
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('accepts a compatible Seanime JavaScript stream provider', () {
+  test('accepts a compatible JavaScript stream provider', () {
     final addon = MarketplaceAddon.tryParse({
       'id': 'provider.test',
       'name': 'Provider Test',
@@ -13,7 +15,7 @@ void main() {
       'type': 'onlinestream-provider',
       'language': 'javascript',
       'lang': 'en',
-    }, repositoryUrl: defaultMarketplaceRepositoryUrl);
+    }, repositoryUrl: 'https://example.com/marketplace.json');
 
     expect(addon, isNotNull);
     expect(addon!.isCompatible, isTrue);
@@ -26,6 +28,10 @@ void main() {
     expect(safePublicHttpsUri('https://10.0.0.1/catalog.json'), isNull);
     expect(safePublicHttpsUri('https://192.168.1.20/catalog.json'), isNull);
     expect(
+      safePublicHttpsUri('https://user:password@example.com/catalog.json'),
+      isNull,
+    );
+    expect(
       MarketplaceAddon.tryParse({
         'id': '../bad',
         'name': 'Bad',
@@ -33,6 +39,22 @@ void main() {
       }, repositoryUrl: 'https://example.com/catalog.json'),
       isNull,
     );
+  });
+
+  test('pinned client rejects a DNS public-to-private rebind', () async {
+    var lookups = 0;
+    Future<List<InternetAddress>> rebindingLookup(String _) async {
+      lookups += 1;
+      return [InternetAddress(lookups == 1 ? '93.184.216.34' : '127.0.0.1')];
+    }
+
+    final uri = Uri.parse('https://rebinding.example/catalog.json');
+    await validatePublicNetworkTarget(uri, lookup: rebindingLookup);
+    final client = createPinnedPublicHttpsClient(lookup: rebindingLookup);
+    addTearDown(() => client.close(force: true));
+
+    await expectLater(client.getUrl(uri), throwsA(isA<FormatException>()));
+    expect(lookups, 2);
   });
 
   test('rejects non-public IPv4 and IPv6 literal targets', () {
@@ -86,35 +108,32 @@ void main() {
     expect(addon!.inlinePayload, 'class Provider {}');
   });
 
-  test('retains current Seanime marketplace user-config defaults', () {
-    // Shape taken from the GojoWtf manifest referenced by the default
-    // ASleepyDrink/Seanime-Stuff marketplace.
+  test('retains marketplace user-config defaults', () {
+    // A third-party marketplace may omit the optional version field.
     final addon = MarketplaceAddon.tryParse({
-      'id': 'gojowtf',
-      'name': 'GojoWtf',
-      'manifestURI':
-          'https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json',
-      'payloadURI':
-          'https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/GojoWtf/provider.ts',
+      'id': 'provider-config',
+      'name': 'Configured provider',
+      'manifestURI': 'https://example.com/provider/manifest.json',
+      'payloadURI': 'https://example.com/provider/provider.ts',
       'type': 'onlinestream-provider',
       'language': 'typescript',
       'lang': 'en',
       'userConfig': {
         'requiredConfig': false,
         'fields': [
-          {'name': 'api', 'default': 'https://animetsu.net'},
-          {'name': 'blobDomain', 'default': 'https://swiftstream.top'},
+          {'name': 'api', 'default': 'https://api.example.com'},
+          {'name': 'blobDomain', 'default': 'https://media.example.com'},
         ],
       },
-    }, repositoryUrl: defaultMarketplaceRepositoryUrl);
+    }, repositoryUrl: 'https://example.com/marketplace.json');
 
     expect(addon!.userConfigDefaults, {
-      'api': 'https://animetsu.net',
-      'blobDomain': 'https://swiftstream.top',
+      'api': 'https://api.example.com',
+      'blobDomain': 'https://media.example.com',
     });
     final restored = MarketplaceAddon.tryParse(
       addon.toJson(),
-      repositoryUrl: defaultMarketplaceRepositoryUrl,
+      repositoryUrl: 'https://example.com/marketplace.json',
     );
     expect(restored!.userConfigDefaults, addon.userConfigDefaults);
   });

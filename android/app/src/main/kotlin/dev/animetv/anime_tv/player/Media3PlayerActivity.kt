@@ -1142,6 +1142,32 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         dialog.setOnShowListener {
             val continueButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
             val exitButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val horizontalPadding = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                18f,
+                resources.displayMetrics,
+            ).toInt()
+            val verticalPadding = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                11f,
+                resources.displayMetrics,
+            ).toInt()
+            dialog.findViewById<TextView>(android.R.id.message)?.apply {
+                setTextColor(Color.WHITE)
+                alpha = 0.92f
+            }
+            continueButton?.apply {
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setBackgroundResource(R.drawable.tetotv_dialog_neutral_button)
+                setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            }
+            exitButton?.apply {
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setBackgroundResource(R.drawable.tetotv_dialog_danger_button)
+                setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            }
             continueButton?.setOnKeyListener { _, keyCode, event ->
                 if (
                     event.action == KeyEvent.ACTION_DOWN &&

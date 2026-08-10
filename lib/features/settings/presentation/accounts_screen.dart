@@ -4,11 +4,13 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
@@ -17,7 +19,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-enum _SettingsArea { customize, streaming, tracking, appearance, system }
+enum _SettingsArea { customize, streaming, tracking, system }
 
 class AccountsScreen extends ConsumerStatefulWidget {
   const AccountsScreen({super.key});
@@ -30,6 +32,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   _SettingsArea _activeArea = _SettingsArea.customize;
   final _tokenController = TextEditingController();
   final _torBoxTokenController = TextEditingController();
+  final _allDebridTokenController = TextEditingController();
+  final _premiumizeTokenController = TextEditingController();
   final _githubTokenController = TextEditingController();
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
@@ -49,7 +53,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _marketplaceFocus = FocusNode(
     debugLabel: 'accounts.streaming.marketplace',
   );
-  final _appearanceFocus = FocusNode(debugLabel: 'accounts.appearance.first');
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
   );
@@ -66,6 +69,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _torBoxActionFocus = FocusNode(debugLabel: 'accounts.torbox.action');
   final _torBoxTokenFocus = FocusNode(debugLabel: 'accounts.torbox.token');
   final _torBoxSaveFocus = FocusNode(debugLabel: 'accounts.torbox.save');
+  final _allDebridActionFocus = FocusNode(
+    debugLabel: 'accounts.alldebrid.action',
+  );
+  final _allDebridTokenFocus = FocusNode(
+    debugLabel: 'accounts.alldebrid.token',
+  );
+  final _allDebridSaveFocus = FocusNode(debugLabel: 'accounts.alldebrid.save');
+  final _premiumizeActionFocus = FocusNode(
+    debugLabel: 'accounts.premiumize.action',
+  );
+  final _premiumizeTokenFocus = FocusNode(
+    debugLabel: 'accounts.premiumize.token',
+  );
+  final _premiumizeSaveFocus = FocusNode(
+    debugLabel: 'accounts.premiumize.save',
+  );
   final _anilistFocus = FocusNode(debugLabel: 'accounts.anilist');
   final _malFocus = FocusNode(debugLabel: 'accounts.myanimelist');
   final _anilistTokenFocus = FocusNode(debugLabel: 'accounts.anilist.token');
@@ -78,6 +97,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.updates.automatic',
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
+  final _legalFocus = FocusNode(debugLabel: 'accounts.system.legal');
   final _areaFocusNodes = {
     for (final area in _SettingsArea.values)
       area: FocusNode(debugLabel: 'accounts.area.${area.name}'),
@@ -91,6 +111,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   void dispose() {
     _tokenController.dispose();
     _torBoxTokenController.dispose();
+    _allDebridTokenController.dispose();
+    _premiumizeTokenController.dispose();
     _githubTokenController.dispose();
     _backFocus.dispose();
     _titleLanguageFocus.dispose();
@@ -100,7 +122,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _debridStreamsFocus.dispose();
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
-    _appearanceFocus.dispose();
     _customizationFocus.dispose();
     _setupFocus.dispose();
     _calibrationFocus.dispose();
@@ -111,6 +132,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _torBoxActionFocus.dispose();
     _torBoxTokenFocus.dispose();
     _torBoxSaveFocus.dispose();
+    _allDebridActionFocus.dispose();
+    _allDebridTokenFocus.dispose();
+    _allDebridSaveFocus.dispose();
+    _premiumizeActionFocus.dispose();
+    _premiumizeTokenFocus.dispose();
+    _premiumizeSaveFocus.dispose();
     _anilistFocus.dispose();
     _malFocus.dispose();
     _anilistTokenFocus.dispose();
@@ -121,6 +148,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _githubSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
+    _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
       node.dispose();
     }
@@ -137,21 +165,32 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
     final preferences = ref.read(settingsPreferencesProvider);
-    final selectedDebridAction =
-        preferences.debridProvider == DebridService.realDebrid
-        ? _debridConnectFocus
-        : _torBoxActionFocus;
-    final selectedDebridLast =
-        preferences.debridProvider == DebridService.realDebrid
-        ? _tokenSaveFocus
-        : _torBoxSaveFocus;
+    final selectedDebridAction = switch (preferences.debridProvider) {
+      DebridService.realDebrid => _debridConnectFocus,
+      DebridService.torBox => _torBoxActionFocus,
+      DebridService.allDebrid => _allDebridActionFocus,
+      DebridService.premiumize => _premiumizeActionFocus,
+    };
+    final selectedDebridToken = switch (preferences.debridProvider) {
+      DebridService.realDebrid => _tokenFocus,
+      DebridService.torBox => _torBoxTokenFocus,
+      DebridService.allDebrid => _allDebridTokenFocus,
+      DebridService.premiumize => _premiumizeTokenFocus,
+    };
+    final selectedDebridLast = switch (preferences.debridProvider) {
+      DebridService.realDebrid => _tokenSaveFocus,
+      DebridService.torBox => _torBoxSaveFocus,
+      DebridService.allDebrid => _allDebridSaveFocus,
+      DebridService.premiumize => _premiumizeSaveFocus,
+    };
     final selectedTrackingAction =
         preferences.trackingProvider == TrackingProvider.anilist
         ? _anilistFocus
         : _malFocus;
     FocusNode? target;
     final shelfNodes = [
-      for (final shelf in HomeShelf.values) _shelfFocusNodes[shelf]!,
+      for (final shelf in ref.read(homeShelfOrderProvider))
+        _shelfFocusNodes[shelf]!,
     ];
     final shelfIndex = current == null ? -1 : shelfNodes.indexOf(current);
     final areaNodes = [
@@ -173,23 +212,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           _SettingsArea.customize => shelfNodes.first,
           _SettingsArea.streaming => _debridProviderFocus,
           _SettingsArea.tracking => _trackingProviderFocus,
-          _SettingsArea.appearance => _appearanceFocus,
           _SettingsArea.system => _setupFocus,
         };
       }
     } else if (shelfIndex >= 0) {
-      if (key == LogicalKeyboardKey.arrowLeft && shelfIndex > 0) {
-        target = shelfNodes[shelfIndex - 1];
-      }
-      if (key == LogicalKeyboardKey.arrowRight &&
-          shelfIndex < shelfNodes.length - 1) {
-        target = shelfNodes[shelfIndex + 1];
-      }
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _titleLanguageFocus;
+        target = shelfIndex > 0
+            ? shelfNodes[shelfIndex - 1]
+            : _areaFocusNodes[_SettingsArea.customize];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _customizationFocus;
+        target = shelfIndex < shelfNodes.length - 1
+            ? shelfNodes[shelfIndex + 1]
+            : _customizationFocus;
       }
     }
 
@@ -212,50 +247,44 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _areaFocusNodes[_SettingsArea.streaming];
       }
       if (key == LogicalKeyboardKey.arrowDown) target = selectedDebridAction;
-    } else if (current == _debridConnectFocus) {
+    } else if (current == selectedDebridAction) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
       if (key == LogicalKeyboardKey.arrowUp) target = _debridProviderFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _tokenFocus.context == null
+        target = selectedDebridToken.context == null
             ? _debridStreamsFocus
-            : _tokenFocus;
+            : selectedDebridToken;
       }
-    } else if (current == _tokenFocus) {
-      if (key == LogicalKeyboardKey.arrowRight) target = _tokenSaveFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _debridConnectFocus;
-    } else if (current == _tokenSaveFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _tokenFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _debridConnectFocus;
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = _debridStreamsFocus;
-      }
-    } else if (current == _torBoxActionFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _debridProviderFocus;
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = _torBoxTokenFocus.context == null
-            ? _debridStreamsFocus
-            : _torBoxTokenFocus;
-      }
-    } else if (current == _torBoxTokenFocus) {
-      if (key == LogicalKeyboardKey.arrowRight) target = _torBoxSaveFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _torBoxActionFocus;
-    } else if (current == _torBoxSaveFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _torBoxTokenFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _torBoxActionFocus;
+    } else if (current == selectedDebridToken) {
+      if (key == LogicalKeyboardKey.arrowRight) target = selectedDebridLast;
+      if (key == LogicalKeyboardKey.arrowUp) target = selectedDebridAction;
+    } else if (current == selectedDebridLast) {
+      if (key == LogicalKeyboardKey.arrowLeft) target = selectedDebridToken;
+      if (key == LogicalKeyboardKey.arrowUp) target = selectedDebridAction;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _debridStreamsFocus;
       }
     } else if (current == _debridStreamsFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = selectedDebridLast;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = selectedDebridLast.context == null
+            ? selectedDebridAction
+            : selectedDebridLast;
+      }
       if (key == LogicalKeyboardKey.arrowRight) target = _webStreamsFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _webStreamsFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = selectedDebridLast;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = selectedDebridLast.context == null
+            ? selectedDebridAction
+            : selectedDebridLast;
+      }
       if (key == LogicalKeyboardKey.arrowLeft) target = _debridStreamsFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _marketplaceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _trackingProviderFocus;
+      // Streaming is the end of this tab. Keep focus here instead of pointing
+      // at a tracking control which is not mounted while this tab is active.
+      if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _trackingProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.tracking];
@@ -337,7 +366,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _automaticUpdatesFocus;
       }
     } else if (current == _githubSaveFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _malSaveFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _githubTokenFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _checkUpdatesFocus;
     } else if (current == _automaticUpdatesFocus) {
@@ -348,6 +377,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) {
         target = _automaticUpdatesFocus;
       }
+      if (key == LogicalKeyboardKey.arrowDown) target = _legalFocus;
+    } else if (current == _legalFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
     }
 
     if (target == null || target.context == null) {
@@ -356,7 +388,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     target.requestFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final targetContext = target?.context;
-      if (targetContext != null) {
+      if (mounted && targetContext != null && targetContext.mounted) {
         Scrollable.ensureVisible(
           targetContext,
           duration: const Duration(milliseconds: 160),
@@ -371,9 +403,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   Widget build(BuildContext context) {
     final debrid = ref.watch(realDebridSettingsControllerProvider);
     final torBox = ref.watch(torBoxSettingsControllerProvider);
+    final allDebrid = ref.watch(allDebridSettingsControllerProvider);
+    final premiumize = ref.watch(premiumizeSettingsControllerProvider);
     final tracking = ref.watch(trackingAccountsControllerProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final homeShelves = ref.watch(homeShelfPreferencesProvider);
+    final homeShelfOrder = ref.watch(homeShelfOrderProvider);
     final appUpdate = ref.watch(appUpdateControllerProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
@@ -412,7 +447,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ),
                             ),
                             const Icon(
-                              Icons.lock_outline_rounded,
+                              Icons.lock_rounded,
                               size: 18,
                               color: AppColors.cyan,
                             ),
@@ -460,7 +495,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const Tooltip(
                         message: 'Secrets stay encrypted on this device',
                         child: Icon(
-                          Icons.lock_outline_rounded,
+                          Icons.lock_rounded,
                           size: 18,
                           color: AppColors.cyan,
                         ),
@@ -494,73 +529,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     if (_activeArea == _SettingsArea.customize) ...[
                       const _SectionHeader(
                         icon: Icons.tune_rounded,
-                        title: 'CUSTOMIZE TETOTV',
+                        title: 'APPEARANCE & NAVIGATION',
                         subtitle:
-                            'Choose navigation shortcuts, Home layout, and visible content.',
+                            'Personalize layout, Home content, controls, captions, and sounds.',
                       ),
                       const SizedBox(height: 8),
-                      _Panel(
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final label = const SizedBox(
-                              width: 150,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'HOME SHELVES',
-                                    style: TextStyle(
-                                      color: AppColors.accentBright,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    'Choose what appears on Home',
-                                    style: TextStyle(
-                                      color: AppColors.textMuted,
-                                      fontSize: 9,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                            final toggles = Wrap(
-                              spacing: 7,
-                              runSpacing: 7,
-                              children: [
-                                for (final shelf in HomeShelf.values)
-                                  _ShelfToggle(
-                                    shelf: shelf,
-                                    enabled: homeShelves.contains(shelf),
-                                    focusNode: _shelfFocusNodes[shelf]!,
-                                    onPressed: () => ref
-                                        .read(
-                                          homeShelfPreferencesProvider.notifier,
-                                        )
-                                        .toggle(shelf),
-                                  ),
-                              ],
-                            );
-                            if (constraints.maxWidth < 600) {
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  label,
-                                  const SizedBox(height: 10),
-                                  toggles,
-                                ],
-                              );
-                            }
-                            return Row(
-                              children: [
-                                label,
-                                Expanded(child: toggles),
-                              ],
-                            );
-                          },
-                        ),
+                      _HomeShelfOrganizer(
+                        order: homeShelfOrder,
+                        enabled: homeShelves,
+                        focusNodes: _shelfFocusNodes,
+                        onToggle: (shelf) => ref
+                            .read(homeShelfPreferencesProvider.notifier)
+                            .toggle(shelf),
+                        onMove: (shelf, offset) => ref
+                            .read(homeShelfOrderProvider.notifier)
+                            .move(shelf, offset),
                       ),
                       const SizedBox(height: 10),
                       _CustomizationPanel(
@@ -569,6 +552,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           settingsPreferencesProvider.notifier,
                         ),
                         firstFocusNode: _customizationFocus,
+                        onReset: () async {
+                          final controller = ref.read(
+                            settingsPreferencesProvider.notifier,
+                          );
+                          await controller.resetCustomization();
+                          await controller.resetAppearance();
+                          await ref
+                              .read(homeShelfPreferencesProvider.notifier)
+                              .reset();
+                          await ref
+                              .read(homeShelfOrderProvider.notifier)
+                              .reset();
+                        },
                       ),
                       const SizedBox(height: 10),
                     ],
@@ -590,9 +586,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               value: service,
                               label: service.displayName,
                               detail:
-                                  (service == DebridService.realDebrid
-                                      ? debrid.hasSavedToken
-                                      : torBox.hasSavedToken)
+                                  switch (service) {
+                                    DebridService.realDebrid =>
+                                      debrid.hasSavedToken,
+                                    DebridService.torBox =>
+                                      torBox.hasSavedToken,
+                                    DebridService.allDebrid =>
+                                      allDebrid.hasSavedToken,
+                                    DebridService.premiumize =>
+                                      premiumize.hasSavedToken,
+                                  }
                                   ? 'Connected'
                                   : 'Not connected',
                             ),
@@ -602,9 +605,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             .setDebridProvider,
                       ),
                       const SizedBox(height: 8),
-                      if (preferences.debridProvider ==
-                          DebridService.realDebrid)
-                        _RealDebridPanel(
+                      switch (preferences.debridProvider) {
+                        DebridService.realDebrid => _RealDebridPanel(
                           state: debrid,
                           tokenController: _tokenController,
                           onSave: () async {
@@ -625,9 +627,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           connectFocusNode: _debridConnectFocus,
                           tokenFocusNode: _tokenFocus,
                           saveFocusNode: _tokenSaveFocus,
-                        )
-                      else
-                        _TorBoxPanel(
+                        ),
+                        DebridService.torBox => _TorBoxPanel(
                           state: torBox,
                           tokenController: _torBoxTokenController,
                           onSave: () async {
@@ -649,6 +650,101 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           tokenFocusNode: _torBoxTokenFocus,
                           saveFocusNode: _torBoxSaveFocus,
                         ),
+                        DebridService.allDebrid => _ApiKeyDebridPanel(
+                          title: 'AllDebrid',
+                          icon: Icons.cloud_sync_rounded,
+                          gradient: const [AppColors.accent, AppColors.cyan],
+                          connected: allDebrid.account != null,
+                          hasSavedToken: allDebrid.hasSavedToken,
+                          connectedLabel: 'PREMIUM',
+                          description: allDebrid.account == null
+                              ? 'Authorize with AllDebrid PIN, or enter a personal API key.'
+                              : 'Connected as ${allDebrid.account!.username}. '
+                                    'Torrent files resolve through AllDebrid only.',
+                          errorMessage: allDebrid.errorMessage,
+                          isLoading: allDebrid.isLoading,
+                          tokenController: _allDebridTokenController,
+                          tokenTitle: 'AllDebrid API key',
+                          keyboardTitle: 'Enter AllDebrid API key',
+                          connectLabel: 'Connect by PIN',
+                          connectIcon: Icons.qr_code_rounded,
+                          onSave: () async {
+                            final saved = await ref
+                                .read(
+                                  allDebridSettingsControllerProvider.notifier,
+                                )
+                                .saveAndValidate(
+                                  _allDebridTokenController.text,
+                                );
+                            if (saved) _allDebridTokenController.clear();
+                          },
+                          onDisconnect: () => ref
+                              .read(
+                                allDebridSettingsControllerProvider.notifier,
+                              )
+                              .disconnect(),
+                          onConnect: () async {
+                            await context.push('/pair/alldebrid');
+                            await ref
+                                .read(
+                                  allDebridSettingsControllerProvider.notifier,
+                                )
+                                .load();
+                          },
+                          actionFocusNode: _allDebridActionFocus,
+                          tokenFocusNode: _allDebridTokenFocus,
+                          saveFocusNode: _allDebridSaveFocus,
+                        ),
+                        DebridService.premiumize => _ApiKeyDebridPanel(
+                          title: 'Premiumize',
+                          icon: Icons.cloud_queue_rounded,
+                          gradient: const [
+                            AppColors.cyan,
+                            AppColors.accentBright,
+                          ],
+                          connected: premiumize.account != null,
+                          hasSavedToken: premiumize.hasSavedToken,
+                          connectedLabel: 'PREMIUM',
+                          description: premiumize.account == null
+                              ? 'Enter the API key from your Premiumize account page.'
+                              : 'Connected as customer '
+                                    '${premiumize.account!.customerId}. '
+                                    'Torrent files resolve through Premiumize only.',
+                          errorMessage: premiumize.errorMessage,
+                          isLoading: premiumize.isLoading,
+                          tokenController: _premiumizeTokenController,
+                          tokenTitle: 'Premiumize API key',
+                          keyboardTitle: 'Enter Premiumize API key',
+                          connectLabel: 'Connection help',
+                          connectIcon: Icons.key_rounded,
+                          onSave: () async {
+                            final saved = await ref
+                                .read(
+                                  premiumizeSettingsControllerProvider.notifier,
+                                )
+                                .saveAndValidate(
+                                  _premiumizeTokenController.text,
+                                );
+                            if (saved) _premiumizeTokenController.clear();
+                          },
+                          onDisconnect: () => ref
+                              .read(
+                                premiumizeSettingsControllerProvider.notifier,
+                              )
+                              .disconnect(),
+                          onConnect: () async {
+                            await context.push('/pair/premiumize');
+                            await ref
+                                .read(
+                                  premiumizeSettingsControllerProvider.notifier,
+                                )
+                                .load();
+                          },
+                          actionFocusNode: _premiumizeActionFocus,
+                          tokenFocusNode: _premiumizeTokenFocus,
+                          saveFocusNode: _premiumizeSaveFocus,
+                        ),
+                      },
                       const SizedBox(height: 14),
                       const _SectionHeader(
                         icon: Icons.stream_rounded,
@@ -778,23 +874,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       const SizedBox(height: 10),
                     ],
-                    if (_activeArea == _SettingsArea.appearance) ...[
-                      const _SectionHeader(
-                        icon: Icons.palette_outlined,
-                        title: 'APPEARANCE & CONTROLS',
-                        subtitle:
-                            'Tune captions, card density, interface scale, and seeking.',
-                      ),
-                      const SizedBox(height: 8),
-                      _AppearancePanel(
-                        preferences: preferences,
-                        firstFocusNode: _appearanceFocus,
-                        controller: ref.read(
-                          settingsPreferencesProvider.notifier,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                    ],
                     if (_activeArea == _SettingsArea.system) ...[
                       const _SectionHeader(
                         icon: Icons.memory_rounded,
@@ -822,7 +901,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ),
                               _TvTextButton(
                                 label: 'Diagnostics',
-                                icon: Icons.monitor_heart_outlined,
+                                icon: Icons.monitor_heart_rounded,
                                 focusNode: _diagnosticsFocus,
                                 onPressed: () =>
                                     context.push('/settings/diagnostics'),
@@ -841,7 +920,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         icon: Icons.system_update_alt_rounded,
                         title: 'APP UPDATES',
                         subtitle:
-                            'Private GitHub releases, downloaded directly to this device.',
+                            'Secure public releases download directly to this device.',
                       ),
                       const SizedBox(height: 8),
                       _AppUpdatePanel(
@@ -874,6 +953,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           }
                         },
                       ),
+                      const SizedBox(height: 12),
+                      const _SectionHeader(
+                        icon: Icons.info_rounded,
+                        title: 'ABOUT & LEGAL',
+                        subtitle:
+                            'Independent software, attribution, and open-source notices.',
+                      ),
+                      const SizedBox(height: 8),
+                      _LegalNoticesPanel(focusNode: _legalFocus),
                     ],
                   ],
                 ),
@@ -899,55 +987,109 @@ class _SettingsAreaTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 48,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-        itemCount: _SettingsArea.values.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final area = _SettingsArea.values[index];
-          final active = area == selected;
-          final (icon, label) = switch (area) {
-            _SettingsArea.customize => (Icons.tune_rounded, 'Customize'),
-            _SettingsArea.streaming => (Icons.play_circle_outline, 'Streaming'),
-            _SettingsArea.tracking => (Icons.sync_alt_rounded, 'Tracking'),
-            _SettingsArea.appearance => (Icons.palette_outlined, 'Appearance'),
-            _SettingsArea.system => (Icons.memory_rounded, 'System'),
-          };
-          return TvFocusable(
-            focusNode: focusNodes[area],
-            onPressed: () => onSelected(area),
-            focusScale: 1.02,
+    Widget tab(_SettingsArea area, {required bool compact}) {
+      final active = area == selected;
+      final (icon, label) = switch (area) {
+        _SettingsArea.customize => (Icons.tune_rounded, 'Customize'),
+        _SettingsArea.streaming => (Icons.live_tv_rounded, 'Streaming'),
+        _SettingsArea.tracking => (Icons.sync_rounded, 'Tracking'),
+        _SettingsArea.system => (Icons.settings_rounded, 'System'),
+      };
+      return TvFocusable(
+        focusNode: focusNodes[area],
+        onPressed: () => onSelected(area),
+        focusScale: 1.02,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 4 : 16,
+            vertical: compact ? 5 : 0,
+          ),
+          decoration: BoxDecoration(
+            color: active ? AppColors.accent : AppColors.panel,
             borderRadius: BorderRadius.circular(12),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: active ? AppColors.accent : AppColors.panel,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: active
-                      ? AppColors.accentBright
-                      : Colors.white.withValues(alpha: .08),
+            border: Border.all(
+              color: active
+                  ? AppColors.accentBright
+                  : Colors.white.withValues(alpha: .08),
+            ),
+          ),
+          child: compact
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 18,
+                      color: active ? Colors.white : AppColors.textPrimary,
+                    ),
+                    const SizedBox(height: 2),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: active ? Colors.white : AppColors.textPrimary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 19,
+                      color: active ? Colors.white : AppColors.textPrimary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: active ? Colors.white : AppColors.textPrimary,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 19),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 600;
+        if (compact) {
+          return SizedBox(
+            height: 58,
+            child: Row(
+              children: [
+                for (final area in _SettingsArea.values) ...[
+                  if (area != _SettingsArea.values.first)
+                    const SizedBox(width: 5),
+                  Expanded(child: tab(area, compact: true)),
                 ],
-              ),
+              ],
             ),
           );
-        },
-      ),
+        }
+        return SizedBox(
+          height: 48,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+            itemCount: _SettingsArea.values.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, index) =>
+                tab(_SettingsArea.values[index], compact: false),
+          ),
+        );
+      },
     );
   }
 }
@@ -1162,11 +1304,13 @@ class _CustomizationPanel extends StatelessWidget {
     required this.preferences,
     required this.controller,
     required this.firstFocusNode,
+    required this.onReset,
   });
 
   final SettingsPreferences preferences;
   final SettingsPreferencesController controller;
   final FocusNode firstFocusNode;
+  final VoidCallback onReset;
 
   @override
   Widget build(BuildContext context) {
@@ -1186,7 +1330,65 @@ class _CustomizationPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _MiniSectionLabel('HOME LAYOUT'),
+          const _MiniSectionLabel('DISPLAY'),
+          const SizedBox(height: 6),
+          _SettingsSelection<InterfaceMode>(
+            focusNode: firstFocusNode,
+            label: 'Screen layout',
+            value: preferences.interfaceMode,
+            options: [
+              for (final mode in InterfaceMode.values)
+                _SettingsOption(
+                  value: mode,
+                  label: mode.displayName,
+                  detail: mode.description,
+                ),
+            ],
+            onSelected: controller.setInterfaceMode,
+          ),
+          _PreferenceRow(
+            label: 'Interface scale',
+            children: [
+              for (final option in const [
+                (.8, '80%'),
+                (.9, '90%'),
+                (1.0, '100%'),
+                (1.1, '110%'),
+                (1.2, '120%'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.interfaceScale == option.$1,
+                  onPressed: () => controller.setInterfaceScale(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Content density',
+            children: [
+              for (final density in ContentDensity.values)
+                _PreferenceChip(
+                  label: density.displayName,
+                  selected: preferences.contentDensity == density,
+                  onPressed: () => controller.setContentDensity(density),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Thumbnail size',
+            children: [
+              for (final option in const [
+                (.85, 'Small'),
+                (1.0, 'Medium'),
+                (1.15, 'Large'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.thumbnailScale == option.$1,
+                  onPressed: () => controller.setThumbnailScale(option.$1),
+                ),
+            ],
+          ),
           _PreferenceRow(
             label: 'Layout style',
             children: [
@@ -1197,6 +1399,30 @@ class _CustomizationPanel extends StatelessWidget {
                   onPressed: () => controller.setHomeLayout(layout),
                 ),
             ],
+          ),
+          const _PreferenceDivider(),
+          const _MiniSectionLabel('HOME & NAVIGATION'),
+          const SizedBox(height: 6),
+          _SettingsSelection<LandingPage>(
+            label: 'Default landing page',
+            value: preferences.defaultLandingPage,
+            options: [
+              for (final page in LandingPage.values.where(
+                (page) => switch (page) {
+                  LandingPage.home => true,
+                  LandingPage.search => preferences.showSearch,
+                  LandingPage.myList => preferences.showMyList,
+                  LandingPage.discover => preferences.showDiscover,
+                  LandingPage.calendar => preferences.showCalendar,
+                },
+              ))
+                _SettingsOption(
+                  value: page,
+                  label: page.displayName,
+                  detail: page.route,
+                ),
+            ],
+            onSelected: controller.setDefaultLandingPage,
           ),
           _PreferenceRow(
             label: 'Home content',
@@ -1218,10 +1444,6 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Divider(color: Colors.white.withValues(alpha: .07), height: 1),
-          const SizedBox(height: 8),
-          const _MiniSectionLabel('TOP NAVIGATION'),
           _PreferenceRow(
             label: 'Visible shortcuts',
             children: [
@@ -1229,7 +1451,6 @@ class _CustomizationPanel extends StatelessWidget {
                 label: 'Search',
                 value: preferences.showSearch,
                 onChanged: controller.setShowSearch,
-                focusNode: firstFocusNode,
               ),
               toggle(
                 label: 'My List',
@@ -1248,13 +1469,130 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
+          const _PreferenceDivider(),
+          const _MiniSectionLabel('INPUT & FEEDBACK'),
+          _PreferenceRow(
+            label: 'On-screen keyboard',
+            children: [
+              _PreferenceChip(
+                label: 'Built-in',
+                selected: preferences.useBuiltInKeyboard,
+                onPressed: () => controller.setUseBuiltInKeyboard(true),
+              ),
+              _PreferenceChip(
+                label: 'Device keyboard',
+                selected: !preferences.useBuiltInKeyboard,
+                onPressed: () => controller.setUseBuiltInKeyboard(false),
+              ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Interface sounds',
+            children: [
+              toggle(
+                label: 'Navigation',
+                value: preferences.navigationSounds,
+                onChanged: controller.setNavigationSounds,
+              ),
+              toggle(
+                label: 'Click',
+                value: preferences.clickSounds,
+                onChanged: controller.setClickSounds,
+              ),
+            ],
+          ),
+          const _PreferenceDivider(),
+          const _MiniSectionLabel('CLOSED CAPTIONS'),
+          _PreferenceRow(
+            label: 'Text color',
+            children: [
+              for (final option in const [
+                (0xFFFFFFFF, 'White'),
+                (0xFFFFFF66, 'Yellow'),
+                (0xFF66E7FF, 'Cyan'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.captionTextColor == option.$1,
+                  swatch: Color(option.$1),
+                  onPressed: () => controller.setCaptionTextColor(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Background',
+            children: [
+              for (final option in const [
+                (0x00000000, 'Off'),
+                (0x99000000, 'Dark'),
+                (0xDD000000, 'Strong'),
+              ])
+                _PreferenceChip(
+                  label: option.$2,
+                  selected: preferences.captionBackgroundColor == option.$1,
+                  swatch: Color(option.$1),
+                  onPressed: () =>
+                      controller.setCaptionBackgroundColor(option.$1),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Text size',
+            children: [
+              for (final size in const [28.0, 34.0, 42.0, 50.0])
+                _PreferenceChip(
+                  label: '${size.round()}',
+                  selected: preferences.captionTextSize == size,
+                  onPressed: () => controller.setCaptionTextSize(size),
+                ),
+            ],
+          ),
+          const _PreferenceDivider(),
+          const _MiniSectionLabel('PLAYER CONTROLS'),
+          _PreferenceRow(
+            label: 'Rewind',
+            children: [
+              for (final seconds in const [5, 10, 15, 30, 60])
+                _PreferenceChip(
+                  label: '${seconds}s',
+                  selected: preferences.seekBackSeconds == seconds,
+                  onPressed: () => controller.setSeekBackSeconds(seconds),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Fast-forward',
+            children: [
+              for (final seconds in const [5, 10, 15, 30, 60])
+                _PreferenceChip(
+                  label: '${seconds}s',
+                  selected: preferences.seekForwardSeconds == seconds,
+                  onPressed: () => controller.setSeekForwardSeconds(seconds),
+                ),
+            ],
+          ),
+          _PreferenceRow(
+            label: 'Automatic skipping',
+            children: [
+              toggle(
+                label: 'Intros',
+                value: preferences.autoSkipIntros,
+                onChanged: controller.setAutoSkipIntros,
+              ),
+              toggle(
+                label: 'Outros',
+                value: preferences.autoSkipOutros,
+                onChanged: controller.setAutoSkipOutros,
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerRight,
             child: _TvTextButton(
-              label: 'Reset customization',
+              label: 'Reset appearance & navigation',
               icon: Icons.restart_alt_rounded,
-              onPressed: controller.resetCustomization,
+              onPressed: onReset,
             ),
           ),
         ],
@@ -1280,180 +1618,14 @@ class _MiniSectionLabel extends StatelessWidget {
   );
 }
 
-class _AppearancePanel extends StatelessWidget {
-  const _AppearancePanel({
-    required this.preferences,
-    required this.controller,
-    required this.firstFocusNode,
-  });
-
-  final SettingsPreferences preferences;
-  final SettingsPreferencesController controller;
-  final FocusNode firstFocusNode;
+class _PreferenceDivider extends StatelessWidget {
+  const _PreferenceDivider();
 
   @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        children: [
-          _PreferenceRow(
-            label: 'On-screen keyboard',
-            children: [
-              _PreferenceChip(
-                label: 'Built-in',
-                selected: preferences.useBuiltInKeyboard,
-                focusNode: firstFocusNode,
-                onPressed: () => controller.setUseBuiltInKeyboard(true),
-              ),
-              _PreferenceChip(
-                label: 'Device keyboard',
-                selected: !preferences.useBuiltInKeyboard,
-                onPressed: () => controller.setUseBuiltInKeyboard(false),
-              ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Caption text',
-            children: [
-              for (final option in const [
-                (0xFFFFFFFF, 'White'),
-                (0xFFFFFF66, 'Yellow'),
-                (0xFF66E7FF, 'Cyan'),
-              ])
-                _PreferenceChip(
-                  label: option.$2,
-                  selected: preferences.captionTextColor == option.$1,
-                  swatch: Color(option.$1),
-                  onPressed: () => controller.setCaptionTextColor(option.$1),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Caption background',
-            children: [
-              for (final option in const [
-                (0x00000000, 'Off'),
-                (0x99000000, 'Dark'),
-                (0xDD000000, 'Strong'),
-              ])
-                _PreferenceChip(
-                  label: option.$2,
-                  selected: preferences.captionBackgroundColor == option.$1,
-                  swatch: Color(option.$1),
-                  onPressed: () =>
-                      controller.setCaptionBackgroundColor(option.$1),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Caption size',
-            children: [
-              for (final size in const [28.0, 34.0, 42.0, 50.0])
-                _PreferenceChip(
-                  label: '${size.round()}',
-                  selected: preferences.captionTextSize == size,
-                  onPressed: () => controller.setCaptionTextSize(size),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Thumbnail size',
-            children: [
-              for (final option in const [
-                (.85, 'Small'),
-                (1.0, 'Medium'),
-                (1.15, 'Large'),
-              ])
-                _PreferenceChip(
-                  label: option.$2,
-                  selected: preferences.thumbnailScale == option.$1,
-                  onPressed: () => controller.setThumbnailScale(option.$1),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Interface scale',
-            children: [
-              for (final option in const [
-                (.9, '90%'),
-                (1.0, '100%'),
-                (1.1, '110%'),
-              ])
-                _PreferenceChip(
-                  label: option.$2,
-                  selected: preferences.interfaceScale == option.$1,
-                  onPressed: () => controller.setInterfaceScale(option.$1),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Content density',
-            children: [
-              for (final density in ContentDensity.values)
-                _PreferenceChip(
-                  label: density.displayName,
-                  selected: preferences.contentDensity == density,
-                  onPressed: () => controller.setContentDensity(density),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Rewind',
-            children: [
-              for (final seconds in const [5, 10, 15, 30, 60])
-                _PreferenceChip(
-                  label: '${seconds}s',
-                  selected: preferences.seekBackSeconds == seconds,
-                  onPressed: () => controller.setSeekBackSeconds(seconds),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Fast-forward',
-            children: [
-              for (final seconds in const [5, 10, 15, 30, 60])
-                _PreferenceChip(
-                  label: '${seconds}s',
-                  selected: preferences.seekForwardSeconds == seconds,
-                  onPressed: () => controller.setSeekForwardSeconds(seconds),
-                ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Auto-skip intro',
-            children: [
-              _PreferenceChip(
-                label: preferences.autoSkipIntros ? 'On' : 'Off',
-                selected: preferences.autoSkipIntros,
-                onPressed: () =>
-                    controller.setAutoSkipIntros(!preferences.autoSkipIntros),
-              ),
-            ],
-          ),
-          _PreferenceRow(
-            label: 'Auto-skip outro',
-            children: [
-              _PreferenceChip(
-                label: preferences.autoSkipOutros ? 'On' : 'Off',
-                selected: preferences.autoSkipOutros,
-                onPressed: () =>
-                    controller.setAutoSkipOutros(!preferences.autoSkipOutros),
-              ),
-            ],
-          ),
-          const SizedBox(height: 3),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _TvTextButton(
-              label: 'Reset appearance',
-              icon: Icons.restart_alt_rounded,
-              onPressed: controller.resetAppearance,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Divider(color: Colors.white.withValues(alpha: .07), height: 1),
+  );
 }
 
 class _StreamingSourcesPanel extends StatelessWidget {
@@ -1509,7 +1681,7 @@ class _StreamingSourcesPanel extends StatelessWidget {
           );
           final marketplace = _TvTextButton(
             label: 'Marketplace',
-            icon: Icons.storefront_outlined,
+            icon: Icons.storefront_rounded,
             focusNode: marketplaceFocusNode,
             onPressed: onMarketplace,
           );
@@ -1720,17 +1892,17 @@ class _AppUpdatePanel extends StatelessWidget {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         _StatusPill(
-                          connected: state.hasAccessToken,
+                          connected: true,
                           label: state.hasAccessToken
-                              ? 'PRIVATE RELEASES READY'
-                              : 'TOKEN REQUIRED',
+                              ? 'PUBLIC + PRIVATE READY'
+                              : 'PUBLIC UPDATES READY',
                         ),
                       ],
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Uses a fine-grained GitHub token with read-only Contents '
-                      'access. The token stays encrypted on this TV.',
+                      'Public updates need no secret. An optional fine-grained '
+                      'read-only token can be stored for a private repository.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -1742,7 +1914,7 @@ class _AppUpdatePanel extends StatelessWidget {
           Divider(color: Colors.white.withValues(alpha: .08), height: 1),
           const SizedBox(height: 10),
           _ResponsiveTokenRow(
-            title: 'Private GitHub token',
+            title: 'Optional private-repository token',
             input: TvTextInput(
               focusNode: tokenFocusNode,
               controller: tokenController,
@@ -1767,7 +1939,7 @@ class _AppUpdatePanel extends StatelessWidget {
                   const SizedBox(width: 7),
                   _TvTextButton(
                     label: 'Remove',
-                    icon: Icons.delete_outline_rounded,
+                    icon: Icons.delete_rounded,
                     onPressed: onRemoveToken,
                   ),
                 ],
@@ -1840,9 +2012,7 @@ class _AppUpdatePanel extends StatelessWidget {
                   icon: state.downloadedPath == null
                       ? Icons.refresh_rounded
                       : Icons.install_mobile_rounded,
-                  onPressed: state.isBusy || !state.hasAccessToken
-                      ? null
-                      : onCheckOrInstall,
+                  onPressed: state.isBusy ? null : onCheckOrInstall,
                   focusNode: checkFocusNode,
                 ),
               ],
@@ -1862,47 +2032,201 @@ class _AppUpdatePanel extends StatelessWidget {
   }
 }
 
-class _ShelfToggle extends StatelessWidget {
-  const _ShelfToggle({
-    required this.shelf,
+class _HomeShelfOrganizer extends StatelessWidget {
+  const _HomeShelfOrganizer({
+    required this.order,
     required this.enabled,
-    required this.focusNode,
-    required this.onPressed,
+    required this.focusNodes,
+    required this.onToggle,
+    required this.onMove,
   });
 
-  final HomeShelf shelf;
-  final bool enabled;
-  final FocusNode focusNode;
-  final VoidCallback onPressed;
+  final List<HomeShelf> order;
+  final Set<HomeShelf> enabled;
+  final Map<HomeShelf, FocusNode> focusNodes;
+  final ValueChanged<HomeShelf> onToggle;
+  final void Function(HomeShelf shelf, int offset) onMove;
 
   @override
   Widget build(BuildContext context) {
-    final label = switch (shelf) {
-      HomeShelf.history => 'History',
-      HomeShelf.tracking => 'Watching',
-      HomeShelf.trending => 'Trending',
-      HomeShelf.planned => 'Planned',
-      HomeShelf.airing => 'Airing',
-      HomeShelf.completed => 'Completed',
-    };
-    return TvFocusable(
-      focusNode: focusNode,
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(7),
-      child: Container(
-        height: 30,
-        padding: const EdgeInsets.symmetric(horizontal: 9),
-        color: enabled ? AppColors.accent : const Color(0xFF1A1A1A),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(enabled ? Icons.check_rounded : Icons.add_rounded, size: 14),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800),
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MiniSectionLabel('HOME SHELVES'),
+          const SizedBox(height: 3),
+          const Text(
+            'Choose what appears on Home and move favorites toward the top.',
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+          const SizedBox(height: 10),
+          for (var index = 0; index < order.length; index++) ...[
+            _HomeShelfRow(
+              index: index,
+              total: order.length,
+              shelf: order[index],
+              enabled: enabled.contains(order[index]),
+              focusNode: focusNodes[order[index]]!,
+              onToggle: () => onToggle(order[index]),
+              onMoveUp: () => onMove(order[index], -1),
+              onMoveDown: () => onMove(order[index], 1),
             ),
+            if (index != order.length - 1) const SizedBox(height: 6),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeShelfRow extends StatelessWidget {
+  const _HomeShelfRow({
+    required this.index,
+    required this.total,
+    required this.shelf,
+    required this.enabled,
+    required this.focusNode,
+    required this.onToggle,
+    required this.onMoveUp,
+    required this.onMoveDown,
+  });
+
+  final int index;
+  final int total;
+  final HomeShelf shelf;
+  final bool enabled;
+  final FocusNode focusNode;
+  final VoidCallback onToggle;
+  final VoidCallback onMoveUp;
+  final VoidCallback onMoveDown;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 24,
+          child: Text(
+            '${index + 1}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: TvFocusable(
+            focusNode: focusNode,
+            onPressed: onToggle,
+            focusScale: 1.01,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              height: 38,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: enabled
+                    ? AppColors.accent.withValues(alpha: .28)
+                    : AppColors.panelRaised,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: enabled
+                      ? AppColors.accentBright.withValues(alpha: .7)
+                      : Colors.white.withValues(alpha: .08),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    enabled
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_off_rounded,
+                    size: 17,
+                    color: enabled ? Colors.white : AppColors.textMuted,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      shelf.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: enabled ? Colors.white : AppColors.textMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    enabled ? 'SHOWN' : 'HIDDEN',
+                    style: TextStyle(
+                      color: enabled
+                          ? AppColors.accentBright
+                          : AppColors.textMuted,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .7,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 7),
+        _ShelfOrderButton(
+          icon: Icons.keyboard_arrow_up_rounded,
+          label: 'Move ${shelf.displayName} up',
+          onPressed: index == 0 ? null : onMoveUp,
+        ),
+        const SizedBox(width: 5),
+        _ShelfOrderButton(
+          icon: Icons.keyboard_arrow_down_rounded,
+          label: 'Move ${shelf.displayName} down',
+          onPressed: index == total - 1 ? null : onMoveDown,
+        ),
+      ],
+    );
+  }
+}
+
+class _ShelfOrderButton extends StatelessWidget {
+  const _ShelfOrderButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (onPressed == null) {
+      return SizedBox(
+        width: 38,
+        height: 38,
+        child: Icon(icon, color: Colors.white24, size: 19),
+      );
+    }
+    return Semantics(
+      label: label,
+      button: true,
+      child: TvFocusable(
+        onPressed: onPressed!,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 38,
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: AppColors.panelRaised,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 19),
         ),
       ),
     );
@@ -1922,19 +2246,47 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final heading = Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, size: 16, color: AppColors.accentBright),
         const SizedBox(width: 7),
-        Text(
-          title,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.1,
+        Flexible(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.1,
+            ),
           ),
         ),
+      ],
+    );
+    if (MediaQuery.sizeOf(context).width < 600) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          heading,
+          const SizedBox(height: 3),
+          Padding(
+            padding: const EdgeInsets.only(left: 23),
+            child: Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+            ),
+          ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        heading,
         const SizedBox(width: 10),
         Expanded(
           child: Text(
@@ -1945,6 +2297,77 @@ class _SectionHeader extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LegalNoticesPanel extends StatelessWidget {
+  const _LegalNoticesPanel({required this.focusNode});
+
+  final FocusNode focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const notice =
+              'TetoTV is an independent, unofficial client. It is not '
+              'affiliated with or endorsed by AniList, MyAnimeList, debrid '
+              'services, addon authors, or media rights holders. Users add '
+              'and are responsible for their own services and repositories.';
+          const attribution = '重音テト © 線 / 小山乃舞世 / TWINDRILL';
+          final copy = const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                notice,
+                style: TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 10,
+                  height: 1.35,
+                ),
+              ),
+              SizedBox(height: 7),
+              Text(
+                attribution,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          );
+          final licenses = _TvTextButton(
+            label: 'Open-source licenses',
+            icon: Icons.description_rounded,
+            focusNode: focusNode,
+            onPressed: () => showLicensePage(
+              context: context,
+              applicationName: 'TetoTV',
+              applicationLegalese: '$notice\n\n$attribution',
+            ),
+          );
+          if (constraints.maxWidth < 620) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                copy,
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: licenses),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: copy),
+              const SizedBox(width: 18),
+              licenses,
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -2117,7 +2540,7 @@ class _RealDebridPanel extends StatelessWidget {
                 label: state.isLoading ? 'Checking…' : 'Save & verify',
                 icon: state.isLoading
                     ? Icons.sync_rounded
-                    : Icons.verified_user_outlined,
+                    : Icons.verified_user_rounded,
                 onPressed: state.isLoading ? null : onSave,
                 focusNode: saveFocusNode,
               ),
@@ -2215,7 +2638,7 @@ class _TorBoxPanel extends StatelessWidget {
                 label: state.isLoading ? 'Checking…' : 'Save & verify',
                 icon: state.isLoading
                     ? Icons.sync_rounded
-                    : Icons.verified_user_outlined,
+                    : Icons.verified_user_rounded,
                 onPressed: state.isLoading ? null : onSave,
                 focusNode: saveFocusNode,
               ),
@@ -2225,6 +2648,115 @@ class _TorBoxPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ApiKeyDebridPanel extends StatelessWidget {
+  const _ApiKeyDebridPanel({
+    required this.title,
+    required this.icon,
+    required this.gradient,
+    required this.connected,
+    required this.hasSavedToken,
+    required this.connectedLabel,
+    required this.description,
+    required this.isLoading,
+    required this.tokenController,
+    required this.tokenTitle,
+    required this.keyboardTitle,
+    required this.connectLabel,
+    required this.connectIcon,
+    required this.onSave,
+    required this.onDisconnect,
+    required this.onConnect,
+    required this.actionFocusNode,
+    required this.tokenFocusNode,
+    required this.saveFocusNode,
+    this.errorMessage,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<Color> gradient;
+  final bool connected;
+  final bool hasSavedToken;
+  final String connectedLabel;
+  final String description;
+  final String? errorMessage;
+  final bool isLoading;
+  final TextEditingController tokenController;
+  final String tokenTitle;
+  final String keyboardTitle;
+  final String connectLabel;
+  final IconData connectIcon;
+  final VoidCallback onSave;
+  final VoidCallback onDisconnect;
+  final VoidCallback onConnect;
+  final FocusNode actionFocusNode;
+  final FocusNode tokenFocusNode;
+  final FocusNode saveFocusNode;
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+    child: Column(
+      children: [
+        _ServiceAccountHeader(
+          icon: icon,
+          gradient: gradient,
+          title: title,
+          status: _StatusPill(
+            connected: connected,
+            label: connected
+                ? connectedLabel
+                : hasSavedToken
+                ? 'RECONNECTING'
+                : 'NOT CONNECTED',
+          ),
+          description: description,
+          action: _TvTextButton(
+            label: connected ? 'Disconnect' : connectLabel,
+            icon: connected ? Icons.link_off_rounded : connectIcon,
+            onPressed: connected ? onDisconnect : onConnect,
+            focusNode: actionFocusNode,
+          ),
+        ),
+        if (errorMessage case final error?) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              error,
+              style: const TextStyle(color: Color(0xFFFF929B)),
+            ),
+          ),
+        ],
+        if (!connected) ...[
+          const SizedBox(height: 10),
+          Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+          const SizedBox(height: 10),
+          _ResponsiveTokenRow(
+            title: tokenTitle,
+            input: TvTextInput(
+              focusNode: tokenFocusNode,
+              controller: tokenController,
+              labelText: 'Personal API key',
+              hintText: 'Select to open the TV keyboard',
+              keyboardTitle: keyboardTitle,
+              obscureText: true,
+              onSubmitted: (_) => onSave(),
+            ),
+            action: _TvTextButton(
+              label: isLoading ? 'Checking…' : 'Save & verify',
+              icon: isLoading
+                  ? Icons.sync_rounded
+                  : Icons.verified_user_rounded,
+              onPressed: isLoading ? null : onSave,
+              focusNode: saveFocusNode,
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
 }
 
 class _TrackingPanel extends StatefulWidget {
@@ -2365,7 +2897,7 @@ class _TrackingPanelState extends State<_TrackingPanel> {
                 label: _saving || widget.isLoading
                     ? 'Checking…'
                     : 'Save & verify',
-                icon: Icons.verified_user_outlined,
+                icon: Icons.verified_user_rounded,
                 focusNode: widget.saveFocusNode,
                 onPressed: _saving || widget.isLoading ? null : _saveToken,
               ),
@@ -2412,7 +2944,8 @@ class _DebridOnlyPanel extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  'Torrents are only played through Real-Debrid or TorBox. '
+                  'Torrents are only played through the debrid service you '
+                  'connect. '
                   'Installed web addons run without access to account tokens '
                   'or device files.',
                   style: Theme.of(context).textTheme.bodyMedium,
@@ -2646,10 +3179,14 @@ class _TvTextButton extends StatelessWidget {
               size: 19,
             ),
             const SizedBox(width: 8),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: enabled ? Colors.white : Colors.white54,
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: enabled ? Colors.white : Colors.white54,
+                ),
               ),
             ),
           ],

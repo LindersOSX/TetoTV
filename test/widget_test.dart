@@ -1,9 +1,14 @@
 import 'package:anime_tv/app/app.dart';
+import 'package:anime_tv/core/layout/interface_scaling.dart';
+import 'package:anime_tv/core/storage/storage_providers.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
-import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -201,6 +206,105 @@ void main() {
       tester.getSize(longArtwork).height,
     );
   });
+
+  testWidgets(
+    'continue watching merges tracker titles with local resume precedence',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final checkpoint = PlaybackCheckpoint(
+        anilistMediaId: 101,
+        malMediaId: 202,
+        episode: 4,
+        title: 'Local resume wins',
+        position: const Duration(minutes: 8),
+        duration: const Duration(minutes: 24),
+        updatedAt: DateTime(2026, 8, 9),
+      );
+      const watching = [
+        HomeTrackedAnime(
+          tracked: TrackedAnime(
+            mediaId: 101,
+            title: 'AniList duplicate must be hidden',
+            status: TrackingListStatus.watching,
+            progress: 3,
+          ),
+          provider: TrackingProvider.anilist,
+          anilistId: 101,
+          coverImageUrl: null,
+        ),
+        HomeTrackedAnime(
+          tracked: TrackedAnime(
+            mediaId: 202,
+            title: 'MAL duplicate must be hidden',
+            status: TrackingListStatus.watching,
+            progress: 3,
+          ),
+          provider: TrackingProvider.myAnimeList,
+          anilistId: null,
+          coverImageUrl: null,
+        ),
+        HomeTrackedAnime(
+          tracked: TrackedAnime(
+            mediaId: 303,
+            title: 'Distinct AniList title remains',
+            status: TrackingListStatus.watching,
+            progress: 2,
+          ),
+          provider: TrackingProvider.anilist,
+          anilistId: 303,
+          coverImageUrl: null,
+        ),
+        HomeTrackedAnime(
+          tracked: TrackedAnime(
+            mediaId: 404,
+            title: 'Distinct MAL title remains',
+            status: TrackingListStatus.watching,
+            progress: 1,
+          ),
+          provider: TrackingProvider.myAnimeList,
+          anilistId: null,
+          coverImageUrl: null,
+        ),
+      ];
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trendingAnimeProvider.overrideWith((_) async => const []),
+            seasonalAnimeProvider.overrideWith((_) async => const []),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: watching,
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            recentPlaybackProvider.overrideWith((_) async => [checkpoint]),
+            dismissedContinueWatchingProvider.overrideWith(
+              (_) async => const <int>{},
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Local resume wins'), findsWidgets);
+      expect(find.text('AniList duplicate must be hidden'), findsNothing);
+      expect(find.text('MAL duplicate must be hidden'), findsNothing);
+      expect(find.text('Distinct AniList title remains'), findsOneWidget);
+      expect(find.text('Distinct MAL title remains'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('fresh installs open setup and can skip it', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});

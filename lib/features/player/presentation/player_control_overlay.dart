@@ -344,11 +344,9 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
           constraints: const BoxConstraints(maxWidth: 520),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xE60A0A0C),
+              color: const Color(0xFA09090B),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: AppColors.accent.withValues(alpha: .72),
-              ),
+              border: Border.all(color: Colors.white.withValues(alpha: .3)),
               boxShadow: const [
                 BoxShadow(color: Color(0xA0000000), blurRadius: 28),
               ],
@@ -362,13 +360,17 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                   Text(
                     'Exit video?',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
                   const SizedBox(height: 8),
                   const Text(
                     'Your current playback position will be saved.',
-                    style: TextStyle(color: AppColors.textMuted),
+                    style: TextStyle(
+                      color: Color(0xFFF0EAEC),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   LayoutBuilder(
@@ -392,10 +394,26 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                             color: const Color(0xA629292E),
                             borderRadius: BorderRadius.circular(9),
                           ),
-                          child: const Text(
-                            'Continue watching',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontWeight: FontWeight.w800),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  'Continue watching',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -416,10 +434,26 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                             color: AppColors.accent,
                             borderRadius: BorderRadius.circular(9),
                           ),
-                          child: const Text(
-                            'Exit video',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontWeight: FontWeight.w900),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.logout_rounded,
+                                color: Colors.white,
+                                size: 19,
+                              ),
+                              SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  'Exit video',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       );

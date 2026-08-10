@@ -1,17 +1,13 @@
 import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/layout/interface_scaling.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-double tvCanvasWidthForPhysicalPixels(double physicalWidth) {
-  if (physicalWidth >= 3200) return 1600;
-  if (physicalWidth >= 2400) return 1280;
-  return 960;
-}
 
 class TetoTvApp extends ConsumerWidget {
   const TetoTvApp({super.key});
@@ -28,19 +24,22 @@ class TetoTvApp extends ConsumerWidget {
       routerConfig: appRouter,
       builder: (context, child) {
         final mq = MediaQuery.of(context);
-        final content = TvShortcuts(child: child ?? const SizedBox.shrink());
-        if (!isTelevision) {
-          return MediaQuery(
-            data: mq.copyWith(
-              textScaler: TextScaler.linear(preferences.interfaceScale),
-            ),
-            child: content,
-          );
+        final content = InteractionSoundScope(
+          navigationEnabled: preferences.navigationSounds,
+          clickEnabled: preferences.clickSounds,
+          child: TvShortcuts(child: child ?? const SizedBox.shrink()),
+        );
+        final scale = interfaceCanvasScale(
+          logicalWidth: mq.size.width,
+          physicalWidth: View.of(context).physicalSize.width,
+          detectedTelevision: isTelevision,
+          mode: preferences.interfaceMode,
+          userScale: preferences.interfaceScale,
+        );
+
+        if ((scale - 1).abs() < .001) {
+          return MediaQuery(data: mq, child: content);
         }
-        final physicalWidth = View.of(context).physicalSize.width;
-        final canvasWidth = tvCanvasWidthForPhysicalPixels(physicalWidth);
-        final scale =
-            (mq.size.width / canvasWidth) * preferences.interfaceScale;
 
         return MediaQuery(
           data: mq.copyWith(

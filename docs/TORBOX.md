@@ -17,12 +17,13 @@ TorBox currently requires a paid plan for third-party API streaming.
 
 ## Episode flow
 
-1. Torrentio supplies release metadata and a magnet.
+1. A source explicitly configured by the user supplies release metadata and a
+   magnet.
 2. The user selects the exact Sub or Dub/Dual release.
 3. TetoTV submits the magnet to
    `POST /v1/api/torrents/createtorrent`.
 4. It polls `GET /v1/api/torrents/mylist` with `bypass_cache=true`.
-5. It preserves Torrentio's `fileIdx` when selecting the episode from a batch,
+5. It preserves a source-provided file index when selecting the episode from a batch,
    with episode-name matching as a fallback.
 6. It requests the temporary CDN stream from
    `GET /v1/api/torrents/requestdl`.

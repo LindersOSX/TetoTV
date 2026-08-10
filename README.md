@@ -14,9 +14,10 @@ currently includes:
 - optional manual Real-Debrid token entry with pre-save validation;
 - TorBox device-code pairing plus optional API-token validation and encrypted
   account storage;
+- AllDebrid phone PIN pairing and Premiumize personal-key validation;
 - encrypted token and OAuth refresh-credential storage;
-- Real-Debrid and TorBox magnet, cache/download progress, exact file selection,
-  and secure direct-stream clients;
+- Real-Debrid, TorBox, AllDebrid, and Premiumize magnet, cache/download
+  progress, exact file selection, and secure direct-stream clients;
 - concrete AniList GraphQL and MyAnimeList v2 list/progress repositories;
 - live AniList trending, seasonal, search, and details screens with cached art,
   a mapping-backed Kitsu search/details fallback for AniList outages, plus
@@ -28,8 +29,10 @@ currently includes:
 - thumbnail-free episode controls that keep details pages compact and fast;
 - episode-to-debrid resolution with a configurable provider or manual magnet
   fallback;
-- a Torrentio/Stremio-compatible master stream list with TV filters for Sub,
-  Dub/Dual Audio, quality, codec, HDR, size, provider, and seeders;
+- user-configured Stremio-compatible torrent source manifests with TV filters
+  for Sub, Dub/Dual Audio, quality, codec, HDR, size, provider, and seeders;
+- no bundled torrent index, source repository, or automatically installed
+  streaming extension; users explicitly add and install sources they trust;
 - exact Stremio `fileIdx` preservation for correct episode selection inside
   batch torrents;
 - a monotonic 90%-completion tracking outbox for both trackers;
@@ -79,7 +82,9 @@ offline playback smoke tests.
    [deployable broker instructions](broker/README.md).
 4. Read [the Real-Debrid flow](docs/REAL_DEBRID.md).
 5. Read [the TorBox flow](docs/TORBOX.md).
-6. Retain the [third-party playback notices](docs/THIRD_PARTY_NOTICES.md) when
+6. Read [the AllDebrid flow](docs/ALL_DEBRID.md) and
+   [Premiumize flow](docs/PREMIUMIZE.md).
+7. Retain the [third-party playback notices](docs/THIRD_PARTY_NOTICES.md) when
    redistributing builds.
 
 Then run:
@@ -125,14 +130,14 @@ deployed `broker/` service and report both providers as ready from `/health`.
 ## Current scope
 
 The installed APK validates TV launch and focus, live AniList discovery and
-search, Real-Debrid and TorBox device authorization, native Media3 playback
+search, supported debrid authorization, native Media3 playback
 with MPV/libass and VLC fallbacks, and the client-side tracking/streaming flow.
 Production deployment still requires:
 
 - registered AniList and MyAnimeList OAuth applications and an HTTPS deployment
   of the included `broker/`;
-- review/configuration of the selected Stremio add-on for content the user is
-  legally authorized to access;
+- explicit user configuration of any source repository or Stremio-compatible
+  manifest, for content the user is legally authorized to access;
 - a private Android release signing key;
 - codec, audio passthrough, and remote QA on the target physical TV boxes.
 
@@ -146,3 +151,23 @@ Use `adb shell getprop ro.product.cpu.abilist` before choosing a split APK.
 Many Fire TV devices, including Fire TV Stick 4K Max models, expose the
 32-bit `armeabi-v7a` application ABI even when their CPU is 64-bit. Use the
 universal release APK when the target ABI is unknown.
+
+## Distribution and source policy
+
+Public builds contain no torrent index, default marketplace repository,
+preconfigured Stremio manifest, or private GitHub credential. Source
+repositories and compatible manifests must be entered and installed explicitly
+by the user. Public GitHub releases update without an API token; an optional
+fine-grained read-only token may be stored on-device only when the release
+repository is private.
+
+Any token previously compiled into an APK, committed, or shared outside the
+device must be treated as exposed and revoked. Moving a token into encrypted
+device storage does not retroactively make an exposed credential safe.
+
+Removing bundled source configuration reduces distribution risk but does not
+guarantee that an app cannot receive a copyright or platform complaint.
+Distributors remain responsible for the media sources, branding, policies, and
+legal requirements that apply to their release. Retain
+[the third-party notices](docs/THIRD_PARTY_NOTICES.md), the in-app legal notice,
+and the Kasane Teto attribution when redistributing the app.

@@ -1,4 +1,6 @@
+import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
+import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,16 +33,16 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.history',
+      'accounts.shelf.tracking',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.tracking',
+      'accounts.shelf.history',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -175,7 +177,6 @@ void main() {
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
@@ -194,11 +195,99 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.save',
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.setup',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.save',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.check',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('connected debrid traversal only targets visible controls', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          realDebridSettingsControllerProvider.overrideWith(
+            (_) => _ConnectedRealDebridController(),
+          ),
+        ],
+        child: const MaterialApp(home: AccountsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+    ]) {
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.debrid.connect',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.debrid',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.debrid.connect',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.debrid.connect',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.marketplace',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.marketplace',
     );
     expect(tester.takeException(), isNull);
   });
@@ -220,11 +309,30 @@ void main() {
     expect(find.text('Settings'), findsWidgets);
     expect(find.text('Customize'), findsOneWidget);
     expect(find.text('Streaming'), findsOneWidget);
-    expect(find.text('CUSTOMIZE TETOTV'), findsOneWidget);
+    expect(find.text('Appearance'), findsNothing);
+    expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('Streaming'));
     await tester.pumpAndSettle();
     expect(find.text('DEBRID STREAMING'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+}
+
+class _ConnectedRealDebridController extends RealDebridSettingsController {
+  _ConnectedRealDebridController()
+    : super(const FlutterSecureStorage(), (_) => throw UnimplementedError()) {
+    state = const RealDebridSettingsState(
+      hasSavedToken: true,
+      account: RealDebridAccount(
+        id: 1,
+        username: 'connected-user',
+        type: 'premium',
+      ),
+    );
+  }
+
+  @override
+  Future<void> load() async {}
 }

@@ -3,6 +3,7 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -70,6 +71,20 @@ void main() {
       ),
       findsWidgets,
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('episode-step-previous')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('episode-step-next')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -122,10 +137,193 @@ void main() {
     expect(find.text('2026'), findsWidgets);
     expect(find.text('24m'), findsWidgets);
     expect(find.text('7.8 / 10'), findsOneWidget);
+    final posterCenter = tester.getCenter(
+      find.byKey(const ValueKey('anime-details-poster')),
+    );
+    final infoCenter = tester.getCenter(
+      find.byKey(const ValueKey('anime-details-info')),
+    );
+    final actionsCenter = tester.getCenter(
+      find.byKey(const ValueKey('episode-actions-panel')),
+    );
+    expect((posterCenter.dy - actionsCenter.dy).abs(), lessThan(1));
+    expect((infoCenter.dy - actionsCenter.dy).abs(), lessThan(1));
     expect(tester.takeException(), isNull);
   });
 
-  for (final size in const [Size(390, 844), Size(844, 390)]) {
+  testWidgets('future shows display an unreleased cover badge', (tester) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const anime = AnimeSummary(
+      id: 11,
+      title: 'Future Anime',
+      description: 'This series has not premiered yet.',
+      episodes: 12,
+      score: null,
+      status: 'NOT_YET_RELEASED',
+      seasonYear: 2027,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 11)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('UNRELEASED'), findsOneWidget);
+    expect(find.text('Not released yet'), findsOneWidget);
+    expect(find.text('Start watching'), findsNothing);
+    for (final key in const [
+      'episode-action-resume',
+      'episode-action-restart',
+      'episode-action-selected',
+      'episode-step-previous',
+      'episode-step-next',
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(FocusableActionDetector),
+        ),
+        findsNothing,
+        reason: '$key must not become a D-pad focus stop before release',
+      );
+    }
+    final backControl = tester.widget<FocusableActionDetector>(
+      find
+          .ancestor(
+            of: find.text('Back'),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    expect(backControl.focusNode?.hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final size in const [Size(700, 600), Size(720, 600), Size(800, 600)]) {
+    testWidgets(
+      'episode actions remain responsive and focusable at ${size.width.toInt()}x${size.height.toInt()}',
+      (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        const anime = AnimeSummary(
+          id: 21,
+          title: 'Responsive Mid Width Anime With a Long Title',
+          description:
+              'A longer synopsis verifies that the information column remains '
+              'readable without crowding the playback actions at tablet and '
+              'small television widths.',
+          episodes: 24,
+          score: 8.7,
+          genres: ['Action', 'Adventure', 'Fantasy'],
+          format: 'TV',
+          status: 'RELEASING',
+          durationMinutes: 24,
+          seasonYear: 2026,
+          staff: [AnimePerson(id: 1, name: 'Director')],
+          relatedAnime: [
+            RelatedAnime(
+              relationType: 'SEQUEL',
+              anime: AnimeSummary(
+                id: 22,
+                title: 'Responsive Sequel',
+                description: '',
+                episodes: 12,
+                score: 8,
+              ),
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              animeDetailsProvider.overrideWith((_, _) async => anime),
+              trackingHomeProvider.overrideWith(
+                (_) async => const TrackingHomeData(
+                  watching: [],
+                  planToWatch: [],
+                  completed: [],
+                ),
+              ),
+            ],
+            child: const MaterialApp(home: AnimeDetailsScreen(animeId: 21)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final posterRect = tester.getRect(
+          find.byKey(const ValueKey('anime-details-poster')),
+        );
+        expect(posterRect.left, greaterThanOrEqualTo(0));
+        expect(posterRect.top, greaterThanOrEqualTo(0));
+        expect(posterRect.right, lessThanOrEqualTo(size.width));
+        expect(posterRect.bottom, lessThanOrEqualTo(size.height));
+
+        if (size.width < 800) {
+          final backControl = tester.widget<FocusableActionDetector>(
+            find
+                .ancestor(
+                  of: find.text('Back'),
+                  matching: find.byType(FocusableActionDetector),
+                )
+                .first,
+          );
+          expect(backControl.focusNode?.hasFocus, isTrue);
+          await tester.ensureVisible(
+            find.byKey(const ValueKey('episode-actions-panel')),
+          );
+          await tester.pump();
+        } else {
+          final resumeControl = tester.widget<FocusableActionDetector>(
+            find
+                .descendant(
+                  of: find.byKey(const ValueKey('episode-action-resume')),
+                  matching: find.byType(FocusableActionDetector),
+                )
+                .first,
+          );
+          expect(resumeControl.focusNode?.hasFocus, isTrue);
+        }
+        final actionsRect = tester.getRect(
+          find.byKey(const ValueKey('episode-actions-panel')),
+        );
+        expect(actionsRect.left, greaterThanOrEqualTo(0));
+        expect(actionsRect.top, greaterThanOrEqualTo(0));
+        expect(actionsRect.right, lessThanOrEqualTo(size.width));
+        expect(actionsRect.bottom, lessThanOrEqualTo(size.height));
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  for (final size in const [
+    Size(390, 844),
+    Size(412, 915),
+    Size(768, 832),
+    Size(1536, 2048),
+    Size(844, 390),
+  ]) {
     testWidgets(
       'episode action layout fits mobile ${size.width.toInt()}x${size.height.toInt()}',
       (tester) async {
@@ -183,6 +381,25 @@ void main() {
         expect(find.text('Play selected'), findsOneWidget);
         expect(find.text('Related series'), findsOneWidget);
         expect(find.text('EP 1 / 12'), findsOneWidget);
+        final posterSize = tester.getSize(
+          find.byKey(const ValueKey('anime-details-poster')),
+        );
+        expect(posterSize.width, inInclusiveRange(112, 320));
+        if (size.width >= 1200) {
+          expect(posterSize.width, greaterThanOrEqualTo(300));
+        }
+        expect(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('episode-actions-panel')))
+              .dy,
+          greaterThan(
+            tester
+                .getBottomLeft(
+                  find.byKey(const ValueKey('anime-details-poster')),
+                )
+                .dy,
+          ),
+        );
         expect(tester.takeException(), isNull);
       },
     );

@@ -29,7 +29,7 @@ class WebStreamValidator {
     var target = uri;
     for (var redirect = 0; redirect <= 4; redirect++) {
       await validatePublicNetworkTarget(target);
-      final client = HttpClient()
+      final client = createPinnedPublicHttpsClient()
         ..connectionTimeout = const Duration(seconds: 7)
         ..idleTimeout = const Duration(seconds: 8);
       try {

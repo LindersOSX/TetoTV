@@ -10,6 +10,18 @@ enum DebridService {
     displayName: 'TorBox',
     shortName: 'TB',
     tokenStorageKey: 'torbox_api_token',
+  ),
+  allDebrid(
+    slug: 'alldebrid',
+    displayName: 'AllDebrid',
+    shortName: 'AD',
+    tokenStorageKey: 'all_debrid_api_key',
+  ),
+  premiumize(
+    slug: 'premiumize',
+    displayName: 'Premiumize',
+    shortName: 'PM',
+    tokenStorageKey: 'premiumize_api_key',
   );
 
   const DebridService({

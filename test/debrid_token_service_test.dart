@@ -112,6 +112,29 @@ void main() {
     expect(await service.accessToken(DebridService.torBox), 'torbox-token');
     expect(oauth.refreshCalls, 0);
   });
+
+  test('returns AllDebrid and Premiumize keys directly', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.allDebrid.tokenStorageKey: 'all-debrid-key',
+      DebridService.premiumize.tokenStorageKey: 'premiumize-key',
+    });
+    final oauth = _FakeRealDebridOAuthClient();
+    final service = DebridTokenService(
+      storage,
+      realDebridOAuthClient: oauth,
+      now: () => now,
+    );
+
+    expect(
+      await service.accessToken(DebridService.allDebrid),
+      'all-debrid-key',
+    );
+    expect(
+      await service.accessToken(DebridService.premiumize),
+      'premiumize-key',
+    );
+    expect(oauth.refreshCalls, 0);
+  });
 }
 
 class _FakeRealDebridOAuthClient extends RealDebridOAuthClient {

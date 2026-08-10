@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -776,7 +777,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
   if (body != null && utf8.encode(body).length > 128 * 1024) {
     throw const FormatException('Provider request body is too large.');
   }
-  final dio = Dio(
+  final dio = createPinnedPublicHttpsDio(
     BaseOptions(
       connectTimeout: connectTimeout,
       receiveTimeout: receiveTimeout,
@@ -929,7 +930,12 @@ const _networkBootstrap = r'''
 
 const _seanimeCompatibilityBootstrap = r'''
   if (typeof console === 'undefined') {
-    globalThis.console = {log() {}, info() {}, warn() {}, error() {}, debug() {}};
+    globalThis.console = {};
+  }
+  for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace', 'table', 'assert']) {
+    if (typeof globalThis.console[method] !== 'function') {
+      globalThis.console[method] = function() {};
+    }
   }
 
   if (typeof URLSearchParams === 'undefined') {

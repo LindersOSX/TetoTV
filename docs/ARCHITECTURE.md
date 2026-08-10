@@ -18,7 +18,7 @@ playback path, with two independent compatibility engines.
 | Native TV | Kotlin activity and method channel | Direct-surface Media3 playback, MediaSession, Watch Next, reminders, codec/display/audio capabilities, and display mode selection. |
 | Metadata | AniList GraphQL with mapped Kitsu search/details fallback | AniList remains canonical; Kitsu keeps title search usable during documented AniList API suspensions while preserving AniList/MAL IDs. |
 | Auth | Direct Real-Debrid device OAuth plus a tracker pairing broker | Real-Debrid exposes a TV-friendly device flow; AniList/MAL authorization is adapted by a small server so secrets never ship in the APK. |
-| Debrid | Real-Debrid and TorBox APIs | Magnets are processed remotely and only provider-generated HTTPS streams reach either player. |
+| Debrid | Real-Debrid, TorBox, AllDebrid, and Premiumize APIs | Magnets are processed remotely and only provider-generated HTTPS streams reach either player. |
 
 Flutter remains responsible for catalog, account, stream-resolution, and TV
 navigation UI. Full-screen video is deliberately hosted by a Kotlin activity:
@@ -47,7 +47,7 @@ lib/
     home/                    TV shelves and hero presentation
     player/                  native Media3 orchestration, MPV/VLC fallbacks,
                              resume, diagnostics, and remote controls
-    streaming/               Torrentio picker plus Real-Debrid/TorBox resolvers
+    streaming/               user-configured sources plus debrid resolvers
     tracking/                MAL/AniList list and mutation contracts
 ```
 
@@ -63,7 +63,7 @@ flowchart LR
     B --> C["Release source adapters"]
     C --> D["Candidate scorer"]
     D --> E["Choose connected debrid service"]
-    E --> F["Add magnet to Real-Debrid or TorBox"]
+    E --> F["Submit magnet to the selected debrid service"]
     F --> G["Inspect and select the episode file"]
     G --> H["Poll status and progress"]
     H -->|Cached: completes quickly| I["Request provider HTTPS stream"]

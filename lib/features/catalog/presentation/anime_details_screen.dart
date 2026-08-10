@@ -54,6 +54,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final isUnreleased = animeAiringStatusLabel(anime.status) == 'UNRELEASED';
     final knownEpisodes = (anime.episodes != null && anime.episodes! > 0)
         ? anime.episodes!
         : ((anime.nextAiringEpisode ?? 1) - 1).clamp(1, 999);
@@ -83,23 +84,36 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       1,
       knownEpisodes,
     );
-    final episodeActions = _EpisodeActions(
-      selectedEpisode: selectedEpisode,
-      resumeEpisode: targetEpisode,
-      totalEpisodes: knownEpisodes,
-      hasProgress: progress > 0 || localResume,
-      resumePosition: localResume ? localPlayback.position : null,
-      onDecrease: selectedEpisode > 1
-          ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
-          : null,
-      onIncrease: selectedEpisode < knownEpisodes
-          ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
-          : null,
-      onPlayFromBeginning: () =>
-          _openEpisode(context, anime, selectedEpisode, restart: true),
-      onResume: () => _openEpisode(context, anime, targetEpisode),
-      onPlaySelected: () => _openEpisode(context, anime, selectedEpisode),
-    );
+    _EpisodeActions episodeActions({required bool autofocusPrimary}) =>
+        _EpisodeActions(
+          isAvailable: !isUnreleased,
+          autofocusPrimary: autofocusPrimary,
+          selectedEpisode: selectedEpisode,
+          resumeEpisode: targetEpisode,
+          totalEpisodes: knownEpisodes,
+          hasProgress: progress > 0 || localResume,
+          resumePosition: localResume ? localPlayback.position : null,
+          onDecrease: !isUnreleased && selectedEpisode > 1
+              ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
+              : null,
+          onIncrease: !isUnreleased && selectedEpisode < knownEpisodes
+              ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
+              : null,
+          onPlayFromBeginning: isUnreleased
+              ? null
+              : () => _openEpisode(
+                  context,
+                  anime,
+                  selectedEpisode,
+                  restart: true,
+                ),
+          onResume: isUnreleased
+              ? null
+              : () => _openEpisode(context, anime, targetEpisode),
+          onPlaySelected: isUnreleased
+              ? null
+              : () => _openEpisode(context, anime, selectedEpisode),
+        );
     final onFranchise = anime.relatedAnime.isEmpty
         ? null
         : () => context.push('/anime/${anime.id}/franchise');
@@ -130,15 +144,20 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
             builder: (context, constraints) {
               final useCompactLayout =
                   constraints.maxWidth < 700 ||
+                  constraints.maxHeight > constraints.maxWidth ||
                   (constraints.maxWidth < 900 && constraints.maxHeight < 520);
               if (useCompactLayout) {
-                final posterWidth = constraints.maxWidth < 430 ? 112.0 : 128.0;
+                final portrait = constraints.maxHeight > constraints.maxWidth;
+                final posterWidth =
+                    (constraints.maxWidth * (portrait ? .24 : .18))
+                        .clamp(112.0, portrait ? 320.0 : 168.0)
+                        .toDouble();
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        _DetailsBack(onPressed: context.pop),
+                        _DetailsBack(onPressed: context.pop, autofocus: true),
                         const Spacer(),
                         _EpisodeCounterBadge(
                           selectedEpisode: selectedEpisode,
@@ -157,6 +176,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 SizedBox(
+                                  key: const ValueKey('anime-details-poster'),
                                   width: posterWidth,
                                   height: posterWidth * 1.5,
                                   child: ClipRRect(
@@ -186,6 +206,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
+                                    key: const ValueKey('anime-details-info'),
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
@@ -225,7 +246,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 18),
-                            episodeActions,
+                            episodeActions(autofocusPrimary: false),
                             if (onFranchise != null || onCredits != null) ...[
                               const SizedBox(height: 12),
                               _InformationActions(
@@ -242,7 +263,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               }
               final wide = constraints.maxWidth >= 1500;
               final spacious = constraints.maxWidth >= 1080;
-              final posterWidth = wide ? 360.0 : (spacious ? 255.0 : 175.0);
+              final posterWidth = wide ? 340.0 : (spacious ? 255.0 : 175.0);
               final actionWidth = wide ? 460.0 : (spacious ? 350.0 : 252.0);
               final columnGap = wide ? 48.0 : (spacious ? 30.0 : 20.0);
               return Column(
@@ -250,7 +271,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                 children: [
                   Row(
                     children: [
-                      _DetailsBack(onPressed: context.pop, autofocus: false),
+                      _DetailsBack(
+                        onPressed: context.pop,
+                        autofocus: isUnreleased,
+                      ),
                       const Spacer(),
                       _EpisodeCounterBadge(
                         selectedEpisode: selectedEpisode,
@@ -261,99 +285,94 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                   ),
                   SizedBox(height: wide ? 38 : 14),
                   Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: posterWidth,
-                          child: Padding(
-                            padding: EdgeInsets.only(top: wide ? 35 : 0),
-                            child: Align(
-                              alignment: Alignment.topCenter,
-                              child: AspectRatio(
-                                aspectRatio: wide ? .625 : 2 / 3,
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: Colors.white.withValues(alpha: .2),
-                                    ),
+                    child: Center(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            key: const ValueKey('anime-details-poster'),
+                            width: posterWidth,
+                            child: AspectRatio(
+                              aspectRatio: 2 / 3,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: .2),
                                   ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(19),
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        NetworkArtwork(
-                                          url: anime.coverImageUrl,
-                                          cacheWidth: wide
-                                              ? 760
-                                              : (spacious ? 540 : 360),
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(19),
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      NetworkArtwork(
+                                        url: anime.coverImageUrl,
+                                        cacheWidth: wide
+                                            ? 680
+                                            : (spacious ? 540 : 360),
+                                      ),
+                                      if (animeAiringStatusLabel(
+                                            anime.status,
+                                          ) !=
+                                          null)
+                                        Positioned(
+                                          left: wide ? 18 : 9,
+                                          top: wide ? 18 : 9,
+                                          child: PosterAiringStatusBadge(
+                                            status: anime.status,
+                                          ),
                                         ),
-                                        if (animeAiringStatusLabel(
-                                              anime.status,
-                                            ) !=
-                                            null)
-                                          Positioned(
-                                            left: wide ? 18 : 9,
-                                            top: wide ? 18 : 9,
-                                            child: PosterAiringStatusBadge(
-                                              status: anime.status,
-                                            ),
+                                      if (anime.score != null ||
+                                          anime.seasonYear != null ||
+                                          anime.durationMinutes != null)
+                                        Positioned(
+                                          left: wide ? 18 : 9,
+                                          right: wide ? 18 : 9,
+                                          bottom: wide ? 18 : 9,
+                                          child: PosterMetadataOverlay(
+                                            score: anime.score,
+                                            releaseYear: anime.seasonYear,
+                                            durationMinutes:
+                                                anime.durationMinutes,
                                           ),
-                                        if (anime.score != null ||
-                                            anime.seasonYear != null ||
-                                            anime.durationMinutes != null)
-                                          Positioned(
-                                            left: wide ? 18 : 9,
-                                            right: wide ? 18 : 9,
-                                            bottom: wide ? 18 : 9,
-                                            child: PosterMetadataOverlay(
-                                              score: anime.score,
-                                              releaseYear: anime.seasonYear,
-                                              durationMinutes:
-                                                  anime.durationMinutes,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
+                                        ),
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                        SizedBox(width: columnGap),
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(
-                              vertical: wide ? 28 : 8,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  anime.displayTitle(titlePreference),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .displaySmall
-                                      ?.copyWith(
-                                        fontSize: wide
-                                            ? 58
-                                            : (spacious ? 44 : 34),
-                                        height: 1,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                ),
-                                SizedBox(height: wide ? 20 : 10),
-                                _MetadataRow(anime: anime),
-                                SizedBox(height: wide ? 18 : 10),
-                                _MediaFactsRow(anime: anime),
-                                SizedBox(height: wide ? 24 : 12),
-                                Flexible(
-                                  child: Text(
+                          SizedBox(width: columnGap),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Column(
+                                key: const ValueKey('anime-details-info'),
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    anime.displayTitle(titlePreference),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .displaySmall
+                                        ?.copyWith(
+                                          fontSize: wide
+                                              ? 58
+                                              : (spacious ? 44 : 34),
+                                          height: 1,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                  ),
+                                  SizedBox(height: wide ? 20 : 10),
+                                  _MetadataRow(anime: anime),
+                                  SizedBox(height: wide ? 18 : 10),
+                                  _MediaFactsRow(anime: anime),
+                                  SizedBox(height: wide ? 24 : 12),
+                                  Text(
                                     anime.description.isEmpty
                                         ? 'No synopsis is available.'
                                         : anime.description,
@@ -366,40 +385,37 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           height: 1.48,
                                         ),
                                   ),
-                                ),
-                                if (anime.status case final status?) ...[
-                                  SizedBox(height: wide ? 20 : 10),
-                                  Text(
-                                    'Status:  ${status.replaceAll('_', ' ')}',
-                                    style: TextStyle(
-                                      color: AppColors.accentBright,
-                                      fontSize: wide ? 17 : 13,
-                                      fontWeight: FontWeight.w800,
+                                  if (anime.status case final status?) ...[
+                                    SizedBox(height: wide ? 20 : 10),
+                                    Text(
+                                      'Status:  ${status.replaceAll('_', ' ')}',
+                                      style: TextStyle(
+                                        color: AppColors.accentBright,
+                                        fontSize: wide ? 17 : 13,
+                                        fontWeight: FontWeight.w800,
+                                      ),
                                     ),
-                                  ),
+                                  ],
+                                  if (onFranchise != null ||
+                                      onCredits != null) ...[
+                                    SizedBox(height: wide ? 22 : 12),
+                                    _InformationActions(
+                                      onFranchise: onFranchise,
+                                      onCredits: onCredits,
+                                      large: wide,
+                                    ),
+                                  ],
                                 ],
-                                if (onFranchise != null ||
-                                    onCredits != null) ...[
-                                  SizedBox(height: wide ? 22 : 12),
-                                  _InformationActions(
-                                    onFranchise: onFranchise,
-                                    onCredits: onCredits,
-                                    large: wide,
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
                           ),
-                        ),
-                        SizedBox(width: columnGap),
-                        SizedBox(
-                          width: actionWidth,
-                          child: Padding(
-                            padding: EdgeInsets.only(top: wide ? 68 : 0),
-                            child: episodeActions,
+                          SizedBox(width: columnGap),
+                          SizedBox(
+                            width: actionWidth,
+                            child: episodeActions(autofocusPrimary: true),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -648,6 +664,8 @@ class _InformationButton extends StatelessWidget {
 
 class _EpisodeActions extends StatelessWidget {
   const _EpisodeActions({
+    required this.isAvailable,
+    required this.autofocusPrimary,
     required this.selectedEpisode,
     required this.resumeEpisode,
     required this.totalEpisodes,
@@ -660,6 +678,8 @@ class _EpisodeActions extends StatelessWidget {
     required this.onPlaySelected,
   });
 
+  final bool isAvailable;
+  final bool autofocusPrimary;
   final int selectedEpisode;
   final int resumeEpisode;
   final int totalEpisodes;
@@ -667,101 +687,107 @@ class _EpisodeActions extends StatelessWidget {
   final Duration? resumePosition;
   final VoidCallback? onDecrease;
   final VoidCallback? onIncrease;
-  final VoidCallback onPlayFromBeginning;
-  final VoidCallback onResume;
-  final VoidCallback onPlaySelected;
+  final VoidCallback? onPlayFromBeginning;
+  final VoidCallback? onResume;
+  final VoidCallback? onPlaySelected;
 
   @override
   Widget build(BuildContext context) {
     final large = MediaQuery.sizeOf(context).width >= 1500;
-    return Align(
-      alignment: large ? Alignment.topCenter : Alignment.center,
-      child: Container(
-        padding: EdgeInsets.all(large ? 22 : 8),
-        decoration: BoxDecoration(
-          color: const Color(0xF5111111),
-          borderRadius: BorderRadius.circular(large ? 20 : 14),
-          border: Border.all(color: Colors.white.withValues(alpha: .18)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _EpisodeActionButton(
-              label: resumePosition == null
-                  ? (hasProgress ? 'Resume' : 'Start watching')
-                  : 'Resume at ${_formatDuration(resumePosition!)}',
-              trailing: 'EP-$resumeEpisode',
-              icon: Icons.play_arrow_rounded,
-              primary: true,
-              autofocus: true,
-              onPressed: onResume,
-              large: large,
+    return Container(
+      key: const ValueKey('episode-actions-panel'),
+      width: double.infinity,
+      padding: EdgeInsets.all(large ? 22 : 8),
+      decoration: BoxDecoration(
+        color: const Color(0xF5111111),
+        borderRadius: BorderRadius.circular(large ? 20 : 14),
+        border: Border.all(color: Colors.white.withValues(alpha: .18)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _EpisodeActionButton(
+            key: const ValueKey('episode-action-resume'),
+            label: !isAvailable
+                ? 'Not released yet'
+                : resumePosition == null
+                ? (hasProgress ? 'Resume' : 'Start watching')
+                : 'Resume at ${_formatDuration(resumePosition!)}',
+            trailing: isAvailable ? 'EP-$resumeEpisode' : null,
+            icon: Icons.play_arrow_rounded,
+            primary: true,
+            autofocus: isAvailable && autofocusPrimary,
+            onPressed: onResume,
+            large: large,
+          ),
+          SizedBox(height: large ? 14 : 6),
+          _EpisodeActionButton(
+            key: const ValueKey('episode-action-restart'),
+            label: 'Play from beginning',
+            icon: Icons.replay_rounded,
+            onPressed: onPlayFromBeginning,
+            large: large,
+          ),
+          SizedBox(height: large ? 14 : 6),
+          _EpisodeActionButton(
+            key: const ValueKey('episode-action-selected'),
+            label: 'Play selected',
+            trailing: 'EP-$selectedEpisode',
+            icon: Icons.skip_next_rounded,
+            onPressed: onPlaySelected,
+            large: large,
+          ),
+          SizedBox(height: large ? 22 : 7),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'EPISODE',
+              style: TextStyle(
+                color: AppColors.textMuted,
+                fontSize: large ? 13 : 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
             ),
-            SizedBox(height: large ? 14 : 6),
-            _EpisodeActionButton(
-              label: 'Play from beginning',
-              icon: Icons.replay_rounded,
-              onPressed: onPlayFromBeginning,
-              large: large,
+          ),
+          SizedBox(height: large ? 10 : 5),
+          Container(
+            height: large ? 68 : 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF191919),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withValues(alpha: .14)),
             ),
-            SizedBox(height: large ? 14 : 6),
-            _EpisodeActionButton(
-              label: 'Play selected',
-              trailing: 'EP-$selectedEpisode',
-              icon: Icons.skip_next_rounded,
-              onPressed: onPlaySelected,
-              large: large,
-            ),
-            SizedBox(height: large ? 22 : 7),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'EPISODE',
-                style: TextStyle(
-                  color: AppColors.textMuted,
-                  fontSize: large ? 13 : 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.1,
+            child: Row(
+              children: [
+                _EpisodeStepButton(
+                  key: const ValueKey('episode-step-previous'),
+                  icon: Icons.remove_rounded,
+                  label: 'Previous episode',
+                  onPressed: onDecrease,
                 ),
-              ),
-            ),
-            SizedBox(height: large ? 10 : 5),
-            Container(
-              height: large ? 68 : 44,
-              decoration: BoxDecoration(
-                color: const Color(0xFF191919),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white.withValues(alpha: .14)),
-              ),
-              child: Row(
-                children: [
-                  _EpisodeStepButton(
-                    icon: Icons.remove_rounded,
-                    label: 'Previous episode',
-                    onPressed: onDecrease,
-                  ),
-                  Expanded(
-                    child: Text(
-                      'Episode $selectedEpisode of $totalEpisodes',
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: large ? 16 : 13,
-                      ),
+                Expanded(
+                  child: Text(
+                    'Episode $selectedEpisode of $totalEpisodes',
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: large ? 16 : 13,
                     ),
                   ),
-                  _EpisodeStepButton(
-                    icon: Icons.add_rounded,
-                    label: 'Next episode',
-                    onPressed: onIncrease,
-                  ),
-                ],
-              ),
+                ),
+                _EpisodeStepButton(
+                  key: const ValueKey('episode-step-next'),
+                  icon: Icons.add_rounded,
+                  label: 'Next episode',
+                  onPressed: onIncrease,
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -769,6 +795,7 @@ class _EpisodeActions extends StatelessWidget {
 
 class _EpisodeActionButton extends StatelessWidget {
   const _EpisodeActionButton({
+    super.key,
     required this.label,
     required this.icon,
     required this.onPressed,
@@ -781,56 +808,66 @@ class _EpisodeActionButton extends StatelessWidget {
   final String label;
   final String? trailing;
   final IconData icon;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool primary;
   final bool autofocus;
   final bool large;
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final content = Container(
+      height: large ? 76 : 42,
+      padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
+      color: primary ? AppColors.accent : const Color(0xFF1B1B1B),
+      child: Row(
+        children: [
+          Icon(icon, size: large ? 29 : 19),
+          SizedBox(width: large ? 16 : 8),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: large ? 18 : 14,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          if (trailing case final value?)
+            Text(
+              value,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: large ? 14 : 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (!enabled) {
+      return Semantics(
+        button: true,
+        enabled: false,
+        child: Opacity(opacity: .38, child: content),
+      );
+    }
     return TvFocusable(
       autofocus: autofocus,
       focusScale: 1.025,
       borderRadius: BorderRadius.circular(10),
-      onPressed: onPressed,
-      child: Container(
-        height: large ? 76 : 42,
-        padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
-        color: primary ? AppColors.accent : const Color(0xFF1B1B1B),
-        child: Row(
-          children: [
-            Icon(icon, size: large ? 29 : 19),
-            SizedBox(width: large ? 16 : 8),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: large ? 18 : 14,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            if (trailing case final value?)
-              Text(
-                value,
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: large ? 14 : 11,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-          ],
-        ),
-      ),
+      onPressed: onPressed!,
+      child: content,
     );
   }
 }
 
 class _EpisodeStepButton extends StatelessWidget {
   const _EpisodeStepButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.onPressed,
@@ -842,16 +879,28 @@ class _EpisodeStepButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final content = SizedBox(
+      width: 48,
+      height: 48,
+      child: Icon(icon, size: 22),
+    );
+    if (onPressed == null) {
+      return Semantics(
+        label: label,
+        button: true,
+        enabled: false,
+        child: Opacity(opacity: .32, child: content),
+      );
+    }
     return Semantics(
       label: label,
-      child: Opacity(
-        opacity: onPressed == null ? .32 : 1,
-        child: TvFocusable(
-          focusScale: 1.04,
-          borderRadius: BorderRadius.circular(9),
-          onPressed: onPressed ?? () {},
-          child: SizedBox(width: 48, height: 48, child: Icon(icon, size: 22)),
-        ),
+      button: true,
+      enabled: true,
+      child: TvFocusable(
+        focusScale: 1.04,
+        borderRadius: BorderRadius.circular(9),
+        onPressed: onPressed!,
+        child: content,
       ),
     );
   }

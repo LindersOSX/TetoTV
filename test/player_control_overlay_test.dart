@@ -76,6 +76,18 @@ void main() {
     expect(find.byKey(const ValueKey('player-exit-dialog')), findsOneWidget);
     expect(find.byKey(const ValueKey('player-exit-continue')), findsOneWidget);
     expect(find.byKey(const ValueKey('player-exit-confirm')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.text('Exit video?')).style?.color,
+      Colors.white,
+    );
+    expect(
+      tester.widget<Text>(find.text('Continue watching')).style?.color,
+      Colors.white,
+    );
+    expect(
+      tester.widget<Text>(find.text('Exit video')).style?.color,
+      Colors.white,
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

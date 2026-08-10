@@ -28,6 +28,10 @@ const _showHeroKey = 'home_show_featured_hero';
 const _showPosterMetadataKey = 'home_show_poster_metadata';
 const _showCardSubtitlesKey = 'home_show_card_subtitles';
 const _trackerUpdateThresholdKey = 'tracking_episode_update_threshold';
+const _interfaceModeKey = 'appearance_interface_mode';
+const _navigationSoundsKey = 'audio_navigation_sounds';
+const _clickSoundsKey = 'audio_click_sounds';
+const _defaultLandingPageKey = 'navigation_default_landing_page';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -88,6 +92,46 @@ extension HomeLayoutLabel on HomeLayout {
   };
 }
 
+/// Controls whether TetoTV uses its 10-foot canvas or the denser handheld
+/// canvas. Automatic keeps the current device-aware behavior for existing
+/// installs, while the explicit options are useful on unusual Android boxes
+/// and large foldable phones.
+enum InterfaceMode { automatic, television, phone }
+
+extension InterfaceModeLabel on InterfaceMode {
+  String get displayName => switch (this) {
+    InterfaceMode.automatic => 'Automatic',
+    InterfaceMode.television => 'TV',
+    InterfaceMode.phone => 'Phone',
+  };
+
+  String get description => switch (this) {
+    InterfaceMode.automatic => 'Match this device',
+    InterfaceMode.television => '10-foot layout',
+    InterfaceMode.phone => 'Denser handheld layout',
+  };
+}
+
+enum LandingPage { home, search, myList, discover, calendar }
+
+extension LandingPageLabel on LandingPage {
+  String get displayName => switch (this) {
+    LandingPage.home => 'Home',
+    LandingPage.search => 'Search',
+    LandingPage.myList => 'My List',
+    LandingPage.discover => 'Discover',
+    LandingPage.calendar => 'Calendar',
+  };
+
+  String get route => switch (this) {
+    LandingPage.home => '/',
+    LandingPage.search => '/search',
+    LandingPage.myList => '/my-list',
+    LandingPage.discover => '/discover',
+    LandingPage.calendar => '/calendar',
+  };
+}
+
 enum ContentDensity { compact, standard, comfortable }
 
 extension ContentDensityLabel on ContentDensity {
@@ -130,6 +174,10 @@ class SettingsPreferences {
     this.showPosterMetadata = true,
     this.showCardSubtitles = true,
     this.trackerUpdateThreshold = TrackerUpdateThreshold.nearlyFinished,
+    this.interfaceMode = InterfaceMode.automatic,
+    this.navigationSounds = true,
+    this.clickSounds = true,
+    this.defaultLandingPage = LandingPage.home,
   });
 
   final DebridService debridProvider;
@@ -156,6 +204,10 @@ class SettingsPreferences {
   final bool showPosterMetadata;
   final bool showCardSubtitles;
   final TrackerUpdateThreshold trackerUpdateThreshold;
+  final InterfaceMode interfaceMode;
+  final bool navigationSounds;
+  final bool clickSounds;
+  final LandingPage defaultLandingPage;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -182,6 +234,10 @@ class SettingsPreferences {
     bool? showPosterMetadata,
     bool? showCardSubtitles,
     TrackerUpdateThreshold? trackerUpdateThreshold,
+    InterfaceMode? interfaceMode,
+    bool? navigationSounds,
+    bool? clickSounds,
+    LandingPage? defaultLandingPage,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -209,6 +265,10 @@ class SettingsPreferences {
     showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
     trackerUpdateThreshold:
         trackerUpdateThreshold ?? this.trackerUpdateThreshold,
+    interfaceMode: interfaceMode ?? this.interfaceMode,
+    navigationSounds: navigationSounds ?? this.navigationSounds,
+    clickSounds: clickSounds ?? this.clickSounds,
+    defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
   );
 }
 
@@ -224,80 +284,223 @@ final settingsPreferencesProvider =
     });
 
 class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
-  SettingsPreferencesController(this._storage)
+  SettingsPreferencesController(this._storage, {this.readValue})
     : super(const SettingsPreferences());
 
   final FlutterSecureStorage _storage;
+  final Future<String?> Function(String key)? readValue;
+  bool _initialLandingPageConsumed = false;
+  Future<void>? _loadFuture;
+  bool _initialLoadComplete = false;
+  int _revision = 0;
+  final Map<String, int> _keyRevisions = {};
+  final Set<String> _preloadMutations = {};
 
-  Future<void> load() async {
-    try {
-      final values = await Future.wait([
-        _storage.read(key: _debridProviderKey),
-        _storage.read(key: _trackingProviderKey),
-        _storage.read(key: _captionTextColorKey),
-        _storage.read(key: _captionBackgroundColorKey),
-        _storage.read(key: _captionTextSizeKey),
-        _storage.read(key: _thumbnailScaleKey),
-        _storage.read(key: _interfaceScaleKey),
-        _storage.read(key: _contentDensityKey),
-        _storage.read(key: _seekBackSecondsKey),
-        _storage.read(key: _seekForwardSecondsKey),
-        _storage.read(key: _builtInKeyboardKey),
-        _storage.read(key: _debridStreamsEnabledKey),
-        _storage.read(key: _webStreamsEnabledKey),
-        _storage.read(key: _autoSkipIntrosKey),
-        _storage.read(key: _autoSkipOutrosKey),
-        _storage.read(key: _homeLayoutKey),
-        _storage.read(key: _showSearchKey),
-        _storage.read(key: _showMyListKey),
-        _storage.read(key: _showDiscoverKey),
-        _storage.read(key: _showCalendarKey),
-        _storage.read(key: _showHeroKey),
-        _storage.read(key: _showPosterMetadataKey),
-        _storage.read(key: _showCardSubtitlesKey),
-        _storage.read(key: _trackerUpdateThresholdKey),
-      ]);
-      state = SettingsPreferences(
+  /// Returns the configured non-Home route once per app process. This avoids
+  /// redirecting again when the user intentionally navigates back to Home.
+  String? takeInitialLandingRoute() {
+    if (_initialLandingPageConsumed) return null;
+    _initialLandingPageConsumed = true;
+    final route = state.defaultLandingPage.route;
+    return route == '/' ? null : route;
+  }
+
+  /// Coalesces simultaneous startup loads, restores each preference
+  /// independently, and preserves any user choice made before encrypted
+  /// storage finishes responding.
+  Future<void> load() => _loadFuture ??= _load().whenComplete(() {
+    _loadFuture = null;
+  });
+
+  Future<void> _load() async {
+    final revisionAtStart = _revision;
+    final wasInitialLoad = !_initialLoadComplete;
+    final values = await Future.wait<Object?>([
+      _safeRead(_debridProviderKey),
+      _safeRead(_trackingProviderKey),
+      _safeRead(_captionTextColorKey),
+      _safeRead(_captionBackgroundColorKey),
+      _safeRead(_captionTextSizeKey),
+      _safeRead(_thumbnailScaleKey),
+      _safeRead(_interfaceScaleKey),
+      _safeRead(_contentDensityKey),
+      _safeRead(_seekBackSecondsKey),
+      _safeRead(_seekForwardSecondsKey),
+      _safeRead(_builtInKeyboardKey),
+      _safeRead(_debridStreamsEnabledKey),
+      _safeRead(_webStreamsEnabledKey),
+      _safeRead(_autoSkipIntrosKey),
+      _safeRead(_autoSkipOutrosKey),
+      _safeRead(_homeLayoutKey),
+      _safeRead(_showSearchKey),
+      _safeRead(_showMyListKey),
+      _safeRead(_showDiscoverKey),
+      _safeRead(_showCalendarKey),
+      _safeRead(_showHeroKey),
+      _safeRead(_showPosterMetadataKey),
+      _safeRead(_showCardSubtitlesKey),
+      _safeRead(_trackerUpdateThresholdKey),
+      _safeRead(_interfaceModeKey),
+      _safeRead(_navigationSoundsKey),
+      _safeRead(_clickSoundsKey),
+      _safeRead(_defaultLandingPageKey),
+    ]);
+
+    bool canRestore(String key, int index) {
+      if (identical(values[index], _preferenceReadFailed)) return false;
+      if (wasInitialLoad && _preloadMutations.contains(key)) return false;
+      return (_keyRevisions[key] ?? 0) <= revisionAtStart;
+    }
+
+    String? valueAt(int index) => values[index] as String?;
+    var restored = state;
+    if (canRestore(_debridProviderKey, 0)) {
+      restored = restored.copyWith(
         debridProvider:
-            DebridService.fromSlug(values[0]) ?? DebridService.realDebrid,
+            DebridService.fromSlug(valueAt(0)) ?? DebridService.realDebrid,
+      );
+    }
+    if (canRestore(_trackingProviderKey, 1)) {
+      restored = restored.copyWith(
         trackingProvider: TrackingProvider.values.firstWhere(
-          (provider) => provider.slug == values[1],
+          (provider) => provider.slug == valueAt(1),
           orElse: () => TrackingProvider.anilist,
         ),
-        captionTextColor: _parseInt(values[2], 0xFFFFFFFF),
-        captionBackgroundColor: _parseInt(values[3], 0x00000000),
-        captionTextSize: _parseDouble(values[4], 34).clamp(18, 60),
-        thumbnailScale: _parseDouble(values[5], 1).clamp(.8, 1.25),
-        interfaceScale: _parseDouble(values[6], 1).clamp(.85, 1.15),
+      );
+    }
+    if (canRestore(_captionTextColorKey, 2)) {
+      restored = restored.copyWith(
+        captionTextColor: _parseInt(valueAt(2), 0xFFFFFFFF),
+      );
+    }
+    if (canRestore(_captionBackgroundColorKey, 3)) {
+      restored = restored.copyWith(
+        captionBackgroundColor: _parseInt(valueAt(3), 0x00000000),
+      );
+    }
+    if (canRestore(_captionTextSizeKey, 4)) {
+      restored = restored.copyWith(
+        captionTextSize: _parseDouble(valueAt(4), 34).clamp(18, 60),
+      );
+    }
+    if (canRestore(_thumbnailScaleKey, 5)) {
+      restored = restored.copyWith(
+        thumbnailScale: _parseDouble(valueAt(5), 1).clamp(.8, 1.25),
+      );
+    }
+    if (canRestore(_interfaceScaleKey, 6)) {
+      restored = restored.copyWith(
+        interfaceScale: _parseDouble(valueAt(6), 1).clamp(.8, 1.2),
+      );
+    }
+    if (canRestore(_contentDensityKey, 7)) {
+      restored = restored.copyWith(
         contentDensity: ContentDensity.values.firstWhere(
-          (density) => density.name == values[7],
+          (density) => density.name == valueAt(7),
           orElse: () => ContentDensity.standard,
         ),
-        seekBackSeconds: _seekValue(values[8]),
-        seekForwardSeconds: _seekValue(values[9]),
-        useBuiltInKeyboard: values[10] != 'false',
-        debridStreamsEnabled: values[11] != 'false',
-        webStreamsEnabled: values[12] != 'false',
-        autoSkipIntros: values[13] == 'true',
-        autoSkipOutros: values[14] == 'true',
+      );
+    }
+    if (canRestore(_seekBackSecondsKey, 8)) {
+      restored = restored.copyWith(seekBackSeconds: _seekValue(valueAt(8)));
+    }
+    if (canRestore(_seekForwardSecondsKey, 9)) {
+      restored = restored.copyWith(seekForwardSeconds: _seekValue(valueAt(9)));
+    }
+    if (canRestore(_builtInKeyboardKey, 10)) {
+      restored = restored.copyWith(useBuiltInKeyboard: valueAt(10) != 'false');
+    }
+    if (canRestore(_debridStreamsEnabledKey, 11)) {
+      restored = restored.copyWith(
+        debridStreamsEnabled: valueAt(11) != 'false',
+      );
+    }
+    if (canRestore(_webStreamsEnabledKey, 12)) {
+      restored = restored.copyWith(webStreamsEnabled: valueAt(12) != 'false');
+    }
+    if (canRestore(_autoSkipIntrosKey, 13)) {
+      restored = restored.copyWith(autoSkipIntros: valueAt(13) == 'true');
+    }
+    if (canRestore(_autoSkipOutrosKey, 14)) {
+      restored = restored.copyWith(autoSkipOutros: valueAt(14) == 'true');
+    }
+    if (canRestore(_homeLayoutKey, 15)) {
+      restored = restored.copyWith(
         homeLayout: HomeLayout.values.firstWhere(
-          (layout) => layout.name == values[15],
+          (layout) => layout.name == valueAt(15),
           orElse: () => HomeLayout.cinematic,
         ),
-        showSearch: values[16] != 'false',
-        showMyList: values[17] != 'false',
-        showDiscover: values[18] != 'false',
-        showCalendar: values[19] != 'false',
-        showHero: values[20] != 'false',
-        showPosterMetadata: values[21] != 'false',
-        showCardSubtitles: values[22] != 'false',
+      );
+    }
+    if (canRestore(_showSearchKey, 16)) {
+      restored = restored.copyWith(showSearch: valueAt(16) != 'false');
+    }
+    if (canRestore(_showMyListKey, 17)) {
+      restored = restored.copyWith(showMyList: valueAt(17) != 'false');
+    }
+    if (canRestore(_showDiscoverKey, 18)) {
+      restored = restored.copyWith(showDiscover: valueAt(18) != 'false');
+    }
+    if (canRestore(_showCalendarKey, 19)) {
+      restored = restored.copyWith(showCalendar: valueAt(19) != 'false');
+    }
+    if (canRestore(_showHeroKey, 20)) {
+      restored = restored.copyWith(showHero: valueAt(20) != 'false');
+    }
+    if (canRestore(_showPosterMetadataKey, 21)) {
+      restored = restored.copyWith(showPosterMetadata: valueAt(21) != 'false');
+    }
+    if (canRestore(_showCardSubtitlesKey, 22)) {
+      restored = restored.copyWith(showCardSubtitles: valueAt(22) != 'false');
+    }
+    if (canRestore(_trackerUpdateThresholdKey, 23)) {
+      restored = restored.copyWith(
         trackerUpdateThreshold: TrackerUpdateThreshold.values.firstWhere(
-          (threshold) => threshold.name == values[23],
+          (threshold) => threshold.name == valueAt(23),
           orElse: () => TrackerUpdateThreshold.nearlyFinished,
         ),
       );
+    }
+    if (canRestore(_interfaceModeKey, 24)) {
+      restored = restored.copyWith(
+        interfaceMode: InterfaceMode.values.firstWhere(
+          (mode) => mode.name == valueAt(24),
+          orElse: () => InterfaceMode.automatic,
+        ),
+      );
+    }
+    if (canRestore(_navigationSoundsKey, 25)) {
+      restored = restored.copyWith(navigationSounds: valueAt(25) != 'false');
+    }
+    if (canRestore(_clickSoundsKey, 26)) {
+      restored = restored.copyWith(clickSounds: valueAt(26) != 'false');
+    }
+    if (canRestore(_defaultLandingPageKey, 27)) {
+      restored = restored.copyWith(
+        defaultLandingPage: LandingPage.values.firstWhere(
+          (page) => page.name == valueAt(27),
+          orElse: () => LandingPage.home,
+        ),
+      );
+    }
+    state = restored;
+    _initialLoadComplete = true;
+    _preloadMutations.clear();
+  }
+
+  Future<Object?> _safeRead(String key) async {
+    try {
+      return await (readValue?.call(key) ?? _storage.read(key: key));
     } catch (_) {
-      // Appearance preferences are optional; safe defaults remain usable.
+      return _preferenceReadFailed;
+    }
+  }
+
+  void _markMutated(Iterable<String> keys) {
+    final revision = ++_revision;
+    for (final key in keys) {
+      _keyRevisions[key] = revision;
+      if (!_initialLoadComplete) _preloadMutations.add(key);
     }
   }
 
@@ -379,24 +582,32 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setHomeLayout(HomeLayout value) =>
       _update(state.copyWith(homeLayout: value), {_homeLayoutKey: value.name});
 
-  Future<void> setShowSearch(bool value) => _update(
-    state.copyWith(showSearch: value),
-    {_showSearchKey: value.toString()},
+  Future<void> setShowSearch(bool value) => _setNavigationVisibility(
+    visible: value,
+    page: LandingPage.search,
+    visibilityKey: _showSearchKey,
+    next: state.copyWith(showSearch: value),
   );
 
-  Future<void> setShowMyList(bool value) => _update(
-    state.copyWith(showMyList: value),
-    {_showMyListKey: value.toString()},
+  Future<void> setShowMyList(bool value) => _setNavigationVisibility(
+    visible: value,
+    page: LandingPage.myList,
+    visibilityKey: _showMyListKey,
+    next: state.copyWith(showMyList: value),
   );
 
-  Future<void> setShowDiscover(bool value) => _update(
-    state.copyWith(showDiscover: value),
-    {_showDiscoverKey: value.toString()},
+  Future<void> setShowDiscover(bool value) => _setNavigationVisibility(
+    visible: value,
+    page: LandingPage.discover,
+    visibilityKey: _showDiscoverKey,
+    next: state.copyWith(showDiscover: value),
   );
 
-  Future<void> setShowCalendar(bool value) => _update(
-    state.copyWith(showCalendar: value),
-    {_showCalendarKey: value.toString()},
+  Future<void> setShowCalendar(bool value) => _setNavigationVisibility(
+    visible: value,
+    page: LandingPage.calendar,
+    visibilityKey: _showCalendarKey,
+    next: state.copyWith(showCalendar: value),
   );
 
   Future<void> setShowHero(bool value) => _update(
@@ -419,8 +630,42 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _trackerUpdateThresholdKey: value.name,
       });
 
+  Future<void> setInterfaceMode(InterfaceMode value) => _update(
+    state.copyWith(interfaceMode: value),
+    {_interfaceModeKey: value.name},
+  );
+
+  Future<void> setNavigationSounds(bool value) => _update(
+    state.copyWith(navigationSounds: value),
+    {_navigationSoundsKey: value.toString()},
+  );
+
+  Future<void> setClickSounds(bool value) => _update(
+    state.copyWith(clickSounds: value),
+    {_clickSoundsKey: value.toString()},
+  );
+
+  Future<void> setDefaultLandingPage(LandingPage value) => _update(
+    state.copyWith(defaultLandingPage: value),
+    {_defaultLandingPageKey: value.name},
+  );
+
   Future<void> resetCustomization() async {
     const defaults = SettingsPreferences();
+    const keys = [
+      _homeLayoutKey,
+      _showSearchKey,
+      _showMyListKey,
+      _showDiscoverKey,
+      _showCalendarKey,
+      _showHeroKey,
+      _showPosterMetadataKey,
+      _showCardSubtitlesKey,
+      _navigationSoundsKey,
+      _clickSoundsKey,
+      _defaultLandingPageKey,
+    ];
+    _markMutated(keys);
     state = state.copyWith(
       homeLayout: defaults.homeLayout,
       showSearch: defaults.showSearch,
@@ -430,23 +675,29 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,
+      navigationSounds: defaults.navigationSounds,
+      clickSounds: defaults.clickSounds,
+      defaultLandingPage: defaults.defaultLandingPage,
     );
-    for (final key in const [
-      _homeLayoutKey,
-      _showSearchKey,
-      _showMyListKey,
-      _showDiscoverKey,
-      _showCalendarKey,
-      _showHeroKey,
-      _showPosterMetadataKey,
-      _showCardSubtitlesKey,
-    ]) {
+    for (final key in keys) {
       await _storage.delete(key: key);
     }
   }
 
   Future<void> resetAppearance() async {
     const defaults = SettingsPreferences();
+    const keys = [
+      _captionTextColorKey,
+      _captionBackgroundColorKey,
+      _captionTextSizeKey,
+      _thumbnailScaleKey,
+      _interfaceScaleKey,
+      _contentDensityKey,
+      _interfaceModeKey,
+      _seekBackSecondsKey,
+      _seekForwardSecondsKey,
+    ];
+    _markMutated(keys);
     state = state.copyWith(
       captionTextColor: defaults.captionTextColor,
       captionBackgroundColor: defaults.captionBackgroundColor,
@@ -454,19 +705,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       thumbnailScale: defaults.thumbnailScale,
       interfaceScale: defaults.interfaceScale,
       contentDensity: defaults.contentDensity,
+      interfaceMode: defaults.interfaceMode,
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,
     );
-    for (final key in const [
-      _captionTextColorKey,
-      _captionBackgroundColorKey,
-      _captionTextSizeKey,
-      _thumbnailScaleKey,
-      _interfaceScaleKey,
-      _contentDensityKey,
-      _seekBackSecondsKey,
-      _seekForwardSecondsKey,
-    ]) {
+    for (final key in keys) {
       await _storage.delete(key: key);
     }
   }
@@ -475,6 +718,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     SettingsPreferences next,
     Map<String, String> values,
   ) async {
+    _markMutated(values.keys);
     state = next;
     try {
       for (final entry in values.entries) {
@@ -484,7 +728,25 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // Keep the in-memory preference if platform storage is unavailable.
     }
   }
+
+  Future<void> _setNavigationVisibility({
+    required bool visible,
+    required LandingPage page,
+    required String visibilityKey,
+    required SettingsPreferences next,
+  }) {
+    final landingPage = !visible && state.defaultLandingPage == page
+        ? LandingPage.home
+        : state.defaultLandingPage;
+    return _update(next.copyWith(defaultLandingPage: landingPage), {
+      visibilityKey: visible.toString(),
+      if (landingPage != state.defaultLandingPage)
+        _defaultLandingPageKey: landingPage.name,
+    });
+  }
 }
+
+const _preferenceReadFailed = Object();
 
 int _parseInt(String? value, int fallback) =>
     int.tryParse(value ?? '') ?? fallback;

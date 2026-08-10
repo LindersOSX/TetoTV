@@ -1,5 +1,7 @@
 import 'package:anime_tv/features/auth/presentation/anilist_pairing_screen.dart';
+import 'package:anime_tv/features/auth/presentation/all_debrid_pairing_screen.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/auth/presentation/premiumize_pairing_screen.dart';
 import 'package:anime_tv/features/auth/presentation/real_debrid_pairing_screen.dart';
 import 'package:anime_tv/features/auth/presentation/torbox_pairing_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
@@ -94,6 +96,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/pair/torbox',
       builder: (context, state) => const TorBoxPairingScreen(),
+    ),
+    GoRoute(
+      path: '/pair/alldebrid',
+      builder: (context, state) => const AllDebridPairingScreen(),
+    ),
+    GoRoute(
+      path: '/pair/premiumize',
+      builder: (context, state) => const PremiumizePairingScreen(),
     ),
     GoRoute(
       path: '/settings/accounts',
