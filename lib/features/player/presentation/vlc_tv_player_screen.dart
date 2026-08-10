@@ -1077,6 +1077,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             'synonyms': details.synonyms.join('|'),
             'episode': nextEpisode.toString(),
             'autoplay': '1',
+            if (details.seasonYear != null)
+              'year': details.seasonYear.toString(),
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
             if (widget.malMediaId != null)
               'malId': widget.malMediaId.toString(),

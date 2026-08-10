@@ -952,15 +952,18 @@ class _PosterCard extends StatelessWidget {
               const SizedBox(height: 8),
               SizedBox(
                 height: 24,
-                child: Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 11,
-                    height: 1.05,
-                    fontWeight: FontWeight.w800,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    item.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 11,
+                      height: 1.05,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ),
@@ -968,7 +971,7 @@ class _PosterCard extends StatelessWidget {
                 SizedBox(
                   height: 14,
                   child: Padding(
-                    padding: const EdgeInsets.only(top: 3),
+                    padding: const EdgeInsets.fromLTRB(6, 3, 6, 0),
                     child: Text(
                       item.subtitle,
                       maxLines: 1,

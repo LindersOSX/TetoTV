@@ -527,6 +527,8 @@ class _NativeMedia3PlayerScreenState
             'synonyms': details.synonyms.join('|'),
             'episode': nextEpisode.toString(),
             'autoplay': '1',
+            if (details.seasonYear != null)
+              'year': details.seasonYear.toString(),
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
             if (_malMediaId != null) 'malId': _malMediaId.toString(),
           },

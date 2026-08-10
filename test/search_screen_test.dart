@@ -1,10 +1,11 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
-import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -94,6 +95,71 @@ void main() {
 
     expect(client.requests, contains('Cowboy Bebop'));
     expect(find.text('Results for “Cowboy Bebop”'), findsOneWidget);
+  });
+  testWidgets('focused long result titles stay inside the card', (
+    tester,
+  ) async {
+    const longTitle =
+        'Skeleton Knight in Another World Season Two With an Extra Long Name';
+    const query = 'skeleton';
+    final viewports = <Size>[const Size(1280, 720), const Size(400, 800)];
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    for (final viewport in viewports) {
+      await tester.binding.setSurfaceSize(viewport);
+      final client = _DeferredCatalogClient();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [catalogClientProvider.overrideWithValue(client)],
+          child: const MaterialApp(home: SearchScreen(initialQuery: query)),
+        ),
+      );
+      await tester.pump();
+
+      client.complete(query, [_anime(3, longTitle)]);
+      await tester.pump();
+
+      final title = find.text(longTitle);
+      expect(title, findsOneWidget, reason: 'viewport: $viewport');
+      final card = find.ancestor(of: title, matching: find.byType(TvFocusable));
+      expect(card, findsOneWidget, reason: 'viewport: $viewport');
+      final focusDetector = find.descendant(
+        of: card,
+        matching: find.byType(FocusableActionDetector),
+      );
+      tester
+          .widget<FocusableActionDetector>(focusDetector)
+          .focusNode!
+          .requestFocus();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final titleRect = tester.getRect(title);
+      final cardRect = tester.getRect(card);
+      const safeInset = 5.0;
+      expect(
+        titleRect.left,
+        greaterThanOrEqualTo(cardRect.left + safeInset),
+        reason: 'left edge at viewport $viewport',
+      );
+      expect(
+        titleRect.right,
+        lessThanOrEqualTo(cardRect.right - safeInset),
+        reason: 'right edge at viewport $viewport',
+      );
+      expect(
+        titleRect.top,
+        greaterThanOrEqualTo(cardRect.top + safeInset),
+        reason: 'top edge at viewport $viewport',
+      );
+      expect(
+        titleRect.bottom,
+        lessThanOrEqualTo(cardRect.bottom - safeInset),
+        reason: 'bottom edge at viewport $viewport',
+      );
+      expect(tester.takeException(), isNull, reason: 'viewport: $viewport');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
   });
 }
 

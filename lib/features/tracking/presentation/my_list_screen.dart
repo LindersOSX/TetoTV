@@ -729,26 +729,32 @@ class _TrackedShelf extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      item.tracked.displayTitle(titlePreference),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        height: 1.05,
-                        fontWeight: FontWeight.w800,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Text(
+                        item.tracked.displayTitle(titlePreference),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          height: 1.05,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 3),
-                    Text(
-                      item.tracked.totalEpisodes == null
-                          ? 'Episode ${item.tracked.progress}'
-                          : 'Episode ${item.tracked.progress} / '
-                                '${item.tracked.totalEpisodes}',
-                      style: const TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 9,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Text(
+                        item.tracked.totalEpisodes == null
+                            ? 'Episode ${item.tracked.progress}'
+                            : 'Episode ${item.tracked.progress} / '
+                                  '${item.tracked.totalEpisodes}',
+                        style: const TextStyle(
+                          color: AppColors.textMuted,
+                          fontSize: 9,
+                        ),
                       ),
                     ),
                   ],

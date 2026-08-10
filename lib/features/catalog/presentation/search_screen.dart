@@ -335,7 +335,10 @@ class _SearchCard extends StatelessWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(2, 7, 2, 3),
+                  // Keep card copy clear of TvFocusable's three-pixel
+                  // foreground focus ring. The artwork intentionally remains
+                  // full bleed, while text needs an inset on both sides.
+                  padding: const EdgeInsets.fromLTRB(6, 7, 6, 3),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

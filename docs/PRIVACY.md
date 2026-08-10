@@ -37,7 +37,10 @@ TetoTV makes network requests only for app features the user uses:
   This lookup also supports the manual Skip button when automatic skipping is
   disabled;
 - source repositories and extensions installed by the user receive the title,
-  episode, and related request data needed to find sources; and
+  episode, and related request data needed to find sources;
+- when a user-added Stremio source cannot use the available Kitsu identifier,
+  Cinemeta may receive the anime title and year to resolve the corresponding
+  IMDb series and episode identifier; and
 - image hosts receive ordinary artwork requests.
 
 Those independent services can see normal connection metadata such as the

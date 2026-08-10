@@ -858,6 +858,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         'synonyms': details.synonyms.join('|'),
         'episode': nextEp.toString(),
         'autoplay': '1',
+        if (details.seasonYear != null) 'year': details.seasonYear.toString(),
         if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
         if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
       };

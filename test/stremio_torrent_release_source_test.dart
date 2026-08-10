@@ -166,4 +166,276 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
+
+  test(
+    'uses manifest series capability and requests included MAL mapping data',
+    () async {
+      final addonRequests = <Uri>[];
+      final addonDio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              addonRequests.add(options.uri);
+              if (options.uri.path.endsWith('/manifest.json')) {
+                handler.resolve(
+                  Response<dynamic>(
+                    requestOptions: options,
+                    statusCode: 200,
+                    data: const {
+                      'types': ['series'],
+                      'resources': [
+                        {
+                          'name': 'stream',
+                          'types': ['series'],
+                          'idPrefixes': ['kitsu'],
+                        },
+                      ],
+                    },
+                  ),
+                );
+                return;
+              }
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: const {
+                    'streams': [
+                      {
+                        'name': '1080p',
+                        'infoHash': 'f03841b6b24585b1571df6b0c930d9946047058f',
+                      },
+                    ],
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      final kitsuDio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              expect(options.queryParameters['include'], 'item');
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: const {
+                    'data': [
+                      {
+                        'relationships': {
+                          'item': {
+                            'data': {'id': '42'},
+                          },
+                        },
+                      },
+                    ],
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      final cinemetaDio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) => handler.reject(
+              DioException(
+                requestOptions: options,
+                message: 'Cinemeta must remain lazy when Kitsu succeeds.',
+              ),
+            ),
+          ),
+        );
+      final validated = <Uri>[];
+      final source = StremioTorrentReleaseSource(
+        manifestUrl:
+            'https://example.com/private/manifest.json?private=do-not-copy',
+        addonDio: addonDio,
+        kitsuDio: kitsuDio,
+        cinemetaDio: cinemetaDio,
+        targetValidator: (uri) async => validated.add(uri),
+      );
+
+      final releases = await source.search(
+        const EpisodeReference(
+          anilistMediaId: 1,
+          malMediaId: 2,
+          title: 'Example',
+          episode: 7,
+        ),
+      );
+
+      expect(releases, hasLength(1));
+      expect(addonRequests, hasLength(2));
+      expect(
+        addonRequests.last.path,
+        '/private/stream/series/kitsu%3A42%3A7.json',
+      );
+      expect(addonRequests.last.query, isEmpty);
+      expect(validated, addonRequests);
+    },
+  );
+
+  test('falls back from Kitsu to year-matched IMDb series episode', () async {
+    final addonRequests = <Uri>[];
+    final addonDio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            addonRequests.add(options.uri);
+            if (options.uri.path.endsWith('/manifest.json')) {
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: const {
+                    'resources': [
+                      {
+                        'name': 'stream',
+                        'types': ['anime', 'series'],
+                        'idPrefixes': ['tt', 'kitsu'],
+                      },
+                    ],
+                  },
+                ),
+              );
+              return;
+            }
+            if (options.uri.path.contains('/kitsu%3A')) {
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 502,
+                  data: 'upstream unavailable',
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: const {
+                  'streams': [
+                    {
+                      'name': '1080p',
+                      'infoHash': 'f03841b6b24585b1571df6b0c930d9946047058f',
+                    },
+                  ],
+                },
+              ),
+            );
+          },
+        ),
+      );
+    final kitsuDio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: const {
+                'data': [
+                  {
+                    'relationships': {
+                      'item': {
+                        'data': {'id': '1697'},
+                      },
+                    },
+                  },
+                ],
+              },
+            ),
+          ),
+        ),
+      );
+    final cinemetaRequests = <Uri>[];
+    final cinemetaDio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            cinemetaRequests.add(options.uri);
+            if (options.uri.path.contains('/catalog/')) {
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: const {
+                    'metas': [
+                      {
+                        'id': 'tt1086236',
+                        'name': 'Lucky Star',
+                        'releaseInfo': '2007-2024',
+                      },
+                    ],
+                  },
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: const {
+                  'meta': {
+                    'videos': [
+                      {
+                        'id': 'tt1086236:1:1',
+                        'season': 1,
+                        'episode': 1,
+                        'released': '2007-04-08T00:00:00.000Z',
+                      },
+                      {
+                        'id': 'tt1086236:2:1',
+                        'season': 2,
+                        'episode': 1,
+                        'released': '2024-04-08T00:00:00.000Z',
+                      },
+                    ],
+                  },
+                },
+              ),
+            );
+          },
+        ),
+      );
+    final source = StremioTorrentReleaseSource(
+      manifestUrl:
+          'https://addon.example/user-path/manifest.json?token=private',
+      addonDio: addonDio,
+      kitsuDio: kitsuDio,
+      cinemetaDio: cinemetaDio,
+      targetValidator: (_) async {},
+    );
+
+    final releases = await source.search(
+      const EpisodeReference(
+        anilistMediaId: 1887,
+        malMediaId: 1887,
+        title: 'Lucky Star',
+        year: 2024,
+        episode: 1,
+      ),
+    );
+
+    expect(releases, hasLength(1));
+    expect(
+      addonRequests.last.path,
+      '/user-path/stream/series/tt1086236%3A2%3A1.json',
+    );
+    expect(addonRequests.skip(1).every((uri) => uri.query.isEmpty), isTrue);
+    expect(cinemetaRequests, hasLength(2));
+    expect(
+      cinemetaRequests.every(
+        (uri) =>
+            uri.host == 'v3-cinemeta.strem.io' &&
+            !uri.toString().contains('private'),
+      ),
+      isTrue,
+    );
+  });
 }
