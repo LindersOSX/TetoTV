@@ -87,10 +87,14 @@ class SourcePairingState {
     this.session,
     this.summary,
     this.message,
+    this.canRetryImport = false,
+    this.canRetryAcknowledgement = false,
   });
 
   final SourcePairingStage stage;
   final SourcePairingSession? session;
   final SourceImportSummary? summary;
   final String? message;
+  final bool canRetryImport;
+  final bool canRetryAcknowledgement;
 }

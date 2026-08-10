@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/source_pairing_client.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
@@ -12,6 +12,7 @@ typedef SourcePairingApiFactory = SourcePairingApi Function(String baseUrl);
 typedef SourcePairingBaseUrlLoader = Future<String?> Function();
 typedef SourcePayloadImporter =
     Future<SourceImportSummary> Function(SourcePairingPayload payload);
+typedef SourcePairingRetryDelay = Future<void> Function(Duration duration);
 typedef PairedRepositoryAdder =
     Future<String?> Function(String url, {bool refreshAfterAdd});
 typedef PairedManifestAdder = Future<String?> Function(String url);
@@ -26,7 +27,10 @@ final sourcePairingControllerProvider =
         userTorrentSourcesControllerProvider.notifier,
       );
       return SourcePairingController(
-        () => effectiveAuthBrokerBaseUrl(ref.read(secureStorageProvider)),
+        () async {
+          final origin = AppConfig.authBrokerBaseUrl.trim();
+          return origin.isEmpty ? null : origin;
+        },
         (baseUrl) => SourcePairingClient(baseUrl: baseUrl),
         (payload) => importPairedSources(
           payload,
@@ -41,29 +45,38 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
     this._baseUrlLoader,
     this._clientFactory,
     this._importer, {
-    DateTime Function()? now,
-  }) : _now = now ?? DateTime.now,
+    SourcePairingRetryDelay? retryDelay,
+  }) : _retryDelay = retryDelay ?? Future<void>.delayed,
        super(const SourcePairingState());
 
   final SourcePairingBaseUrlLoader _baseUrlLoader;
   final SourcePairingApiFactory _clientFactory;
   final SourcePayloadImporter _importer;
-  final DateTime Function() _now;
+  final SourcePairingRetryDelay _retryDelay;
   SourcePairingApi? _client;
   Timer? _pollTimer;
   int? _pollingGeneration;
   int _generation = 0;
   int _consecutivePollFailures = 0;
+  SourcePairingPayload? _pendingPayload;
+  SourceImportSummary? _pendingAcknowledgement;
+  bool _deliveryHandled = false;
 
   Future<void> start() async {
     final previousClient = _client;
     final previousSession = state.session;
+    final previousDeliveryHandled = _deliveryHandled;
     final generation = ++_generation;
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _client = null;
     _consecutivePollFailures = 0;
-    if (previousClient != null && previousSession != null) {
+    _pendingPayload = null;
+    _pendingAcknowledgement = null;
+    _deliveryHandled = false;
+    if (!previousDeliveryHandled &&
+        previousClient != null &&
+        previousSession != null) {
       unawaited(_cancelBestEffort(previousClient, previousSession));
     }
     state = const SourcePairingState(stage: SourcePairingStage.starting);
@@ -72,7 +85,7 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
       if (!mounted || generation != _generation) return;
       if (baseUrl == null) {
         throw StateError(
-          'The TetoTV HTTPS broker is not configured. Configure account QR pairing first.',
+          'This TetoTV build does not have its trusted HTTPS pairing service configured.',
         );
       }
       final client = _clientFactory(baseUrl);
@@ -107,16 +120,6 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
         client == null) {
       return;
     }
-    if (!_now().isBefore(session.expiresAt)) {
-      _pollTimer?.cancel();
-      state = SourcePairingState(
-        stage: SourcePairingStage.expired,
-        session: session,
-        message: 'The one-time source code expired. Create a new code.',
-      );
-      return;
-    }
-
     final generation = _generation;
     if (_pollingGeneration == generation) return;
     _pollingGeneration = generation;
@@ -143,32 +146,16 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
             );
           }
           _pollTimer?.cancel();
-          state = SourcePairingState(
-            stage: SourcePairingStage.validating,
+          _pendingPayload = payload;
+          // From this point the broker payload must remain available until an
+          // authenticated completion acknowledgement. Closing or backgrounding
+          // the app must not DELETE it while local persistence is in progress.
+          _deliveryHandled = true;
+          await _importAndAcknowledge(
+            payload,
+            client: client,
             session: session,
-            message: 'Received. Validating public HTTPS destinations…',
-          );
-          late final SourceImportSummary summary;
-          try {
-            summary = await _importer(payload);
-          } catch (_) {
-            if (!mounted || generation != _generation) return;
-            state = SourcePairingState(
-              stage: SourcePairingStage.failed,
-              session: session,
-              message:
-                  'Sources were received but could not be imported safely. Create a new code and try again.',
-            );
-            return;
-          }
-          if (!mounted || generation != _generation) return;
-          state = SourcePairingState(
-            stage: summary.totalAdded > 0
-                ? SourcePairingStage.completed
-                : SourcePairingStage.failed,
-            session: session,
-            summary: summary,
-            message: summary.message,
+            generation: generation,
           );
       }
     } catch (error) {
@@ -189,6 +176,131 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
     }
   }
 
+  Future<void> retryImport() async {
+    if (!mounted ||
+        state.stage != SourcePairingStage.failed ||
+        !state.canRetryImport) {
+      return;
+    }
+    final payload = _pendingPayload;
+    final client = _client;
+    final session = state.session;
+    if (payload == null || client == null || session == null) return;
+    await _importAndAcknowledge(
+      payload,
+      client: client,
+      session: session,
+      generation: _generation,
+    );
+  }
+
+  Future<void> _importAndAcknowledge(
+    SourcePairingPayload payload, {
+    required SourcePairingApi client,
+    required SourcePairingSession session,
+    required int generation,
+  }) async {
+    state = SourcePairingState(
+      stage: SourcePairingStage.validating,
+      session: session,
+      message: 'Received. Validating public HTTPS destinations…',
+    );
+    late final SourceImportSummary summary;
+    try {
+      summary = await _importer(payload);
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      state = SourcePairingState(
+        stage: SourcePairingStage.failed,
+        session: session,
+        message:
+            'Sources were received but could not be saved safely. Retry without re-entering the URLs.',
+        canRetryImport: true,
+      );
+      return;
+    }
+    if (!mounted || generation != _generation) return;
+
+    // Persistence has finished before the broker is told to clear the URLs.
+    // A closing dialog must not cancel this result while the phone reads it.
+    _pendingAcknowledgement = summary;
+    final acknowledged = await _acknowledgeWithRetry(
+      client,
+      session,
+      summary,
+      generation,
+    );
+    if (!mounted || generation != _generation) return;
+    _pendingPayload = null;
+    if (acknowledged) _pendingAcknowledgement = null;
+    state = SourcePairingState(
+      stage: summary.totalAdded > 0
+          ? SourcePairingStage.completed
+          : SourcePairingStage.failed,
+      session: session,
+      summary: summary,
+      message: acknowledged
+          ? summary.message
+          : '${summary.message} Saved locally, but the phone confirmation could not be updated.',
+      canRetryAcknowledgement: !acknowledged,
+    );
+  }
+
+  Future<void> retryAcknowledgement() async {
+    if (!mounted || !state.canRetryAcknowledgement) return;
+    final client = _client;
+    final session = state.session;
+    final summary = _pendingAcknowledgement;
+    if (client == null || session == null || summary == null) return;
+
+    final generation = _generation;
+    state = SourcePairingState(
+      stage: SourcePairingStage.validating,
+      session: session,
+      summary: summary,
+      message: 'Sources are saved. Updating the phone confirmation…',
+    );
+    final acknowledged = await _acknowledgeWithRetry(
+      client,
+      session,
+      summary,
+      generation,
+    );
+    if (!mounted || generation != _generation) return;
+    if (acknowledged) _pendingAcknowledgement = null;
+    state = SourcePairingState(
+      stage: summary.totalAdded > 0
+          ? SourcePairingStage.completed
+          : SourcePairingStage.failed,
+      session: session,
+      summary: summary,
+      message: acknowledged
+          ? summary.message
+          : '${summary.message} Saved locally, but the phone confirmation still could not be updated.',
+      canRetryAcknowledgement: !acknowledged,
+    );
+  }
+
+  Future<bool> _acknowledgeWithRetry(
+    SourcePairingApi client,
+    SourcePairingSession session,
+    SourceImportSummary summary,
+    int generation,
+  ) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        await client.acknowledge(session, summary);
+        return true;
+      } catch (_) {
+        if (!mounted || generation != _generation) return false;
+        if (attempt < 2) {
+          await _retryDelay(Duration(milliseconds: 200 * (attempt + 1)));
+        }
+      }
+    }
+    return false;
+  }
+
   void stop() {
     if (!mounted) return;
     final client = _client;
@@ -197,7 +309,7 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _client = null;
-    if (client != null && session != null) {
+    if (!_deliveryHandled && client != null && session != null) {
       unawaited(_cancelBestEffort(client, session));
     }
     if (mounted &&
@@ -215,7 +327,7 @@ class SourcePairingController extends StateNotifier<SourcePairingState> {
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _client = null;
-    if (client != null && session != null) {
+    if (!_deliveryHandled && client != null && session != null) {
       unawaited(_cancelBestEffort(client, session));
     }
     super.dispose();
@@ -272,7 +384,7 @@ Future<SourceImportSummary> importPairedSourcesWithOperations(
       // Marketplace network requests pin the validated public address again.
       await (repositoryTargetValidator ?? validatePublicNetworkTarget)(uri);
       final error = await addRepository(uri.toString(), refreshAfterAdd: false);
-      if (error == null) {
+      if (error == null || _alreadySaved(error)) {
         repositoriesAdded++;
       } else {
         errors.add('Repository ${index + 1}: $error');
@@ -282,22 +394,10 @@ Future<SourceImportSummary> importPairedSourcesWithOperations(
     }
   }
 
-  if (repositoriesAdded > 0) {
-    try {
-      // A paired form can contain several repositories. Refresh the combined
-      // catalog once rather than blocking the TV on one network pass per URL.
-      await refreshRepositories();
-    } catch (_) {
-      errors.add(
-        'Repositories were saved, but the marketplace catalog could not refresh.',
-      );
-    }
-  }
-
   for (var index = 0; index < payload.manifestUrls.length; index++) {
     try {
       final error = await addManifest(payload.manifestUrls[index]);
-      if (error == null) {
+      if (error == null || _alreadySaved(error)) {
         manifestsAdded++;
       } else {
         errors.add('Torrent manifest ${index + 1}: $error');
@@ -307,12 +407,22 @@ Future<SourceImportSummary> importPairedSourcesWithOperations(
     }
   }
 
+  if (repositoriesAdded > 0) {
+    // Persistence is complete before any third-party repository is fetched.
+    // A slow or broken catalog must not delay torrent-manifest storage, the
+    // app acknowledgement, or the phone's saved confirmation.
+    unawaited(refreshRepositories().catchError((_) {}));
+  }
+
   return SourceImportSummary(
     repositoriesAdded: repositoriesAdded,
     manifestsAdded: manifestsAdded,
     errors: List<String>.unmodifiable(errors),
   );
 }
+
+bool _alreadySaved(String message) =>
+    message.toLowerCase().contains('already added');
 
 String _safeMessage(Object error) {
   final value = error.toString().replaceFirst(

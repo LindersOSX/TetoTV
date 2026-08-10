@@ -14,6 +14,51 @@ class RealDebridDeviceSession {
   final Uri verificationUrl;
   final Duration interval;
   final DateTime expiresAt;
+
+  factory RealDebridDeviceSession.fromJson(
+    Map<String, dynamic> json, {
+    DateTime? now,
+  }) {
+    final deviceCode = json['device_code']?.toString().trim() ?? '';
+    final userCode = json['user_code']?.toString().trim() ?? '';
+    final verificationUrl = Uri.tryParse(
+      json['verification_url']?.toString().trim() ?? '',
+    );
+    final intervalSeconds = _integerValue(json['interval']) ?? 5;
+    final expiresInSeconds = _integerValue(json['expires_in']) ?? 1800;
+
+    if (deviceCode.isEmpty ||
+        userCode.isEmpty ||
+        !_isRealDebridVerificationUrl(verificationUrl) ||
+        expiresInSeconds <= 0 ||
+        expiresInSeconds > const Duration(days: 1).inSeconds) {
+      throw const FormatException(
+        'Real-Debrid returned an incomplete device authorization response.',
+      );
+    }
+
+    return RealDebridDeviceSession(
+      deviceCode: deviceCode,
+      userCode: userCode,
+      verificationUrl: verificationUrl!,
+      interval: Duration(seconds: intervalSeconds.clamp(3, 30)),
+      expiresAt: (now ?? DateTime.now()).add(
+        Duration(seconds: expiresInSeconds),
+      ),
+    );
+  }
+}
+
+int? _integerValue(Object? value) => switch (value) {
+  final num number => number.toInt(),
+  final String text => int.tryParse(text),
+  _ => null,
+};
+
+bool _isRealDebridVerificationUrl(Uri? uri) {
+  if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) return false;
+  final host = uri.host.toLowerCase();
+  return host == 'real-debrid.com' || host.endsWith('.real-debrid.com');
 }
 
 class RealDebridOAuthCredentials {
@@ -64,15 +109,13 @@ class RealDebridOAuthClient {
         'new_credentials': 'yes',
       },
     );
-    final data = response.data!;
-    final expiresIn = data['expires_in'] as int? ?? 1800;
-    return RealDebridDeviceSession(
-      deviceCode: data['device_code'] as String,
-      userCode: data['user_code'] as String,
-      verificationUrl: Uri.parse(data['verification_url'] as String),
-      interval: Duration(seconds: data['interval'] as int? ?? 5),
-      expiresAt: DateTime.now().add(Duration(seconds: expiresIn)),
-    );
+    final data = response.data;
+    if (data == null) {
+      throw const FormatException(
+        'Real-Debrid returned an empty device authorization response.',
+      );
+    }
+    return RealDebridDeviceSession.fromJson(data);
   }
 
   Future<RealDebridOAuthCredentials?> pollCredentials(

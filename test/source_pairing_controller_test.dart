@@ -5,6 +5,8 @@ import 'package:anime_tv/features/marketplace/application/source_pairing_control
 import 'package:anime_tv/features/marketplace/data/source_pairing_client.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 
 void main() {
   test(
@@ -54,6 +56,7 @@ void main() {
         contains('Added 2 repositories and 1 torrent manifest.'),
       );
       expect(summary.message, contains('1 item was rejected.'));
+      expect(manifestCalls, 2);
       for (final error in summary.errors) {
         expect(error, isNot(contains(repositoryOne)));
         expect(error, isNot(contains(repositoryTwo)));
@@ -61,6 +64,65 @@ void main() {
         expect(error, isNot(contains(rejectedManifest)));
         expect(error, isNot(contains('secret')));
       }
+    },
+  );
+
+  test('persists both source types before a slow catalog refresh', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+    const storage = FlutterSecureStorage();
+    final torrentSources = UserTorrentSourcesController(
+      storage,
+      targetValidator: (_) async {},
+    );
+    final savedRepositories = <String>[];
+    final refreshNeverFinishes = Completer<void>();
+
+    final summary = await importPairedSourcesWithOperations(
+      const SourcePairingPayload(
+        repositoryUrls: ['https://repo.example/marketplace.json'],
+        manifestUrls: ['https://addon.example/manifest.json'],
+      ),
+      repositoryTargetValidator: (_) async {},
+      addRepository: (url, {refreshAfterAdd = true}) async {
+        savedRepositories.add(url);
+        return null;
+      },
+      refreshRepositories: () => refreshNeverFinishes.future,
+      addManifest: torrentSources.add,
+    );
+
+    expect(summary.repositoriesAdded, 1);
+    expect(summary.manifestsAdded, 1);
+    expect(savedRepositories, ['https://repo.example/marketplace.json']);
+    final restarted = UserTorrentSourcesController(
+      storage,
+      targetValidator: (_) async {},
+    );
+    await restarted.load();
+    expect(restarted.state.manifestUrls, [
+      'https://addon.example/manifest.json',
+    ]);
+  });
+
+  test(
+    'treats already-persisted URLs as saved during safe redelivery',
+    () async {
+      final summary = await importPairedSourcesWithOperations(
+        const SourcePairingPayload(
+          repositoryUrls: ['https://repo.example/marketplace.json'],
+          manifestUrls: ['https://addon.example/manifest.json'],
+        ),
+        repositoryTargetValidator: (_) async {},
+        addRepository: (url, {refreshAfterAdd = true}) async =>
+            'That repository is already added.',
+        refreshRepositories: () async {},
+        addManifest: (_) async => 'That torrent source is already added.',
+      );
+
+      expect(summary.repositoriesAdded, 1);
+      expect(summary.manifestsAdded, 1);
+      expect(summary.errors, isEmpty);
     },
   );
 
@@ -99,6 +161,122 @@ void main() {
       expect(controller.state.summary?.errors, hasLength(1));
       expect(controller.state.message, contains('Added 1 repository.'));
       expect(controller.state.message, contains('1 item was rejected.'));
+      expect(api.acknowledgeCalls, 1);
+    });
+
+    test(
+      'retries a transient acknowledgement without importing twice',
+      () async {
+        var importCalls = 0;
+        final api = _FakeSourcePairingApi(
+          session: _session('ack-retry'),
+          polls: [
+            () async => const SourcePairingPollResult(
+              status: SourcePairingPollStatus.submitted,
+              payload: SourcePairingPayload(
+                manifestUrls: ['https://example.com/manifest.json'],
+              ),
+            ),
+          ],
+          acknowledgementFailures: 2,
+        );
+        final controller = SourcePairingController(
+          () async => 'https://pair.example',
+          (_) => api,
+          (_) async {
+            importCalls++;
+            return const SourceImportSummary(manifestsAdded: 1);
+          },
+          retryDelay: (_) async {},
+        );
+        addTearDown(controller.dispose);
+
+        await controller.start();
+        await controller.pollNow();
+
+        expect(controller.state.stage, SourcePairingStage.completed);
+        expect(importCalls, 1);
+        expect(api.acknowledgeCalls, 3);
+      },
+    );
+
+    test('can retry the phone confirmation after local persistence', () async {
+      var importCalls = 0;
+      final api = _FakeSourcePairingApi(
+        session: _session('ack-manual-retry'),
+        polls: [
+          () async => const SourcePairingPollResult(
+            status: SourcePairingPollStatus.submitted,
+            payload: SourcePairingPayload(
+              manifestUrls: ['https://example.com/manifest.json'],
+            ),
+          ),
+        ],
+        acknowledgementFailures: 3,
+      );
+      final controller = SourcePairingController(
+        () async => 'https://pair.example',
+        (_) => api,
+        (_) async {
+          importCalls++;
+          return const SourceImportSummary(manifestsAdded: 1);
+        },
+        retryDelay: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.start();
+      await controller.pollNow();
+
+      expect(controller.state.stage, SourcePairingStage.completed);
+      expect(controller.state.canRetryAcknowledgement, isTrue);
+      expect(controller.state.message, contains('Saved locally'));
+      expect(importCalls, 1);
+      expect(api.acknowledgeCalls, 3);
+
+      await controller.retryAcknowledgement();
+
+      expect(controller.state.stage, SourcePairingStage.completed);
+      expect(controller.state.canRetryAcknowledgement, isFalse);
+      expect(controller.state.message, 'Added 1 torrent manifest.');
+      expect(importCalls, 1);
+      expect(api.acknowledgeCalls, 4);
+    });
+
+    test('an import failure can retry without re-entering URLs', () async {
+      var importCalls = 0;
+      final api = _FakeSourcePairingApi(
+        session: _session('import-retry'),
+        polls: [
+          () async => const SourcePairingPollResult(
+            status: SourcePairingPollStatus.submitted,
+            payload: SourcePairingPayload(
+              repositoryUrls: ['https://example.com/marketplace.json'],
+            ),
+          ),
+        ],
+      );
+      final controller = SourcePairingController(
+        () async => 'https://pair.example',
+        (_) => api,
+        (_) async {
+          importCalls++;
+          if (importCalls == 1) throw StateError('private URL detail');
+          return const SourceImportSummary(repositoriesAdded: 1);
+        },
+      );
+      addTearDown(controller.dispose);
+
+      await controller.start();
+      await controller.pollNow();
+      expect(controller.state.stage, SourcePairingStage.failed);
+      expect(controller.state.canRetryImport, isTrue);
+      expect(controller.state.message, isNot(contains('private URL detail')));
+
+      await controller.retryImport();
+      expect(controller.state.stage, SourcePairingStage.completed);
+      expect(importCalls, 2);
+      expect(api.acknowledgeCalls, 1);
     });
 
     test(
@@ -127,10 +305,7 @@ void main() {
 
         expect(controller.state.stage, SourcePairingStage.failed);
         expect(controller.state.session?.pairingId, 'import-error');
-        expect(
-          controller.state.message,
-          contains('could not be imported safely'),
-        );
+        expect(controller.state.message, contains('could not be saved safely'));
         expect(
           controller.state.message,
           isNot(contains('sensitive source URL')),
@@ -268,12 +443,17 @@ SourcePairingSession _session(String id) => SourcePairingSession(
 );
 
 class _FakeSourcePairingApi implements SourcePairingApi {
-  _FakeSourcePairingApi({required this.session, required List<_Poll> polls})
-    : _polls = Queue<_Poll>.of(polls);
+  _FakeSourcePairingApi({
+    required this.session,
+    required List<_Poll> polls,
+    this.acknowledgementFailures = 0,
+  }) : _polls = Queue<_Poll>.of(polls);
 
   final SourcePairingSession session;
   final Queue<_Poll> _polls;
   int cancelCalls = 0;
+  int acknowledgeCalls = 0;
+  final int acknowledgementFailures;
 
   @override
   Future<void> ensureReady() async {}
@@ -289,6 +469,17 @@ class _FakeSourcePairingApi implements SourcePairingApi {
       );
     }
     return _polls.removeFirst()();
+  }
+
+  @override
+  Future<void> acknowledge(
+    SourcePairingSession session,
+    SourceImportSummary summary,
+  ) async {
+    acknowledgeCalls++;
+    if (acknowledgeCalls <= acknowledgementFailures) {
+      throw StateError('temporary acknowledgement failure');
+    }
   }
 
   @override

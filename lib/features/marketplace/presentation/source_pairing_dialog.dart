@@ -36,15 +36,15 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed ||
-        state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.resumed) {
+      // Mobile users may briefly switch to a browser to paste URLs. Android
+      // suspends periodic timers in the background, so poll immediately when
+      // they return instead of cancelling their one-time session.
+      unawaited(_controller.pollNow());
       return;
     }
-    _controller.stop();
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.of(context).maybePop();
-      });
+    if (state == AppLifecycleState.detached) {
+      _controller.stop();
     }
   }
 
@@ -61,8 +61,12 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(sourcePairingControllerProvider);
+    final saving = state.stage == SourcePairingStage.validating;
     return PopScope(
-      onPopInvokedWithResult: (_, _) => _controller.stop(),
+      canPop: !saving,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) _controller.stop();
+      },
       child: Dialog(
         backgroundColor: AppColors.panel,
         child: ConstrainedBox(
@@ -88,7 +92,7 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
                     ),
                     IconButton(
                       tooltip: 'Close',
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: saving ? null : () => Navigator.pop(context),
                       icon: const Icon(Icons.close_rounded),
                     ),
                   ],
@@ -99,6 +103,19 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
                 Align(
                   alignment: Alignment.centerRight,
                   child: switch (state.stage) {
+                    SourcePairingStage.failed when state.canRetryImport =>
+                      FilledButton.icon(
+                        autofocus: true,
+                        onPressed: _controller.retryImport,
+                        icon: const Icon(Icons.save_rounded),
+                        label: const Text('RETRY SAVE'),
+                      ),
+                    _ when state.canRetryAcknowledgement => FilledButton.icon(
+                      autofocus: true,
+                      onPressed: _controller.retryAcknowledgement,
+                      icon: const Icon(Icons.sync_rounded),
+                      label: const Text('RETRY PHONE CONFIRMATION'),
+                    ),
                     SourcePairingStage.failed ||
                     SourcePairingStage.expired => FilledButton.icon(
                       autofocus: true,
@@ -110,6 +127,10 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
                       autofocus: true,
                       onPressed: () => Navigator.pop(context),
                       child: const Text('DONE'),
+                    ),
+                    SourcePairingStage.validating => const TextButton(
+                      onPressed: null,
+                      child: Text('SAVING…'),
                     ),
                     _ => TextButton(
                       autofocus: true,

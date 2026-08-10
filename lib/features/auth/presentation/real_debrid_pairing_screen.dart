@@ -11,7 +11,11 @@ import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 class RealDebridPairingScreen extends ConsumerStatefulWidget {
-  const RealDebridPairingScreen({super.key});
+  const RealDebridPairingScreen({super.key, this.client});
+
+  /// Optional override used by widget tests. Production pairing always uses
+  /// the official Real-Debrid OAuth client.
+  final RealDebridOAuthClient? client;
 
   @override
   ConsumerState<RealDebridPairingScreen> createState() =>
@@ -20,7 +24,7 @@ class RealDebridPairingScreen extends ConsumerStatefulWidget {
 
 class _RealDebridPairingScreenState
     extends ConsumerState<RealDebridPairingScreen> {
-  final _client = RealDebridOAuthClient();
+  late final RealDebridOAuthClient _client;
   RealDebridDeviceSession? _session;
   Timer? _pollTimer;
   String? _error;
@@ -31,6 +35,7 @@ class _RealDebridPairingScreenState
   @override
   void initState() {
     super.initState();
+    _client = widget.client ?? RealDebridOAuthClient();
     _start();
   }
 
@@ -50,7 +55,7 @@ class _RealDebridPairingScreenState
       _pollTimer = Timer.periodic(session.interval, (_) => _poll(generation));
     } catch (error) {
       if (mounted && generation == _generation) {
-        setState(() => _error = error.toString());
+        setState(() => _error = _friendlyError(error));
       }
     }
   }
@@ -120,7 +125,7 @@ class _RealDebridPairingScreenState
     } catch (error) {
       if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
-      setState(() => _error = error.toString());
+      setState(() => _error = _friendlyError(error));
     } finally {
       _polling = false;
     }
@@ -137,27 +142,45 @@ class _RealDebridPairingScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 42, vertical: 28),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                _BackButton(onPressed: context.pop),
-                const SizedBox(width: 18),
-                Text(
-                  'Connect Real-Debrid',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const Spacer(),
-                const Text(
-                  'Your Real-Debrid password never touches this TV',
-                  style: TextStyle(color: AppColors.textMuted),
-                ),
-              ],
-            ),
-            const SizedBox(height: 28),
-            Expanded(child: Center(child: _content(context))),
-          ],
+        child: LayoutBuilder(
+          builder: (context, viewport) {
+            final compactHeader = viewport.maxWidth < 760;
+            final horizontalPadding = viewport.maxWidth < 600 ? 16.0 : 42.0;
+            final verticalPadding = viewport.maxHeight < 500 ? 12.0 : 28.0;
+            return Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: horizontalPadding,
+                vertical: verticalPadding,
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      _BackButton(onPressed: context.pop),
+                      SizedBox(width: compactHeader ? 12 : 18),
+                      Flexible(
+                        child: Text(
+                          'Connect Real-Debrid',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                      ),
+                      if (!compactHeader) ...[
+                        const Spacer(),
+                        const Text(
+                          'Your Real-Debrid password never touches this TV',
+                          style: TextStyle(color: AppColors.textMuted),
+                        ),
+                      ],
+                    ],
+                  ),
+                  SizedBox(height: compactHeader ? 18 : 28),
+                  Expanded(child: Center(child: _content(context))),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
@@ -190,70 +213,154 @@ class _RealDebridPairingScreenState
     }
     return Container(
       constraints: const BoxConstraints(maxWidth: 880),
-      padding: const EdgeInsets.all(34),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: AppColors.panel,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 220,
-            height: 220,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 620;
+          final qrSize = compact ? 166.0 : 220.0;
+          final qr = Semantics(
+            label: 'QR code for ${session.verificationUrl}',
+            image: true,
+            child: Container(
+              key: const ValueKey('real-debrid-qr-code'),
+              width: qrSize,
+              height: qrSize,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: session.verificationUrl.toString(),
+                semanticsLabel:
+                    'Real-Debrid pairing link ${session.verificationUrl}',
+                backgroundColor: Colors.white,
+                errorCorrectionLevel: QrErrorCorrectLevel.Q,
+                padding: EdgeInsets.zero,
+                eyeStyle: const QrEyeStyle(color: AppColors.ink),
+                dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
+              ),
             ),
-            child: QrImageView(
-              data: session.verificationUrl.toString(),
-              backgroundColor: Colors.white,
-              errorCorrectionLevel: QrErrorCorrectLevel.Q,
-              padding: EdgeInsets.zero,
-              eyeStyle: const QrEyeStyle(color: AppColors.ink),
-              dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
-            ),
-          ),
-          const SizedBox(width: 38),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const _WaitingPill(),
-                const SizedBox(height: 18),
-                Text(
-                  'Scan with your phone',
-                  style: Theme.of(context).textTheme.displaySmall,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Open ${session.verificationUrl} and enter:',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  session.userCode,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 4,
+          );
+          final code = _UserCode(code: session.userCode);
+
+          if (compact) {
+            // Put the human-readable code before the QR on narrow viewports.
+            // A user can therefore complete pairing even when the lower part
+            // of a short phone or split-screen window must be scrolled.
+            return SingleChildScrollView(
+              child: Column(
+                children: [
+                  const _WaitingPill(),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Enter this code',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall,
                   ),
+                  const SizedBox(height: 10),
+                  code,
+                  const SizedBox(height: 12),
+                  Text(
+                    'Open ${session.verificationUrl} on your phone, or scan below.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  qr,
+                  const SizedBox(height: 12),
+                  Text(
+                    'This screen updates automatically after approval.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return Row(
+            children: [
+              qr,
+              const SizedBox(width: 38),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _WaitingPill(),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Scan with your phone',
+                      style: Theme.of(context).textTheme.displaySmall,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Open ${session.verificationUrl} and enter:',
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
+                    const SizedBox(height: 18),
+                    code,
+                    const SizedBox(height: 14),
+                    Text(
+                      'This screen updates automatically after approval.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                Text(
-                  'This screen updates automatically after approval.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }
+}
+
+class _UserCode extends StatelessWidget {
+  const _UserCode({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: 'Real-Debrid confirmation code $code',
+      readOnly: true,
+      child: Container(
+        key: const ValueKey('real-debrid-user-code'),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.ink,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+        ),
+        child: Text(
+          code,
+          maxLines: 1,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 32,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 4,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _friendlyError(Object error) {
+  final text = error.toString().trim();
+  return text
+      .replaceFirst(RegExp(r'^(StateError|Bad state|FormatException):\s*'), '')
+      .trim();
 }
 
 class _WaitingPill extends StatelessWidget {

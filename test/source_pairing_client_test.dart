@@ -26,7 +26,11 @@ void main() {
           Response(
             requestOptions: options,
             statusCode: 200,
-            data: <String, dynamic>{'status': 'ok', 'source_pairing': true},
+            data: <String, dynamic>{
+              'status': 'ok',
+              'source_pairing': true,
+              'source_pairing_version': 2,
+            },
           ),
         );
         return;
@@ -62,6 +66,33 @@ void main() {
     expect(session.userCode, 'ABCD-EFGH');
     expect(session.deviceCode, hasLength(43));
     expect(session.verificationUri.path, '/source-pair');
+  });
+
+  test('rejects a legacy broker without completion receipts', () async {
+    final dio = _stubDio((options, handler) {
+      handler.resolve(
+        Response(
+          requestOptions: options,
+          statusCode: 200,
+          data: <String, dynamic>{'status': 'ok', 'source_pairing': true},
+        ),
+      );
+    });
+    final client = SourcePairingClient(
+      baseUrl: 'https://auth.example.com',
+      dio: dio,
+    );
+
+    await expectLater(
+      client.ensureReady(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('must be updated'),
+        ),
+      ),
+    );
   });
 
   test('rejects unknown poll status instead of polling forever', () async {
@@ -102,6 +133,38 @@ void main() {
       endsWith('v1/source-pairings/pairing_id_1234567890'),
     );
     expect(captured?.headers['Authorization'], 'Pairing ${session.deviceCode}');
+  });
+
+  test('acknowledgement sends only bounded persistence counts', () async {
+    RequestOptions? captured;
+    final dio = _stubDio((options, handler) {
+      captured = options;
+      handler.resolve(Response<void>(requestOptions: options, statusCode: 204));
+    });
+    final client = SourcePairingClient(
+      baseUrl: 'https://auth.example.com',
+      dio: dio,
+    );
+
+    await client.acknowledge(
+      _session(),
+      const SourceImportSummary(
+        repositoriesAdded: 1,
+        manifestsAdded: 2,
+        errors: ['Rejected https://secret.example/manifest.json?token=hidden'],
+      ),
+    );
+
+    expect(captured?.method, 'POST');
+    expect(captured?.path, endsWith('/pairing_id_1234567890/complete'));
+    expect(captured?.headers['Authorization'], 'Pairing $_deviceCode');
+    expect(captured?.data, {
+      'repositories_saved': 1,
+      'manifests_saved': 2,
+      'rejected_count': 1,
+    });
+    expect(captured?.data.toString(), isNot(contains('secret.example')));
+    expect(captured?.data.toString(), isNot(contains('hidden')));
   });
 }
 

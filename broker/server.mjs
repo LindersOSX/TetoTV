@@ -31,6 +31,7 @@ const pairings = new Map();
 const codes = new Map();
 const sourcePairings = new Map();
 const sourceCodes = new Map();
+const sourceReceipts = new Map();
 const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
 let cachedLatestRelease = null;
@@ -107,7 +108,7 @@ function json(response, status, value, extraHeaders = {}) {
   response.end(JSON.stringify(value));
 }
 
-function html(response, status, body) {
+function html(response, status, body, { refreshUrl = "" } = {}) {
   response.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
@@ -119,8 +120,11 @@ function html(response, status, body) {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   });
+  const refresh = refreshUrl
+    ? `<meta http-equiv="refresh" content="2;url=${escapeHtml(refreshUrl)}">`
+    : "";
   response.end(`<!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">${refresh}
 <title>TetoTV pairing</title>
 <style>
 body{margin:0;background:#080c16;color:#f5f5fb;font:18px system-ui;display:grid;min-height:100vh;place-items:center}
@@ -130,6 +134,7 @@ a,button{display:block;width:100%;box-sizing:border-box;border:0;margin-top:24px
 input,textarea{display:block;width:100%;box-sizing:border-box;margin-top:22px;padding:16px 18px;border:1px solid #39435f;border-radius:12px;background:#090e1a;color:#f5f5fb;font:700 18px system-ui}
 textarea{min-height:150px;resize:vertical;overflow-wrap:anywhere}.code-input{font-size:22px;letter-spacing:3px;text-transform:uppercase}
 code{color:#5bd8ec}small{display:block;margin-top:18px;color:#7f879e}
+.success{color:#67d49b}.warning{color:#ffd166}.error{color:#ff8798;font-weight:800}.count{font-size:22px;font-weight:800;color:#f5f5fb}
 </style><main>${body}</main></html>`);
 }
 
@@ -210,6 +215,7 @@ function cleanup() {
     if (pairing.expiresAt <= now) {
       sourcePairings.delete(id);
       sourceCodes.delete(pairing.userCode);
+      if (pairing.receiptToken) sourceReceipts.delete(pairing.receiptToken);
     }
   }
 }
@@ -324,6 +330,8 @@ async function createSourcePairing(request, response) {
     expiresAt,
     status: "pending",
     submitted: null,
+    result: null,
+    receiptToken: null,
   });
   sourceCodes.set(userCode, pairingId);
   return json(response, 201, {
@@ -349,19 +357,138 @@ function pollSourcePairing(request, response, pairingId) {
   if (!deviceCode || !timingSafeEqual(suppliedHash, pairing.deviceHash)) {
     return json(response, 401, { error: "invalid_device_code" });
   }
-  if (pairing.status !== "submitted" || !pairing.submitted) {
-    return json(response, 200, { status: "pending" });
+  if (
+    (pairing.status !== "submitted" && pairing.status !== "delivered") ||
+    !pairing.submitted
+  ) {
+    return json(response, 200, {
+      status:
+        pairing.status === "completed" || pairing.status === "failed"
+          ? pairing.status
+          : "pending",
+    });
   }
   const submitted = pairing.submitted;
-  // Delete before responding so a parallel/replayed device poll cannot
-  // retrieve the one-time payload twice.
-  sourcePairings.delete(pairingId);
-  sourceCodes.delete(pairing.userCode);
+  pairing.status = "delivered";
+  // The device may retrieve this authenticated payload again after a network
+  // interruption. URLs are cleared only after the app acknowledges that local
+  // persistence finished; the human code can never retrieve this response.
   return json(response, 200, {
     status: "submitted",
     repository_urls: submitted.repositoryUrls,
     manifest_urls: submitted.manifestUrls,
   });
+}
+
+async function completeSourcePairing(request, response, pairingId) {
+  cleanup();
+  const pairing = sourcePairings.get(pairingId);
+  if (!pairing) return json(response, 404, { status: "expired" });
+  const authorization = String(request.headers.authorization || "");
+  const deviceCode = authorization.startsWith("Pairing ")
+    ? authorization.slice("Pairing ".length)
+    : "";
+  if (!deviceCode || !timingSafeEqual(digest(deviceCode), pairing.deviceHash)) {
+    return json(response, 401, { error: "invalid_device_code" });
+  }
+  const body = await readJson(request, { requireBody: true });
+  if (
+    !body ||
+    Array.isArray(body) ||
+    typeof body !== "object" ||
+    Object.keys(body).sort().join(",") !==
+      "manifests_saved,rejected_count,repositories_saved"
+  ) {
+    return json(response, 400, { error: "invalid_completion" });
+  }
+  if (pairing.status === "completed" || pairing.status === "failed") {
+    response.writeHead(204, {
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    return response.end();
+  }
+  if (pairing.status !== "delivered" || !pairing.submitted) {
+    return json(response, 409, { error: "submission_not_ready" });
+  }
+  const repositoriesSaved = body.repositories_saved;
+  const manifestsSaved = body.manifests_saved;
+  const rejectedCount = body.rejected_count;
+  const repositoryCount = pairing.submitted.repositoryUrls.length;
+  const manifestCount = pairing.submitted.manifestUrls.length;
+  const submittedCount = repositoryCount + manifestCount;
+  if (
+    !Number.isSafeInteger(repositoriesSaved) ||
+    !Number.isSafeInteger(manifestsSaved) ||
+    !Number.isSafeInteger(rejectedCount) ||
+    repositoriesSaved < 0 ||
+    repositoriesSaved > repositoryCount ||
+    manifestsSaved < 0 ||
+    manifestsSaved > manifestCount ||
+    rejectedCount < 0 ||
+    rejectedCount > submittedCount ||
+    repositoriesSaved + manifestsSaved + rejectedCount !== submittedCount
+  ) {
+    return json(response, 400, { error: "invalid_completion" });
+  }
+
+  pairing.result = {
+    repositoriesSaved,
+    manifestsSaved,
+    rejectedCount,
+  };
+  pairing.status =
+    repositoriesSaved + manifestsSaved > 0 ? "completed" : "failed";
+  pairing.expiresAt = Date.now() + ttlMs;
+  // Clear all submitted URLs immediately after the authenticated device says
+  // persistence finished. The retained receipt contains counts only.
+  pairing.submitted = null;
+  response.writeHead(204, {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  response.end();
+}
+
+function sourceReceiptPage(response, receiptToken) {
+  cleanup();
+  const pairingId = sourceReceipts.get(receiptToken);
+  const pairing = pairingId ? sourcePairings.get(pairingId) : null;
+  if (!pairing || pairing.receiptToken !== receiptToken) {
+    return html(
+      response,
+      404,
+      "<h1>Confirmation expired</h1><p>Check TetoTV for the saved result.</p>",
+    );
+  }
+  if (pairing.status === "completed" && pairing.result) {
+    const { repositoriesSaved, manifestsSaved, rejectedCount } =
+      pairing.result;
+    return html(
+      response,
+      200,
+      `<h1 class="success">Saved in TetoTV</h1>
+       <p class="count">${repositoriesSaved} marketplace ${repositoriesSaved === 1 ? "repository" : "repositories"} and ${manifestsSaved} torrent ${manifestsSaved === 1 ? "manifest" : "manifests"} saved.</p>
+       ${rejectedCount ? `<p class="warning">${rejectedCount} ${rejectedCount === 1 ? "item was" : "items were"} rejected. Review TetoTV for details.</p>` : ""}
+       <p>You can close this page.</p>`,
+    );
+  }
+  if (pairing.status === "failed" && pairing.result) {
+    return html(
+      response,
+      200,
+      `<h1 class="warning">TetoTV could not save these sources</h1>
+       <p>${pairing.result.rejectedCount} ${pairing.result.rejectedCount === 1 ? "item was" : "items were"} rejected. Review TetoTV for details, then create a new code to retry.</p>`,
+    );
+  }
+  return html(
+    response,
+    200,
+    `<h1>Sent to TetoTV</h1>
+     <p>Your URLs were submitted securely. Keep TetoTV open while it validates and saves them.</p>
+     <p><small>Waiting for the app's saved confirmation…</small></p>`,
+    { refreshUrl: `/source-pair/status/${receiptToken}` },
+  );
 }
 
 function cancelSourcePairing(request, response, pairingId) {
@@ -380,6 +507,7 @@ function cancelSourcePairing(request, response, pairingId) {
   }
   sourcePairings.delete(pairingId);
   sourceCodes.delete(pairing.userCode);
+  if (pairing.receiptToken) sourceReceipts.delete(pairing.receiptToken);
   response.writeHead(204, {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -389,7 +517,7 @@ function cancelSourcePairing(request, response, pairingId) {
 
 function sourcePairingForm(response, pairing, errorMessage = "") {
   const error = errorMessage
-    ? `<p role="alert">${escapeHtml(errorMessage)}</p>`
+    ? `<p class="error" role="alert">${escapeHtml(errorMessage)}</p>`
     : "";
   return html(
     response,
@@ -403,7 +531,7 @@ function sourcePairingForm(response, pairing, errorMessage = "") {
        <textarea name="manifest_urls" aria-label="Stremio manifest URLs" placeholder="Stremio manifests&#10;https://example.com/addon/manifest.json" maxlength="16391"></textarea>
        <button type="submit">Send securely</button>
      </form>
-     <small>TetoTV never uploads saved account tokens. Submitted URLs are encrypted in transit, held in memory until this TV retrieves them once, then deleted.</small>`,
+     <small>TetoTV never uploads saved account tokens. Submitted URLs are encrypted in transit, held in memory until this device confirms the local save, then deleted.</small>`,
   );
 }
 
@@ -432,6 +560,13 @@ function sourcePairingPage(response, url) {
       "<h1>Pairing expired</h1><p>Return to TetoTV and create a new code.</p>",
     );
   }
+  if (pairing.status !== "pending") {
+    return html(
+      response,
+      409,
+      "<h1>Already sent</h1><p>Use the original confirmation page or check TetoTV for the saved result.</p>",
+    );
+  }
   return sourcePairingForm(response, pairing);
 }
 
@@ -452,7 +587,7 @@ async function submitSourcePairing(request, response) {
     return html(
       response,
       409,
-      "<h1>Already sent</h1><p>This one-time code has already accepted a submission.</p>",
+      "<h1>Already sent</h1><p>This one-time code has already accepted a submission. Use the original confirmation page or check TetoTV.</p>",
     );
   }
   const lines = (name) =>
@@ -482,11 +617,12 @@ async function submitSourcePairing(request, response) {
     manifestUrls: [...new Set(manifestUrls)],
   };
   pairing.status = "submitted";
-  return html(
-    response,
-    200,
-    "<h1>Sent to TetoTV</h1><p>The TV will validate and save the URL. You can close this page.</p>",
-  );
+  // Give the device a full bounded processing window even when the user
+  // submits near the end of the original code-entry period.
+  pairing.expiresAt = Date.now() + ttlMs;
+  pairing.receiptToken = randomToken(18);
+  sourceReceipts.set(pairing.receiptToken, pairingId);
+  return sourceReceiptPage(response, pairing.receiptToken);
 }
 
 async function createPairing(request, response, provider) {
@@ -1315,6 +1451,7 @@ const server = createServer(
           myanimelist: callbackUrl("myanimelist"),
         },
         source_pairing: true,
+        source_pairing_version: 2,
         app_updates: updateProxyConfigured(),
       });
     }
@@ -1401,6 +1538,24 @@ const server = createServer(
       }
       return await createSourcePairing(request, response);
     }
+    const sourceCompleteMatch = url.pathname.match(
+      /^\/v1\/source-pairings\/([A-Za-z0-9_-]+)\/complete$/,
+    );
+    if (request.method === "POST" && sourceCompleteMatch) {
+      if (rateLimited(request, 30, "source-complete")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await completeSourcePairing(
+        request,
+        response,
+        sourceCompleteMatch[1],
+      );
+    }
     const sourcePollMatch = url.pathname.match(
       /^\/v1\/source-pairings\/([A-Za-z0-9_-]+)$/,
     );
@@ -1428,6 +1583,12 @@ const server = createServer(
     }
     if (request.method === "GET" && url.pathname === "/source-pair") {
       return sourcePairingPage(response, url);
+    }
+    const sourceReceiptMatch = url.pathname.match(
+      /^\/source-pair\/status\/([A-Za-z0-9_-]{20,80})$/,
+    );
+    if (request.method === "GET" && sourceReceiptMatch) {
+      return sourceReceiptPage(response, sourceReceiptMatch[1]);
     }
     if (request.method === "POST" && url.pathname === "/source-pair") {
       if (rateLimited(request, 10, "source-submit")) {
@@ -1608,6 +1769,25 @@ server.listen(port, async () => {
           body: sourceForm("https://example.com/second.json"),
         }),
       ]);
+      const sourceSubmitSuccess = parallelSubmissions.find(
+        (value) => value.status === 200,
+      );
+      if (!sourceSubmitSuccess) {
+        throw new Error("Source submission did not return a confirmation.");
+      }
+      const sourceSubmitPage = await sourceSubmitSuccess.text();
+      const sourceReceiptPath = sourceSubmitPage.match(
+        /\/source-pair\/status\/[A-Za-z0-9_-]{20,80}/,
+      )?.[0];
+      if (!sourceReceiptPath) {
+        throw new Error("Source submission did not issue a receipt.");
+      }
+      const sourcePostSubmitExpiresAt = sourcePairings.get(
+        sourcePairing.pairing_id,
+      )?.expiresAt;
+      const sourceWaitingPage = await fetch(
+        `http://127.0.0.1:${port}${sourceReceiptPath}`,
+      ).then((response) => response.text());
       const sourceUnauthorized = await fetch(
         `http://127.0.0.1:${port}/v1/source-pairings/${sourcePairing.pairing_id}`,
         { headers: { Authorization: "Pairing wrong-device-code" } },
@@ -1626,16 +1806,114 @@ server.listen(port, async () => {
           },
         }),
       ]);
-      const sourceResultResponse = parallelDevicePolls.find(
-        (value) => value.status === 200,
-      );
-      const sourceReplay = parallelDevicePolls.find(
-        (value) => value.status === 404,
-      );
-      if (!sourceResultResponse || !sourceReplay) {
-        throw new Error("Parallel source-pairing retrieval was not atomic.");
+      if (parallelDevicePolls.some((value) => value.status !== 200)) {
+        throw new Error("Authenticated source redelivery was not idempotent.");
       }
-      const sourceResult = await sourceResultResponse.json();
+      const [sourceResult, sourceRedelivery] = await Promise.all(
+        parallelDevicePolls.map((value) => value.json()),
+      );
+      const sourceCompleteUrl = `${sourcePollUrl}/complete`;
+      const completionHeaders = {
+        Authorization: `Pairing ${sourcePairing.device_code}`,
+        "Content-Type": "application/json",
+      };
+      const invalidSourceCompletion = await fetch(sourceCompleteUrl, {
+        method: "POST",
+        headers: completionHeaders,
+        body: JSON.stringify({
+          repositories_saved: 2,
+          manifests_saved: 1,
+          rejected_count: 0,
+        }),
+      });
+      const sourceRetryAfterBadAck = await fetch(sourcePollUrl, {
+        headers: {
+          Authorization: `Pairing ${sourcePairing.device_code}`,
+        },
+      }).then((response) => response.json());
+      const sourceCompletion = await fetch(sourceCompleteUrl, {
+        method: "POST",
+        headers: completionHeaders,
+        body: JSON.stringify({
+          repositories_saved: 1,
+          manifests_saved: 1,
+          rejected_count: 0,
+        }),
+      });
+      const sourceCompletionReplay = await fetch(sourceCompleteUrl, {
+        method: "POST",
+        headers: completionHeaders,
+        body: JSON.stringify({
+          repositories_saved: 1,
+          manifests_saved: 1,
+          rejected_count: 0,
+        }),
+      });
+      const sourceCompletedPage = await fetch(
+        `http://127.0.0.1:${port}${sourceReceiptPath}`,
+      ).then((response) => response.text());
+      const sourceCompletedPoll = await fetch(sourcePollUrl, {
+        headers: {
+          Authorization: `Pairing ${sourcePairing.device_code}`,
+        },
+      }).then((response) => response.json());
+      const failedSourcePairing = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "self-test-failed-receipt",
+          },
+          body: "{}",
+        },
+      ).then((response) => response.json());
+      const failedSourceSubmitPage = await fetch(
+        `http://127.0.0.1:${port}/source-pair`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Forwarded-For": "self-test-failed-receipt",
+          },
+          body: new URLSearchParams({
+            code: failedSourcePairing.user_code,
+            repository_urls: "https://rejected.example/catalog.json",
+          }),
+        },
+      ).then((response) => response.text());
+      const failedSourceReceiptPath = failedSourceSubmitPage.match(
+        /\/source-pair\/status\/[A-Za-z0-9_-]{20,80}/,
+      )?.[0];
+      const failedSourcePollUrl =
+        `http://127.0.0.1:${port}/v1/source-pairings/${failedSourcePairing.pairing_id}`;
+      await fetch(failedSourcePollUrl, {
+        headers: {
+          Authorization: `Pairing ${failedSourcePairing.device_code}`,
+          "X-Forwarded-For": "self-test-failed-receipt",
+        },
+      });
+      const failedSourceCompletion = await fetch(
+        `${failedSourcePollUrl}/complete`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Pairing ${failedSourcePairing.device_code}`,
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "self-test-failed-receipt",
+          },
+          body: JSON.stringify({
+            repositories_saved: 0,
+            manifests_saved: 0,
+            rejected_count: 1,
+          }),
+        },
+      );
+      const failedSourceReceiptPage = failedSourceReceiptPath
+        ? await fetch(
+            `http://127.0.0.1:${port}${failedSourceReceiptPath}`,
+          ).then((response) => response.text())
+        : "";
       const oversizedSourceForm = await fetch(
         `http://127.0.0.1:${port}/source-pair`,
         {
@@ -1691,6 +1969,7 @@ server.listen(port, async () => {
       if (
         health.status !== "ok" ||
         health.source_pairing !== true ||
+        health.source_pairing_version !== 2 ||
         health.app_updates !== true ||
         updateProxyConfigured({ token: "" }) !== false ||
         updateMetadataResponse.status !== 200 ||
@@ -1765,13 +2044,40 @@ server.listen(port, async () => {
         ) ||
         parallelSubmissions.map((value) => value.status).sort().join(",") !==
           "200,409" ||
+        !sourceSubmitPage.includes("Sent to TetoTV") ||
+        !sourceSubmitPage.includes("Waiting for the app's saved confirmation") ||
+        !sourcePostSubmitExpiresAt ||
+        sourcePostSubmitExpiresAt < Date.now() + ttlMs - 5_000 ||
+        sourceSubmitPage.includes(sourcePairing.device_code) ||
+        sourceWaitingPage.includes("https://example.com") ||
+        sourceWaitingPage.includes(sourcePairing.device_code) ||
         sourceUnauthorized.status !== 401 ||
-        sourceResultResponse.status !== 200 ||
         sourceResult.status !== "submitted" ||
         sourceResult.repository_urls.length !== 1 ||
         sourceResult.manifest_urls[0] !==
           "https://example.com/addon/manifest.json" ||
-        sourceReplay.status !== 404 ||
+        sourceRedelivery.status !== "submitted" ||
+        sourceRedelivery.repository_urls[0] !==
+          sourceResult.repository_urls[0] ||
+        invalidSourceCompletion.status !== 400 ||
+        sourceRetryAfterBadAck.status !== "submitted" ||
+        sourceCompletion.status !== 204 ||
+        sourceCompletionReplay.status !== 204 ||
+        sourceCompletedPoll.status !== "completed" ||
+        Object.hasOwn(sourceCompletedPoll, "repository_urls") ||
+        Object.hasOwn(sourceCompletedPoll, "manifest_urls") ||
+        !sourceCompletedPage.includes("Saved in TetoTV") ||
+        !sourceCompletedPage.includes("1 marketplace repository") ||
+        !sourceCompletedPage.includes("1 torrent manifest") ||
+        sourceCompletedPage.includes("https://example.com") ||
+        sourceCompletedPage.includes(sourcePairing.device_code) ||
+        !failedSourceReceiptPath ||
+        failedSourceCompletion.status !== 204 ||
+        !failedSourceReceiptPage.includes(
+          "TetoTV could not save these sources",
+        ) ||
+        failedSourceReceiptPage.includes("rejected.example") ||
+        failedSourceReceiptPage.includes(failedSourcePairing.device_code) ||
         oversizedSourceForm.status !== 413 ||
         expiredSourcePoll.status !== 404 ||
         cancelSourceResponse.status !== 204 ||

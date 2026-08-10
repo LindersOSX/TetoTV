@@ -51,15 +51,43 @@ the Android Keystore between refreshes.
 TetoTV can also create a ten-minute code for `/source-pair`, letting a user
 paste long Marketplace repository and Stremio manifest URLs on a phone or PC.
 The browser receives only the human code. The 256-bit device code stays on the
-TV, the first valid browser submission wins, and a successful device poll
-deletes the payload before responding. Canceling the dialog sends an
-authenticated best-effort delete; abandoned sessions expire automatically.
+TV, and the first valid browser submission wins. An authenticated device poll
+leases the payload without deleting it, allowing safe redelivery after a
+network interruption. Only after TetoTV processes every submitted item and
+persists every accepted entry does it POST a count-only completion
+acknowledgement; that acknowledgement deletes all URLs and retains a
+short-lived sanitized receipt for the browser. Canceling an unclaimed dialog
+sends an authenticated best-effort delete, and abandoned sessions expire
+automatically.
+
+After submission, the phone receives a random high-entropy receipt URL rather
+than using the short human code as a status credential. The confirmation page
+refreshes until the app reports either saved or rejected counts. It never
+contains submitted URLs, device codes, account tokens, or rejection details.
+The device completion contract is:
+
+```text
+POST /v1/source-pairings/:pairing_id/complete
+Authorization: Pairing <device_code>
+
+{
+  "repositories_saved": 1,
+  "manifests_saved": 1,
+  "rejected_count": 0
+}
+```
+
+Clients require `source_pairing_version: 2` from `/health`, so deploy this
+broker protocol before publishing an APK that depends on saved receipts. A
+valid browser submission starts a fresh bounded ten-minute processing window;
+completion starts a fresh ten-minute window for the sanitized receipt.
 
 Saved TetoTV account, tracker, debrid, and updater tokens are never uploaded by
 this flow. A source URL pasted by the user may itself contain provider
 configuration, so it is kept only in the broker's in-memory session until the
-TV retrieves it once. The TV independently repeats HTTPS, DNS, private-address,
-type, and capacity validation before persisting anything.
+TV acknowledges persistence or the session expires. Authenticated redelivery
+is allowed after a network interruption. The TV independently repeats HTTPS,
+DNS, private-address, type, and capacity validation before persisting anything.
 
 Source pairings and rate limits are process-local memory. Keep a Render deploy
 at one instance, or move these maps to an atomic shared TTL store before

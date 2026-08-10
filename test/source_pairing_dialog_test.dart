@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -89,11 +90,99 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(SourcePairingDialog), findsNothing);
   });
+
+  testWidgets(
+    'keeps a mobile pairing alive while the browser is foregrounded',
+    (tester) async {
+      final api = _DialogApi(
+        session: _dialogSession(),
+        polls: [
+          () async => const SourcePairingPollResult(
+            status: SourcePairingPollStatus.submitted,
+            payload: SourcePairingPayload(
+              manifestUrls: ['https://example.com/manifest.json'],
+            ),
+          ),
+        ],
+      );
+      late SourcePairingController controller;
+      await tester.pumpWidget(
+        _harness(api: api, onController: (value) => controller = value),
+      );
+      await tester.tap(find.text('OPEN'));
+      await tester.pumpAndSettle();
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      expect(find.byType(SourcePairingDialog), findsOneWidget);
+      expect(api.cancelCalls, 0);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(controller.state.stage, SourcePairingStage.completed);
+      expect(find.text('Sources added'), findsOneWidget);
+      expect(api.acknowledgeCalls, 1);
+    },
+  );
+
+  testWidgets('cannot close while received sources are being persisted', (
+    tester,
+  ) async {
+    final persistence = Completer<SourceImportSummary>();
+    final api = _DialogApi(
+      session: _dialogSession(),
+      polls: [
+        () async => const SourcePairingPollResult(
+          status: SourcePairingPollStatus.submitted,
+          payload: SourcePairingPayload(
+            repositoryUrls: ['https://example.com/marketplace.json'],
+          ),
+        ),
+      ],
+    );
+    late SourcePairingController controller;
+    await tester.pumpWidget(
+      _harness(
+        api: api,
+        onController: (value) => controller = value,
+        importer: (_) => persistence.future,
+      ),
+    );
+    await tester.tap(find.text('OPEN'));
+    await tester.pumpAndSettle();
+
+    final saving = controller.pollNow();
+    await tester.pump();
+    expect(controller.state.stage, SourcePairingStage.validating);
+    await tester.pump();
+    expect(
+      tester
+          .widget<IconButton>(
+            find.widgetWithIcon(IconButton, Icons.close_rounded),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byType(SourcePairingDialog), findsOneWidget);
+    expect(api.cancelCalls, 0);
+
+    persistence.complete(const SourceImportSummary(repositoriesAdded: 1));
+    await saving;
+    await tester.pumpAndSettle();
+    expect(find.text('Sources added'), findsOneWidget);
+  });
 }
 
 Widget _harness({
   required _DialogApi api,
   required void Function(SourcePairingController) onController,
+  SourcePayloadImporter? importer,
 }) {
   return ProviderScope(
     overrides: [
@@ -101,7 +190,8 @@ Widget _harness({
         final controller = SourcePairingController(
           () async => 'https://pair.example',
           (_) => api,
-          (_) async => const SourceImportSummary(repositoriesAdded: 1),
+          importer ??
+              (_) async => const SourceImportSummary(repositoriesAdded: 1),
         );
         onController(controller);
         return controller;
@@ -142,6 +232,7 @@ class _DialogApi implements SourcePairingApi {
   final SourcePairingSession session;
   final Queue<Future<SourcePairingPollResult> Function()> _polls;
   int cancelCalls = 0;
+  int acknowledgeCalls = 0;
 
   @override
   Future<void> ensureReady() async {}
@@ -158,6 +249,14 @@ class _DialogApi implements SourcePairingApi {
           ),
         )
       : _polls.removeFirst()();
+
+  @override
+  Future<void> acknowledge(
+    SourcePairingSession session,
+    SourceImportSummary summary,
+  ) async {
+    acknowledgeCalls++;
+  }
 
   @override
   Future<void> cancel(SourcePairingSession session) async {

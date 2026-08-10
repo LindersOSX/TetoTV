@@ -8,6 +8,11 @@ abstract interface class SourcePairingApi {
 
   Future<SourcePairingPollResult> poll(SourcePairingSession session);
 
+  Future<void> acknowledge(
+    SourcePairingSession session,
+    SourceImportSummary summary,
+  );
+
   Future<void> cancel(SourcePairingSession session);
 }
 
@@ -44,9 +49,16 @@ class SourcePairingClient implements SourcePairingApi {
     try {
       final response = await _dio.get<Map<String, dynamic>>('health');
       final data = response.data ?? const <String, dynamic>{};
-      if (data['status'] != 'ok' || data['source_pairing'] != true) {
+      final protocolVersion = switch (data['source_pairing_version']) {
+        final int value => value,
+        final num value => value.toInt(),
+        _ => 0,
+      };
+      if (data['status'] != 'ok' ||
+          data['source_pairing'] != true ||
+          protocolVersion < 2) {
         throw StateError(
-          'The configured TetoTV broker does not support source pairing yet.',
+          'The TetoTV pairing service must be updated before sources can be saved with confirmation.',
         );
       }
     } on DioException catch (error) {
@@ -166,6 +178,30 @@ class SourcePairingClient implements SourcePairingApi {
   }
 
   @override
+  Future<void> acknowledge(
+    SourcePairingSession session,
+    SourceImportSummary summary,
+  ) async {
+    try {
+      await _dio.post<void>(
+        'v1/source-pairings/${session.pairingId}/complete',
+        data: <String, int>{
+          'repositories_saved': summary.repositoriesAdded,
+          'manifests_saved': summary.manifestsAdded,
+          // Only bounded counts leave the device. Rejection messages may
+          // contain provider details and are deliberately kept local.
+          'rejected_count': summary.errors.length.clamp(0, 16),
+        },
+        options: Options(
+          headers: {'Authorization': 'Pairing ${session.deviceCode}'},
+        ),
+      );
+    } on DioException catch (error) {
+      throw StateError(_connectionMessage(error));
+    }
+  }
+
+  @override
   Future<void> cancel(SourcePairingSession session) async {
     try {
       await _dio.delete<void>(
@@ -227,11 +263,12 @@ List<String> _urlList(Object? value) {
     throw const FormatException('The source-pairing URL list is invalid.');
   }
   final result = <String>[];
+  final seen = <String>{};
   for (final item in value) {
     if (item is! String || item.isEmpty || item.length > 2048) {
       throw const FormatException('A source-pairing URL is invalid.');
     }
-    result.add(item);
+    if (seen.add(item)) result.add(item);
   }
   return List<String>.unmodifiable(result);
 }
