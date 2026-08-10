@@ -167,12 +167,18 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     );
   }
 
-  Future<String?> addRepository(String rawUrl) async {
+  Future<String?> addRepository(
+    String rawUrl, {
+    bool refreshAfterAdd = true,
+  }) async {
     final uri = safePublicHttpsUri(rawUrl);
     if (uri == null) return 'Enter a public HTTPS repository URL.';
     final normalized = uri.toString();
     if (state.repositories.any((item) => item.url == normalized)) {
       return 'That repository is already added.';
+    }
+    if (state.repositories.length >= 32) {
+      return 'Remove a repository before adding another (maximum 32).';
     }
     final repository = AddonRepository(
       url: normalized,
@@ -180,7 +186,7 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     );
     await _store.saveRepository(repository);
     state = state.copyWith(repositories: [...state.repositories, repository]);
-    await refresh();
+    if (refreshAfterAdd) await refresh();
     return null;
   }
 

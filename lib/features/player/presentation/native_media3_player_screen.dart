@@ -8,6 +8,7 @@ import 'package:anime_tv/features/player/presentation/player_control_overlay.dar
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -15,6 +16,15 @@ import 'package:anime_tv/features/tracking/application/tracking_sync_service.dar
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+/// Whether resolving another release would repeat a provider-wide failure.
+///
+/// Only release-specific Real-Debrid failures are candidate-local. Account,
+/// authorization, rate-limit, transient, and unknown provider failures cannot
+/// be repaired by selecting another torrent, so failover stops without
+/// multiplying refused requests.
+bool isTerminalDebridAlternativeFailure(Object error) =>
+    error is RealDebridException && !error.canTryAnotherRelease;
 
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
@@ -415,7 +425,22 @@ class _NativeMedia3PlayerScreenState
           _diagnostic = reason;
         });
       }
-      final ready = await _resolveRelease(candidate);
+      StreamReady? ready;
+      try {
+        ready = await _resolveRelease(candidate);
+      } catch (error) {
+        if (!isTerminalDebridAlternativeFailure(error)) {
+          // This release failed independently. Keep walking the ranked list.
+          continue;
+        }
+        if (mounted) {
+          setState(() {
+            _status = 'Could not switch debrid stream';
+            _diagnostic = error.toString();
+          });
+        }
+        return false;
+      }
       if (!mounted) return false;
       if (ready == null) continue;
       _source = ready.uri.toString();

@@ -13,8 +13,17 @@ const rateWindowMs = 60 * 1000;
 const maxRateLimitEntries = 4096;
 const pairings = new Map();
 const codes = new Map();
+const sourcePairings = new Map();
+const sourceCodes = new Map();
 const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
+
+class RequestInputError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function providerConfig(provider) {
   if (provider === "anilist") {
@@ -73,10 +82,12 @@ function html(response, status, body) {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     "Content-Security-Policy":
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://anilist.co https://myanimelist.net; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   });
   response.end(`<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -86,22 +97,41 @@ body{margin:0;background:#080c16;color:#f5f5fb;font:18px system-ui;display:grid;
 main{width:min(580px,calc(100% - 40px));background:#131928;border:1px solid #293149;border-radius:24px;padding:32px;box-sizing:border-box}
 h1{margin:0 0 12px;font-size:32px}p{color:#b8bfd4;line-height:1.55}
 a,button{display:block;width:100%;box-sizing:border-box;border:0;margin-top:24px;padding:16px 20px;border-radius:12px;background:#f5f5fb;color:#111624;text-align:center;text-decoration:none;font:inherit;font-weight:800;cursor:pointer}
-input{display:block;width:100%;box-sizing:border-box;margin-top:22px;padding:16px 18px;border:1px solid #39435f;border-radius:12px;background:#090e1a;color:#f5f5fb;font:700 22px system-ui;letter-spacing:3px;text-transform:uppercase}
+input,textarea{display:block;width:100%;box-sizing:border-box;margin-top:22px;padding:16px 18px;border:1px solid #39435f;border-radius:12px;background:#090e1a;color:#f5f5fb;font:700 18px system-ui}
+textarea{min-height:150px;resize:vertical;overflow-wrap:anywhere}.code-input{font-size:22px;letter-spacing:3px;text-transform:uppercase}
 code{color:#5bd8ec}small{display:block;margin-top:18px;color:#7f879e}
 </style><main>${body}</main></html>`);
 }
 
+const escapeHtml = (value) =>
+  String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
 const normalizeCode = (value) =>
   String(value || "").trim().toUpperCase();
 
-function rateLimited(request) {
+function rateLimited(request, limit = 600, namespace = "global") {
+  // Render appends the connection address to X-Forwarded-For. Use the
+  // rightmost bounded value so a client-supplied first entry cannot create an
+  // unlimited stream of rate-limit buckets.
+  const forwarded = String(request.headers["x-forwarded-for"] || "").slice(
+    0,
+    2048,
+  );
   const address = String(
-    request.headers["x-forwarded-for"] || request.socket.remoteAddress || "",
+    forwarded
+      ? forwarded.split(",").at(-1)
+      : request.socket.remoteAddress || "",
   )
-    .split(",")[0]
     .trim()
     .slice(0, 256);
-  const key = createHash("sha256").update(address).digest("base64url");
+  const key = createHash("sha256")
+    .update(`${namespace}:${address}`)
+    .digest("base64url");
   const now = Date.now();
   cleanupRateLimits(now);
   const current = rateLimits.get(key);
@@ -113,7 +143,7 @@ function rateLimited(request) {
     return false;
   }
   current.count += 1;
-  return current.count > 60;
+  return current.count > limit;
 }
 
 function cleanupRateLimits(now = Date.now()) {
@@ -133,26 +163,287 @@ function cleanup() {
       codes.delete(pairing.userCode);
     }
   }
+  for (const [id, pairing] of sourcePairings) {
+    if (pairing.expiresAt <= now) {
+      sourcePairings.delete(id);
+      sourceCodes.delete(pairing.userCode);
+    }
+  }
 }
 
 async function drainBody(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 16_384) throw new Error("Request body is too large.");
+    if (size > 16_384) {
+      throw new RequestInputError(413, "Request body is too large.");
+    }
   }
 }
 
-async function readJson(request) {
+async function readJson(request, { requireBody = false } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 16_384) throw new Error("Request body is too large.");
+    if (size > 16_384) {
+      throw new RequestInputError(413, "Request body is too large.");
+    }
     chunks.push(chunk);
   }
   const value = Buffer.concat(chunks).toString("utf8");
+  if (requireBody && !value.trim()) {
+    throw new RequestInputError(400, "Expected a JSON object.");
+  }
   return value ? JSON.parse(value) : {};
+}
+
+async function readForm(request) {
+  const contentType = String(request.headers["content-type"] || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/x-www-form-urlencoded") {
+    throw new RequestInputError(415, "Expected a form submission.");
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 131_072) {
+      throw new RequestInputError(413, "Request body is too large.");
+    }
+    chunks.push(chunk);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+}
+
+function validSubmittedUrl(value, { manifest = false } = {}) {
+  if (
+    typeof value !== "string" ||
+    value.length < 10 ||
+    value.length > 2048 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    const structurallySafe =
+      url.protocol === "https:" &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password;
+    return (
+      structurallySafe &&
+      (!manifest || url.pathname.toLowerCase().endsWith("/manifest.json"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function createSourcePairing(request, response) {
+  if (!publicBaseUrl.startsWith("https://")) {
+    return json(response, 503, {
+      error: "PUBLIC_BASE_URL must be an externally reachable HTTPS origin.",
+    });
+  }
+  const contentType = String(request.headers["content-type"] || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/json") {
+    throw new RequestInputError(415, "Expected a JSON request.");
+  }
+  const body = await readJson(request, { requireBody: true });
+  if (
+    !body ||
+    Array.isArray(body) ||
+    typeof body !== "object" ||
+    Object.keys(body).length !== 0
+  ) {
+    return json(response, 400, { error: "invalid_request" });
+  }
+  cleanup();
+  if (sourcePairings.size >= 256) {
+    return json(response, 503, { error: "pairing_capacity_reached" });
+  }
+  let userCode;
+  do userCode = newUserCode();
+  while (sourceCodes.has(userCode));
+  const pairingId = randomToken(18);
+  const deviceCode = randomToken(32);
+  const expiresAt = Date.now() + ttlMs;
+  sourcePairings.set(pairingId, {
+    userCode,
+    deviceHash: digest(deviceCode),
+    expiresAt,
+    status: "pending",
+    submitted: null,
+  });
+  sourceCodes.set(userCode, pairingId);
+  return json(response, 201, {
+    pairing_id: pairingId,
+    device_code: deviceCode,
+    user_code: userCode,
+    verification_uri: `${publicBaseUrl}/source-pair`,
+    verification_uri_complete: `${publicBaseUrl}/source-pair?code=${encodeURIComponent(userCode)}`,
+    expires_at: new Date(expiresAt).toISOString(),
+    interval: 3,
+  });
+}
+
+function pollSourcePairing(request, response, pairingId) {
+  cleanup();
+  const pairing = sourcePairings.get(pairingId);
+  if (!pairing) return json(response, 404, { status: "expired" });
+  const authorization = String(request.headers.authorization || "");
+  const deviceCode = authorization.startsWith("Pairing ")
+    ? authorization.slice("Pairing ".length)
+    : "";
+  const suppliedHash = digest(deviceCode);
+  if (!deviceCode || !timingSafeEqual(suppliedHash, pairing.deviceHash)) {
+    return json(response, 401, { error: "invalid_device_code" });
+  }
+  if (pairing.status !== "submitted" || !pairing.submitted) {
+    return json(response, 200, { status: "pending" });
+  }
+  const submitted = pairing.submitted;
+  // Delete before responding so a parallel/replayed device poll cannot
+  // retrieve the one-time payload twice.
+  sourcePairings.delete(pairingId);
+  sourceCodes.delete(pairing.userCode);
+  return json(response, 200, {
+    status: "submitted",
+    repository_urls: submitted.repositoryUrls,
+    manifest_urls: submitted.manifestUrls,
+  });
+}
+
+function cancelSourcePairing(request, response, pairingId) {
+  cleanup();
+  const pairing = sourcePairings.get(pairingId);
+  if (!pairing) return json(response, 404, { status: "expired" });
+  const authorization = String(request.headers.authorization || "");
+  const deviceCode = authorization.startsWith("Pairing ")
+    ? authorization.slice("Pairing ".length)
+    : "";
+  if (
+    !deviceCode ||
+    !timingSafeEqual(digest(deviceCode), pairing.deviceHash)
+  ) {
+    return json(response, 401, { error: "invalid_device_code" });
+  }
+  sourcePairings.delete(pairingId);
+  sourceCodes.delete(pairing.userCode);
+  response.writeHead(204, {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  response.end();
+}
+
+function sourcePairingForm(response, pairing, errorMessage = "") {
+  const error = errorMessage
+    ? `<p role="alert">${escapeHtml(errorMessage)}</p>`
+    : "";
+  return html(
+    response,
+    errorMessage ? 400 : 200,
+    `<h1>Send sources to TetoTV</h1>
+     <p>Enter URLs for the TV showing code <code>${escapeHtml(pairing.userCode)}</code>. Use one URL per line, up to eight of each.</p>
+     ${error}
+     <form method="post" action="/source-pair" autocomplete="off">
+       <input type="hidden" name="code" value="${escapeHtml(pairing.userCode)}">
+       <textarea name="repository_urls" aria-label="Marketplace repository URLs" placeholder="Marketplace repositories&#10;https://example.com/marketplace.json" maxlength="16391"></textarea>
+       <textarea name="manifest_urls" aria-label="Stremio manifest URLs" placeholder="Stremio manifests&#10;https://example.com/addon/manifest.json" maxlength="16391"></textarea>
+       <button type="submit">Send securely</button>
+     </form>
+     <small>TetoTV never uploads saved account tokens. Submitted URLs are encrypted in transit, held in memory until this TV retrieves them once, then deleted.</small>`,
+  );
+}
+
+function sourcePairingPage(response, url) {
+  cleanup();
+  const userCode = normalizeCode(url.searchParams.get("code"));
+  const pairingId = sourceCodes.get(userCode);
+  const pairing = pairingId ? sourcePairings.get(pairingId) : null;
+  if (!userCode) {
+    return html(
+      response,
+      200,
+      `<h1>Send a URL to TetoTV</h1>
+       <p>Enter the code shown on your TV.</p>
+       <form method="get" action="/source-pair" autocomplete="off">
+         <input class="code-input" name="code" aria-label="TV pairing code" placeholder="ABCD-EFGH" maxlength="9" required>
+         <button type="submit">Continue securely</button>
+       </form>
+       <small>This page cannot read saved TetoTV secrets; it only accepts URLs you explicitly submit.</small>`,
+    );
+  }
+  if (!pairing) {
+    return html(
+      response,
+      404,
+      "<h1>Pairing expired</h1><p>Return to TetoTV and create a new code.</p>",
+    );
+  }
+  return sourcePairingForm(response, pairing);
+}
+
+async function submitSourcePairing(request, response) {
+  cleanup();
+  const form = await readForm(request);
+  const userCode = normalizeCode(form.get("code"));
+  const pairingId = sourceCodes.get(userCode);
+  const pairing = pairingId ? sourcePairings.get(pairingId) : null;
+  if (!pairing) {
+    return html(
+      response,
+      404,
+      "<h1>Pairing expired</h1><p>Return to TetoTV and create a new code.</p>",
+    );
+  }
+  if (pairing.status !== "pending") {
+    return html(
+      response,
+      409,
+      "<h1>Already sent</h1><p>This one-time code has already accepted a submission.</p>",
+    );
+  }
+  const lines = (name) =>
+    String(form.get(name) || "")
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+  const repositoryUrls = lines("repository_urls");
+  const manifestUrls = lines("manifest_urls");
+  if (
+    repositoryUrls.length > 8 ||
+    manifestUrls.length > 8 ||
+    repositoryUrls.length + manifestUrls.length === 0 ||
+    repositoryUrls.some((value) => !validSubmittedUrl(value)) ||
+    manifestUrls.some(
+      (value) => !validSubmittedUrl(value, { manifest: true }),
+    )
+  ) {
+    return sourcePairingForm(
+      response,
+      pairing,
+      "Enter up to eight valid public HTTPS URLs per section. Manifest paths must end in /manifest.json, and embedded username/password credentials are not allowed.",
+    );
+  }
+  pairing.submitted = {
+    repositoryUrls: [...new Set(repositoryUrls)],
+    manifestUrls: [...new Set(manifestUrls)],
+  };
+  pairing.status = "submitted";
+  return html(
+    response,
+    200,
+    "<h1>Sent to TetoTV</h1><p>The TV will validate and save the URL. You can close this page.</p>",
+  );
 }
 
 async function createPairing(request, response, provider) {
@@ -234,8 +525,8 @@ function pairingPage(response, url) {
       200,
       `<h1>Connect TetoTV</h1>
        <p>Enter the code shown on your TV.</p>
-       <form method="get" action="/pair">
-         <input name="code" aria-label="TV pairing code" placeholder="ABCD-EFGH" maxlength="9" required>
+       <form method="get" action="/pair" autocomplete="off">
+         <input class="code-input" name="code" aria-label="TV pairing code" placeholder="ABCD-EFGH" maxlength="9" required>
          <button type="submit">Continue securely</button>
        </form>
        <small>No TetoTV password is entered on this page.</small>`,
@@ -451,7 +742,13 @@ async function oauthCallback(response, url, provider) {
   }
 }
 
-const server = createServer(async (request, response) => {
+const server = createServer(
+  {
+    maxHeaderSize: 16_384,
+    headersTimeout: 10_000,
+    requestTimeout: 20_000,
+  },
+  async (request, response) => {
   try {
     if (rateLimited(request)) {
       return json(
@@ -480,7 +777,58 @@ const server = createServer(async (request, response) => {
           anilist: callbackUrl("anilist"),
           myanimelist: callbackUrl("myanimelist"),
         },
+        source_pairing: true,
       });
+    }
+    if (request.method === "POST" && url.pathname === "/v1/source-pairings") {
+      if (rateLimited(request, 5, "source-create")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await createSourcePairing(request, response);
+    }
+    const sourcePollMatch = url.pathname.match(
+      /^\/v1\/source-pairings\/([A-Za-z0-9_-]+)$/,
+    );
+    if (request.method === "GET" && sourcePollMatch) {
+      if (rateLimited(request, 240, "source-poll")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return pollSourcePairing(request, response, sourcePollMatch[1]);
+    }
+    if (request.method === "DELETE" && sourcePollMatch) {
+      if (rateLimited(request, 30, "source-cancel")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return cancelSourcePairing(request, response, sourcePollMatch[1]);
+    }
+    if (request.method === "GET" && url.pathname === "/source-pair") {
+      return sourcePairingPage(response, url);
+    }
+    if (request.method === "POST" && url.pathname === "/source-pair") {
+      if (rateLimited(request, 10, "source-submit")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await submitSourcePairing(request, response);
     }
     const createMatch = url.pathname.match(
       /^\/v1\/(anilist|myanimelist)\/pairings$/,
@@ -514,10 +862,17 @@ const server = createServer(async (request, response) => {
     }
     return json(response, 404, { error: "not_found" });
   } catch (error) {
+    if (error instanceof RequestInputError) {
+      return json(response, error.status, { error: "invalid_request" });
+    }
+    if (error instanceof SyntaxError) {
+      return json(response, 400, { error: "invalid_json" });
+    }
     console.error("Broker request failed:", error.message);
     return json(response, 500, { error: "internal_error" });
   }
-});
+  },
+);
 
 server.listen(port, async () => {
   console.log(`TetoTV auth broker listening on port ${port}`);
@@ -550,8 +905,146 @@ server.listen(port, async () => {
         { redirect: "manual" },
       );
       const malAuthorizeUrl = new URL(malAuthorize.headers.get("location"));
+      const sourceWrongContentType = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        { method: "POST", body: "{}" },
+      );
+      const sourceUnexpectedBody = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: '{"unexpected":true}',
+        },
+      );
+      const sourceMalformedBody = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "untrusted, self-test-malformed",
+          },
+          body: "{bad",
+        },
+      );
+      const sourcePairing = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ).then((response) => response.json());
+      const sourcePageResponse = await fetch(
+        `http://127.0.0.1:${port}/source-pair?code=${encodeURIComponent(sourcePairing.user_code)}`,
+      );
+      const sourcePage = await sourcePageResponse.text();
+      const sourceForm = (repositoryUrl) =>
+        new URLSearchParams({
+          code: sourcePairing.user_code,
+          repository_urls: repositoryUrl,
+          manifest_urls: "https://example.com/addon/manifest.json",
+        });
+      const parallelSubmissions = await Promise.all([
+        fetch(`http://127.0.0.1:${port}/source-pair`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: sourceForm("https://example.com/first.json"),
+        }),
+        fetch(`http://127.0.0.1:${port}/source-pair`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: sourceForm("https://example.com/second.json"),
+        }),
+      ]);
+      const sourceUnauthorized = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings/${sourcePairing.pairing_id}`,
+        { headers: { Authorization: "Pairing wrong-device-code" } },
+      );
+      const sourcePollUrl =
+        `http://127.0.0.1:${port}/v1/source-pairings/${sourcePairing.pairing_id}`;
+      const parallelDevicePolls = await Promise.all([
+        fetch(sourcePollUrl, {
+          headers: {
+            Authorization: `Pairing ${sourcePairing.device_code}`,
+          },
+        }),
+        fetch(sourcePollUrl, {
+          headers: {
+            Authorization: `Pairing ${sourcePairing.device_code}`,
+          },
+        }),
+      ]);
+      const sourceResultResponse = parallelDevicePolls.find(
+        (value) => value.status === 200,
+      );
+      const sourceReplay = parallelDevicePolls.find(
+        (value) => value.status === 404,
+      );
+      if (!sourceResultResponse || !sourceReplay) {
+        throw new Error("Parallel source-pairing retrieval was not atomic.");
+      }
+      const sourceResult = await sourceResultResponse.json();
+      const oversizedSourceForm = await fetch(
+        `http://127.0.0.1:${port}/source-pair`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: `code=ABCD-EFGH&repository_urls=${"a".repeat(131_073)}`,
+        },
+      );
+      const expiringSourcePairing = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ).then((response) => response.json());
+      sourcePairings.get(expiringSourcePairing.pairing_id).expiresAt = 0;
+      const expiredSourcePoll = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings/${expiringSourcePairing.pairing_id}`,
+        {
+          headers: {
+            Authorization: `Pairing ${expiringSourcePairing.device_code}`,
+          },
+        },
+      );
+      const cancellableSourcePairing = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ).then((response) => response.json());
+      const cancelSourceResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings/${cancellableSourcePairing.pairing_id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Pairing ${cancellableSourcePairing.device_code}`,
+          },
+        },
+      );
+      const cancelledSourcePoll = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings/${cancellableSourcePairing.pairing_id}`,
+        {
+          headers: {
+            Authorization: `Pairing ${cancellableSourcePairing.device_code}`,
+          },
+        },
+      );
       if (
         health.status !== "ok" ||
+        health.source_pairing !== true ||
         health.callbacks.myanimelist !==
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||
@@ -561,7 +1054,33 @@ server.listen(port, async () => {
         !malAuthorizeUrl.searchParams.get("code_challenge") ||
         !String(pairing.verification_uri || "").startsWith("https://") ||
         pending.status !== "pending" ||
-        !manualPage.includes('name="code"')
+        !manualPage.includes('name="code"') ||
+        sourceWrongContentType.status !== 415 ||
+        sourceUnexpectedBody.status !== 400 ||
+        sourceMalformedBody.status !== 400 ||
+        !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(sourcePairing.user_code) ||
+        !/^[A-Za-z0-9_-]{43}$/.test(sourcePairing.device_code) ||
+        !sourcePage.includes('name="repository_urls"') ||
+        !sourcePage.includes('name="manifest_urls"') ||
+        sourcePage.includes(sourcePairing.pairing_id) ||
+        sourcePage.includes(sourcePairing.device_code) ||
+        sourcePageResponse.headers.get("cache-control") !== "no-store" ||
+        !String(sourcePageResponse.headers.get("content-security-policy")).includes(
+          "default-src 'none'",
+        ) ||
+        parallelSubmissions.map((value) => value.status).sort().join(",") !==
+          "200,409" ||
+        sourceUnauthorized.status !== 401 ||
+        sourceResultResponse.status !== 200 ||
+        sourceResult.status !== "submitted" ||
+        sourceResult.repository_urls.length !== 1 ||
+        sourceResult.manifest_urls[0] !==
+          "https://example.com/addon/manifest.json" ||
+        sourceReplay.status !== 404 ||
+        oversizedSourceForm.status !== 413 ||
+        expiredSourcePoll.status !== 404 ||
+        cancelSourceResponse.status !== 204 ||
+        cancelledSourcePoll.status !== 404
       ) {
         throw new Error("Broker self-test response validation failed.");
       }

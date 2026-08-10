@@ -55,7 +55,11 @@ class RealDebridStreamResolver implements StreamResolver {
         continue;
       }
       if (info.hasFailed) {
-        throw StateError('Real-Debrid torrent failed: ${info.status}.');
+        throw RealDebridException(
+          'This release could not be prepared by Real-Debrid. TetoTV can try '
+          'a different release.',
+          kind: RealDebridFailureKind.releaseUnavailable,
+        );
       }
       if (info.isDownloaded) break;
       yield StreamCaching(
@@ -75,13 +79,60 @@ class RealDebridStreamResolver implements StreamResolver {
       throw StateError('Real-Debrid returned no downloadable video link.');
     }
 
-    final unrestricted = await _client.unrestrict(info.links.first);
+    final link = selectEpisodeDownloadLink(
+      info,
+      episode.episode,
+      preferredFileIndex: selectedRelease.preferredFileIndex,
+    );
+    final unrestricted = await _client.unrestrict(link);
     yield StreamReady(
       uri: unrestricted.download,
       displayName: unrestricted.filename,
       debridService: DebridService.realDebrid,
     );
   }
+}
+
+/// Maps the episode file selected from a downloaded batch to the matching
+/// Real-Debrid link. The API returns links in the same order as selected
+/// files, which is not necessarily the order of all files in the torrent.
+String selectEpisodeDownloadLink(
+  RealDebridTorrentInfo info,
+  int episode, {
+  int? preferredFileIndex,
+}) {
+  if (info.links.isEmpty) {
+    throw StateError('Real-Debrid returned no downloadable video link.');
+  }
+  if (info.links.length == 1) return info.links.single;
+
+  final episodeFile = selectEpisodeFile(
+    info.files,
+    episode,
+    preferredFileIndex: preferredFileIndex,
+  );
+  final selectedFiles = info.files.where((file) => file.selected).toList();
+  final selectedIndex = selectedFiles.indexWhere(
+    (file) => file.id == episodeFile.id,
+  );
+  if (selectedIndex >= 0 && selectedIndex < info.links.length) {
+    return info.links[selectedIndex];
+  }
+
+  // Some older API responses omit the selected flag while returning one link
+  // per torrent file. Preserve correct batch mapping in that representation.
+  if (info.links.length == info.files.length) {
+    final fileIndex = info.files.indexWhere(
+      (file) => file.id == episodeFile.id,
+    );
+    if (fileIndex >= 0) return info.links[fileIndex];
+  }
+
+  throw const RealDebridException(
+    'Real-Debrid did not identify which download belongs to this episode. '
+    'Choose another release.',
+    kind: RealDebridFailureKind.releaseUnavailable,
+  );
 }
 
 RealDebridTorrentFile selectEpisodeFile(

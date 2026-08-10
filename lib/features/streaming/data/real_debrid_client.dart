@@ -1,15 +1,148 @@
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:dio/dio.dart';
 
+/// Describes whether retrying a different release can recover a failed
+/// Real-Debrid request.
+enum RealDebridFailureKind {
+  /// The selected file or torrent cannot be handled, but another release may
+  /// still work.
+  releaseUnavailable,
+
+  /// The access token is missing, invalid, or lacks permission.
+  authorization,
+
+  /// The account is locked, inactive, out of traffic, or otherwise unable to
+  /// perform downloads until the user fixes the account.
+  account,
+
+  /// Real-Debrid asked the client to slow down.
+  rateLimited,
+
+  /// A temporary provider or network-side failure.
+  transient,
+
+  /// The API did not provide enough information to classify the failure.
+  unknown,
+}
+
 class RealDebridException implements Exception {
-  const RealDebridException(this.message, {this.code});
+  const RealDebridException(
+    this.message, {
+    this.code,
+    this.kind = RealDebridFailureKind.unknown,
+  });
 
   final String message;
   final int? code;
+  final RealDebridFailureKind kind;
+
+  /// Authentication and account failures apply to every release. Candidate
+  /// failover must stop and let the user repair their Real-Debrid connection.
+  bool get isTerminalAccountFailure =>
+      kind == RealDebridFailureKind.authorization ||
+      kind == RealDebridFailureKind.account;
+
+  bool get isCandidateSpecific =>
+      kind == RealDebridFailureKind.releaseUnavailable;
+
+  /// Whether selecting a different torrent/file is a meaningful recovery.
+  /// Refused requests count against Real-Debrid limits, so transient, rate,
+  /// account, authorization, and unknown failures must not fan out.
+  bool get canTryAnotherRelease => isCandidateSpecific;
+
+  factory RealDebridException.fromApi({required int? code, int? httpStatus}) {
+    if (code != null) {
+      if (_authorizationErrorCodes.contains(code)) {
+        return RealDebridException(
+          'Your Real-Debrid connection has expired or is not authorized. '
+          'Reconnect it in Accounts.',
+          code: code,
+          kind: RealDebridFailureKind.authorization,
+        );
+      }
+      if (_accountErrorCodes.contains(code)) {
+        return RealDebridException(
+          'Your Real-Debrid account cannot start downloads right now. '
+          'Check the account status and Premium traffic, then try again.',
+          code: code,
+          kind: RealDebridFailureKind.account,
+        );
+      }
+      if (_releaseErrorCodes.contains(code)) {
+        return RealDebridException(
+          _releaseFailureMessage(code),
+          code: code,
+          kind: RealDebridFailureKind.releaseUnavailable,
+        );
+      }
+      if (_rateLimitErrorCodes.contains(code)) {
+        return RealDebridException(
+          'Real-Debrid is receiving too many requests. Wait a moment and try '
+          'again.',
+          code: code,
+          kind: RealDebridFailureKind.rateLimited,
+        );
+      }
+      if (_transientErrorCodes.contains(code)) {
+        return RealDebridException(
+          'Real-Debrid is temporarily unable to process this release. Try '
+          'again shortly.',
+          code: code,
+          kind: RealDebridFailureKind.transient,
+        );
+      }
+    }
+    if (httpStatus == 401 || httpStatus == 403) {
+      return RealDebridException(
+        'Your Real-Debrid connection has expired or is not authorized. '
+        'Reconnect it in Accounts.',
+        code: code ?? httpStatus,
+        kind: RealDebridFailureKind.authorization,
+      );
+    }
+    if (httpStatus == 429) {
+      return RealDebridException(
+        'Real-Debrid is receiving too many requests. Wait a moment and try '
+        'again.',
+        code: code ?? httpStatus,
+        kind: RealDebridFailureKind.rateLimited,
+      );
+    }
+    if (httpStatus != null && httpStatus >= 500) {
+      return RealDebridException(
+        'Real-Debrid is temporarily unavailable. Try again shortly.',
+        code: code ?? httpStatus,
+        kind: RealDebridFailureKind.transient,
+      );
+    }
+    return RealDebridException(
+      'Real-Debrid could not process this request.',
+      code: code ?? httpStatus,
+    );
+  }
 
   @override
   String toString() => message;
 }
+
+// Real-Debrid REST API error codes. Keep the raw API message out of the UI:
+// values such as `infringing_file` are implementation details and make it
+// sound as if the whole episode is unavailable when only one release failed.
+const _authorizationErrorCodes = {8, 9, 10, 11, 12, 13};
+const _accountErrorCodes = {14, 15, 20, 21, 22, 23, 36};
+const _releaseErrorCodes = {7, 16, 24, 28, 29, 30, 35};
+const _rateLimitErrorCodes = {5, 34};
+const _transientErrorCodes = {6, 17, 18, 19, 25, 37};
+
+String _releaseFailureMessage(int code) => switch (code) {
+  29 => 'This release is too large for Real-Debrid. Choose another release.',
+  30 => 'This release contains an invalid torrent. Choose another release.',
+  35 =>
+    'Real-Debrid cannot provide this release. TetoTV can try a different '
+        'release.',
+  _ =>
+    'This release is unavailable through Real-Debrid. Choose another release.',
+};
 
 class RealDebridClient {
   RealDebridClient({required String token, Dio? dio})
@@ -91,16 +224,19 @@ class RealDebridClient {
     } on DioException catch (error) {
       final data = error.response?.data;
       if (data is Map<String, dynamic>) {
-        throw RealDebridException(
-          data['error'] as String? ?? 'Real-Debrid request failed.',
-          code: data['error_code'] as int?,
+        throw RealDebridException.fromApi(
+          code: switch (data['error_code']) {
+            final int value => value,
+            final num value => value.toInt(),
+            final String value => int.tryParse(value),
+            _ => null,
+          },
+          httpStatus: error.response?.statusCode,
         );
       }
-      if (error.response?.statusCode == 401) {
-        throw const RealDebridException(
-          'That Real-Debrid token is invalid or expired.',
-          code: 401,
-        );
+      final status = error.response?.statusCode;
+      if (status != null) {
+        throw RealDebridException.fromApi(httpStatus: status, code: null);
       }
       throw RealDebridException(
         error.message ?? 'Could not reach Real-Debrid.',

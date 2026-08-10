@@ -7,6 +7,7 @@ import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
+import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
@@ -322,6 +323,198 @@ void main() {
     },
   );
 
+  testWidgets(
+    'release-specific failures continue through the fifth unique candidate',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var resolverCalls = 0;
+      final router = GoRouter(
+        initialLocation: '/resolve',
+        routes: [
+          GoRoute(
+            path: '/resolve',
+            builder: (_, _) => const ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/player',
+            builder: (_, _) => const Scaffold(body: Text('PLAYER OPENED')),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _RankedReleaseSource(5),
+            ),
+            debridStreamResolverFactoryProvider.overrideWithValue(({
+              required service,
+              required token,
+              required source,
+            }) {
+              resolverCalls++;
+              return resolverCalls == 5
+                  ? const _ReadyResolver()
+                  : _ErrorResolver(
+                      RealDebridException.fromApi(code: 35, httpStatus: 403),
+                    );
+            }),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+
+      await _pumpUntilFound(tester, find.text('Release 5'));
+      await tester.tap(find.text('Release 5'));
+      await _pumpUntilFound(tester, find.text('PLAYER OPENED'));
+
+      expect(resolverCalls, 5);
+    },
+  );
+
+  testWidgets('release exhaustion reports the aggregate failure safely', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var resolverCalls = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _RankedReleaseSource(3),
+          ),
+          debridStreamResolverFactoryProvider.overrideWithValue(({
+            required service,
+            required token,
+            required source,
+          }) {
+            resolverCalls++;
+            return _ErrorResolver(
+              RealDebridException.fromApi(code: 35, httpStatus: 403),
+            );
+          }),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Example Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('Release 3'));
+    await tester.tap(find.text('Release 3'));
+    await _pumpUntilFound(
+      tester,
+      find.textContaining('could not provide 3 different releases'),
+    );
+
+    expect(resolverCalls, 3);
+    expect(find.textContaining('infringing_file'), findsNothing);
+  });
+
+  testWidgets('terminal Real-Debrid authorization failure stops failover', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var resolverCalls = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _RankedReleaseSource(5),
+          ),
+          debridStreamResolverFactoryProvider.overrideWithValue(({
+            required service,
+            required token,
+            required source,
+          }) {
+            resolverCalls++;
+            return _ErrorResolver(
+              RealDebridException.fromApi(code: 8, httpStatus: 401),
+            );
+          }),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Example Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('Release 5'));
+    await tester.tap(find.text('Release 5'));
+    await _pumpUntilFound(tester, find.textContaining('Reconnect it'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(resolverCalls, 1);
+    expect(find.textContaining('infringing_file'), findsNothing);
+  });
+
+  testWidgets('Real-Debrid rate limiting does not fan out across releases', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var resolverCalls = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _RankedReleaseSource(5),
+          ),
+          debridStreamResolverFactoryProvider.overrideWithValue(({
+            required service,
+            required token,
+            required source,
+          }) {
+            resolverCalls++;
+            return _ErrorResolver(RealDebridException.fromApi(code: 34));
+          }),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Example Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('Release 5'));
+    await tester.tap(find.text('Release 5'));
+    await _pumpUntilFound(tester, find.textContaining('too many requests'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(resolverCalls, 1);
+  });
+
   test(
     'stream filters distinguish language, quality, codec, HDR and batches',
     () {
@@ -419,6 +612,30 @@ class _CallbackReleaseSource implements ReleaseSource {
   Future<List<ReleaseCandidate>> search(EpisodeReference episode) => callback();
 }
 
+class _RankedReleaseSource implements ReleaseSource {
+  const _RankedReleaseSource(this.count);
+
+  final int count;
+
+  @override
+  String get id => 'ranked';
+
+  @override
+  Future<List<ReleaseCandidate>> search(EpisodeReference episode) async => [
+    for (var index = 1; index <= count; index++)
+      ReleaseCandidate(
+        infoHash: index.toString().padLeft(40, '0'),
+        magnetUri: 'magnet:?xt=urn:btih:${index.toString().padLeft(40, '0')}',
+        releaseName: 'Release $index',
+        seeders: index,
+        sourceId: id,
+        isDubbed: true,
+        quality: '1080p',
+        codec: 'H.264',
+      ),
+  ];
+}
+
 class _FailingResolver implements StreamResolver {
   const _FailingResolver(this.failWhenReleased);
 
@@ -441,6 +658,17 @@ class _ReadyResolver implements StreamResolver {
       displayName: 'Ready',
       debridService: DebridService.realDebrid,
     );
+  }
+}
+
+class _ErrorResolver implements StreamResolver {
+  const _ErrorResolver(this.error);
+
+  final Object error;
+
+  @override
+  Stream<StreamResolution> resolve(EpisodeReference episode) async* {
+    throw error;
   }
 }
 

@@ -84,6 +84,9 @@ class UserTorrentSourcesController
     if (state.manifestUrls.contains(normalized)) {
       return 'That torrent source is already added.';
     }
+    if (state.manifestUrls.length >= 32) {
+      return 'Remove a torrent source before adding another (maximum 32).';
+    }
     try {
       await _targetValidator(Uri.parse(normalized));
     } catch (_) {

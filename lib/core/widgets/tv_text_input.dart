@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Uses TetoTV's remote keyboard or the Android device keyboard according to
 /// the saved input preference.
-class TvTextInput extends ConsumerWidget {
+class TvTextInput extends ConsumerStatefulWidget {
   const TvTextInput({
     required this.controller,
     required this.labelText,
@@ -33,82 +33,181 @@ class TvTextInput extends ConsumerWidget {
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
 
+  @override
+  ConsumerState<TvTextInput> createState() => _TvTextInputState();
+}
+
+class _TvTextInputState extends ConsumerState<TvTextInput> {
+  FocusNode? _fallbackFocusNode;
+  bool _deviceKeyboardActive = false;
+
+  FocusNode get _focusNode => widget.focusNode ?? _fallbackFocusNode!;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.focusNode == null) {
+      _fallbackFocusNode = FocusNode(debugLabel: 'TV text input');
+    }
+    _focusNode.addListener(_handleFocusChanged);
+    widget.controller.addListener(_handleControllerChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant TvTextInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      (oldWidget.focusNode ?? _fallbackFocusNode)?.removeListener(
+        _handleFocusChanged,
+      );
+      _fallbackFocusNode?.dispose();
+      _fallbackFocusNode = widget.focusNode == null
+          ? FocusNode(debugLabel: 'TV text input')
+          : null;
+      _focusNode.addListener(_handleFocusChanged);
+    }
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChanged);
+      widget.controller.addListener(_handleControllerChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
+    _focusNode.removeListener(_handleFocusChanged);
+    _fallbackFocusNode?.dispose();
+    super.dispose();
+  }
+
+  void _handleControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _handleFocusChanged() {
+    if (_focusNode.hasFocus || !_deviceKeyboardActive) return;
+    setState(() => _deviceKeyboardActive = false);
+    SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+  }
+
+  void _activateDeviceKeyboard() {
+    if (_deviceKeyboardActive) return;
+    setState(() => _deviceKeyboardActive = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+      SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+    });
+  }
+
+  void _finishDeviceKeyboard(String value) {
+    widget.onSubmitted?.call(value);
+    if (_deviceKeyboardActive) {
+      setState(() => _deviceKeyboardActive = false);
+    }
+    SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+    _focusNode.requestFocus();
+  }
+
+  KeyEventResult _handleDeviceActivation(FocusNode _, KeyEvent event) {
+    if (_deviceKeyboardActive || event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.select ||
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _activateDeviceKeyboard();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _openKeyboard(BuildContext context) async {
     final value = await showDialog<String>(
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: .20),
       builder: (_) => TvKeyboardDialog(
-        title: keyboardTitle ?? labelText,
-        initialValue: controller.text,
-        obscureText: obscureText,
-        autofillSuggestions: autofillSuggestions,
+        title: widget.keyboardTitle ?? widget.labelText,
+        initialValue: widget.controller.text,
+        obscureText: widget.obscureText,
+        autofillSuggestions: widget.autofillSuggestions,
       ),
     );
     if (value == null || !context.mounted) return;
-    controller.value = TextEditingValue(
+    widget.controller.value = TextEditingValue(
       text: value,
       selection: TextSelection.collapsed(offset: value.length),
     );
-    onChanged?.call(value);
-    onSubmitted?.call(value);
+    widget.onChanged?.call(value);
+    widget.onSubmitted?.call(value);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      focusNode?.requestFocus();
+      if (mounted) _focusNode.requestFocus();
     });
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final useBuiltInKeyboard = ref.watch(
       settingsPreferencesProvider.select(
         (preferences) => preferences.useBuiltInKeyboard,
       ),
     );
     if (!useBuiltInKeyboard) {
-      return TextField(
-        controller: controller,
-        focusNode: focusNode,
-        autofocus: autofocus,
-        obscureText: obscureText,
-        autocorrect: !obscureText,
-        enableSuggestions: !obscureText,
-        textInputAction: TextInputAction.done,
-        onChanged: onChanged,
-        onSubmitted: onSubmitted,
-        style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-        cursorColor: AppColors.accentBright,
-        decoration: InputDecoration(
-          labelText: labelText,
-          hintText: hintText,
-          labelStyle: const TextStyle(color: AppColors.textMuted),
-          hintStyle: const TextStyle(color: AppColors.textMuted),
-          filled: true,
-          fillColor: AppColors.ink.withValues(alpha: .82),
-          suffixIcon: const Icon(
-            Icons.keyboard_alt_outlined,
-            color: AppColors.cyan,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.white.withValues(alpha: .14)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(
-              color: AppColors.accentBright,
-              width: 2,
+      return Focus(
+        canRequestFocus: false,
+        onKeyEvent: _handleDeviceActivation,
+        child: TextField(
+          controller: widget.controller,
+          focusNode: _focusNode,
+          autofocus: widget.autofocus,
+          readOnly: !_deviceKeyboardActive,
+          showCursor: _deviceKeyboardActive,
+          enableInteractiveSelection: _deviceKeyboardActive,
+          obscureText: widget.obscureText,
+          autocorrect: !widget.obscureText,
+          enableSuggestions: !widget.obscureText,
+          textInputAction: TextInputAction.done,
+          onTap: _activateDeviceKeyboard,
+          onChanged: widget.onChanged,
+          onSubmitted: _finishDeviceKeyboard,
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+          cursorColor: AppColors.accentBright,
+          decoration: InputDecoration(
+            labelText: widget.labelText,
+            hintText: widget.hintText,
+            labelStyle: const TextStyle(color: AppColors.textMuted),
+            hintStyle: const TextStyle(color: AppColors.textMuted),
+            filled: true,
+            fillColor: AppColors.ink.withValues(alpha: .82),
+            suffixIcon: const Icon(
+              Icons.keyboard_alt_outlined,
+              color: AppColors.cyan,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: .14),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(
+                color: AppColors.accentBright,
+                width: 2,
+              ),
             ),
           ),
         ),
       );
     }
-    final value = controller.text;
-    final visibleValue = obscureText && value.isNotEmpty
+    final value = widget.controller.text;
+    final visibleValue = widget.obscureText && value.isNotEmpty
         ? List.filled(value.length.clamp(1, 48), '\u2022').join()
         : value;
     return TvFocusable(
-      autofocus: autofocus,
-      focusNode: focusNode,
+      autofocus: widget.autofocus,
+      focusNode: _focusNode,
       focusScale: 1.015,
       borderRadius: BorderRadius.circular(8),
       onPressed: () => _openKeyboard(context),
@@ -128,7 +227,7 @@ class TvTextInput extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    labelText,
+                    widget.labelText,
                     style: const TextStyle(
                       color: AppColors.textMuted,
                       fontSize: 11,
@@ -137,7 +236,9 @@ class TvTextInput extends ConsumerWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    visibleValue.isEmpty ? (hintText ?? '') : visibleValue,
+                    visibleValue.isEmpty
+                        ? (widget.hintText ?? '')
+                        : visibleValue,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

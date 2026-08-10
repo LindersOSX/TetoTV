@@ -1133,6 +1133,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_failingOver) return;
     _failingOver = true;
     final position = _player.state.position;
+    Object? terminalFailure;
     try {
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
       await ref
@@ -1168,12 +1169,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           if (mounted) setState(() => _playbackError = null);
           _showTrackMessage('Switched to a compatible stream');
           return;
-        } catch (_) {
-          // Continue through the ranked debrid-only candidates.
+        } catch (error) {
+          if (isTerminalDebridAlternativeFailure(error)) {
+            terminalFailure = error;
+            break;
+          }
+          // Continue through candidate-specific and transient failures.
         }
       }
       if (mounted) {
-        await _fallbackToVlc('Every compatible debrid stream failed. $reason');
+        await _fallbackToVlc(
+          terminalFailure?.toString() ??
+              'Every compatible debrid stream failed. $reason',
+        );
       }
     } finally {
       _failingOver = false;

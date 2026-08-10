@@ -16,6 +16,7 @@ import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
+import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -259,8 +260,11 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   ReleaseCandidate? _lastAttemptedRelease;
   int _resolveAttempt = 0;
   final Set<String> _failedResolveHashes = {};
-  int _automaticResolveFallbacks = 0;
+  DateTime? _automaticResolveDeadline;
   bool _autoPlayStarted = false;
+
+  static const _maxAutomaticResolveCandidates = 8;
+  static const _automaticResolveTimeBudget = Duration(seconds: 45);
 
   bool get _hasDebrid =>
       ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
@@ -488,9 +492,21 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _lastAttemptedRelease = selected;
     });
     try {
-      final token = await ref
-          .read(debridTokenServiceProvider)
-          .accessToken(_debridService);
+      String? token;
+      try {
+        token = await ref
+            .read(debridTokenServiceProvider)
+            .accessToken(_debridService);
+      } catch (error) {
+        if (_debridService == DebridService.realDebrid) {
+          throw const RealDebridException(
+            'Your Real-Debrid connection could not be refreshed. Reconnect it '
+            'in Accounts, then try again.',
+            kind: RealDebridFailureKind.authorization,
+          );
+        }
+        rethrow;
+      }
       if (!mounted || attempt != _resolveAttempt) return;
       if (token == null || token.isEmpty) {
         setState(
@@ -498,6 +514,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               _connectedServices = {..._connectedServices}
                 ..remove(_debridService),
         );
+        if (_debridService == DebridService.realDebrid) {
+          throw const RealDebridException(
+            'Real-Debrid is not connected. Reconnect it in Accounts.',
+            kind: RealDebridFailureKind.authorization,
+          );
+        }
         throw StateError(
           '${_debridService.displayName} is not connected. '
           'Open Accounts to reconnect it.',
@@ -567,6 +589,11 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     } catch (error) {
       if (mounted && attempt == _resolveAttempt) {
         _failedResolveHashes.add(selected.infoHash.toLowerCase());
+        if (error case final RealDebridException realDebridError) {
+          unawaited(
+            _recordRealDebridFailure(realDebridError, selected.sourceId),
+          );
+        }
         final preferred = _filteredAndSortedReleases(_releases);
         final recoveryPool = <ReleaseCandidate>[
           ...preferred,
@@ -578,11 +605,21 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   !_failedResolveHashes.contains(item.infoHash.toLowerCase()),
             )
             .firstOrNull;
-        if (next != null && _automaticResolveFallbacks < 3) {
-          _automaticResolveFallbacks++;
+        final terminalAccountFailure =
+            error is RealDebridException && error.isTerminalAccountFailure;
+        final candidateCanRecover =
+            error is! RealDebridException || error.canTryAnotherRelease;
+        final withinFailoverBudget =
+            _failedResolveHashes.length < _maxAutomaticResolveCandidates &&
+            (_automaticResolveDeadline == null ||
+                DateTime.now().isBefore(_automaticResolveDeadline!));
+        if (!terminalAccountFailure &&
+            candidateCanRecover &&
+            next != null &&
+            withinFailoverBudget) {
           setState(() {
             _resolving = false;
-            _status = 'That release failed. Trying another cached stream…';
+            _status = 'That release failed. Trying another release…';
           });
           unawaited(
             Future<void>.microtask(
@@ -591,8 +628,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           );
           return;
         }
+        final errorMessage =
+            error is RealDebridException && error.canTryAnotherRelease
+            ? _exhaustedReleaseMessage(_failedResolveHashes.length)
+            : error.toString().replaceFirst('Bad state: ', '');
         setState(() {
-          _error = error.toString().replaceFirst('Bad state: ', '');
+          _error = errorMessage;
           _status = 'Could not resolve this episode';
         });
       }
@@ -775,6 +816,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       return;
     }
     final source = _ManualReleaseSource(magnet);
+    _beginResolveSequence();
     _resolve(source, selected: source.candidate(widget.episode));
   }
 
@@ -784,10 +826,53 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       await _initialize();
       return;
     }
-    _failedResolveHashes.clear();
-    _automaticResolveFallbacks = 0;
+    _beginResolveSequence();
     await _rememberStreamSelection(candidate);
     await _resolve(_SelectedReleaseSource(candidate), selected: candidate);
+  }
+
+  void _beginResolveSequence() {
+    _failedResolveHashes.clear();
+    _automaticResolveDeadline = DateTime.now().add(_automaticResolveTimeBudget);
+  }
+
+  String _exhaustedReleaseMessage(int attempted) {
+    final subject = attempted == 1
+        ? 'the selected release'
+        : '$attempted different releases';
+    return 'Real-Debrid could not provide $subject. Choose another authorized '
+        'source or try again later.';
+  }
+
+  Future<void> _recordRealDebridFailure(
+    RealDebridException error,
+    String sourceId,
+  ) async {
+    try {
+      await TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'debrid-resolution',
+        message: 'Real-Debrid resolution failure',
+        details: {
+          'service': DebridService.realDebrid.slug,
+          'kind': error.kind.name,
+          if (error.code != null) 'code': error.code,
+          'sourceId': _safeDiagnosticSourceId(sourceId),
+        },
+      );
+    } catch (_) {
+      // Diagnostics are best-effort and must never block failover.
+    }
+  }
+
+  String _safeDiagnosticSourceId(String sourceId) {
+    if (sourceId.contains('://')) return 'external-source';
+    final withoutHashes = sourceId.replaceAll(
+      RegExp(r'[a-f0-9]{32,64}', caseSensitive: false),
+      'redacted',
+    );
+    return withoutHashes
+        .replaceAll(RegExp(r'[^a-zA-Z0-9:._-]'), '_')
+        .substring(0, withoutHashes.length.clamp(0, 64));
   }
 
   List<ReleaseCandidate> _filteredAndSortedReleases(

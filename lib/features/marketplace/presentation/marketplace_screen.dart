@@ -5,9 +5,11 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 class MarketplaceScreen extends ConsumerWidget {
@@ -106,13 +108,25 @@ class MarketplaceScreen extends ConsumerWidget {
                         SliverToBoxAdapter(
                           child: Padding(
                             padding: const EdgeInsets.only(top: 4, bottom: 24),
-                            child: _MarketplaceButton(
-                              icon: Icons.add_link_rounded,
-                              label: 'Add torrent manifest',
-                              onPressed: () => _addTorrentSource(
-                                context,
-                                torrentSourceController,
-                              ),
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                _MarketplaceButton(
+                                  icon: Icons.add_link_rounded,
+                                  label: 'Add torrent manifest',
+                                  onPressed: () => _addTorrentSource(
+                                    context,
+                                    torrentSourceController,
+                                  ),
+                                ),
+                                _MarketplaceButton(
+                                  icon: Icons.phone_android_rounded,
+                                  label: 'Add sources with phone',
+                                  onPressed: () =>
+                                      showSourcePairingDialog(context),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -157,6 +171,12 @@ class MarketplaceScreen extends ConsumerWidget {
                                   label: 'Add repository',
                                   onPressed: () =>
                                       _addRepository(context, controller),
+                                ),
+                                _MarketplaceButton(
+                                  icon: Icons.phone_android_rounded,
+                                  label: 'Add sources with phone',
+                                  onPressed: () =>
+                                      showSourcePairingDialog(context),
                                 ),
                               ],
                             ),
@@ -880,26 +900,81 @@ Future<bool> _confirm(
   required String title,
   required String body,
   required String action,
-}) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
-        title: Text(title),
-        content: SizedBox(width: 620, child: Text(body)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('CANCEL'),
+}) => showMarketplaceConfirmationDialog(
+  context,
+  title: title,
+  body: body,
+  action: action,
+  autofocusAction: action == 'UNINSTALL',
+);
+
+/// Shows the Marketplace confirmation used for install and removal actions.
+///
+/// The uninstall action deliberately owns initial focus so a TV remote can
+/// confirm it immediately. Left and right are handled explicitly because some
+/// Android TV focus engines do not enter [AlertDialog.actions] until a second
+/// directional key press.
+Future<bool> showMarketplaceConfirmationDialog(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String action,
+  bool autofocusAction = false,
+}) async {
+  final cancelFocus = FocusNode(debugLabel: 'marketplace.confirm.cancel');
+  final actionFocus = FocusNode(debugLabel: 'marketplace.confirm.action');
+  try {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.panel,
+            title: Text(title),
+            content: SizedBox(width: 620, child: Text(body)),
+            actions: [
+              Focus(
+                canRequestFocus: false,
+                onKeyEvent: (_, event) {
+                  if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+                    return KeyEventResult.ignored;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                    cancelFocus.requestFocus();
+                    return KeyEventResult.handled;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    actionFocus.requestFocus();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      focusNode: cancelFocus,
+                      autofocus: !autofocusAction,
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('CANCEL'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      focusNode: actionFocus,
+                      autofocus: autofocusAction,
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: Text(action),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(action),
-          ),
-        ],
-      ),
-    ) ??
-    false;
+        ) ??
+        false;
+  } finally {
+    cancelFocus.dispose();
+    actionFocus.dispose();
+  }
+}
 
 void _notice(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(

@@ -4,6 +4,8 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
+import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
@@ -12,6 +14,7 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,7 +28,7 @@ class InitialSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
-  static const _stepCount = 6;
+  static const _stepCount = 7;
   final _pages = PageController();
   int _step = 0;
 
@@ -111,6 +114,7 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
                   _CustomizationStep(preferences: preferences),
                   const _DeviceStep(),
                   const _DebridStep(),
+                  const _SourcesStep(),
                   const _TrackingStep(),
                   const _FinishedStep(),
                 ],
@@ -363,6 +367,74 @@ class _DebridStep extends ConsumerWidget {
   }
 }
 
+class _SourcesStep extends ConsumerWidget {
+  const _SourcesStep();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final marketplace = ref.watch(marketplaceControllerProvider);
+    final torrentSources = ref.watch(userTorrentSourcesControllerProvider);
+    final repositoryCount = marketplace.repositories.length;
+    final manifestCount = torrentSources.manifestUrls.length;
+    return _SetupPage(
+      icon: Icons.add_link_rounded,
+      title: 'Add streaming sources',
+      subtitle:
+          'TetoTV does not bundle or recommend streaming sources. Add only repositories and torrent manifests you trust and are authorized to use.',
+      child: Column(
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.center,
+            children: [
+              _SourceCount(
+                icon: Icons.extension_rounded,
+                count: repositoryCount,
+                label: repositoryCount == 1
+                    ? 'Marketplace repository'
+                    : 'Marketplace repositories',
+              ),
+              _SourceCount(
+                icon: Icons.cloud_download_outlined,
+                count: manifestCount,
+                label: manifestCount == 1
+                    ? 'torrent manifest'
+                    : 'torrent manifests',
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.center,
+            children: [
+              _SetupButton(
+                label: 'Add sources with phone',
+                icon: Icons.phone_android_rounded,
+                primary: true,
+                onPressed: () => showSourcePairingDialog(context),
+              ),
+              _SetupButton(
+                label: 'Open Marketplace manually',
+                icon: Icons.tune_rounded,
+                onPressed: () => context.push('/settings/marketplace'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'This step is optional. You can add or remove sources later in Settings.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TrackingStep extends ConsumerWidget {
   const _TrackingStep();
 
@@ -414,6 +486,46 @@ class _TrackingStep extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _SourceCount extends StatelessWidget {
+  const _SourceCount({
+    required this.icon,
+    required this.count,
+    required this.label,
+  });
+
+  final IconData icon;
+  final int count;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+    decoration: BoxDecoration(
+      color: AppColors.panelRaised,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: Colors.white12),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, color: AppColors.cyan),
+        const SizedBox(width: 7),
+        Text(
+          '$count',
+          style: const TextStyle(
+            color: AppColors.accentBright,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    ),
+  );
 }
 
 class _FinishedStep extends StatelessWidget {
@@ -544,7 +656,9 @@ class _SetupChoice extends StatelessWidget {
     borderRadius: BorderRadius.circular(8),
     child: Container(
       height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: EdgeInsets.symmetric(
+        horizontal: context.isCompactWidth ? 10 : 14,
+      ),
       decoration: BoxDecoration(
         color: selected ? AppColors.accent : AppColors.panelRaised,
         borderRadius: BorderRadius.circular(8),
@@ -583,7 +697,7 @@ class _FeaturePill extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: AppColors.cyan),
         const SizedBox(width: 7),
-        Text(label),
+        Flexible(child: Text(label)),
       ],
     ),
   );
@@ -651,11 +765,16 @@ class _SetupButton extends StatelessWidget {
         children: [
           Icon(icon, size: 19, color: primary ? Colors.white : null),
           const SizedBox(width: 7),
-          Text(
-            label,
-            style: TextStyle(
-              color: primary ? Colors.white : null,
-              fontWeight: FontWeight.w900,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: primary ? Colors.white : null,
+                fontSize: context.isCompactWidth ? 12 : null,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
         ],

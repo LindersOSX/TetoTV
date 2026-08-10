@@ -237,42 +237,47 @@ void main() {
     await player.cancel();
   });
 
-  test('shared discovery survives route handoff then cancels when abandoned', () async {
-    final cancelled = Completer<void>();
-    final source = StreamController<WebStreamSearchProgress>(
-      onCancel: () {
-        if (!cancelled.isCompleted) cancelled.complete();
-      },
-    );
-    addTearDown(source.close);
-    final aggregator = _CancellableSharedAggregator(source.stream);
-    const episode = EpisodeReference(
-      anilistMediaId: 78,
-      title: 'Graceful Handoff',
-      episode: 2,
-    );
-    final resolver = StreamIterator(
-      aggregator.watchSearchIncrementally(episode),
-    );
-    final firstProgress = resolver.moveNext();
-    source.add(
-      const WebStreamSearchProgress(
-        totalProviders: 1,
-        pendingProviderNames: ['Slow provider'],
-      ),
-    );
-    expect(await firstProgress, isTrue);
-    await resolver.cancel();
+  test(
+    'shared discovery survives route handoff then cancels when abandoned',
+    () async {
+      final cancelled = Completer<void>();
+      final source = StreamController<WebStreamSearchProgress>(
+        onCancel: () {
+          if (!cancelled.isCompleted) cancelled.complete();
+        },
+      );
+      addTearDown(source.close);
+      final aggregator = _CancellableSharedAggregator(source.stream);
+      const episode = EpisodeReference(
+        anilistMediaId: 78,
+        title: 'Graceful Handoff',
+        episode: 2,
+      );
+      final resolver = StreamIterator(
+        aggregator.watchSearchIncrementally(episode),
+      );
+      final firstProgress = resolver.moveNext();
+      source.add(
+        const WebStreamSearchProgress(
+          totalProviders: 1,
+          pendingProviderNames: ['Slow provider'],
+        ),
+      );
+      expect(await firstProgress, isTrue);
+      await resolver.cancel();
 
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-    final player = StreamIterator(aggregator.watchSearchIncrementally(episode));
-    expect(await player.moveNext(), isTrue);
-    expect(aggregator.searchCalls, 1);
-    expect(cancelled.isCompleted, isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final player = StreamIterator(
+        aggregator.watchSearchIncrementally(episode),
+      );
+      expect(await player.moveNext(), isTrue);
+      expect(aggregator.searchCalls, 1);
+      expect(cancelled.isCompleted, isFalse);
 
-    await player.cancel();
-    await cancelled.future.timeout(const Duration(seconds: 1));
-  });
+      await player.cancel();
+      await cancelled.future.timeout(const Duration(seconds: 1));
+    },
+  );
 }
 
 class _CountingSharedAggregator extends WebStreamAggregator {

@@ -8,6 +8,8 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
+import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart'
+    show isTerminalDebridAlternativeFailure;
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
@@ -939,12 +941,23 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Future<void> _tryNextStream(String reason) async {
     if (_failingOver) return;
     _failingOver = true;
+    Object? terminalFailure;
     try {
       if (await _switchToNextDirectStream()) return;
       while (_alternativeIndex < widget.launch.alternatives.length) {
         final candidate = widget.launch.alternatives[_alternativeIndex++];
         _showMessage('Trying another compatible stream...');
-        final ready = await _resolveRelease(candidate);
+        StreamReady? ready;
+        try {
+          ready = await _resolveRelease(candidate);
+        } catch (error) {
+          if (isTerminalDebridAlternativeFailure(error)) {
+            terminalFailure = error;
+            break;
+          }
+          // A rejected or broken release must not abort the remaining list.
+          continue;
+        }
         if (ready == null) continue;
         _source = ready.uri.toString();
         _release = candidate;
@@ -959,7 +972,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         return;
       }
       if (mounted) {
-        setState(() => _playbackError = 'Every debrid stream failed. $reason');
+        setState(
+          () => _playbackError =
+              terminalFailure?.toString() ??
+              'Every debrid stream failed. $reason',
+        );
       }
     } finally {
       _failingOver = false;

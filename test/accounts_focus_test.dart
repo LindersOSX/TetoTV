@@ -320,6 +320,75 @@ void main() {
     expect(find.text('DEBRID STREAMING'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'device keyboard does not open while D-pad traverses token to Marketplace',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        'input_use_built_in_keyboard': 'false',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      for (final key in [
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowRight,
+        LogicalKeyboardKey.enter,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowDown,
+      ]) {
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+      }
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.debrid.token',
+      );
+      expect(tester.testTextInput.isVisible, isFalse);
+
+      for (final key in [
+        LogicalKeyboardKey.arrowRight,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowDown,
+      ]) {
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+      }
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.streaming.marketplace',
+      );
+      expect(tester.testTextInput.isVisible, isFalse);
+
+      for (final key in [
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowLeft,
+      ]) {
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+      }
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.debrid.token',
+      );
+      expect(tester.testTextInput.isVisible, isFalse);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 class _ConnectedRealDebridController extends RealDebridSettingsController {
