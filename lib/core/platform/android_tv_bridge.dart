@@ -439,6 +439,7 @@ class AndroidTvBridge {
     required String title,
     required String checkpointKey,
     required String releaseName,
+    required String streamLabel,
     required Duration resumePosition,
     required bool startFromBeginning,
     DateTime? resumeUpdatedAt,
@@ -475,6 +476,7 @@ class AndroidTvBridge {
             'title': title,
             'checkpointKey': checkpointKey,
             'releaseName': releaseName,
+            'streamLabel': streamLabel,
             'resumeMs': resumePosition.inMilliseconds,
             'resumeProvided':
                 resumeUpdatedAt != null || resumePosition > Duration.zero,

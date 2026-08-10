@@ -42,6 +42,12 @@ class _TvFocusableState extends State<TvFocusable> {
 
   FocusNode get _focusNode => widget.focusNode ?? _fallbackFocusNode;
 
+  void _activate(VoidCallback? action) {
+    if (action == null) return;
+    unawaited(SystemSound.play(SystemSoundType.click));
+    action();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -67,7 +73,7 @@ class _TvFocusableState extends State<TvFocusable> {
       _holdTimer = Timer(const Duration(milliseconds: 650), () {
         if (!mounted) return;
         _holdTriggered = true;
-        widget.onLongPress?.call();
+        _activate(widget.onLongPress);
       });
       return KeyEventResult.handled;
     }
@@ -75,7 +81,7 @@ class _TvFocusableState extends State<TvFocusable> {
     if (event is KeyUpEvent) {
       _holdTimer?.cancel();
       _holdTimer = null;
-      if (!_holdTriggered) widget.onPressed();
+      if (!_holdTriggered) _activate(widget.onPressed);
       _holdTriggered = false;
       return KeyEventResult.handled;
     }
@@ -120,14 +126,14 @@ class _TvFocusableState extends State<TvFocusable> {
             actions: <Type, Action<Intent>>{
               ActivateIntent: CallbackAction<ActivateIntent>(
                 onInvoke: (_) {
-                  widget.onPressed();
+                  _activate(widget.onPressed);
                   return null;
                 },
               ),
               _TvSecondaryActivateIntent:
                   CallbackAction<_TvSecondaryActivateIntent>(
                     onInvoke: (_) {
-                      widget.onLongPress?.call();
+                      _activate(widget.onLongPress);
                       return null;
                     },
                   ),
@@ -138,9 +144,11 @@ class _TvFocusableState extends State<TvFocusable> {
                 behavior: HitTestBehavior.opaque,
                 onTap: () {
                   _focusNode.requestFocus();
-                  widget.onPressed();
+                  _activate(widget.onPressed);
                 },
-                onLongPress: widget.onLongPress,
+                onLongPress: widget.onLongPress == null
+                    ? null
+                    : () => _activate(widget.onLongPress),
                 child: AnimatedScale(
                   scale: _focused ? widget.focusScale : 1,
                   duration: const Duration(milliseconds: 80),

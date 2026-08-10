@@ -93,43 +93,125 @@ List<HomeTrackedAnime> sortMyListItems(
 }
 
 final trackingListProvider = FutureProvider.autoDispose
-    .family<List<HomeTrackedAnime>, TrackingListStatus>((ref, status) async {
+    .family<TrackingListResult, TrackingListStatus>((ref, status) async {
       final tokenService = ref.watch(trackingTokenServiceProvider);
-      final items = <HomeTrackedAnime>[];
-      for (final provider in TrackingProvider.values) {
-        String? token;
-        try {
-          token = await tokenService.accessToken(provider);
-        } catch (_) {
-          // Keep the other tracker usable if this provider cannot refresh.
-          continue;
-        }
-        if (token == null || token.isEmpty) continue;
-        final repository = trackingRepository(provider, token);
-        try {
-          final entries = await repository.list(status);
-          items.addAll(
-            entries.map(
-              (tracked) => HomeTrackedAnime(
-                tracked: tracked,
-                provider: provider,
-                anilistId: provider == TrackingProvider.anilist
-                    ? tracked.mediaId
-                    : null,
-                coverImageUrl: tracked.coverImageUrl,
-              ),
-            ),
-          );
-        } catch (_) {
-          // One disconnected or temporarily unavailable tracker should not
-          // hide the other tracker's list.
-        }
-      }
+      final providerItems = await Future.wait([
+        for (final provider in TrackingProvider.values)
+          () async {
+            String? token;
+            try {
+              token = await tokenService.accessToken(provider);
+            } catch (error) {
+              // Keep the other tracker usable if this provider cannot refresh.
+              return _TrackingProviderListResult.failed(provider, error);
+            }
+            if (token == null || token.isEmpty) {
+              return _TrackingProviderListResult.disconnected(provider);
+            }
+            final repository = trackingRepository(provider, token);
+            try {
+              final entries = await repository.list(status);
+              return _TrackingProviderListResult.succeeded(
+                provider,
+                entries
+                    .map(
+                      (tracked) => HomeTrackedAnime(
+                        tracked: tracked,
+                        provider: provider,
+                        anilistId: provider == TrackingProvider.anilist
+                            ? tracked.mediaId
+                            : null,
+                        coverImageUrl: tracked.coverImageUrl,
+                      ),
+                    )
+                    .toList(growable: false),
+              );
+            } catch (error) {
+              // One disconnected or temporarily unavailable tracker should not
+              // hide the other tracker's list.
+              return _TrackingProviderListResult.failed(provider, error);
+            }
+          }(),
+      ]);
+      final items = providerItems
+          .expand((result) => result.items)
+          .toList(growable: false);
       items.sort(
         (left, right) => left.tracked.title.compareTo(right.tracked.title),
       );
-      return items;
+      return TrackingListResult(
+        items: items,
+        attempted: {
+          for (final result in providerItems)
+            if (result.attempted) result.provider,
+        },
+        failures: {
+          for (final result in providerItems)
+            if (result.failure != null) result.provider: result.failure!,
+        },
+      );
     });
+
+class TrackingListResult {
+  const TrackingListResult({
+    required this.items,
+    this.attempted = const {},
+    this.failures = const {},
+  });
+
+  final List<HomeTrackedAnime> items;
+  final Set<TrackingProvider> attempted;
+  final Map<TrackingProvider, Object> failures;
+
+  bool get hasFailures => failures.isNotEmpty;
+
+  bool get allAttemptedFailed =>
+      attempted.isNotEmpty && failures.length == attempted.length;
+
+  String get failedProviderNames => failures.keys
+      .map((provider) => provider.displayName)
+      .join(failures.length == 2 ? ' and ' : ', ');
+}
+
+class _TrackingProviderListResult {
+  const _TrackingProviderListResult({
+    required this.provider,
+    required this.attempted,
+    required this.items,
+    this.failure,
+  });
+
+  factory _TrackingProviderListResult.disconnected(TrackingProvider provider) =>
+      _TrackingProviderListResult(
+        provider: provider,
+        attempted: false,
+        items: const [],
+      );
+
+  factory _TrackingProviderListResult.succeeded(
+    TrackingProvider provider,
+    List<HomeTrackedAnime> items,
+  ) => _TrackingProviderListResult(
+    provider: provider,
+    attempted: true,
+    items: items,
+  );
+
+  factory _TrackingProviderListResult.failed(
+    TrackingProvider provider,
+    Object failure,
+  ) => _TrackingProviderListResult(
+    provider: provider,
+    attempted: true,
+    items: const [],
+    failure: failure,
+  );
+
+  final TrackingProvider provider;
+  final bool attempted;
+  final List<HomeTrackedAnime> items;
+  final Object? failure;
+}
 
 final trackingStatusControllerProvider =
     StateNotifierProvider.autoDispose<

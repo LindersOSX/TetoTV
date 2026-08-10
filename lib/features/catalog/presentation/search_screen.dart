@@ -311,6 +311,12 @@ class _SearchCard extends StatelessWidget {
                     fit: StackFit.expand,
                     children: [
                       NetworkArtwork(url: anime.coverImageUrl, cacheWidth: 210),
+                      if (animeAiringStatusLabel(anime.status) != null)
+                        Positioned(
+                          left: 5,
+                          top: 5,
+                          child: PosterAiringStatusBadge(status: anime.status),
+                        ),
                       if (anime.score != null ||
                           anime.seasonYear != null ||
                           anime.durationMinutes != null)

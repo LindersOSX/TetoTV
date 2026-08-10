@@ -46,7 +46,7 @@ void main() {
               title: 'VLC compatibility smoke test',
               debridService: DebridService.realDebrid,
               launch: launch,
-              onUseMpv: () {},
+              onUseMpv: (_, _, _, _) {},
             ),
           ),
         ),

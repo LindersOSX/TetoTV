@@ -41,6 +41,7 @@ class MarketplaceAddon {
     this.iconUri,
     this.payloadUri,
     this.inlinePayload,
+    this.userConfigDefaults = const {},
   });
 
   final String id;
@@ -56,6 +57,7 @@ class MarketplaceAddon {
   final Uri? iconUri;
   final Uri? payloadUri;
   final String? inlinePayload;
+  final Map<String, String> userConfigDefaults;
 
   bool get isOnlineStreamProvider => type == 'onlinestream-provider';
   bool get isJavascript => language.toLowerCase() == 'javascript';
@@ -77,6 +79,7 @@ class MarketplaceAddon {
     iconUri: manifest.iconUri ?? iconUri,
     payloadUri: manifest.payloadUri,
     inlinePayload: manifest.inlinePayload,
+    userConfigDefaults: manifest.userConfigDefaults,
   );
 
   Map<String, Object?> toJson() => {
@@ -92,6 +95,13 @@ class MarketplaceAddon {
     'version': version,
     'icon': iconUri?.toString(),
     'payloadURI': payloadUri?.toString(),
+    if (userConfigDefaults.isNotEmpty)
+      'userConfig': {
+        'fields': [
+          for (final entry in userConfigDefaults.entries)
+            {'name': entry.key, 'default': entry.value},
+        ],
+      },
   };
 
   static MarketplaceAddon? tryParse(
@@ -123,8 +133,25 @@ class MarketplaceAddon {
       iconUri: safePublicHttpsUri(json['icon']),
       payloadUri: safePublicHttpsUri(json['payloadURI']),
       inlinePayload: _cleanPayload(json['payload']),
+      userConfigDefaults: _userConfigDefaults(json['userConfig']),
     );
   }
+}
+
+Map<String, String> _userConfigDefaults(Object? value) {
+  if (value is! Map || value['fields'] is! List) return const {};
+  final result = <String, String>{};
+  for (final raw in (value['fields'] as List).take(32)) {
+    if (raw is! Map) continue;
+    final name = _clean(raw['name'], 80);
+    final defaultValue = _clean(raw['default'], 2048);
+    if (name != null &&
+        defaultValue != null &&
+        RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(name)) {
+      result[name] = defaultValue;
+    }
+  }
+  return Map.unmodifiable(result);
 }
 
 String? _cleanPayload(Object? value) {
@@ -225,12 +252,7 @@ Uri? safePublicHttpsUri(Object? value) {
       host == 'localhost' ||
       host.endsWith('.local') ||
       host.endsWith('.internal') ||
-      host == '0.0.0.0' ||
-      host == '::1' ||
-      host.startsWith('127.') ||
-      host.startsWith('10.') ||
-      host.startsWith('192.168.') ||
-      RegExp(r'^172\.(1[6-9]|2\d|3[01])\.').hasMatch(host)) {
+      _literalAddressIsNonPublic(host)) {
     return null;
   }
   return uri;
@@ -243,25 +265,69 @@ Future<void> validatePublicNetworkTarget(Uri uri) async {
   final addresses = await InternetAddress.lookup(
     uri.host,
   ).timeout(const Duration(seconds: 4));
-  if (addresses.isEmpty || addresses.any(_isPrivateAddress)) {
+  if (addresses.isEmpty || addresses.any(_isNonPublicAddress)) {
     throw const FormatException(
       'The resource host does not resolve to a public address.',
     );
   }
 }
 
-bool _isPrivateAddress(InternetAddress address) {
+bool _literalAddressIsNonPublic(String host) {
+  final address = InternetAddress.tryParse(host);
+  return address != null && _isNonPublicAddress(address);
+}
+
+bool _isNonPublicAddress(InternetAddress address) {
   if (address.isLoopback || address.isLinkLocal) return true;
   final bytes = address.rawAddress;
-  if (address.type == InternetAddressType.IPv4) {
-    return bytes[0] == 10 ||
-        bytes[0] == 127 ||
-        (bytes[0] == 169 && bytes[1] == 254) ||
-        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
-        (bytes[0] == 192 && bytes[1] == 168) ||
-        bytes[0] == 0;
+  if (address.type == InternetAddressType.IPv4 && bytes.length == 4) {
+    return _isNonPublicIpv4(bytes);
   }
-  return (bytes.isNotEmpty && (bytes[0] & 0xFE) == 0xFC);
+  if (bytes.length != 16) return true;
+
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d) must be checked using the embedded
+  // IPv4 address. Otherwise loopback/RFC1918 literals can bypass IPv4 guards.
+  final isIpv4Mapped =
+      bytes.take(10).every((byte) => byte == 0) &&
+      bytes[10] == 0xff &&
+      bytes[11] == 0xff;
+  if (isIpv4Mapped) return _isNonPublicIpv4(bytes.sublist(12));
+
+  final isUnspecified = bytes.every((byte) => byte == 0);
+  final isLoopback =
+      bytes.take(15).every((byte) => byte == 0) && bytes[15] == 1;
+  final isIpv4Compatible = bytes.take(12).every((byte) => byte == 0);
+  final isUniqueLocal = (bytes[0] & 0xfe) == 0xfc; // fc00::/7
+  final isLinkLocal =
+      bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80; // fe80::/10
+  final isMulticast = bytes[0] == 0xff; // ff00::/8
+  return isUnspecified ||
+      isLoopback ||
+      isIpv4Compatible ||
+      isUniqueLocal ||
+      isLinkLocal ||
+      isMulticast;
+}
+
+bool _isNonPublicIpv4(List<int> bytes) {
+  if (bytes.length != 4) return true;
+  final first = bytes[0];
+  final second = bytes[1];
+  final third = bytes[2];
+  return first == 0 || // current network / unspecified
+      first == 10 || // RFC1918
+      (first == 100 && second >= 64 && second <= 127) || // CGNAT
+      first == 127 || // loopback
+      (first == 169 && second == 254) || // link-local
+      (first == 172 && second >= 16 && second <= 31) || // RFC1918
+      (first == 192 && second == 0 && third == 0) || // IETF assignments
+      (first == 192 && second == 0 && third == 2) || // documentation
+      (first == 192 && second == 88 && third == 99) || // deprecated 6to4
+      (first == 192 && second == 168) || // RFC1918
+      (first == 198 && (second == 18 || second == 19)) || // benchmarking
+      (first == 198 && second == 51 && third == 100) || // documentation
+      (first == 203 && second == 0 && third == 113) || // documentation
+      first >= 224; // multicast, reserved, limited broadcast
 }
 
 String? _clean(Object? value, int maximum) {

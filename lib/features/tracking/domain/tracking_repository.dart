@@ -25,6 +25,7 @@ class TrackedAnime {
     this.score,
     this.updatedAt,
     this.startDate,
+    this.airingStatus,
   });
 
   final int mediaId;
@@ -38,6 +39,7 @@ class TrackedAnime {
   final double? score;
   final DateTime? updatedAt;
   final DateTime? startDate;
+  final String? airingStatus;
 
   String displayTitle(TitleLanguagePreference preference) =>
       preferredAnimeTitle(

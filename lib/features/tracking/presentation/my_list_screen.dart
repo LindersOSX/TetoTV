@@ -3,6 +3,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -21,7 +22,67 @@ class MyListScreen extends ConsumerStatefulWidget {
 
 class _MyListScreenState extends ConsumerState<MyListScreen> {
   TrackingListStatus _status = TrackingListStatus.watching;
+  final Map<TrackingListStatus, TrackingListResult> _lastUsableResults = {};
   bool _updating = false;
+  bool _refreshing = false;
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    for (final status in TrackingListStatus.values) {
+      ref.invalidate(trackingListProvider(status));
+    }
+    ref.invalidate(trackingHomeProvider);
+    try {
+      final listFuture = ref.read(trackingListProvider(_status).future);
+      final homeFuture = ref.read(trackingHomeProvider.future);
+      final result = await listFuture;
+      await homeFuture;
+      if (!mounted) return;
+      if (result.allAttemptedFailed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not refresh ${result.failedProviderNames}. '
+              'No tracker data was changed.',
+            ),
+            backgroundColor: const Color(0xFF7D1E32),
+          ),
+        );
+        return;
+      }
+      if (result.hasFailures) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Refreshed available data. ${result.failedProviderNames} '
+              'could not be reached.',
+            ),
+            backgroundColor: const Color(0xFF7A4B00),
+          ),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Refresh complete. Showing available connected tracker data.',
+          ),
+          backgroundColor: AppColors.accent,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not refresh every tracker: $error'),
+          backgroundColor: const Color(0xFF7D1E32),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
 
   Future<void> _chooseSort(MyListSort current) async {
     final selected = await showDialog<MyListSort>(
@@ -117,7 +178,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                     ],
                   ],
                 );
-                if (constraints.maxWidth < 700) {
+                if (constraints.maxWidth < 1400) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -128,6 +189,12 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                             style: Theme.of(context).textTheme.headlineSmall,
                           ),
                           const Spacer(),
+                          _RefreshButton(
+                            refreshing: _refreshing,
+                            compact: true,
+                            onPressed: _refresh,
+                          ),
+                          const SizedBox(width: 8),
                           _SortButton(
                             sort: sort,
                             compact: true,
@@ -152,6 +219,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                     const SizedBox(width: 22),
                     tabs,
                     const Spacer(),
+                    _RefreshButton(
+                      refreshing: _refreshing,
+                      onPressed: _refresh,
+                    ),
+                    const SizedBox(width: 8),
                     _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
                   ],
                 );
@@ -173,22 +245,59 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                         title: 'Could not load ${_status.displayName}',
                         body: error.toString(),
                       ),
-                      data: (items) => items.isEmpty
-                          ? _ListMessage(
-                              icon: Icons.video_library_outlined,
-                              title: '${_status.displayName} is empty',
-                              body:
-                                  'Connect AniList or MyAnimeList, or change '
-                                  'a title to this status.',
-                            )
-                          : _TrackedShelf(
-                              items: sortMyListItems(items, sort),
-                              titlePreference: titlePreference,
-                              onPressed: _open,
-                              onManage: (item) =>
-                                  _manage(item, titlePreference),
-                              preferences: preferences,
+                      data: (result) {
+                        if (!result.allAttemptedFailed) {
+                          _lastUsableResults[_status] = result;
+                        }
+                        final previous = _lastUsableResults[_status];
+                        final visibleItems = result.allAttemptedFailed
+                            ? previous?.items ?? const <HomeTrackedAnime>[]
+                            : result.items;
+                        if (visibleItems.isEmpty && result.allAttemptedFailed) {
+                          return _ListMessage(
+                            icon: Icons.cloud_off_rounded,
+                            title: 'Trackers could not be refreshed',
+                            body:
+                                '${result.failedProviderNames} could not be '
+                                'reached. Check the connection or account, '
+                                'then choose Refresh.',
+                          );
+                        }
+                        if (visibleItems.isEmpty) {
+                          return _ListMessage(
+                            icon: Icons.video_library_outlined,
+                            title: '${_status.displayName} is empty',
+                            body:
+                                'Connect AniList or MyAnimeList, or change '
+                                'a title to this status.',
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (result.hasFailures)
+                              _TrackerWarningBanner(
+                                message: result.allAttemptedFailed
+                                    ? '${result.failedProviderNames} could not '
+                                          'be refreshed. Showing the previous '
+                                          'results.'
+                                    : '${result.failedProviderNames} could not '
+                                          'be refreshed. Showing data from the '
+                                          'tracker that responded.',
+                              ),
+                            Expanded(
+                              child: _TrackedShelf(
+                                items: sortMyListItems(visibleItems, sort),
+                                titlePreference: titlePreference,
+                                onPressed: _open,
+                                onManage: (item) =>
+                                    _manage(item, titlePreference),
+                                preferences: preferences,
+                              ),
                             ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                   if (_updating)
@@ -412,6 +521,61 @@ class _SortButton extends StatelessWidget {
   }
 }
 
+class _RefreshButton extends StatelessWidget {
+  const _RefreshButton({
+    required this.refreshing,
+    required this.onPressed,
+    this.compact = false,
+  });
+
+  final bool refreshing;
+  final VoidCallback onPressed;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      key: const Key('my-list-refresh'),
+      onPressed: refreshing ? () {} : onPressed,
+      focusScale: 1.03,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (refreshing)
+              const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.accentBright,
+                ),
+              )
+            else
+              const Icon(Icons.refresh_rounded, size: 18),
+            if (!compact) ...[
+              const SizedBox(width: 7),
+              Text(
+                refreshing ? 'Refreshing' : 'Refresh',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SortDialog extends StatelessWidget {
   const _SortDialog({required this.current});
 
@@ -531,6 +695,17 @@ class _TrackedShelf extends StatelessWidget {
                             url: item.coverImageUrl,
                             cacheWidth: 210,
                           ),
+                          if (animeAiringStatusLabel(
+                                item.tracked.airingStatus,
+                              ) !=
+                              null)
+                            Positioned(
+                              left: 7,
+                              top: 7,
+                              child: PosterAiringStatusBadge(
+                                status: item.tracked.airingStatus,
+                              ),
+                            ),
                           Align(
                             alignment: Alignment.topRight,
                             child: Container(
@@ -704,6 +879,47 @@ class _OpenButton extends StatelessWidget {
         child: const Text(
           'View episodes',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackerWarningBanner extends StatelessWidget {
+  const _TrackerWarningBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF3B2600),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFB97500)),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Color(0xFFFFC15A),
+              size: 20,
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Color(0xFFFFDEA3),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

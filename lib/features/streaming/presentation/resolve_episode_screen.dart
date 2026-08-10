@@ -178,6 +178,29 @@ int compareStreamReleases(
   return right.seeders.compareTo(left.seeders);
 }
 
+int webStreamQualityRank(WebStreamResult stream) {
+  final value = '${stream.quality ?? ''} ${stream.title}'.toLowerCase();
+  if (value.contains('4320') || value.contains('8k')) return 7;
+  if (value.contains('2160') || value.contains('4k') || value.contains('uhd')) {
+    return 6;
+  }
+  if (value.contains('1440') || value.contains('2k')) return 5;
+  if (value.contains('1080') || value.contains('full hd')) return 4;
+  if (value.contains('720') || RegExp(r'\bhd\b').hasMatch(value)) return 3;
+  if (value.contains('576')) return 2;
+  if (value.contains('480') || value.contains('360')) return 1;
+  return 0;
+}
+
+int compareWebStreamsByQuality(WebStreamResult left, WebStreamResult right) {
+  final quality = webStreamQualityRank(
+    right,
+  ).compareTo(webStreamQualityRank(left));
+  if (quality != 0) return quality;
+  final provider = left.providerName.compareTo(right.providerName);
+  return provider != 0 ? provider : left.title.compareTo(right.title);
+}
+
 int _providerRank(ReleaseCandidate release, String? preferredProvider) {
   if (preferredProvider == null || preferredProvider.isEmpty) return 1;
   return release.provider?.toLowerCase() == preferredProvider.toLowerCase()
@@ -224,6 +247,14 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   List<ReleaseCandidate> _releases = const [];
   List<WebStreamResult> _webStreams = const [];
   List<WebProviderFailure> _webFailures = const [];
+  List<ReleaseSourceFailure> _releaseFailures = const [];
+  int _debridSourcesCompleted = 0;
+  int _debridSourcesTotal = 0;
+  int _webProvidersCompleted = 0;
+  int _webProvidersTotal = 0;
+  List<String> _pendingDebridSources = const [];
+  List<String> _pendingWebProviders = const [];
+  int _releaseSearchGeneration = 0;
   Set<DebridService> _connectedServices = const {};
   DebridService _debridService = DebridService.realDebrid;
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
@@ -240,6 +271,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   int _resolveAttempt = 0;
   final Set<String> _failedResolveHashes = {};
   int _automaticResolveFallbacks = 0;
+  bool _autoPlayStarted = false;
 
   bool get _hasDebrid =>
       ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
@@ -347,73 +379,107 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (_loadingReleases) return;
     final preferences = ref.read(settingsPreferencesProvider);
     final source = ref.read(configuredReleaseSourceProvider);
+    final shouldSearchDebrid =
+        preferences.debridStreamsEnabled && source != null && _hasDebrid;
+    var debridSearchFinished = !shouldSearchDebrid;
+    final generation = ++_releaseSearchGeneration;
     setState(() {
       _loadingReleases = true;
       _status = 'Searching enabled stream sources…';
       _error = null;
+      _releases = const [];
+      _webStreams = const [];
+      _webFailures = const [];
+      _releaseFailures = const [];
+      _debridSourcesCompleted = 0;
+      _debridSourcesTotal = 0;
+      _webProvidersCompleted = 0;
+      _webProvidersTotal = 0;
+      _pendingDebridSources = const [];
+      _pendingWebProviders = const [];
     });
-    String? debridError;
+
+    Future<void> loadDebridSources() async {
+      if (!shouldSearchDebrid) return;
+      try {
+        final progressStream = source is CompositeReleaseSource
+            ? source.searchIncrementally(widget.episode)
+            : searchReleaseSourcesIncrementally([source], widget.episode);
+        await for (final progress in progressStream) {
+          if (!mounted || generation != _releaseSearchGeneration) return;
+          setState(() {
+            _releases = progress.candidates;
+            _releaseFailures = progress.failures;
+            _debridSourcesCompleted = progress.completedSources;
+            _debridSourcesTotal = progress.totalSources;
+            _pendingDebridSources = progress.pendingSourceIds;
+          });
+          _tryStartAutoPlay(generation: generation, allowWebFallback: false);
+        }
+      } finally {
+        debridSearchFinished = true;
+        _tryStartAutoPlay(generation: generation, allowWebFallback: true);
+      }
+    }
+
+    Future<void> loadWebProviders() async {
+      if (!preferences.webStreamsEnabled) return;
+      try {
+        await for (final progress
+            in ref
+                .read(webStreamAggregatorProvider)
+                .watchSearchIncrementally(widget.episode)) {
+          if (!mounted || generation != _releaseSearchGeneration) return;
+          setState(() {
+            _webStreams = progress.aggregation.streams;
+            _webFailures = progress.aggregation.failures;
+            _webProvidersCompleted = progress.completedProviders;
+            _webProvidersTotal = progress.totalProviders;
+            _pendingWebProviders = progress.pendingProviderNames;
+          });
+          _tryStartAutoPlay(
+            generation: generation,
+            allowWebFallback: debridSearchFinished,
+          );
+        }
+      } catch (error) {
+        if (!mounted || generation != _releaseSearchGeneration) return;
+        setState(() {
+          _webFailures = [
+            WebProviderFailure(
+              providerName: 'Web providers',
+              message: error.toString(),
+            ),
+          ];
+        });
+      }
+    }
+
     try {
-      final outcomes = await Future.wait<Object>([
-        if (preferences.debridStreamsEnabled && source != null)
-          source.search(widget.episode).catchError((Object error) {
-            debridError = error.toString();
-            return <ReleaseCandidate>[];
-          })
-        else
-          Future<List<ReleaseCandidate>>.value(const []),
-        if (preferences.webStreamsEnabled)
-          ref
-              .read(webStreamAggregatorProvider)
-              .search(widget.episode)
-              .catchError(
-                (Object error) => WebStreamAggregation(
-                  failures: [
-                    WebProviderFailure(
-                      providerName: 'Web providers',
-                      message: error.toString(),
-                    ),
-                  ],
-                ),
-              )
-        else
-          Future<WebStreamAggregation>.value(const WebStreamAggregation()),
-      ]);
-      final releases = outcomes[0] as List<ReleaseCandidate>;
-      final web = outcomes[1] as WebStreamAggregation;
-      if (!mounted) return;
+      await Future.wait([loadDebridSources(), loadWebProviders()]);
+      if (!mounted || generation != _releaseSearchGeneration) return;
       setState(() {
-        _releases = releases;
-        _webStreams = web.streams;
-        _webFailures = web.failures;
-        if (widget.episode.autoPlay) _loadingReleases = false;
-        if (releases.isEmpty && web.streams.isEmpty) {
+        _loadingReleases = false;
+        if (_releases.isEmpty && _webStreams.isEmpty) {
           if (!preferences.debridStreamsEnabled &&
               !preferences.webStreamsEnabled) {
             _error = 'Both Debrid Streams and Web Streams are disabled.';
-          } else if (debridError != null && web.failures.isNotEmpty) {
+          } else if (_releaseFailures.isNotEmpty && _webFailures.isNotEmpty) {
             _error = 'No enabled source completed successfully.';
           } else {
             _error = 'No playable streams were returned for this episode.';
           }
         }
       });
-      if (widget.episode.autoPlay && releases.isNotEmpty && _hasDebrid) {
-        final filtered = _filteredAndSortedReleases(releases);
-        final candidates = filtered.isNotEmpty
-            ? filtered
-            : _filteredAndSortedReleases(releases, ignoreOptionalFilters: true);
-        await _resolveCandidate(candidates.first);
-      } else if (widget.episode.autoPlay && web.streams.isNotEmpty) {
-        final filtered = _filteredWebStreams(web.streams);
-        await _openWebStream(filtered.firstOrNull ?? web.streams.first);
-      }
+      _tryStartAutoPlay(generation: generation, allowWebFallback: true);
     } catch (error) {
-      if (mounted) {
+      if (mounted && generation == _releaseSearchGeneration) {
         setState(() => _error = error.toString());
       }
     } finally {
-      if (mounted) setState(() => _loadingReleases = false);
+      if (mounted && generation == _releaseSearchGeneration) {
+        setState(() => _loadingReleases = false);
+      }
     }
   }
 
@@ -546,15 +612,53 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     }
   }
 
-  List<WebStreamResult> _filteredWebStreams(Iterable<WebStreamResult> input) {
-    final result = input.where((stream) {
-      if (_languageFilter == _StreamLanguageFilter.dub && !stream.isDubbed) {
-        return false;
+  void _tryStartAutoPlay({
+    required int generation,
+    required bool allowWebFallback,
+  }) {
+    if (!mounted ||
+        generation != _releaseSearchGeneration ||
+        !widget.episode.autoPlay ||
+        _autoPlayStarted ||
+        _resolving) {
+      return;
+    }
+    if (_hasDebrid && _releases.isNotEmpty) {
+      final filtered = _filteredAndSortedReleases(_releases);
+      final candidates = filtered.isNotEmpty
+          ? filtered
+          : _filteredAndSortedReleases(_releases, ignoreOptionalFilters: true);
+      if (candidates.isNotEmpty) {
+        _autoPlayStarted = true;
+        unawaited(_resolveCandidate(candidates.first));
+        return;
       }
-      if (_languageFilter == _StreamLanguageFilter.sub && stream.isDubbed) {
-        return false;
+    }
+    if (!allowWebFallback || _webStreams.isEmpty) return;
+    final filtered = _filteredWebStreams(_webStreams);
+    final candidates = filtered.isNotEmpty
+        ? filtered
+        : _filteredWebStreams(_webStreams, ignoreOptionalFilters: true);
+    if (candidates.isEmpty) return;
+    _autoPlayStarted = true;
+    unawaited(_openWebStream(candidates.first));
+  }
+
+  List<WebStreamResult> _filteredWebStreams(
+    Iterable<WebStreamResult> input, {
+    bool ignoreOptionalFilters = false,
+  }) {
+    final result = input.where((stream) {
+      if (!ignoreOptionalFilters) {
+        if (_languageFilter == _StreamLanguageFilter.dub && !stream.isDubbed) {
+          return false;
+        }
+        if (_languageFilter == _StreamLanguageFilter.sub && stream.isDubbed) {
+          return false;
+        }
       }
       final quality = (stream.quality ?? stream.title).toLowerCase();
+      if (ignoreOptionalFilters) return true;
       return switch (_qualityFilter) {
         _StreamQualityFilter.any => true,
         _StreamQualityFilter.p2160 =>
@@ -563,11 +667,38 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         _StreamQualityFilter.p720 => quality.contains('720'),
       };
     }).toList();
-    result.sort((a, b) {
-      final provider = a.providerName.compareTo(b.providerName);
-      return provider != 0 ? provider : a.title.compareTo(b.title);
-    });
+    result.sort(compareWebStreamsByQuality);
     return result;
+  }
+
+  ReleaseCandidate _releaseForWebStream(WebStreamResult stream) {
+    return ReleaseCandidate(
+      infoHash: 'web:${stream.providerId}:${stream.uri.hashCode}',
+      magnetUri: '',
+      releaseName: '${stream.providerName} / ${stream.title}',
+      seeders: 0,
+      sourceId: 'web:${stream.providerId}',
+      quality: stream.quality,
+      provider: stream.providerName,
+      isDubbed: stream.isDubbed,
+      hasSubtitles: stream.subtitleUri != null,
+    );
+  }
+
+  StreamReady _readyForWebStream(
+    WebStreamResult stream, {
+    Uri? validatedUri,
+    Map<String, String>? validatedHeaders,
+  }) {
+    final release = _releaseForWebStream(stream);
+    return StreamReady(
+      uri: validatedUri ?? stream.uri,
+      displayName: release.releaseName,
+      headers: validatedHeaders ?? stream.headers,
+      externalSubtitle: stream.subtitleUri,
+      providerId: stream.providerId,
+      providerName: '${stream.providerName} web stream',
+    );
   }
 
   Future<void> _openWebStream(WebStreamResult stream) async {
@@ -603,27 +734,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       }
       return;
     }
-    final release = ReleaseCandidate(
-      infoHash: 'web:${stream.providerId}:${stream.uri.hashCode}',
-      magnetUri: '',
-      releaseName: '${stream.providerName} / ${stream.title}',
-      seeders: 0,
-      sourceId: 'web:${stream.providerId}',
-      quality: stream.quality,
-      provider: stream.providerName,
-      isDubbed: stream.isDubbed,
-      hasSubtitles: stream.subtitleUri != null,
-    );
+    final release = _releaseForWebStream(stream);
     await _rememberStreamSelection(release);
     if (!mounted) return;
-    final ready = StreamReady(
-      uri: validated.uri,
-      displayName: release.releaseName,
-      headers: validated.headers,
-      externalSubtitle: stream.subtitleUri,
-      providerId: stream.providerId,
-      providerName: '${stream.providerName} web stream',
+    final ready = _readyForWebStream(
+      stream,
+      validatedUri: validated.uri,
+      validatedHeaders: validated.headers,
     );
+    final directAlternatives =
+        _webStreams
+            .where((candidate) => candidate.uri != stream.uri)
+            .toList(growable: false)
+          ..sort(compareWebStreamsByQuality);
     final playerUri = Uri(
       path: '/player',
       queryParameters: {
@@ -642,6 +765,14 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         stream: ready,
         episode: widget.episode,
         selectedRelease: release,
+        directAlternatives: directAlternatives
+            .map(
+              (candidate) => PlaybackStreamOption(
+                stream: _readyForWebStream(candidate),
+                release: _releaseForWebStream(candidate),
+              ),
+            )
+            .toList(growable: false),
       ),
     );
   }
@@ -734,8 +865,26 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     unawaited(_rememberPickerPreferences());
   }
 
+  String get _sourceSearchStatus {
+    final progress = <String>[];
+    if (_debridSourcesTotal > 0) {
+      progress.add('Debrid $_debridSourcesCompleted/$_debridSourcesTotal');
+    }
+    if (_webProvidersTotal > 0) {
+      progress.add('Web $_webProvidersCompleted/$_webProvidersTotal');
+    }
+    final pending = [..._pendingDebridSources, ..._pendingWebProviders];
+    final pendingLabel = pending.take(3).join(', ');
+    final remaining = pending.length - 3;
+    final detail = pendingLabel.isEmpty
+        ? ''
+        : ' • Waiting for $pendingLabel${remaining > 0 ? ' +$remaining' : ''}';
+    return '${progress.isEmpty ? 'Starting providers' : progress.join(' • ')}$detail';
+  }
+
   @override
   void dispose() {
+    _releaseSearchGeneration++;
     _magnetController.dispose();
     super.dispose();
   }
@@ -775,7 +924,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (_loadingAccount) {
       return const CircularProgressIndicator(color: AppColors.cyan);
     }
-    if (_loadingReleases) {
+    if (_loadingReleases && _releases.isEmpty && _webStreams.isEmpty) {
       return SizedBox(
         width: 620,
         child: Column(
@@ -786,8 +935,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             Text(_status, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
-              'Matching this episode across Debrid and installed web providers.',
+              _sourceSearchStatus,
               style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -848,6 +998,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         webTotalCount: _webStreams.length,
         failedWebProviders: _webFailures.length,
         webFailures: _webFailures,
+        failedDebridSources: _releaseFailures.length,
+        isSearching: _loadingReleases,
+        searchStatus: _sourceSearchStatus,
         debridEnabled: sourcePreferences.debridStreamsEnabled,
         webEnabled: sourcePreferences.webStreamsEnabled,
         connectedServices: _connectedServices,
@@ -1026,6 +1179,9 @@ class _StreamPicker extends StatelessWidget {
     required this.webTotalCount,
     required this.failedWebProviders,
     required this.webFailures,
+    required this.failedDebridSources,
+    required this.isSearching,
+    required this.searchStatus,
     required this.debridEnabled,
     required this.webEnabled,
     required this.connectedServices,
@@ -1059,6 +1215,9 @@ class _StreamPicker extends StatelessWidget {
   final int webTotalCount;
   final int failedWebProviders;
   final List<WebProviderFailure> webFailures;
+  final int failedDebridSources;
+  final bool isSearching;
+  final String searchStatus;
   final bool debridEnabled;
   final bool webEnabled;
   final Set<DebridService> connectedServices;
@@ -1117,7 +1276,7 @@ class _StreamPicker extends StatelessWidget {
                         Text(
                           '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
                           ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
-                          '${failedWebProviders > 0 ? ' • $failedWebProviders provider issue(s)' : ''}',
+                          '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -1185,6 +1344,39 @@ class _StreamPicker extends StatelessWidget {
               ),
             ),
           ),
+          if (isSearching) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                color: AppColors.cyan.withValues(alpha: .08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cyan.withValues(alpha: .2)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.cyan,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '$searchStatus • Available results can be selected now.',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (showAdvancedFilters) ...[
             const SizedBox(height: 12),
             Container(
@@ -1347,9 +1539,21 @@ class _StreamPicker extends StatelessWidget {
                           padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
                           sliver: SliverList.builder(
                             itemCount: releases.length,
+                            findChildIndexCallback: (key) {
+                              if (key is! ValueKey<String>) return null;
+                              final index = releases.indexWhere(
+                                (release) =>
+                                    'debrid:${release.infoHash.toLowerCase()}' ==
+                                    key.value,
+                              );
+                              return index < 0 ? null : index;
+                            },
                             itemBuilder: (context, index) {
                               final release = releases[index];
                               return Padding(
+                                key: ValueKey(
+                                  'debrid:${release.infoHash.toLowerCase()}',
+                                ),
                                 padding: const EdgeInsets.only(bottom: 12),
                                 child: _ReleaseCard(
                                   release: release,
@@ -1361,41 +1565,42 @@ class _StreamPicker extends StatelessWidget {
                           ),
                         ),
                       ],
-                      if (webStreams.isNotEmpty)
+                      if (webStreams.isNotEmpty) ...[
+                        const SliverToBoxAdapter(
+                          child: _StreamSectionHeader(
+                            icon: Icons.language_rounded,
+                            title: 'WEB STREAMS',
+                          ),
+                        ),
                         SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 18),
+                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
                           sliver: SliverList.builder(
                             itemCount: webStreams.length,
+                            findChildIndexCallback: (key) {
+                              if (key is! ValueKey<String>) return null;
+                              final index = webStreams.indexWhere(
+                                (stream) =>
+                                    'web:${stream.providerId}:${stream.uri}' ==
+                                    key.value,
+                              );
+                              return index < 0 ? null : index;
+                            },
                             itemBuilder: (context, index) {
                               final stream = webStreams[index];
-                              final beginsProvider =
-                                  index == 0 ||
-                                  webStreams[index - 1].providerId !=
-                                      stream.providerId;
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (beginsProvider)
-                                    _StreamSectionHeader(
-                                      icon: Icons.language_rounded,
-                                      title:
-                                          'WEB STREAMS / ${stream.providerName.toUpperCase()}',
-                                    ),
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      top: 8,
-                                      bottom: 12,
-                                    ),
-                                    child: _WebStreamCard(
-                                      stream: stream,
-                                      onPressed: () => onWebSelected(stream),
-                                    ),
-                                  ),
-                                ],
+                              return Padding(
+                                key: ValueKey(
+                                  'web:${stream.providerId}:${stream.uri}',
+                                ),
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _WebStreamCard(
+                                  stream: stream,
+                                  onPressed: () => onWebSelected(stream),
+                                ),
                               );
                             },
                           ),
                         ),
+                      ],
                     ],
                   ),
           ),
@@ -1479,6 +1684,7 @@ class _WebStreamCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 5),
                   Text(
+                    '${stream.providerName} / '
                     '${stream.isDubbed ? 'DUB' : 'SUB'}'
                     '${stream.quality == null ? '' : ' / ${stream.quality}'}'
                     '${stream.subtitleUri == null ? '' : ' / English captions'}',

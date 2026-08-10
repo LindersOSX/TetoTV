@@ -70,9 +70,13 @@ class MarketplaceClient {
         'This addon is not a compatible JavaScript or TypeScript provider.',
       );
     }
-    final source =
+    final downloadedSource =
         complete.inlinePayload ??
         await _getText(complete.payloadUri!, maximumBytes: _maxPayloadBytes);
+    final source = applyAddonConfigDefaults(
+      downloadedSource,
+      complete.userConfigDefaults,
+    );
     final payload = complete.isTypescript
         ? await _typescriptCompiler.compile(source)
         : source;
@@ -163,3 +167,11 @@ class MarketplaceClient {
 bool _looksLikeProvider(String payload) =>
     RegExp(r'\bclass\s+Provider\b').hasMatch(payload) &&
     payload.length <= MarketplaceClient._maxPayloadBytes;
+
+String applyAddonConfigDefaults(String source, Map<String, String> defaults) {
+  var configured = source;
+  for (final entry in defaults.entries) {
+    configured = configured.replaceAll('{{${entry.key}}}', entry.value);
+  }
+  return configured;
+}

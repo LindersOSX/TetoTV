@@ -27,6 +27,57 @@ const _showCalendarKey = 'navigation_show_calendar';
 const _showHeroKey = 'home_show_featured_hero';
 const _showPosterMetadataKey = 'home_show_poster_metadata';
 const _showCardSubtitlesKey = 'home_show_card_subtitles';
+const _trackerUpdateThresholdKey = 'tracking_episode_update_threshold';
+
+/// AniList and MyAnimeList only accept a whole number of completed episodes.
+/// This setting controls how much of the current episode must be watched before
+/// TetoTV records that episode number on the connected trackers.
+enum TrackerUpdateThreshold {
+  halfway,
+  threeQuarters,
+  nearlyFinished,
+  episodeEnd,
+}
+
+extension TrackerUpdateThresholdLabel on TrackerUpdateThreshold {
+  String get displayName => switch (this) {
+    TrackerUpdateThreshold.halfway => 'After 50%',
+    TrackerUpdateThreshold.threeQuarters => 'After 75%',
+    TrackerUpdateThreshold.nearlyFinished => 'After 90%',
+    TrackerUpdateThreshold.episodeEnd => 'At episode end',
+  };
+
+  String get description => switch (this) {
+    TrackerUpdateThreshold.halfway =>
+      'Mark the episode watched once half of it has played.',
+    TrackerUpdateThreshold.threeQuarters =>
+      'Mark the episode watched after three quarters has played.',
+    TrackerUpdateThreshold.nearlyFinished =>
+      'Mark the episode watched near the end (recommended).',
+    TrackerUpdateThreshold.episodeEnd =>
+      'Only mark the episode watched after playback finishes.',
+  };
+
+  double get watchedFraction => switch (this) {
+    TrackerUpdateThreshold.halfway => .5,
+    TrackerUpdateThreshold.threeQuarters => .75,
+    TrackerUpdateThreshold.nearlyFinished => .9,
+    TrackerUpdateThreshold.episodeEnd => 1,
+  };
+}
+
+bool trackerUpdateThresholdReached({
+  required Duration position,
+  required Duration duration,
+  required TrackerUpdateThreshold threshold,
+  bool playbackEnded = false,
+}) {
+  if (playbackEnded) return true;
+  if (duration <= Duration.zero || position < Duration.zero) return false;
+  if (threshold == TrackerUpdateThreshold.episodeEnd) return false;
+  return position.inMilliseconds / duration.inMilliseconds >=
+      threshold.watchedFraction;
+}
 
 enum HomeLayout { cinematic, compact }
 
@@ -78,6 +129,7 @@ class SettingsPreferences {
     this.showHero = true,
     this.showPosterMetadata = true,
     this.showCardSubtitles = true,
+    this.trackerUpdateThreshold = TrackerUpdateThreshold.nearlyFinished,
   });
 
   final DebridService debridProvider;
@@ -103,6 +155,7 @@ class SettingsPreferences {
   final bool showHero;
   final bool showPosterMetadata;
   final bool showCardSubtitles;
+  final TrackerUpdateThreshold trackerUpdateThreshold;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -128,6 +181,7 @@ class SettingsPreferences {
     bool? showHero,
     bool? showPosterMetadata,
     bool? showCardSubtitles,
+    TrackerUpdateThreshold? trackerUpdateThreshold,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -153,6 +207,8 @@ class SettingsPreferences {
     showHero: showHero ?? this.showHero,
     showPosterMetadata: showPosterMetadata ?? this.showPosterMetadata,
     showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
+    trackerUpdateThreshold:
+        trackerUpdateThreshold ?? this.trackerUpdateThreshold,
   );
 }
 
@@ -199,6 +255,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _storage.read(key: _showHeroKey),
         _storage.read(key: _showPosterMetadataKey),
         _storage.read(key: _showCardSubtitlesKey),
+        _storage.read(key: _trackerUpdateThresholdKey),
       ]);
       state = SettingsPreferences(
         debridProvider:
@@ -234,6 +291,10 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         showHero: values[20] != 'false',
         showPosterMetadata: values[21] != 'false',
         showCardSubtitles: values[22] != 'false',
+        trackerUpdateThreshold: TrackerUpdateThreshold.values.firstWhere(
+          (threshold) => threshold.name == values[23],
+          orElse: () => TrackerUpdateThreshold.nearlyFinished,
+        ),
       );
     } catch (_) {
       // Appearance preferences are optional; safe defaults remain usable.
@@ -352,6 +413,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     state.copyWith(showCardSubtitles: value),
     {_showCardSubtitlesKey: value.toString()},
   );
+
+  Future<void> setTrackerUpdateThreshold(TrackerUpdateThreshold value) =>
+      _update(state.copyWith(trackerUpdateThreshold: value), {
+        _trackerUpdateThresholdKey: value.name,
+      });
 
   Future<void> resetCustomization() async {
     const defaults = SettingsPreferences();

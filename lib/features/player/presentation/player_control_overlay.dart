@@ -3,7 +3,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-const playerControlsIdleTimeout = Duration(seconds: 10);
+const playerControlsIdleTimeout = Duration(seconds: 5);
 const playerControlsDoubleDownWindow = Duration(milliseconds: 450);
 
 Duration playerSeekTarget({
@@ -278,6 +278,174 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool?> showPlayerExitConfirmation(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: const Color(0x99000000),
+    builder: (_) => const PlayerExitDialog(),
+  );
+}
+
+/// A remote-safe exit prompt shared by the Flutter playback engines.
+///
+/// Arrow navigation is handled explicitly because some TV firmware does not
+/// move focus between mixed Material button types inside an [AlertDialog].
+class PlayerExitDialog extends StatefulWidget {
+  const PlayerExitDialog({super.key});
+
+  @override
+  State<PlayerExitDialog> createState() => _PlayerExitDialogState();
+}
+
+class _PlayerExitDialogState extends State<PlayerExitDialog> {
+  final _continueFocus = FocusNode(debugLabel: 'player.exit.continue');
+  final _exitFocus = FocusNode(debugLabel: 'player.exit.confirm');
+
+  @override
+  void dispose() {
+    _continueFocus.dispose();
+    _exitFocus.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _continueFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _exitFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      key: const ValueKey('player-exit-dialog'),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: Focus(
+        onKeyEvent: _handleKey,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xE60A0A0C),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: AppColors.accent.withValues(alpha: .72),
+              ),
+              boxShadow: const [
+                BoxShadow(color: Color(0xA0000000), blurRadius: 28),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Exit video?',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Your current playback position will be saved.',
+                    style: TextStyle(color: AppColors.textMuted),
+                  ),
+                  const SizedBox(height: 20),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 400;
+                      final continueButton = TvFocusable(
+                        key: const ValueKey('player-exit-continue'),
+                        focusNode: _continueFocus,
+                        autofocus: true,
+                        focusScale: 1.015,
+                        borderRadius: BorderRadius.circular(9),
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 48),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xA629292E),
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: const Text(
+                            'Continue watching',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      );
+                      final exitButton = TvFocusable(
+                        key: const ValueKey('player-exit-confirm'),
+                        focusNode: _exitFocus,
+                        focusScale: 1.015,
+                        borderRadius: BorderRadius.circular(9),
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 48),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.accent,
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: const Text(
+                            'Exit video',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      );
+                      if (compact) {
+                        return Column(
+                          children: [
+                            SizedBox(
+                              width: double.infinity,
+                              child: continueButton,
+                            ),
+                            const SizedBox(height: 10),
+                            SizedBox(width: double.infinity, child: exitButton),
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: continueButton),
+                          const SizedBox(width: 12),
+                          Expanded(child: exitButton),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ),

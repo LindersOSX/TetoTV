@@ -68,7 +68,7 @@ void main() {
         overrides: [
           trackingListProvider(
             TrackingListStatus.watching,
-          ).overrideWith((_) async => const []),
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
         ],
         child: const MaterialApp(home: MyListScreen()),
       ),
@@ -79,5 +79,179 @@ void main() {
       expect(find.text(status.displayName), findsWidgets);
     }
     expect(find.text('Watching is empty'), findsOneWidget);
+  });
+
+  testWidgets('refresh reloads the active list and home tracking shelves', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var listLoads = 0;
+    var homeLoads = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(TrackingListStatus.watching).overrideWith((
+            _,
+          ) async {
+            listLoads++;
+            return const TrackingListResult(items: []);
+          }),
+          trackingHomeProvider.overrideWith((_) async {
+            homeLoads++;
+            return const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            );
+          }),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(listLoads, 1);
+    expect(homeLoads, 0);
+
+    await tester.tap(find.byKey(const Key('my-list-refresh')));
+    await tester.pumpAndSettle();
+
+    expect(listLoads, 2);
+    expect(homeLoads, 1);
+    expect(
+      find.text('Refresh complete. Showing available connected tracker data.'),
+      findsOneWidget,
+    );
+  });
+
+  test('tracking result distinguishes partial and complete failures', () {
+    final partial = TrackingListResult(
+      items: const [],
+      attempted: const {TrackingProvider.anilist, TrackingProvider.myAnimeList},
+      failures: {TrackingProvider.myAnimeList: StateError('offline')},
+    );
+    final failed = TrackingListResult(
+      items: const [],
+      attempted: const {TrackingProvider.anilist, TrackingProvider.myAnimeList},
+      failures: {
+        TrackingProvider.anilist: StateError('offline'),
+        TrackingProvider.myAnimeList: StateError('offline'),
+      },
+    );
+
+    expect(partial.hasFailures, isTrue);
+    expect(partial.allAttemptedFailed, isFalse);
+    expect(failed.allAttemptedFailed, isTrue);
+  });
+
+  testWidgets('keeps partial tracker results visible with a warning', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final item = HomeTrackedAnime(
+      tracked: const TrackedAnime(
+        mediaId: 7,
+        title: 'Available show',
+        status: TrackingListStatus.watching,
+        progress: 3,
+      ),
+      provider: TrackingProvider.anilist,
+      anilistId: 7,
+      coverImageUrl: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(TrackingListStatus.watching).overrideWith(
+            (_) async => TrackingListResult(
+              items: [item],
+              attempted: const {
+                TrackingProvider.anilist,
+                TrackingProvider.myAnimeList,
+              },
+              failures: {TrackingProvider.myAnimeList: StateError('offline')},
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Available show'), findsOneWidget);
+    expect(
+      find.textContaining('MyAnimeList could not be refreshed'),
+      findsOneWidget,
+    );
+    expect(find.text('Watching is empty'), findsNothing);
+  });
+
+  testWidgets('failed refresh keeps the previous tracker cards visible', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var loads = 0;
+    final item = HomeTrackedAnime(
+      tracked: const TrackedAnime(
+        mediaId: 9,
+        title: 'Previously loaded show',
+        status: TrackingListStatus.watching,
+        progress: 4,
+      ),
+      provider: TrackingProvider.anilist,
+      anilistId: 9,
+      coverImageUrl: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(TrackingListStatus.watching).overrideWith((
+            _,
+          ) async {
+            loads++;
+            if (loads == 1) {
+              return TrackingListResult(
+                items: [item],
+                attempted: const {TrackingProvider.anilist},
+              );
+            }
+            return TrackingListResult(
+              items: const [],
+              attempted: const {TrackingProvider.anilist},
+              failures: {TrackingProvider.anilist: StateError('offline')},
+            );
+          }),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Previously loaded show'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('my-list-refresh')));
+    await tester.pumpAndSettle();
+
+    expect(loads, 2);
+    expect(find.text('Previously loaded show'), findsOneWidget);
+    expect(find.textContaining('Showing the previous results'), findsOneWidget);
+    expect(find.textContaining('Could not refresh AniList'), findsOneWidget);
   });
 }

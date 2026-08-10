@@ -43,10 +43,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _homeNavFocus = FocusNode(debugLabel: 'home.navigation.home');
   final _scrollController = ScrollController();
   bool _catalogFocusSettled = false;
+  Timer? _heroTimer;
+  int _heroIndex = 0;
 
   @override
   void initState() {
     super.initState();
+    _heroTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted) return;
+      final count = ref.read(trendingAnimeProvider).valueOrNull?.take(5).length;
+      if (count == null || count < 2) return;
+      final items = ref.read(trendingAnimeProvider).valueOrNull!;
+      final nextIndex = ((_heroIndex % count) + 1) % count;
+      final nextArtwork = items[nextIndex].bannerImageUrl;
+      if (nextArtwork != null && nextArtwork.isNotEmpty) {
+        NetworkArtwork.precache(context, nextArtwork, cacheWidth: 1280);
+      }
+      setState(() => _heroIndex = nextIndex);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusHero();
@@ -150,6 +164,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _heroFocus.dispose();
     _homeNavFocus.dispose();
     _scrollController.dispose();
+    _heroTimer?.cancel();
     super.dispose();
   }
 
@@ -183,7 +198,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final dismissedIds =
         ref.watch(dismissedContinueWatchingProvider).valueOrNull ??
         const <int>{};
-    final hero = trending?.firstOrNull;
+    final heroItems =
+        trending?.take(5).toList(growable: false) ?? const <AnimeSummary>[];
+    final activeHeroIndex = heroItems.isEmpty
+        ? 0
+        : _heroIndex % heroItems.length;
+    final hero = heroItems.isEmpty ? null : heroItems[activeHeroIndex];
     final seasonalItems = seasonal == null || seasonal.isEmpty
         ? const <_ShelfItem>[]
         : seasonal
@@ -252,6 +272,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   focusNode: _heroFocus,
                   titlePreference: titlePreference,
                   preferences: preferences,
+                  activeIndex: activeHeroIndex,
+                  itemCount: heroItems.length,
                 ),
               ),
             SliverToBoxAdapter(
@@ -435,6 +457,8 @@ class _HeroPanel extends StatelessWidget {
     required this.titlePreference,
     required this.preferences,
     required this.isLoading,
+    required this.activeIndex,
+    required this.itemCount,
     this.anime,
   });
 
@@ -443,6 +467,8 @@ class _HeroPanel extends StatelessWidget {
   final TitleLanguagePreference titlePreference;
   final SettingsPreferences preferences;
   final bool isLoading;
+  final int activeIndex;
+  final int itemCount;
 
   @override
   Widget build(BuildContext context) {
@@ -465,10 +491,20 @@ class _HeroPanel extends StatelessWidget {
               ),
             ),
           ),
-          if (isLoading)
-            const ArtworkSkeleton()
-          else if (anime?.bannerImageUrl != null)
-            NetworkArtwork(url: anime!.bannerImageUrl!, cacheWidth: 1280),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 420),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, animation) =>
+                FadeTransition(opacity: animation, child: child),
+            child: isLoading
+                ? const ArtworkSkeleton(key: ValueKey('hero-loading'))
+                : NetworkArtwork(
+                    key: ValueKey('hero-art-${anime?.id ?? 0}'),
+                    url: anime?.bannerImageUrl,
+                    cacheWidth: 1280,
+                  ),
+          ),
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -506,30 +542,42 @@ class _HeroPanel extends StatelessWidget {
                 const SizedBox(height: 8),
                 SizedBox(
                   width: compact ? double.infinity : 620,
-                  child: Text(
-                    anime?.displayTitle(titlePreference) ??
-                        'Frieren: Beyond Journey’s End',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                      fontSize: compact ? 30 : 40,
-                      height: 1,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 260),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: Text(
+                      key: ValueKey('hero-title-${anime?.id ?? 0}'),
+                      anime?.displayTitle(titlePreference) ??
+                          'Frieren: Beyond Journey’s End',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        fontSize: compact ? 30 : 40,
+                        height: 1,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
                   width: compact ? double.infinity : 610,
-                  child: Text(
-                    anime?.description.isNotEmpty == true
-                        ? anime!.description
-                        : 'An elven mage retraces a legendary journey and '
-                              'discovers what the brief lives of her friends meant.',
-                    maxLines: dense ? 2 : (compact ? 5 : 4),
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: AppColors.textPrimary,
-                      height: 1.32,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 260),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: Text(
+                      key: ValueKey('hero-description-${anime?.id ?? 0}'),
+                      anime?.description.isNotEmpty == true
+                          ? anime!.description
+                          : 'An elven mage retraces a legendary journey and '
+                                'discovers what the brief lives of her friends meant.',
+                      maxLines: dense ? 2 : (compact ? 5 : 4),
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: AppColors.textPrimary,
+                        height: 1.32,
+                      ),
                     ),
                   ),
                 ),
@@ -565,16 +613,14 @@ class _HeroPanel extends StatelessWidget {
               ],
             ),
           ),
-          if (!compact)
-            const Positioned(
+          if (!compact && itemCount > 1)
+            Positioned(
               right: 20,
               bottom: 18,
               child: Row(
                 children: [
-                  _HeroDot(active: true),
-                  _HeroDot(),
-                  _HeroDot(),
-                  _HeroDot(),
+                  for (var index = 0; index < itemCount; index++)
+                    _HeroDot(active: index == activeIndex),
                 ],
               ),
             ),
@@ -657,6 +703,9 @@ class _MediaShelf extends StatelessWidget {
     final posterWidth = dense
         ? (compact ? 104.0 : 88.0)
         : (compact ? 126.0 : 106.0);
+    final cardHeight = posterHeight * preferences.thumbnailScale;
+    final artworkHeight =
+        cardHeight - (preferences.showCardSubtitles ? 55.0 : 40.0);
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
@@ -665,7 +714,7 @@ class _MediaShelf extends StatelessWidget {
           Text(title, style: Theme.of(context).textTheme.titleLarge),
           SizedBox(height: 9 * preferences.contentDensity.spacingScale),
           SizedBox(
-            height: posterHeight * preferences.thumbnailScale,
+            height: cardHeight,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
@@ -677,6 +726,7 @@ class _MediaShelf extends StatelessWidget {
                 return _PosterCard(
                   item: item,
                   width: posterWidth * preferences.thumbnailScale,
+                  artworkHeight: artworkHeight,
                   preferences: preferences,
                   onPressed: () => item.route != null
                       ? context.push(item.route!)
@@ -716,6 +766,9 @@ class _MediaShelfSkeleton extends StatelessWidget {
         ? (compact ? 104.0 : 88.0)
         : (compact ? 126.0 : 106.0);
     final width = posterWidth * preferences.thumbnailScale;
+    final cardHeight = posterHeight * preferences.thumbnailScale;
+    final artworkHeight =
+        cardHeight - (preferences.showCardSubtitles ? 55.0 : 40.0);
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
@@ -724,7 +777,7 @@ class _MediaShelfSkeleton extends StatelessWidget {
           Text(title, style: Theme.of(context).textTheme.titleLarge),
           SizedBox(height: 9 * preferences.contentDensity.spacingScale),
           SizedBox(
-            height: posterHeight * preferences.thumbnailScale,
+            height: cardHeight,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               physics: const NeverScrollableScrollPhysics(),
@@ -733,19 +786,28 @@ class _MediaShelfSkeleton extends StatelessWidget {
                   SizedBox(width: 10 * preferences.contentDensity.spacingScale),
               itemBuilder: (_, _) => SizedBox(
                 width: width,
-                child: const Column(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: ClipRRect(
+                    SizedBox(
+                      height: artworkHeight,
+                      child: const ClipRRect(
                         borderRadius: BorderRadius.all(Radius.circular(4)),
                         child: ArtworkSkeleton(),
                       ),
                     ),
-                    SizedBox(height: 8),
-                    _SkeletonLine(widthFactor: .88),
-                    SizedBox(height: 5),
-                    _SkeletonLine(widthFactor: .58),
+                    const SizedBox(height: 8),
+                    const SizedBox(
+                      height: 24,
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: _SkeletonLine(widthFactor: .88),
+                      ),
+                    ),
+                    if (preferences.showCardSubtitles) ...[
+                      const SizedBox(height: 5),
+                      const _SkeletonLine(widthFactor: .58),
+                    ],
                   ],
                 ),
               ),
@@ -780,6 +842,7 @@ class _PosterCard extends StatelessWidget {
   const _PosterCard({
     required this.item,
     required this.width,
+    required this.artworkHeight,
     required this.onPressed,
     required this.preferences,
     this.onLongPress,
@@ -789,6 +852,7 @@ class _PosterCard extends StatelessWidget {
   final VoidCallback onPressed;
   final VoidCallback? onLongPress;
   final double width;
+  final double artworkHeight;
   final SettingsPreferences preferences;
 
   @override
@@ -805,7 +869,9 @@ class _PosterCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
+              SizedBox(
+                key: ValueKey('home-artwork-${item.animeId ?? item.title}'),
+                height: artworkHeight,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: Stack(
@@ -827,6 +893,14 @@ class _PosterCard extends StatelessWidget {
                           url: item.coverImageUrl,
                           cacheWidth: 190,
                         ),
+                      if (animeAiringStatusLabel(item.airingStatus) != null)
+                        Positioned(
+                          left: 5,
+                          top: 5,
+                          child: PosterAiringStatusBadge(
+                            status: item.airingStatus,
+                          ),
+                        ),
                       if (preferences.showPosterMetadata &&
                           item.hasPosterMetadata)
                         Positioned(
@@ -844,31 +918,37 @@ class _PosterCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                item.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 11,
-                  height: 1.05,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              if (preferences.showCardSubtitles &&
-                  item.subtitle.isNotEmpty) ...[
-                const SizedBox(height: 3),
-                Text(
-                  item.subtitle,
-                  maxLines: 1,
+              SizedBox(
+                height: 24,
+                child: Text(
+                  item.title,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                    fontSize: 11,
+                    height: 1.05,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-              ],
+              ),
+              if (preferences.showCardSubtitles)
+                SizedBox(
+                  height: 14,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      item.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
               if (item.progress != null) ...[
                 const SizedBox(height: 5),
                 LinearProgressIndicator(
@@ -1025,6 +1105,7 @@ class _ShelfItem {
     this.releaseYear,
     this.durationMinutes,
     this.historyMediaId,
+    this.airingStatus,
   });
 
   final String title;
@@ -1038,6 +1119,7 @@ class _ShelfItem {
   final int? releaseYear;
   final int? durationMinutes;
   final int? historyMediaId;
+  final String? airingStatus;
 
   bool get hasPosterMetadata =>
       score != null || releaseYear != null || durationMinutes != null;
@@ -1055,6 +1137,7 @@ class _ShelfItem {
       score: anime.score,
       releaseYear: anime.seasonYear,
       durationMinutes: anime.durationMinutes,
+      airingStatus: anime.status,
     );
   }
 
@@ -1082,6 +1165,7 @@ class _ShelfItem {
     releaseYear: releaseYear,
     durationMinutes: durationMinutes,
     historyMediaId: historyMediaId,
+    airingStatus: airingStatus,
   );
 
   factory _ShelfItem.fromTracked(
@@ -1117,6 +1201,7 @@ class _ShelfItem {
               queryParameters: {'q': tracked.title},
             ).toString()
           : null,
+      airingStatus: tracked.airingStatus,
     );
   }
 }

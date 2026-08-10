@@ -46,7 +46,7 @@ class _VlcSmokeApp extends StatelessWidget {
         title: 'VLC compatibility smoke test',
         debridService: DebridService.realDebrid,
         launch: launch,
-        onUseMpv: () {},
+        onUseMpv: (_, _, _, _) {},
       ),
     );
   }

@@ -77,6 +77,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var audioTrackButton: ImageButton
     private lateinit var captionTrackButton: ImageButton
     private lateinit var captionSizeButton: ImageButton
+    private lateinit var pictureModeButton: ImageButton
+    private lateinit var fixVideoButton: ImageButton
+    private lateinit var optionsButton: ImageButton
     private lateinit var skipSegmentButton: Button
     private lateinit var pausedTitleView: TextView
     private val handler = Handler(Looper.getMainLooper())
@@ -116,6 +119,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var seekForwardIncrementMs = 10_000L
     private var autoSkipIntros = false
     private var autoSkipOutros = false
+    private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
@@ -277,6 +281,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getLongExtra(EXTRA_SEEK_FORWARD_MS, 10_000L).coerceIn(5_000L, 60_000L)
         autoSkipIntros = intent.getBooleanExtra(EXTRA_AUTO_SKIP_INTROS, false)
         autoSkipOutros = intent.getBooleanExtra(EXTRA_AUTO_SKIP_OUTROS, false)
+        videoResizeMode = when (intent.getStringExtra(EXTRA_VIDEO_FIT)) {
+            "cover" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setPreferredAudioLanguages(*audioLanguages.toTypedArray())
@@ -382,11 +391,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             setShowSubtitleButton(false)
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
             setKeepContentOnPlayerReset(false)
-            resizeMode = when (intent.getStringExtra(EXTRA_VIDEO_FIT)) {
-                "cover" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-            }
+            resizeMode = videoResizeMode
             subtitleView?.apply {
                 val customCaptionColors =
                     subtitleTextColor != Color.WHITE || subtitleBackgroundColor != Color.TRANSPARENT
@@ -430,23 +435,45 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerView.findViewById<ImageButton>(R.id.tetotv_caption_size).apply {
                 setOnClickListener { showSubtitleSizePicker(this) }
             }
+        pictureModeButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_picture_mode).apply {
+                setOnClickListener { cyclePictureMode(this) }
+            }
+        fixVideoButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_fix_video).apply {
+                setOnClickListener {
+                    persistCheckpoint()
+                    finishWithResult(STATUS_USE_MPV)
+                }
+            }
+        optionsButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_player_options).apply {
+                setOnClickListener { showPlaybackOptions(this) }
+            }
         skipSegmentButton =
-            playerView.findViewById<Button>(R.id.tetotv_skip_segment).apply {
+            findViewById<Button>(R.id.tetotv_skip_segment).apply {
                 visibility = View.GONE
                 setOnClickListener {
                     val segment = activeSkipSegment ?: return@setOnClickListener
                     player.seekTo(segment.endMs.coerceAtMost(safeDurationMs()))
                     activeSkipSegment = null
                     visibility = View.GONE
-                    playerView.showController()
-                    requestTransportFocus()
-                    armControllerAutoHide()
+                    if (playerView.isControllerFullyVisible) {
+                        requestTransportFocus()
+                        armControllerAutoHide()
+                    } else {
+                        playerView.requestFocus()
+                    }
                 }
             }
         pausedTitleView = playerView.findViewById<TextView>(R.id.tetotv_paused_title).apply {
             text = intent.getStringExtra(EXTRA_TITLE).orEmpty()
             visibility = View.GONE
         }
+        playerView.findViewById<TextView>(R.id.tetotv_controller_title).text =
+            intent.getStringExtra(EXTRA_TITLE).orEmpty()
+        playerView.findViewById<TextView>(R.id.tetotv_stream_label).text =
+            intent.getStringExtra(EXTRA_STREAM_LABEL).orEmpty().ifBlank { "Debrid stream" }
         updateCaptionSizeDescription()
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).apply {
             contentDescription = getString(
@@ -715,7 +742,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             val focusKey = "${active.kind}:${active.startMs}"
             if (autoFocusedSkipSegments.add(focusKey)) {
-                playerView.showController()
                 skipSegmentButton.post { skipSegmentButton.requestFocus() }
             }
         }
@@ -959,6 +985,79 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
     }
 
+    private fun cyclePictureMode(sourceButton: View) {
+        videoResizeMode = when (videoResizeMode) {
+            AspectRatioFrameLayout.RESIZE_MODE_FIT ->
+                AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM ->
+                AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        playerView.resizeMode = videoResizeMode
+        val label = when (videoResizeMode) {
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Fill screen"
+            AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
+            else -> "Fit"
+        }
+        Toast.makeText(this, "Picture: $label", Toast.LENGTH_SHORT).show()
+        playerView.showController()
+        sourceButton.requestFocus()
+        armControllerAutoHide()
+    }
+
+    private fun showPlaybackOptions(sourceButton: View) {
+        handler.removeCallbacks(hideControllerRunnable)
+        activeTrackDialog?.dismiss()
+        val labels = arrayOf(
+            "Picture mode",
+            "Audio tracks",
+            "Closed captions",
+            "Caption size",
+            "Use compatibility player",
+        )
+        try {
+            val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+                .setTitle(R.string.tetotv_player_options)
+                .setItems(labels) { picker, index ->
+                    picker.dismiss()
+                    handler.post {
+                        when (index) {
+                            0 -> cyclePictureMode(sourceButton)
+                            1 -> showTrackPicker(C.TRACK_TYPE_AUDIO, audioTrackButton)
+                            2 -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
+                            3 -> showSubtitleSizePicker(captionSizeButton)
+                            4 -> {
+                                persistCheckpoint()
+                                finishWithResult(STATUS_USE_MPV)
+                            }
+                        }
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+            activeTrackDialog = dialog
+            dialog.setOnDismissListener {
+                if (activeTrackDialog === dialog) activeTrackDialog = null
+                if (!isFinishing && !isDestroyed) {
+                    playerView.showController()
+                    sourceButton.requestFocus()
+                    armControllerAutoHide()
+                }
+            }
+            dialog.show()
+        } catch (_: Throwable) {
+            activeTrackDialog = null
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_track_picker_error,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
+        }
+    }
+
     private fun applySubtitleStyle() {
         playerView.subtitleView?.apply {
             val customCaptionColors =
@@ -1021,7 +1120,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         // Always pause so playback cannot start behind the confirmation dialog.
         val resumeAfterDialog = ::player.isInitialized && player.playWhenReady
         if (::player.isInitialized) player.pause()
-        val dialog = AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
             .setTitle("Exit video?")
             .setMessage("Your current playback position will be saved.")
             .setCancelable(false)
@@ -1041,7 +1140,33 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             if (exitDialog === dialog) exitDialog = null
         }
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.requestFocus()
+            val continueButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+            val exitButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            continueButton?.setOnKeyListener { _, keyCode, event ->
+                if (
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                        keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
+                ) {
+                    exitButton?.requestFocus()
+                    true
+                } else {
+                    false
+                }
+            }
+            exitButton?.setOnKeyListener { _, keyCode, event ->
+                if (
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    (keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                        keyCode == KeyEvent.KEYCODE_DPAD_UP)
+                ) {
+                    continueButton?.requestFocus()
+                    true
+                } else {
+                    false
+                }
+            }
+            continueButton?.requestFocus()
         }
         dialog.show()
     }
@@ -1069,6 +1194,15 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (!::playerView.isInitialized) return super.dispatchKeyEvent(event)
+        // Modal dialogs own directional focus. Letting the hidden controller
+        // consume their first Left/Right press made "Exit video" unreachable
+        // on a number of Fire TV and Google TV remotes.
+        if (exitDialog?.isShowing == true || activeTrackDialog?.isShowing == true) {
+            return super.dispatchKeyEvent(event)
+        }
+        if (::skipSegmentButton.isInitialized && skipSegmentButton.hasFocus()) {
+            return super.dispatchKeyEvent(event)
+        }
 
         consumedNavigationKeyUp?.let { consumedKey ->
             if (event.keyCode == consumedKey) {
@@ -1469,6 +1603,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     companion object {
         const val EXTRA_SOURCE = "source"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_STREAM_LABEL = "streamLabel"
         const val EXTRA_SUBTITLE_URL = "subtitleUrl"
         const val EXTRA_SUBTITLE_MIME_TYPE = "subtitleMimeType"
         const val EXTRA_SUBTITLE_LANGUAGE = "subtitleLanguage"
@@ -1527,10 +1662,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val STATUS_COMPLETED = "completed"
         const val STATUS_STOPPED = "stopped"
         const val STATUS_ERROR = "error"
+        const val STATUS_USE_MPV = "use_mpv"
 
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
-        private const val CONTROLLER_HIDE_TIMEOUT_MS = 10_000L
+        private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3

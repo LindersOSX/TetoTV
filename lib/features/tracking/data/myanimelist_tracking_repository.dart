@@ -26,7 +26,7 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
     String? nextUrl =
         'https://api.myanimelist.net/v2/users/@me/animelist'
         '?status=${myAnimeListStatus(status)}'
-        '&limit=100&fields=list_status,num_episodes,title,alternative_titles,'
+        '&limit=100&fields=list_status,num_episodes,status,title,alternative_titles,'
         'main_picture';
     final pagingDio = Dio(
       BaseOptions(
@@ -73,6 +73,7 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
             score: (listStatus['score'] as num?)?.toDouble(),
             updatedAt: updatedAt?.toLocal(),
             startDate: startDate,
+            airingStatus: node['status'] as String?,
           ),
         );
       }

@@ -65,11 +65,8 @@ class MarketplaceState {
   }
 
   bool updateAvailable(MarketplaceAddon addon) {
-    final current = installedById(addon.id)?.manifest.version;
-    final next = addon.version;
-    return current != null &&
-        next != null &&
-        _compareVersions(next, current) > 0;
+    final current = installedById(addon.id);
+    return current != null && _installedAddonNeedsRefresh(current, addon);
   }
 }
 
@@ -159,6 +156,10 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         }),
       );
     }
+
+    // Catalog refresh is read-only for installed executable add-ons. Replacing
+    // third-party code always remains an explicit Install/Update action so a
+    // compromised repository cannot silently change an enabled provider.
     state = state.copyWith(
       catalog: catalog,
       repositoryErrors: errors,
@@ -339,6 +340,33 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
           .toList(),
     );
   }
+}
+
+bool _installedAddonNeedsRefresh(
+  InstalledStreamingAddon installed,
+  MarketplaceAddon available,
+) {
+  final unresolvedConfig = RegExp(
+    r'\{\{[A-Za-z0-9._-]+\}\}',
+  ).hasMatch(installed.payload);
+  final versionChanged =
+      available.version != null &&
+      (installed.manifest.version == null ||
+          _compareVersions(available.version!, installed.manifest.version!) >
+              0);
+  final defaultsChanged = !_sameStringMap(
+    installed.manifest.userConfigDefaults,
+    available.userConfigDefaults,
+  );
+  return unresolvedConfig || versionChanged || defaultsChanged;
+}
+
+bool _sameStringMap(Map<String, String> left, Map<String, String> right) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) return false;
+  }
+  return true;
 }
 
 int _compareVersions(String left, String right) {

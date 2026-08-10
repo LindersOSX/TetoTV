@@ -31,19 +31,52 @@
     <FrameLayout
         android:id="@id/exo_bottom_bar"
         android:layout_width="match_parent"
-        android:layout_height="112dp"
+        android:layout_height="168dp"
         android:layout_gravity="bottom"
-        android:background="#E6000000"
+        android:layout_marginStart="28dp"
+        android:layout_marginEnd="28dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/tetotv_player_card_background"
         android:layoutDirection="ltr"
-        android:paddingStart="28dp"
-        android:paddingEnd="28dp"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
         android:paddingBottom="10dp">
+
+        <TextView
+            android:id="@+id/tetotv_controller_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_marginTop="13dp"
+            android:layout_marginEnd="160dp"
+            android:ellipsize="end"
+            android:fontFamily="sans"
+            android:maxLines="1"
+            android:textColor="@android:color/white"
+            android:textSize="21sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tetotv_stream_label"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="11dp"
+            android:background="@drawable/tetotv_skip_button_background"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/tetotv_player_debrid_stream"
+            android:textColor="#FFFF929B"
+            android:textSize="11sp"
+            android:textStyle="bold" />
 
         <androidx.media3.ui.DefaultTimeBar
             android:id="@id/exo_progress"
             android:layout_width="match_parent"
             android:layout_height="28dp"
-            android:layout_gravity="top"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="25dp"
             android:focusable="false"
             android:importantForAccessibility="no"
             app:bar_height="3dp"
@@ -62,7 +95,7 @@
             android:gravity="start|bottom"
             android:importantForAccessibility="noHideDescendants"
             android:orientation="horizontal"
-            android:paddingBottom="16dp">
+            android:paddingBottom="4dp">
 
             <TextView
                 android:id="@id/exo_position"
@@ -90,24 +123,21 @@
                 android:textSize="15sp" />
         </LinearLayout>
 
-        <Button
-            android:id="@+id/tetotv_skip_segment"
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="68dp"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="43dp"
+            android:clipToPadding="false"
+            android:fillViewport="false"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+          <LinearLayout
             android:layout_width="wrap_content"
-            android:layout_height="44dp"
-            android:layout_gravity="start|bottom"
-            android:layout_marginStart="210dp"
-            android:layout_marginBottom="3dp"
-            android:backgroundTint="#FFE63B55"
-            android:focusable="true"
-            android:nextFocusRight="@id/exo_rew"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
-            android:text="@string/tetotv_player_skip_intro"
-            android:textAllCaps="false"
-            android:textColor="@android:color/white"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
         <LinearLayout
             android:id="@id/exo_center_controls"
@@ -206,6 +236,7 @@
                     style="@style/TetoTVPlayerControlButton.Compact"
                     android:contentDescription="@string/tetotv_player_caption_size"
                     android:nextFocusLeft="@id/tetotv_caption_tracks"
+                    android:nextFocusRight="@id/tetotv_picture_mode"
                     android:src="@drawable/tetotv_ic_caption_size" />
 
                 <TextView
@@ -215,7 +246,75 @@
                     android:textColor="@android:color/white"
                     android:textSize="11sp" />
             </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="64dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/tetotv_picture_mode"
+                    style="@style/TetoTVPlayerControlButton.Compact"
+                    android:contentDescription="@string/tetotv_player_picture"
+                    android:nextFocusLeft="@id/tetotv_caption_size"
+                    android:nextFocusRight="@id/tetotv_fix_video"
+                    android:src="@android:drawable/ic_menu_crop" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/tetotv_player_picture_short"
+                    android:textColor="@android:color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="64dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/tetotv_fix_video"
+                    style="@style/TetoTVPlayerControlButton.Compact"
+                    android:contentDescription="@string/tetotv_player_fix_video"
+                    android:nextFocusLeft="@id/tetotv_picture_mode"
+                    android:nextFocusRight="@id/tetotv_player_options"
+                    android:src="@android:drawable/ic_menu_rotate" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/tetotv_player_fix_short"
+                    android:textColor="@android:color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="72dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/tetotv_player_options"
+                    style="@style/TetoTVPlayerControlButton.Compact"
+                    android:contentDescription="@string/tetotv_player_options"
+                    android:nextFocusLeft="@id/tetotv_fix_video"
+                    android:src="@android:drawable/ic_menu_manage" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/tetotv_player_options_short"
+                    android:textColor="@android:color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
+
+          </LinearLayout>
+        </HorizontalScrollView>
     </FrameLayout>
 
     <!-- Media3 treats these groups as optional responsive-control regions. -->

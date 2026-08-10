@@ -22,6 +22,7 @@ void main() {
     await controller.setShowHero(false);
     await controller.setShowPosterMetadata(false);
     await controller.setShowCardSubtitles(false);
+    await controller.setTrackerUpdateThreshold(TrackerUpdateThreshold.halfway);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
@@ -37,6 +38,10 @@ void main() {
     expect(restored.state.showHero, isFalse);
     expect(restored.state.showPosterMetadata, isFalse);
     expect(restored.state.showCardSubtitles, isFalse);
+    expect(
+      restored.state.trackerUpdateThreshold,
+      TrackerUpdateThreshold.halfway,
+    );
   });
 
   test('existing users retain both stream sources by default', () async {
@@ -55,5 +60,47 @@ void main() {
     expect(controller.state.showMyList, isTrue);
     expect(controller.state.showDiscover, isTrue);
     expect(controller.state.showCalendar, isTrue);
+    expect(
+      controller.state.trackerUpdateThreshold,
+      TrackerUpdateThreshold.nearlyFinished,
+    );
+  });
+
+  test('tracker threshold only completes a whole episode when crossed', () {
+    const duration = Duration(minutes: 24);
+
+    expect(
+      trackerUpdateThresholdReached(
+        position: const Duration(minutes: 11),
+        duration: duration,
+        threshold: TrackerUpdateThreshold.halfway,
+      ),
+      isFalse,
+    );
+    expect(
+      trackerUpdateThresholdReached(
+        position: const Duration(minutes: 12),
+        duration: duration,
+        threshold: TrackerUpdateThreshold.halfway,
+      ),
+      isTrue,
+    );
+    expect(
+      trackerUpdateThresholdReached(
+        position: duration,
+        duration: duration,
+        threshold: TrackerUpdateThreshold.episodeEnd,
+      ),
+      isFalse,
+    );
+    expect(
+      trackerUpdateThresholdReached(
+        position: duration,
+        duration: duration,
+        threshold: TrackerUpdateThreshold.episodeEnd,
+        playbackEnded: true,
+      ),
+      isTrue,
+    );
   });
 }

@@ -10,7 +10,11 @@ import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
+import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
+import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
+import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -218,21 +222,44 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
     String source,
     ReleaseCandidate release, [
     Duration? resume,
+    StreamReady? selectedStream,
+    List<PlaybackStreamOption>? discoveredDirectStreams,
   ]) {
+    final previousStream = _activeLaunch.stream;
+    final previousRelease = _activeLaunch.selectedRelease;
+    final nextStream =
+        selectedStream ??
+        StreamReady(
+          uri: Uri.parse(source),
+          displayName: release.releaseName,
+          debridService: previousStream.debridService,
+          headers: previousStream.headers,
+          externalSubtitle: previousStream.externalSubtitle,
+          providerId: previousStream.providerId,
+          providerName: previousStream.providerName,
+        );
+    final mergedDirectStreams = playbackStreamOptionsForHandoff(
+      currentStream: nextStream,
+      currentRelease: release,
+      existing: [
+        if (previousStream.uri != nextStream.uri)
+          PlaybackStreamOption(
+            stream: previousStream,
+            release: previousRelease,
+          ),
+        ..._activeLaunch.directAlternatives,
+        ...?discoveredDirectStreams,
+      ],
+    );
     final launch = PlaybackLaunch(
-      stream: StreamReady(
-        uri: Uri.parse(source),
-        displayName: release.releaseName,
-        debridService: _activeLaunch.stream.debridService,
-        headers: _activeLaunch.stream.headers,
-        externalSubtitle: _activeLaunch.stream.externalSubtitle,
-        providerId: _activeLaunch.stream.providerId,
-        providerName: _activeLaunch.stream.providerName,
-      ),
+      stream: nextStream,
       episode: _activeLaunch.episode,
       selectedRelease: release,
       alternatives: _activeLaunch.alternatives
           .where((candidate) => candidate.infoHash != release.infoHash)
+          .toList(growable: false),
+      directAlternatives: mergedDirectStreams
+          .where((option) => option.stream.uri != nextStream.uri)
           .toList(growable: false),
     );
     setState(() {
@@ -264,11 +291,13 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         malMediaId: widget.malMediaId,
         episode: widget.episode,
         coverImageUrl: widget.coverImageUrl,
-        onUseVlc: (position) => _switchEngine(
+        onUseVlc: (position, stream, release, directStreams) => _switchEngine(
           _TvPlaybackEngine.vlc,
-          _activeSource,
-          _activeLaunch.selectedRelease,
+          stream.uri.toString(),
+          release,
           position,
+          stream,
+          directStreams,
         ),
       );
     }
@@ -286,10 +315,13 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
         episode: widget.episode,
         coverImageUrl: widget.coverImageUrl,
         initialPosition: _resumeOverride,
-        onUseMpv: () => _switchEngine(
+        onUseMpv: (position, stream, release, directStreams) => _switchEngine(
           _TvPlaybackEngine.mpv,
-          _activeSource,
-          _activeLaunch.selectedRelease,
+          stream.uri.toString(),
+          release,
+          position,
+          stream,
+          directStreams,
         ),
       );
     }
@@ -304,10 +336,20 @@ class _TvPlayerScreenRouterState extends State<TvPlayerScreen> {
       malMediaId: widget.malMediaId,
       episode: widget.episode,
       coverImageUrl: widget.coverImageUrl,
-      onUseMpv: (source, release) =>
-          _switchEngine(_TvPlaybackEngine.mpv, source, release),
-      onUseVlc: (source, release) =>
-          _switchEngine(_TvPlaybackEngine.vlc, source, release),
+      onUseMpv: (position, stream, release) => _switchEngine(
+        _TvPlaybackEngine.mpv,
+        stream.uri.toString(),
+        release,
+        position,
+        stream,
+      ),
+      onUseVlc: (position, stream, release) => _switchEngine(
+        _TvPlaybackEngine.vlc,
+        stream.uri.toString(),
+        release,
+        position,
+        stream,
+      ),
     );
   }
 }
@@ -333,7 +375,13 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
   final String title;
   final DebridService debridService;
   final PlaybackLaunch launch;
-  final ValueChanged<Duration> onUseVlc;
+  final void Function(
+    Duration position,
+    StreamReady stream,
+    ReleaseCandidate release,
+    List<PlaybackStreamOption> directStreams,
+  )
+  onUseVlc;
   final String? subtitle;
   final int? anilistMediaId;
   final int? malMediaId;
@@ -351,7 +399,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Map<String, String> get _httpHeaders => {
     'Accept': '*/*',
     'User-Agent': 'TetoTV/1.10 Android libmpv',
-    ...widget.launch.stream.headers,
+    ..._currentStream.headers,
   };
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
@@ -393,6 +441,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   bool _highContrastSubtitles = false;
   late String _source;
   late ReleaseCandidate _currentRelease;
+  late StreamReady _currentStream;
+  List<PlaybackStreamOption> _directStreamOptions = const [];
+  StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
+  final Set<String> _failedDirectStreamUris = {};
   int _alternativeIndex = 0;
   bool _failingOver = false;
   bool _prewarming = false;
@@ -419,6 +471,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   TapDownDetails? _touchDoubleTapDetails;
   bool _requestedVlcFallback = false;
   bool _reportedPlaybackSuccess = false;
+
+  bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
+    current: _currentStream,
+    options: _directStreamOptions,
+    failedUris: _failedDirectStreamUris,
+  );
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume;
@@ -487,6 +545,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     super.initState();
     _source = widget.source;
     _currentRelease = widget.launch.selectedRelease;
+    _currentStream = widget.launch.stream;
+    _directStreamOptions = mergePlaybackStreamOptions([
+      PlaybackStreamOption(stream: _currentStream, release: _currentRelease),
+      ...widget.launch.directAlternatives,
+    ], const []);
     _player = Player(
       configuration: const PlayerConfiguration(
         title: 'TetoTV',
@@ -505,18 +568,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _progressSubscription = _player.stream.position.listen(_onPosition);
     _tracksSubscription = _player.stream.tracks.listen(_selectPreferredTracks);
     _errorSubscription = _player.stream.error.listen((message) {
-      if (isLikelyVideoDecodeFailure(message) && !_softwareFallbackUsed) {
+      if (isLikelyVideoDecodeFailure(message) &&
+          !_softwareFallbackUsed &&
+          !_hasUntriedDirectStream) {
         unawaited(_restartWithSoftwareDecoder());
         return;
       }
-      if (widget.launch.alternatives.isNotEmpty) {
-        unawaited(_tryNextStream(message));
-        return;
-      }
-      unawaited(_fallbackToVlc(message));
+      unawaited(_tryNextStream(message));
     });
     _completedSubscription = _player.stream.completed.listen((completed) {
-      if (completed) _offerNextEpisode();
+      if (!completed) return;
+      if (!_progressHandled &&
+          widget.episode != null &&
+          (widget.anilistMediaId != null || widget.malMediaId != null)) {
+        _progressHandled = true;
+        unawaited(_syncProgress());
+      }
+      unawaited(_offerNextEpisode());
     });
     _videoParamsSubscription = _player.stream.videoParams.listen((params) {
       if (params.w == null || params.h == null) return;
@@ -554,6 +622,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     );
     unawaited(_bootstrapPlayback());
     unawaited(_loadSkipSegments());
+    unawaited(_startWebSourceDiscovery());
     _scheduleControlsHide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _playControlFocus.requestFocus();
@@ -659,15 +728,24 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       unawaited(_persistPlayback(position));
       unawaited(_updateMediaSession());
     }
-    if (_progressHandled || widget.episode == null) return;
-    if (widget.anilistMediaId == null && widget.malMediaId == null) return;
     final duration = _player.state.duration;
     if (duration.inSeconds <= 0) return;
     final ratio = position.inMilliseconds / duration.inMilliseconds;
     if (!_prewarmed && !_prewarming && ratio >= .65) {
       unawaited(_prewarmNextEpisode());
     }
-    if (ratio < .9) return;
+    if (_progressHandled || widget.episode == null) return;
+    if (widget.anilistMediaId == null && widget.malMediaId == null) return;
+    final threshold = ref
+        .read(settingsPreferencesProvider)
+        .trackerUpdateThreshold;
+    if (!trackerUpdateThresholdReached(
+      position: position,
+      duration: duration,
+      threshold: threshold,
+    )) {
+      return;
+    }
     _progressHandled = true;
     unawaited(_syncProgress());
   }
@@ -697,7 +775,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _activeSkip = active;
       });
       if (canSkip) {
-        _showControls();
         _focusSkipOnce(active);
       }
     } else if (!identical(_activeSkip, active)) {
@@ -709,7 +786,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   void _focusSkipOnce(SkipSegment segment) {
     final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
     if (!_autoFocusedSkipSegments.add(key)) return;
-    _showControls();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _activeSkip == segment) _skipControlFocus.requestFocus();
     });
@@ -794,6 +870,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _syncProgress() async {
+    if (widget.episode == null) return;
     try {
       final synced = await ref
           .read(trackingSyncServiceProvider)
@@ -921,7 +998,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       await _player.setSubtitleTrack(SubtitleTrack.no());
       return;
     }
-    final subtitle = widget.subtitle;
+    final subtitle =
+        _currentStream.externalSubtitle?.toString() ?? widget.subtitle;
     if (subtitle != null && subtitle.isNotEmpty) {
       if (subtitle.startsWith('asset:///')) {
         final assetKey = subtitle.substring('asset:///'.length);
@@ -1059,11 +1137,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _tryNextStream(String reason) async {
-    if (_failingOver ||
-        _alternativeIndex >= widget.launch.alternatives.length) {
-      await _fallbackToVlc(reason);
-      return;
-    }
+    if (_failingOver) return;
     _failingOver = true;
     final position = _player.state.position;
     try {
@@ -1075,6 +1149,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             infoHash: _currentRelease.infoHash,
             reason: reason,
           );
+      if (await _switchToNextDirectStream(position)) return;
       while (_alternativeIndex < widget.launch.alternatives.length) {
         final candidate = widget.launch.alternatives[_alternativeIndex++];
         _showTrackMessage('Trying another compatible stream…');
@@ -1083,6 +1158,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           if (ready == null) continue;
           _source = ready.uri.toString();
           _currentRelease = candidate;
+          _currentStream = ready;
           _seriesPreferences = _seriesPreferences.copyWith(
             subtitleEnabled: subtitlesEnabledByDefault(candidate),
           );
@@ -1111,6 +1187,47 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
+  Future<bool> _switchToNextDirectStream(Duration position) async {
+    if (!_currentStream.isWebStream) return false;
+    _failedDirectStreamUris.add(_currentStream.uri.toString());
+    final candidates = _directStreamOptions.where(
+      (option) =>
+          option.stream.isWebStream &&
+          !_failedDirectStreamUris.contains(option.stream.uri.toString()),
+    );
+    for (final candidate in candidates) {
+      final requestedUri = candidate.stream.uri;
+      _failedDirectStreamUris.add(requestedUri.toString());
+      final option = await _preflightDirectStream(candidate);
+      if (option == null) continue;
+      if (validatedRedirectWasAlreadyAttempted(
+        requestedUri: requestedUri,
+        validatedUri: option.stream.uri,
+        attemptedUris: _failedDirectStreamUris,
+      )) {
+        continue;
+      }
+      _failedDirectStreamUris.add(option.stream.uri.toString());
+      _currentStream = option.stream;
+      _currentRelease = option.release;
+      _source = option.stream.uri.toString();
+      _preferredAudioSelected = false;
+      _preferredSubtitleSelected = false;
+      _softwareFallbackUsed = false;
+      _decoderMode = releaseRequiresSoftwareDecoder(option.release)
+          ? PlaybackDecoderMode.software
+          : PlaybackDecoderMode.hardwareSafe;
+      _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
+      _videoFrameSeen = false;
+      await _openMedia(resume: position);
+      if (!mounted) return true;
+      setState(() => _playbackError = null);
+      _showTrackMessage('Recovered with ${playbackStreamOptionLabel(option)}');
+      return true;
+    }
+    return false;
+  }
+
   Future<void> _retryCurrentStream() async {
     final position = _player.state.position;
     if (mounted) setState(() => _playbackError = null);
@@ -1129,7 +1246,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   Future<void> _recordEngineSuccess() async {
     final database = ref.read(tetoTvDatabaseProvider);
-    if (widget.launch.stream.providerId case final providerId?) {
+    if (_currentStream.providerId case final providerId?) {
       await database.recordProviderSuccess(providerId);
       return;
     }
@@ -1141,7 +1258,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_requestedVlcFallback) return;
     _requestedVlcFallback = true;
     final database = ref.read(tetoTvDatabaseProvider);
-    if (widget.launch.stream.providerId case final providerId?) {
+    if (_currentStream.providerId case final providerId?) {
       await database.recordProviderFailure(providerId, reason);
     } else {
       final device = await AndroidTvBridge.instance.getDeviceProfile();
@@ -1153,7 +1270,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     );
     final position = _player.state.position;
     await _persistPlayback(position, force: true);
-    if (mounted) widget.onUseVlc(position);
+    if (mounted) {
+      widget.onUseVlc(
+        position,
+        _currentStream,
+        _currentRelease,
+        List.unmodifiable(_directStreamOptions),
+      );
+    }
   }
 
   Future<void> _prewarmNextEpisode() async {
@@ -1272,7 +1396,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _scheduleVideoWatchdogCheck();
         return;
       }
-      if (_softwareFallbackUsed) {
+      if (_hasUntriedDirectStream || _softwareFallbackUsed) {
         unawaited(_tryNextStream('No video frames were rendered.'));
       } else {
         unawaited(_restartWithSoftwareDecoder());
@@ -1362,13 +1486,17 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _highDropSamples = delta >= 10 ? _highDropSamples + 1 : 0;
       if (_highDropSamples < 2) return;
       _highDropSamples = 0;
-      if (_decoderMode != PlaybackDecoderMode.software) {
+      if (_hasUntriedDirectStream) {
+        await _tryNextStream(
+          'This stream is dropping too many frames on this device.',
+        );
+      } else if (_decoderMode != PlaybackDecoderMode.software) {
         await _switchDecoder(
           PlaybackDecoderMode.software,
           automatic: true,
           reason: 'Playback was dropping frames; compatibility mode enabled',
         );
-      } else if (widget.launch.alternatives.isNotEmpty) {
+      } else {
         await _tryNextStream(
           'This stream is dropping too many frames on this device.',
         );
@@ -1456,6 +1584,144 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
+  Stream<WebStreamSearchProgress> _webSourceSearch({bool refresh = false}) =>
+      ref
+          .read(webStreamAggregatorProvider)
+          .watchSearchIncrementally(
+            widget.launch.episode,
+            refresh: refresh,
+          );
+
+  Future<void> _startWebSourceDiscovery({bool restart = false}) async {
+    if (!_currentStream.isWebStream ||
+        !ref.read(settingsPreferencesProvider).webStreamsEnabled) {
+      return;
+    }
+    if (_sourceDiscoverySubscription != null && !restart) return;
+    await _sourceDiscoverySubscription?.cancel();
+    _sourceDiscoverySubscription = _webSourceSearch().listen((progress) {
+      if (!mounted) return;
+      _mergeDirectStreamOptions(
+        progress.aggregation.streams.map(playbackOptionForWebStream),
+      );
+    }, onError: (_) {});
+  }
+
+  void _mergeDirectStreamOptions(Iterable<PlaybackStreamOption> options) {
+    final merged = mergePlaybackStreamOptions(_directStreamOptions, options);
+    final before = _directStreamOptions
+        .map((option) => option.stream.uri.toString())
+        .join('\n');
+    final after = merged
+        .map((option) => option.stream.uri.toString())
+        .join('\n');
+    if (before == after) return;
+    setState(() => _directStreamOptions = merged);
+  }
+
+  Future<PlaybackStreamOption?> _preflightDirectStream(
+    PlaybackStreamOption option,
+  ) async {
+    if (!option.stream.isWebStream) return option;
+    _showTrackMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    try {
+      final validated = await const WebStreamValidator().validate(
+        option.stream.uri,
+        option.stream.headers,
+      );
+      final validatedOption = PlaybackStreamOption(
+        stream: StreamReady(
+          uri: validated.uri,
+          displayName: option.stream.displayName,
+          headers: validated.headers,
+          externalSubtitle: option.stream.externalSubtitle,
+          providerId: option.stream.providerId,
+          providerName: option.stream.providerName,
+        ),
+        release: option.release,
+      );
+      _directStreamOptions = replaceValidatedPlaybackStreamOption(
+        options: _directStreamOptions,
+        requestedUri: option.stream.uri,
+        validated: validatedOption,
+      );
+      return validatedOption;
+    } catch (error) {
+      _failedDirectStreamUris.add(option.stream.uri.toString());
+      _showTrackMessage(
+        'That source is unavailable: '
+        "${error.toString().replaceFirst('FormatException: ', '')}",
+      );
+      return null;
+    }
+  }
+
+  Future<void> _openStreamSourcePicker() async {
+    _controlsTimer?.cancel();
+    final selected = await showPlayerStreamSourcePicker(
+      context: context,
+      initialOptions: _directStreamOptions,
+      selectedUri: _currentStream.uri,
+      onOptionsChanged: (options) {
+        if (mounted) setState(() => _directStreamOptions = options);
+      },
+      discover:
+          _currentStream.isWebStream &&
+              ref.read(settingsPreferencesProvider).webStreamsEnabled
+          ? _webSourceSearch
+          : null,
+    );
+    if (!mounted) return;
+    if (selected == null || selected.stream.uri == _currentStream.uri) {
+      _showControls();
+      return;
+    }
+
+    final option = await _preflightDirectStream(selected);
+    if (!mounted || option == null) {
+      _showControls();
+      return;
+    }
+    final resume = _player.state.position;
+    _failedDirectStreamUris.clear();
+    _currentStream = option.stream;
+    _source = option.stream.uri.toString();
+    _currentRelease = option.release;
+    _directStreamOptions = mergePlaybackStreamOptions(
+      [option],
+      _directStreamOptions.where(
+        (candidate) => candidate.stream.uri != selected.stream.uri,
+      ),
+    );
+    _preferredAudioSelected = false;
+    _preferredSubtitleSelected = false;
+    _softwareFallbackUsed = false;
+    _decoderMode = releaseRequiresSoftwareDecoder(option.release)
+        ? PlaybackDecoderMode.software
+        : PlaybackDecoderMode.hardwareSafe;
+    _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
+    _videoFrameSeen = false;
+    if (mounted) setState(() => _playbackError = null);
+    await _openMedia(resume: resume);
+    if (!mounted) return;
+    _showTrackMessage('Playing ${playbackStreamOptionLabel(option)}');
+    _showControls();
+  }
+
+  // TODO: Remove after older persisted player-route labels are migrated.
+  // ignore: unused_element
+  static String _streamOptionLabel(PlaybackStreamOption option) {
+    final quality = option.release.quality?.trim();
+    final provider =
+        option.stream.providerName ??
+        option.release.provider ??
+        option.release.sourceId;
+    return [
+      if (quality != null && quality.isNotEmpty) quality,
+      provider,
+    ].join(' • ');
+  }
+
   Future<void> _openPlaybackMenu() async {
     _controlsTimer?.cancel();
     if (mounted) setState(() => _controlsVisible = true);
@@ -1473,6 +1739,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         highContrastSubtitles: _highContrastSubtitles,
         hasAlternateStreams:
             _alternativeIndex < widget.launch.alternatives.length,
+        hasDirectSources: _currentStream.isWebStream,
       ),
     );
     if (!mounted) return;
@@ -1512,6 +1779,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         );
       case 'nextStream':
         await _tryNextStream('Stream changed manually.');
+      case 'sources':
+        await _openStreamSourcePicker();
       case 'retry':
         await _retryPlayback();
     }
@@ -1824,26 +2093,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final wasPlaying = _player.state.playing;
     if (wasPlaying) await _player.pause();
     if (!mounted) return;
-    final exit = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
-        title: const Text('Exit video?'),
-        content: const Text('Your current playback position will be saved.'),
-        actions: [
-          FilledButton(
-            autofocus: true,
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Continue watching'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Exit video'),
-          ),
-        ],
-      ),
-    );
+    final exit = await showPlayerExitConfirmation(context);
     _confirmingExit = false;
     if (!mounted) return;
     if (exit == true) {
@@ -1875,6 +2125,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _videoParamsSubscription?.cancel();
     _playingSubscription?.cancel();
     _mediaActionSubscription?.cancel();
+    _sourceDiscoverySubscription?.cancel();
     _playerRootFocus.dispose();
     _playControlFocus.dispose();
     _skipControlFocus.dispose();
@@ -1970,11 +2221,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                         player: _player,
                         title: widget.title,
                         streamLabel:
-                            widget.launch.stream.providerName ??
+                            _currentStream.providerName ??
                             '${widget.debridService.displayName} stream',
                         decoderMode: _decoderMode,
                         playFocusNode: _playControlFocus,
-                        skipFocusNode: _skipControlFocus,
                         seekBackSeconds: _seekBackSeconds,
                         seekForwardSeconds: _seekForwardSeconds,
                         onRewind: () =>
@@ -1982,9 +2232,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                         onPlayPause: _player.playOrPause,
                         onForward: () =>
                             _seekBy(Duration(seconds: _seekForwardSeconds)),
-                        canSkip: _canSkipNow,
-                        skipLabel: _activeSkip?.actionLabel,
-                        onSkip: _skipCurrentSegment,
                         onAudio: _openAudioTrackPicker,
                         onSubtitles: _openSubtitleTrackPicker,
                         onFit: _cycleFit,
@@ -1997,11 +2244,28 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                             unawaited(_restartWithSoftwareDecoder());
                           }
                         },
+                        onSources: _currentStream.isWebStream
+                            ? _openStreamSourcePicker
+                            : null,
                         onOptions: _openPlaybackMenu,
                       ),
                     ),
                   ),
                 ),
+                if (_canSkipNow && _activeSkip != null)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    right: MediaQuery.sizeOf(context).width < 720 ? 16 : 38,
+                    bottom: _controlsVisible
+                        ? (MediaQuery.sizeOf(context).height < 480 ? 132 : 184)
+                        : 26,
+                    child: TetoSkipSegmentOverlay(
+                      focusNode: _skipControlFocus,
+                      label: _activeSkip!.actionLabel,
+                      onPressed: _skipCurrentSegment,
+                    ),
+                  ),
                 if (_playbackError case final error?)
                   Positioned(
                     left: 34,
@@ -2091,19 +2355,16 @@ class _PlayerChrome extends StatelessWidget {
     required this.streamLabel,
     required this.decoderMode,
     required this.playFocusNode,
-    required this.skipFocusNode,
     required this.seekBackSeconds,
     required this.seekForwardSeconds,
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
-    required this.canSkip,
-    required this.skipLabel,
-    required this.onSkip,
     required this.onAudio,
     required this.onSubtitles,
     required this.onFit,
     required this.onCompatibility,
+    this.onSources,
     required this.onOptions,
   });
 
@@ -2112,33 +2373,43 @@ class _PlayerChrome extends StatelessWidget {
   final String streamLabel;
   final PlaybackDecoderMode decoderMode;
   final FocusNode playFocusNode;
-  final FocusNode skipFocusNode;
   final int seekBackSeconds;
   final int seekForwardSeconds;
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
-  final bool canSkip;
-  final String? skipLabel;
-  final VoidCallback onSkip;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
   final VoidCallback onFit;
   final VoidCallback onCompatibility;
+  final VoidCallback? onSources;
   final VoidCallback onOptions;
 
   @override
   Widget build(BuildContext context) {
+    final compact =
+        MediaQuery.sizeOf(context).width < 720 ||
+        MediaQuery.sizeOf(context).height < 480;
     return Align(
       alignment: Alignment.bottomCenter,
       child: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(28, 0, 28, 24),
+        minimum: EdgeInsets.fromLTRB(
+          compact ? 12 : 28,
+          0,
+          compact ? 12 : 28,
+          compact ? 10 : 24,
+        ),
         child: Container(
           key: const ValueKey('mpv-bottom-player-chrome'),
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 13),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 12 : 16,
+            compact ? 9 : 12,
+            compact ? 12 : 16,
+            compact ? 9 : 13,
+          ),
           decoration: BoxDecoration(
-            color: const Color(0xF5080808),
+            color: const Color(0xD6080808),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
             boxShadow: const [
@@ -2158,23 +2429,32 @@ class _PlayerChrome extends StatelessWidget {
                   Expanded(
                     child: Text(
                       title,
-                      style: Theme.of(context).textTheme.headlineSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: compact
+                          ? Theme.of(context).textTheme.titleMedium
+                          : Theme.of(context).textTheme.headlineSmall,
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: .2),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      streamLabel,
-                      style: const TextStyle(
-                        color: AppColors.accentBright,
-                        fontWeight: FontWeight.w800,
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: compact ? 112 : 190),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.accent.withValues(alpha: .2),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        streamLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.accentBright,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ),
@@ -2212,16 +2492,6 @@ class _PlayerChrome extends StatelessWidget {
                       label: 'Forward ${seekForwardSeconds}s',
                       onPressed: onForward,
                     ),
-                    if (canSkip) ...[
-                      const SizedBox(width: 8),
-                      _PlayerControl(
-                        focusNode: skipFocusNode,
-                        icon: Icons.skip_next_rounded,
-                        label: skipLabel ?? 'Skip',
-                        primary: true,
-                        onPressed: onSkip,
-                      ),
-                    ],
                     const SizedBox(width: 18),
                     _PlayerControl(
                       icon: Icons.audiotrack_rounded,
@@ -2246,6 +2516,14 @@ class _PlayerChrome extends StatelessWidget {
                       label: 'Fix video',
                       onPressed: onCompatibility,
                     ),
+                    if (onSources != null) ...[
+                      const SizedBox(width: 8),
+                      _PlayerControl(
+                        icon: Icons.video_library_rounded,
+                        label: 'Sources',
+                        onPressed: onSources!,
+                      ),
+                    ],
                     const SizedBox(width: 18),
                     _PlayerControl(
                       icon: Icons.tune_rounded,
@@ -2287,12 +2565,14 @@ class _PlayerChrome extends StatelessWidget {
                                 '${_format(position)}  /  ${_format(duration)}',
                                 style: Theme.of(context).textTheme.bodyMedium,
                               ),
-                              const Spacer(),
-                              Text(
-                                'D-pad controls   •   J/L seek   •   '
-                                'Menu/Y options   •   C compatibility',
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
+                              if (!compact) ...[
+                                const Spacer(),
+                                Text(
+                                  'D-pad controls  |  J/L seek  |  '
+                                  'Menu/Y options  |  C compatibility',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ],
                             ],
                           ),
                         ],
@@ -2341,7 +2621,7 @@ class _PlayerControl extends StatelessWidget {
       child: Container(
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 11),
-        color: primary ? AppColors.accent : const Color(0xDD161616),
+        color: primary ? AppColors.accent : const Color(0x8F242429),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2373,6 +2653,7 @@ class _PlaybackOptionsDialog extends StatelessWidget {
     required this.audioDelayMs,
     required this.highContrastSubtitles,
     required this.hasAlternateStreams,
+    required this.hasDirectSources,
   });
 
   final PlaybackDecoderMode decoderMode;
@@ -2384,6 +2665,7 @@ class _PlaybackOptionsDialog extends StatelessWidget {
   final int audioDelayMs;
   final bool highContrastSubtitles;
   final bool hasAlternateStreams;
+  final bool hasDirectSources;
 
   void _close(BuildContext context, String type, Object value) {
     Navigator.of(context).pop<_PlaybackMenuResult>((type: type, value: value));
@@ -2393,151 +2675,171 @@ class _PlaybackOptionsDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: 900,
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: const Color(0xFF080808),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .55)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      insetPadding: const EdgeInsets.all(12),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 900),
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF080808),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: AppColors.accent.withValues(alpha: .55),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.tune_rounded, color: AppColors.accentBright),
-                const SizedBox(width: 9),
-                Text(
-                  'Playback options',
-                  style: Theme.of(context).textTheme.headlineSmall,
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.tune_rounded,
+                      color: AppColors.accentBright,
+                    ),
+                    const SizedBox(width: 9),
+                    Text(
+                      'Playback options',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const Spacer(),
+                    const Text(
+                      'Changes apply immediately',
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
-                const Spacer(),
-                const Text(
-                  'Changes apply immediately',
-                  style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                const SizedBox(height: 16),
+                _OptionSection(
+                  title: 'DECODER',
+                  children: [
+                    for (final mode in PlaybackDecoderMode.values)
+                      _OptionChip(
+                        label: playbackDecoderLabel(mode),
+                        selected: decoderMode == mode,
+                        autofocus: decoderMode == mode,
+                        onPressed: () => _close(context, 'decoder', mode),
+                      ),
+                    _OptionChip(
+                      label: 'Restart stream',
+                      icon: Icons.refresh_rounded,
+                      onPressed: () => _close(context, 'retry', true),
+                    ),
+                    if (hasAlternateStreams)
+                      _OptionChip(
+                        label: 'Try next stream',
+                        icon: Icons.swap_horiz_rounded,
+                        onPressed: () => _close(context, 'nextStream', true),
+                      ),
+                    if (hasDirectSources)
+                      _OptionChip(
+                        label: 'Sources & quality',
+                        icon: Icons.video_library_rounded,
+                        onPressed: () => _close(context, 'sources', true),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _OptionSection(
+                  title: 'PICTURE',
+                  children: [
+                    _OptionChip(
+                      label: 'Fit',
+                      selected: videoFit == BoxFit.contain,
+                      onPressed: () => _close(context, 'fit', BoxFit.contain),
+                    ),
+                    _OptionChip(
+                      label: 'Fill screen',
+                      selected: videoFit == BoxFit.cover,
+                      onPressed: () => _close(context, 'fit', BoxFit.cover),
+                    ),
+                    _OptionChip(
+                      label: 'Stretch',
+                      selected: videoFit == BoxFit.fill,
+                      onPressed: () => _close(context, 'fit', BoxFit.fill),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _OptionSection(
+                  title: 'SPEED',
+                  children: [
+                    for (final rate in const [.75, 1.0, 1.25, 1.5, 2.0])
+                      _OptionChip(
+                        label: '${rate}x',
+                        selected: playbackRate == rate,
+                        onPressed: () => _close(context, 'rate', rate),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _OptionSection(
+                  title: 'SUBTITLE SIZE',
+                  children: [
+                    for (final size in const [28.0, 34.0, 42.0, 50.0])
+                      _OptionChip(
+                        label: switch (size) {
+                          28 => 'Small',
+                          34 => 'Medium',
+                          42 => 'Large',
+                          _ => 'Extra large',
+                        },
+                        selected: subtitleSize == size,
+                        onPressed: () => _close(context, 'subtitleSize', size),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _OptionSection(
+                  title: 'SUBTITLE STYLE',
+                  children: [
+                    for (final position in const [78, 90, 100])
+                      _OptionChip(
+                        label: switch (position) {
+                          78 => 'Higher',
+                          90 => 'Raised',
+                          _ => 'Bottom',
+                        },
+                        selected: subtitlePosition == position,
+                        onPressed: () =>
+                            _close(context, 'subtitlePosition', position),
+                      ),
+                    _OptionChip(
+                      label: highContrastSubtitles
+                          ? 'High contrast on'
+                          : 'High contrast off',
+                      selected: highContrastSubtitles,
+                      onPressed: () =>
+                          _close(context, 'contrast', !highContrastSubtitles),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _OptionSection(
+                  title: 'SYNC',
+                  children: [
+                    for (final delay in const [-500, -250, 0, 250, 500])
+                      _OptionChip(
+                        label: 'Subs ${delay > 0 ? '+' : ''}${delay}ms',
+                        selected: subtitleDelayMs == delay,
+                        onPressed: () =>
+                            _close(context, 'subtitleDelay', delay),
+                      ),
+                    for (final delay in const [-250, 0, 250])
+                      _OptionChip(
+                        label: 'Audio ${delay > 0 ? '+' : ''}${delay}ms',
+                        selected: audioDelayMs == delay,
+                        onPressed: () => _close(context, 'audioDelay', delay),
+                      ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            _OptionSection(
-              title: 'DECODER',
-              children: [
-                for (final mode in PlaybackDecoderMode.values)
-                  _OptionChip(
-                    label: playbackDecoderLabel(mode),
-                    selected: decoderMode == mode,
-                    autofocus: decoderMode == mode,
-                    onPressed: () => _close(context, 'decoder', mode),
-                  ),
-                _OptionChip(
-                  label: 'Restart stream',
-                  icon: Icons.refresh_rounded,
-                  onPressed: () => _close(context, 'retry', true),
-                ),
-                if (hasAlternateStreams)
-                  _OptionChip(
-                    label: 'Try next stream',
-                    icon: Icons.swap_horiz_rounded,
-                    onPressed: () => _close(context, 'nextStream', true),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _OptionSection(
-              title: 'PICTURE',
-              children: [
-                _OptionChip(
-                  label: 'Fit',
-                  selected: videoFit == BoxFit.contain,
-                  onPressed: () => _close(context, 'fit', BoxFit.contain),
-                ),
-                _OptionChip(
-                  label: 'Fill screen',
-                  selected: videoFit == BoxFit.cover,
-                  onPressed: () => _close(context, 'fit', BoxFit.cover),
-                ),
-                _OptionChip(
-                  label: 'Stretch',
-                  selected: videoFit == BoxFit.fill,
-                  onPressed: () => _close(context, 'fit', BoxFit.fill),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _OptionSection(
-              title: 'SPEED',
-              children: [
-                for (final rate in const [.75, 1.0, 1.25, 1.5, 2.0])
-                  _OptionChip(
-                    label: '${rate}x',
-                    selected: playbackRate == rate,
-                    onPressed: () => _close(context, 'rate', rate),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _OptionSection(
-              title: 'SUBTITLE SIZE',
-              children: [
-                for (final size in const [28.0, 34.0, 42.0, 50.0])
-                  _OptionChip(
-                    label: switch (size) {
-                      28 => 'Small',
-                      34 => 'Medium',
-                      42 => 'Large',
-                      _ => 'Extra large',
-                    },
-                    selected: subtitleSize == size,
-                    onPressed: () => _close(context, 'subtitleSize', size),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _OptionSection(
-              title: 'SUBTITLE STYLE',
-              children: [
-                for (final position in const [78, 90, 100])
-                  _OptionChip(
-                    label: switch (position) {
-                      78 => 'Higher',
-                      90 => 'Raised',
-                      _ => 'Bottom',
-                    },
-                    selected: subtitlePosition == position,
-                    onPressed: () =>
-                        _close(context, 'subtitlePosition', position),
-                  ),
-                _OptionChip(
-                  label: highContrastSubtitles
-                      ? 'High contrast on'
-                      : 'High contrast off',
-                  selected: highContrastSubtitles,
-                  onPressed: () =>
-                      _close(context, 'contrast', !highContrastSubtitles),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _OptionSection(
-              title: 'SYNC',
-              children: [
-                for (final delay in const [-500, -250, 0, 250, 500])
-                  _OptionChip(
-                    label: 'Subs ${delay > 0 ? '+' : ''}${delay}ms',
-                    selected: subtitleDelayMs == delay,
-                    onPressed: () => _close(context, 'subtitleDelay', delay),
-                  ),
-                for (final delay in const [-250, 0, 250])
-                  _OptionChip(
-                    label: 'Audio ${delay > 0 ? '+' : ''}${delay}ms',
-                    selected: audioDelayMs == delay,
-                    onPressed: () => _close(context, 'audioDelay', delay),
-                  ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -2552,23 +2854,33 @@ class _OptionSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        SizedBox(
-          width: 112,
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: AppColors.textMuted,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.1,
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 600;
+        final label = Text(
+          title,
+          style: const TextStyle(
+            color: AppColors.textMuted,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.1,
           ),
-        ),
-        Expanded(child: Wrap(spacing: 7, runSpacing: 7, children: children)),
-      ],
+        );
+        final options = Wrap(spacing: 7, runSpacing: 7, children: children);
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [label, const SizedBox(height: 7), options],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(width: 112, child: label),
+            Expanded(child: options),
+          ],
+        );
+      },
     );
   }
 }

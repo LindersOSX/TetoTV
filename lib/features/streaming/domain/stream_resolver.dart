@@ -117,12 +117,24 @@ class PlaybackLaunch {
     required this.episode,
     required this.selectedRelease,
     this.alternatives = const [],
+    this.directAlternatives = const [],
   });
 
   final StreamReady stream;
   final EpisodeReference episode;
   final ReleaseCandidate selectedRelease;
   final List<ReleaseCandidate> alternatives;
+  final List<PlaybackStreamOption> directAlternatives;
+}
+
+/// An already-discovered direct stream that the player can switch to without
+/// repeating a provider search. Torrent candidates are deliberately kept in
+/// [PlaybackLaunch.alternatives] until a debrid service resolves them.
+class PlaybackStreamOption {
+  const PlaybackStreamOption({required this.stream, required this.release});
+
+  final StreamReady stream;
+  final ReleaseCandidate release;
 }
 
 abstract interface class ReleaseSource {

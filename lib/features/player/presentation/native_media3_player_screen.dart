@@ -50,8 +50,18 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
   final int? malMediaId;
   final int? episode;
   final String? coverImageUrl;
-  final void Function(String source, ReleaseCandidate release) onUseMpv;
-  final void Function(String source, ReleaseCandidate release) onUseVlc;
+  final void Function(
+    Duration position,
+    StreamReady stream,
+    ReleaseCandidate release,
+  )
+  onUseMpv;
+  final void Function(
+    Duration position,
+    StreamReady stream,
+    ReleaseCandidate release,
+  )
+  onUseVlc;
 
   @override
   ConsumerState<NativeMedia3PlayerScreen> createState() =>
@@ -62,6 +72,7 @@ class _NativeMedia3PlayerScreenState
     extends ConsumerState<NativeMedia3PlayerScreen> {
   late String _source;
   late ReleaseCandidate _release;
+  late StreamReady _currentStream;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   Duration _resumePosition = Duration.zero;
   DateTime? _resumeUpdatedAt;
@@ -83,6 +94,7 @@ class _NativeMedia3PlayerScreenState
     super.initState();
     _source = widget.source;
     _release = widget.launch.selectedRelease;
+    _currentStream = widget.launch.stream;
     _startFromBeginning = widget.launch.episode.startFromBeginning;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_run());
@@ -103,7 +115,9 @@ class _NativeMedia3PlayerScreenState
           releaseRequiresSoftwareDecoder(_release) ||
           _preferences.subtitleDelayMs != 0 ||
           _preferences.audioDelayMs != 0) {
-        if (mounted) widget.onUseMpv(_source, _release);
+        if (mounted) {
+          widget.onUseMpv(_resumePosition, _currentStream, _release);
+        }
         return;
       }
       while (mounted) {
@@ -118,13 +132,15 @@ class _NativeMedia3PlayerScreenState
           title: widget.title,
           checkpointKey: '$_mediaId:$_episodeNumber',
           releaseName: _release.releaseName,
+          streamLabel:
+              _currentStream.providerName ??
+              '${widget.debridService.displayName} stream',
           resumePosition: _resumePosition,
           resumeUpdatedAt: _resumeUpdatedAt,
           startFromBeginning: _startFromBeginning,
           externalSubtitle:
-              widget.launch.stream.externalSubtitle?.toString() ??
-              widget.subtitle,
-          headers: widget.launch.stream.headers,
+              _currentStream.externalSubtitle?.toString() ?? widget.subtitle,
+          headers: _currentStream.headers,
           audioLanguage: _preferences.audioLanguage,
           subtitleLanguage: _preferences.subtitleLanguage,
           subtitlesEnabled: _preferences.subtitlePreferenceSet
@@ -152,6 +168,7 @@ class _NativeMedia3PlayerScreenState
             : result.position;
         _resumeUpdatedAt = DateTime.now();
         await _persistResult(result);
+        await _syncResultIfThresholdReached(result);
         if (result.firstFrameRendered) {
           final profile = await AndroidTvBridge.instance.getDeviceProfile();
           await ref
@@ -173,15 +190,21 @@ class _NativeMedia3PlayerScreenState
             if (await _switchToCompatibleStream('Requested by the player')) {
               continue;
             }
-            if (mounted) widget.onUseMpv(_source, _release);
+            if (mounted) {
+              widget.onUseMpv(_resumePosition, _currentStream, _release);
+            }
             return;
           case 'use_vlc':
           case 'fallback_vlc':
-            if (mounted) widget.onUseVlc(_source, _release);
+            if (mounted) {
+              widget.onUseVlc(_resumePosition, _currentStream, _release);
+            }
             return;
           case 'use_mpv':
           case 'fallback_mpv':
-            if (mounted) widget.onUseMpv(_source, _release);
+            if (mounted) {
+              widget.onUseMpv(_resumePosition, _currentStream, _release);
+            }
             return;
           case 'error':
           case 'no_first_frame':
@@ -194,10 +217,14 @@ class _NativeMedia3PlayerScreenState
             }
             // MPV keeps libass and unusual-codec support as the second engine.
             // VLC remains available manually from MPV or on a future retry.
-            if (mounted) widget.onUseMpv(_source, _release);
+            if (mounted) {
+              widget.onUseMpv(_resumePosition, _currentStream, _release);
+            }
             return;
           case 'unsupported':
-            if (mounted) widget.onUseMpv(_source, _release);
+            if (mounted) {
+              widget.onUseMpv(_resumePosition, _currentStream, _release);
+            }
             return;
           case 'exit':
           case 'cancelled':
@@ -323,7 +350,30 @@ class _NativeMedia3PlayerScreenState
         duration: duration,
       );
     }
-    if (completed) await _syncProgress();
+  }
+
+  Future<void> _syncResultIfThresholdReached(
+    NativePlaybackResult result,
+  ) async {
+    if (_syncHandled || !mounted) return;
+    if (widget.anilistMediaId == null &&
+        widget.launch.episode.anilistMediaId <= 0 &&
+        _malMediaId == null) {
+      return;
+    }
+    final ended = result.status == 'completed' || result.status == 'ended';
+    final threshold = ref
+        .read(settingsPreferencesProvider)
+        .trackerUpdateThreshold;
+    if (!trackerUpdateThresholdReached(
+      position: result.position,
+      duration: result.duration,
+      threshold: threshold,
+      playbackEnded: ended,
+    )) {
+      return;
+    }
+    await _syncProgress();
   }
 
   Future<void> _recordFailure(NativePlaybackResult result) async {
@@ -373,6 +423,7 @@ class _NativeMedia3PlayerScreenState
       if (ready == null) continue;
       _source = ready.uri.toString();
       _release = candidate;
+      _currentStream = ready;
       _automaticStreamAttempts++;
       return true;
     }
@@ -542,12 +593,20 @@ class _NativeMedia3PlayerScreenState
                   const SizedBox(height: 10),
                 ],
                 OutlinedButton(
-                  onPressed: () => widget.onUseMpv(_source, _release),
+                  onPressed: () => widget.onUseMpv(
+                    _resumePosition,
+                    _currentStream,
+                    _release,
+                  ),
                   child: const Text('Use MPV compatibility player'),
                 ),
                 const SizedBox(height: 10),
                 TextButton(
-                  onPressed: () => widget.onUseVlc(_source, _release),
+                  onPressed: () => widget.onUseVlc(
+                    _resumePosition,
+                    _currentStream,
+                    _release,
+                  ),
                   child: const Text('Use VLC software player'),
                 ),
               ],

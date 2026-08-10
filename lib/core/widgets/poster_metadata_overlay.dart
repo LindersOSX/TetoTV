@@ -1,6 +1,53 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
+String? animeAiringStatusLabel(String? status) {
+  final normalized = status
+      ?.trim()
+      .toUpperCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+  return switch (normalized) {
+    'RELEASING' || 'CURRENTLY_AIRING' || 'AIRING' => 'AIRING',
+    'FINISHED' || 'FINISHED_AIRING' => 'FINISHED',
+    _ => null,
+  };
+}
+
+class PosterAiringStatusBadge extends StatelessWidget {
+  const PosterAiringStatusBadge({required this.status, super.key});
+
+  final String? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = animeAiringStatusLabel(status);
+    if (label == null) return const SizedBox.shrink();
+    final airing = label == 'AIRING';
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: airing ? const Color(0xE61A7A45) : const Color(0xE61B1B1B),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.white.withValues(alpha: .22)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Text(
+          label,
+          maxLines: 1,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 8,
+            fontWeight: FontWeight.w900,
+            letterSpacing: .45,
+            height: 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class PosterMetadataOverlay extends StatelessWidget {
   const PosterMetadataOverlay({
     this.score,

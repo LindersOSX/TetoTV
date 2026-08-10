@@ -5,6 +5,45 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('TV activation plays the platform click sound', (tester) async {
+    final platformCalls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          platformCalls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TvFocusable(
+            autofocus: true,
+            onPressed: () {},
+            child: const SizedBox(width: 100, height: 100),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+
+    expect(
+      platformCalls,
+      contains(
+        isA<MethodCall>()
+            .having((call) => call.method, 'method', 'SystemSound.play')
+            .having((call) => call.arguments, 'sound', 'SystemSoundType.click'),
+      ),
+    );
+  });
+
   testWidgets('D-pad hold invokes the secondary TV action only', (
     tester,
   ) async {

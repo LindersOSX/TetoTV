@@ -4,6 +4,13 @@
     <string name="tetotv_player_audio_tracks">Select audio track</string>
     <string name="tetotv_player_cc_short">CC</string>
     <string name="tetotv_player_size_short">Size</string>
+    <string name="tetotv_player_picture_short">Picture</string>
+    <string name="tetotv_player_picture">Change picture size</string>
+    <string name="tetotv_player_fix_short">Fix video</string>
+    <string name="tetotv_player_fix_video">Use compatibility player</string>
+    <string name="tetotv_player_options_short">Options</string>
+    <string name="tetotv_player_options">Playback options</string>
+    <string name="tetotv_player_debrid_stream">Debrid stream</string>
     <string name="tetotv_player_caption_size">Caption size</string>
     <string name="tetotv_player_select_caption_size">Choose caption size</string>
     <string name="tetotv_player_caption_size_small">Small</string>

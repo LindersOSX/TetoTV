@@ -52,6 +52,14 @@ class CatalogGrid extends StatelessWidget {
                           url: anime.coverImageUrl,
                           cacheWidth: 260,
                         ),
+                        if (animeAiringStatusLabel(anime.status) != null)
+                          Positioned(
+                            left: 5,
+                            top: 5,
+                            child: PosterAiringStatusBadge(
+                              status: anime.status,
+                            ),
+                          ),
                         Positioned(
                           left: 5,
                           right: 5,

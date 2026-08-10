@@ -51,4 +51,60 @@ void main() {
     expect(selected, 'jpn');
     expect(picker, findsNothing);
   });
+
+  testWidgets('exit dialog exposes both remote actions with explicit focus', (
+    tester,
+  ) async {
+    bool? shouldExit;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () async {
+                shouldExit = await showPlayerExitConfirmation(context);
+              },
+              child: const Text('Exit'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Exit'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-exit-dialog')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-exit-continue')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-exit-confirm')), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(shouldExit, isTrue);
+  });
+
+  testWidgets('exit dialog stacks without overflow on a narrow phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: PlayerExitDialog())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final continueButton = find.byKey(const ValueKey('player-exit-continue'));
+    final exitButton = find.byKey(const ValueKey('player-exit-confirm'));
+    expect(continueButton, findsOneWidget);
+    expect(exitButton, findsOneWidget);
+    expect(
+      tester.getTopLeft(exitButton).dy,
+      greaterThan(tester.getTopLeft(continueButton).dy),
+    );
+  });
 }

@@ -14,6 +14,7 @@ void main() {
         checkpointKey:
             'integration:media3:${DateTime.now().microsecondsSinceEpoch}',
         releaseName: 'vlc_smoke.mp4',
+        streamLabel: 'Media3 smoke stream',
         resumePosition: Duration.zero,
         startFromBeginning: true,
       );
@@ -37,6 +38,7 @@ void main() {
             'integration:media3-resume:'
             '${DateTime.now().microsecondsSinceEpoch}',
         releaseName: 'vlc_smoke.mp4',
+        streamLabel: 'Media3 smoke stream',
         resumePosition: const Duration(seconds: 8),
         startFromBeginning: false,
       );

@@ -16,42 +16,17 @@ final trackingHomeProvider = FutureProvider<TrackingHomeData>((ref) async {
     for (final status in homeStatuses) status: [],
   };
 
-  for (final provider in TrackingProvider.values) {
-    String? token;
-    try {
-      token = await tokenService.accessToken(provider);
-    } catch (_) {
-      // One expired or temporarily unreachable provider must not prevent the
-      // other linked tracker from populating the home screen.
-      continue;
-    }
-    if (token == null || token.isEmpty) continue;
-    final repository = switch (provider) {
-      TrackingProvider.anilist => AniListTrackingRepository(accessToken: token),
-      TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
-        accessToken: token,
+  final providerResults = await Future.wait([
+    for (final provider in TrackingProvider.values)
+      _loadProviderHomeData(
+        provider: provider,
+        tokenService: tokenService,
+        statuses: homeStatuses,
       ),
-    };
-    for (final status in homeStatuses) {
-      try {
-        final list = await repository.list(status);
-        for (final tracked in list.take(20)) {
-          int? anilistId;
-          if (provider == TrackingProvider.anilist) {
-            anilistId = tracked.mediaId;
-          }
-          all[status]!.add(
-            HomeTrackedAnime(
-              tracked: tracked,
-              provider: provider,
-              anilistId: anilistId,
-              coverImageUrl: tracked.coverImageUrl,
-            ),
-          );
-        }
-      } catch (e) {
-        // Ignore failures for individual lists so the rest of the home screen can load
-      }
+  ]);
+  for (final providerData in providerResults) {
+    for (final entry in providerData.entries) {
+      all[entry.key]!.addAll(entry.value);
     }
   }
 
@@ -61,6 +36,52 @@ final trackingHomeProvider = FutureProvider<TrackingHomeData>((ref) async {
     completed: _deduplicate(all[TrackingListStatus.completed]!),
   );
 });
+
+Future<Map<TrackingListStatus, List<HomeTrackedAnime>>> _loadProviderHomeData({
+  required TrackingProvider provider,
+  required TrackingTokenService tokenService,
+  required List<TrackingListStatus> statuses,
+}) async {
+  String? token;
+  try {
+    token = await tokenService.accessToken(provider);
+  } catch (_) {
+    // One expired or temporarily unreachable provider must not prevent the
+    // other linked tracker from populating the home screen.
+    return const {};
+  }
+  if (token == null || token.isEmpty) return const {};
+  final repository = switch (provider) {
+    TrackingProvider.anilist => AniListTrackingRepository(accessToken: token),
+    TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
+      accessToken: token,
+    ),
+  };
+  final lists = await Future.wait([
+    for (final status in statuses)
+      () async {
+        try {
+          final tracked = await repository.list(status);
+          return MapEntry(status, [
+            for (final anime in tracked.take(20))
+              HomeTrackedAnime(
+                tracked: anime,
+                provider: provider,
+                anilistId: provider == TrackingProvider.anilist
+                    ? anime.mediaId
+                    : null,
+                coverImageUrl: anime.coverImageUrl,
+              ),
+          ]);
+        } catch (_) {
+          // A single unavailable status should not hide the provider's other
+          // shelves or data from the other connected tracker.
+          return MapEntry(status, const <HomeTrackedAnime>[]);
+        }
+      }(),
+  ]);
+  return Map.fromEntries(lists);
+}
 
 class TrackingHomeData {
   const TrackingHomeData({

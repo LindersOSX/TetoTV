@@ -14,7 +14,53 @@ import 'package:flutter_js/quickjs/quickjs_runtime2.dart';
 abstract interface class WebStreamingProvider {
   String get id;
   String get name;
-  Future<List<WebStreamResult>> streams(EpisodeReference episode);
+  Future<List<WebStreamResult>> streams(
+    EpisodeReference episode, {
+    WebProviderCancellation? cancellation,
+  });
+}
+
+class WebProviderSearchCancelled implements Exception {
+  const WebProviderSearchCancelled();
+
+  @override
+  String toString() => 'Web provider search cancelled.';
+}
+
+/// Cooperative cancellation shared by the provider worker pool and the
+/// isolate-backed Seanime runtime. Listeners run synchronously so navigation
+/// can kill active QuickJS isolates before another screen starts discovery.
+class WebProviderCancellation {
+  final Set<void Function()> _listeners = {};
+  final Completer<void> _cancelledSignal = Completer<void>();
+  bool _cancelled = false;
+
+  bool get isCancelled => _cancelled;
+  Future<void> get whenCancelled => _cancelledSignal.future;
+
+  void throwIfCancelled() {
+    if (_cancelled) throw const WebProviderSearchCancelled();
+  }
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _cancelledSignal.complete();
+    final listeners = _listeners.toList(growable: false);
+    _listeners.clear();
+    for (final listener in listeners) {
+      listener();
+    }
+  }
+
+  void Function() addListener(void Function() listener) {
+    if (_cancelled) {
+      listener();
+      return () {};
+    }
+    _listeners.add(listener);
+    return () => _listeners.remove(listener);
+  }
 }
 
 class SeanimeJavascriptProvider implements WebStreamingProvider {
@@ -31,13 +77,18 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
   String get name => addon.manifest.name;
 
   @override
-  Future<List<WebStreamResult>> streams(EpisodeReference episode) async {
+  Future<List<WebStreamResult>> streams(
+    EpisodeReference episode, {
+    WebProviderCancellation? cancellation,
+  }) async {
+    cancellation?.throwIfCancelled();
     final domRuntime = await (_domRuntimeSource ??= rootBundle.loadString(
       'assets/addon_runtime/linkedom.js',
       cache: true,
     ));
-    final raw = await Isolate.run(
-      () => _executeProvider({
+    cancellation?.throwIfCancelled();
+    final raw = await _runProviderIsolate(
+      {
         'id': addon.manifest.id,
         'name': addon.manifest.name,
         'payload': addon.payload,
@@ -48,15 +99,22 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'anilistId': episode.anilistMediaId,
         'malId': episode.malMediaId,
         'year': episode.year,
-      }),
-    ).timeout(const Duration(seconds: 38));
+      },
+      timeout: const Duration(seconds: 19),
+      cancellation: cancellation,
+    );
+    cancellation?.throwIfCancelled();
+    final expandedRaw = await _expandHlsVariants(raw, cancellation);
+    cancellation?.throwIfCancelled();
     final results = <WebStreamResult>[];
     final publicHosts = <String, bool>{};
     Future<bool> allowed(Uri uri) async {
+      cancellation?.throwIfCancelled();
       final known = publicHosts[uri.host];
       if (known != null) return known;
       try {
         await validatePublicNetworkTarget(uri);
+        cancellation?.throwIfCancelled();
         publicHosts[uri.host] = true;
         return true;
       } catch (_) {
@@ -65,7 +123,8 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
       }
     }
 
-    for (final item in raw) {
+    for (final item in expandedRaw) {
+      cancellation?.throwIfCancelled();
       final uri = safePublicHttpsUri(item['url']);
       if (uri == null || !await allowed(uri)) continue;
       final candidateSubtitle = safePublicHttpsUri(item['subtitleUrl']);
@@ -90,7 +149,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
           providerName: name,
           title: '${item['title'] ?? name}',
           uri: uri,
-          quality: item['quality'] as String?,
+          quality: item['quality']?.toString(),
           headers: headers,
           subtitleUri: subtitle,
           subtitleLanguage: item['subtitleLanguage'] as String?,
@@ -109,6 +168,281 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
 
 bool isSeanimeProviderNoMatch(Object error) =>
     error.toString().contains('NO_MATCH:');
+
+class HlsStreamVariant {
+  const HlsStreamVariant({
+    required this.uri,
+    required this.quality,
+    this.bandwidth,
+  });
+
+  final Uri uri;
+  final String quality;
+  final int? bandwidth;
+}
+
+List<HlsStreamVariant> parseHlsMasterPlaylist(String source, Uri masterUri) {
+  if (!source.contains('#EXT-X-STREAM-INF')) return const [];
+  final lines = const LineSplitter().convert(source);
+  final variants = <String, HlsStreamVariant>{};
+  for (var index = 0; index < lines.length; index++) {
+    final line = lines[index].trim();
+    if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+    final attributes = _hlsAttributes(
+      line.substring('#EXT-X-STREAM-INF:'.length),
+    );
+    String? location;
+    while (++index < lines.length) {
+      final candidate = lines[index].trim();
+      if (candidate.isEmpty) continue;
+      if (candidate.startsWith('#')) break;
+      location = candidate;
+      break;
+    }
+    if (location == null) continue;
+    final uri = safePublicHttpsUri(masterUri.resolve(location).toString());
+    if (uri == null) continue;
+    final resolution = attributes['RESOLUTION'];
+    final height = resolution == null
+        ? null
+        : int.tryParse(resolution.split('x').last);
+    final bandwidth = int.tryParse(
+      attributes['AVERAGE-BANDWIDTH'] ?? attributes['BANDWIDTH'] ?? '',
+    );
+    final name = attributes['NAME']?.trim();
+    final quality = height != null && height > 0
+        ? '${height}p'
+        : name?.isNotEmpty == true
+        ? name!
+        : bandwidth != null
+        ? '${(bandwidth / 1000000).toStringAsFixed(1)} Mbps'
+        : 'Variant';
+    variants.putIfAbsent(
+      uri.toString(),
+      () => HlsStreamVariant(uri: uri, quality: quality, bandwidth: bandwidth),
+    );
+    if (variants.length >= 20) break;
+  }
+  final result = variants.values.toList();
+  result.sort((left, right) {
+    final leftHeight = int.tryParse(
+      RegExp(r'\d+').firstMatch(left.quality)?.group(0) ?? '',
+    );
+    final rightHeight = int.tryParse(
+      RegExp(r'\d+').firstMatch(right.quality)?.group(0) ?? '',
+    );
+    final resolution = (rightHeight ?? 0).compareTo(leftHeight ?? 0);
+    if (resolution != 0) return resolution;
+    return (right.bandwidth ?? 0).compareTo(left.bandwidth ?? 0);
+  });
+  return result;
+}
+
+List<Map<String, dynamic>> expandHlsResultVariants(
+  Map<String, dynamic> item,
+  String playlist,
+  Uri masterUri,
+) {
+  final title = '${item['title'] ?? 'Auto'}';
+  return [
+    for (final variant in parseHlsMasterPlaylist(playlist, masterUri))
+      {
+        ...item,
+        'url': variant.uri.toString(),
+        'quality': variant.quality,
+        'title': _variantTitle(title, variant.quality),
+      },
+  ];
+}
+
+Map<String, String> _hlsAttributes(String value) {
+  final result = <String, String>{};
+  final expression = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
+  for (final match in expression.allMatches(value)) {
+    var attribute = match.group(2)?.trim() ?? '';
+    if (attribute.length >= 2 &&
+        attribute.startsWith('"') &&
+        attribute.endsWith('"')) {
+      attribute = attribute.substring(1, attribute.length - 1);
+    }
+    result[match.group(1)!] = attribute;
+  }
+  return result;
+}
+
+Future<List<Map<String, dynamic>>> _expandHlsVariants(
+  List<Map<String, dynamic>> raw,
+  WebProviderCancellation? cancellation,
+) async {
+  final result = raw.toList(growable: true);
+  final adaptive = raw.where(_isAdaptiveHlsCandidate).take(6).toList();
+  for (var offset = 0; offset < adaptive.length; offset += 2) {
+    cancellation?.throwIfCancelled();
+    final end = (offset + 2).clamp(0, adaptive.length);
+    final groups = await Future.wait(
+      adaptive
+          .sublist(offset, end)
+          .map((item) => _hlsVariantsForItem(item, cancellation)),
+    );
+    for (final variants in groups) {
+      result.addAll(variants);
+    }
+  }
+  final unique = <String, Map<String, dynamic>>{};
+  for (final item in result) {
+    final url = '${item['url'] ?? ''}';
+    final quality = '${item['quality'] ?? ''}';
+    unique.putIfAbsent('$url|$quality', () => item);
+  }
+  return unique.values.take(120).toList(growable: false);
+}
+
+bool _isAdaptiveHlsCandidate(Map<String, dynamic> item) {
+  final url = '${item['url'] ?? ''}'.toLowerCase();
+  final quality = '${item['quality'] ?? item['title'] ?? ''}'.toLowerCase();
+  return url.contains('.m3u8') &&
+      (quality.isEmpty ||
+          quality.contains('auto') ||
+          quality.contains('adaptive') ||
+          quality.contains('unknown'));
+}
+
+Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
+  Map<String, dynamic> item,
+  WebProviderCancellation? cancellation,
+) async {
+  cancellation?.throwIfCancelled();
+  final uri = safePublicHttpsUri(item['url']);
+  if (uri == null) return const [];
+  try {
+    final response = await _safeAddonRequest(
+      {
+        'url': uri.toString(),
+        'options': {
+          'method': 'GET',
+          'headers': item['headers'] is Map ? item['headers'] : const {},
+        },
+      },
+      connectTimeout: const Duration(seconds: 4),
+      receiveTimeout: const Duration(seconds: 4),
+      overallTimeout: const Duration(seconds: 6),
+      maximumResponseBytes: 512 * 1024,
+      cancellation: cancellation,
+    );
+    final status = response['status'] as int? ?? 0;
+    if (status < 200 || status >= 300) return const [];
+    return expandHlsResultVariants(
+      item,
+      '${response['body'] ?? ''}',
+      Uri.parse('${response['url'] ?? uri}'),
+    );
+  } catch (_) {
+    // A media playlist, unavailable master, or failed variant lookup leaves
+    // the original Auto stream intact and selectable.
+    return const [];
+  }
+}
+
+String _variantTitle(String original, String quality) {
+  final auto = RegExp(r'\b(auto|adaptive|unknown)\b', caseSensitive: false);
+  return auto.hasMatch(original)
+      ? original.replaceFirst(auto, quality)
+      : '$original / $quality';
+}
+
+Future<List<Map<String, dynamic>>> _runProviderIsolate(
+  Map<String, Object?> input, {
+  required Duration timeout,
+  WebProviderCancellation? cancellation,
+}) async {
+  cancellation?.throwIfCancelled();
+  final responses = ReceivePort();
+  final errors = ReceivePort();
+  final completed = Completer<List<Map<String, dynamic>>>();
+  Isolate? isolate;
+  StreamSubscription<dynamic>? responseSubscription;
+  StreamSubscription<dynamic>? errorSubscription;
+  Timer? deadline;
+  void Function()? removeCancellationListener;
+  try {
+    removeCancellationListener = cancellation?.addListener(() {
+      if (!completed.isCompleted) {
+        completed.completeError(const WebProviderSearchCancelled());
+      }
+    });
+    isolate = await Isolate.spawn<List<Object?>>(
+      _providerIsolateEntry,
+      [responses.sendPort, input],
+      onError: errors.sendPort,
+      errorsAreFatal: true,
+      paused: true,
+      debugName: 'TetoTV provider ${input['id']}',
+    );
+    responseSubscription = responses.listen((dynamic message) {
+      if (completed.isCompleted || message is! Map) return;
+      if (message['ok'] != true) {
+        completed.completeError(
+          StateError('${message['error'] ?? 'Provider failed'}'),
+        );
+        return;
+      }
+      final raw = message['result'];
+      final result = <Map<String, dynamic>>[];
+      if (raw is List) {
+        for (final item in raw) {
+          if (item is Map) {
+            result.add(item.map((key, value) => MapEntry('$key', value)));
+          }
+        }
+      }
+      completed.complete(result);
+    });
+    errorSubscription = errors.listen((dynamic message) {
+      if (completed.isCompleted) return;
+      final error = message is List && message.isNotEmpty
+          ? message.first
+          : message;
+      completed.completeError(StateError('$error'));
+    });
+    deadline = Timer(timeout, () {
+      if (!completed.isCompleted) {
+        completed.completeError(
+          TimeoutException(
+            'Provider exceeded its ${timeout.inSeconds}-second runtime limit.',
+            timeout,
+          ),
+        );
+      }
+    });
+    final pauseCapability = isolate.pauseCapability;
+    if (pauseCapability != null) isolate.resume(pauseCapability);
+    return await completed.future;
+  } finally {
+    removeCancellationListener?.call();
+    deadline?.cancel();
+    isolate?.kill(priority: Isolate.immediate);
+    await responseSubscription?.cancel();
+    await errorSubscription?.cancel();
+    responses.close();
+    errors.close();
+  }
+}
+
+void _providerIsolateEntry(List<Object?> message) {
+  final port = message[0] as SendPort;
+  final rawInput = message[1] as Map;
+  final input = rawInput.map<String, Object?>(
+    (key, value) => MapEntry('$key', value),
+  );
+  unawaited(() async {
+    try {
+      final result = await _executeProvider(input);
+      port.send({'ok': true, 'result': result});
+    } catch (error) {
+      port.send({'ok': false, 'error': error.toString()});
+    }
+  }());
+}
 
 Future<List<Map<String, dynamic>>> _executeProvider(
   Map<String, Object?> input,
@@ -189,7 +523,9 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const settings = typeof provider.getSettings === 'function'
             ? ((await provider.getSettings()) || {}) : {};
           const titles = ${jsonEncode([input['title'], ...((input['titles'] as List?) ?? const [])])}
-            .filter(Boolean).slice(0, 8);
+            .filter(Boolean).filter((title, index, all) =>
+              all.findIndex(other => String(other).toLowerCase() === String(title).toLowerCase()) === index
+            ).slice(0, 5);
           const episodeNumber = ${input['episode']};
           const media = {
             id: ${input['anilistId']},
@@ -285,7 +621,10 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 if (ranked.length && (!selected || ranked[0].points > selected.points)) {
                   selected = ranked[0];
                 }
-                if (selected && selected.points >= 700) break;
+                // A provider's own ordered search result is usually more
+                // useful than repeatedly querying every title alias. Continue
+                // only when the match is weak enough to justify another call.
+                if (selected && selected.points >= 500) break;
               } catch (error) { errors.push(String(error && error.message || error)); }
             }
             if (!selected) continue;
@@ -304,7 +643,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (!episode) continue;
             foundEpisode = true;
             let servers = Array.isArray(settings.episodeServers) && settings.episodeServers.length
-              ? settings.episodeServers.slice(0, 12) : [null];
+              ? settings.episodeServers.slice(0, 6) : ['default'];
             const serverName = server => server && typeof server === 'object'
               ? String(server.name || server.label || server.id || server.value || 'Default')
               : String(server || 'Default');
@@ -314,21 +653,33 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (settings.supportsDub && dubbedServers.length) {
               servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(serverName(server)));
             }
-            for (const server of servers) {
+            // Resolve independent servers together. A dead mirror must not
+            // prevent a healthy mirror later in the provider's server list
+            // from being discovered before the provider deadline.
+            await Promise.all(servers.map(async server => {
               try {
                 let resolved = null;
-                const attempts = [
-                  () => provider.findEpisodeServer(episode, serverValue(server)),
-                  () => provider.findEpisodeServer(episode.id || episode.url || episode, serverValue(server)),
-                  () => provider.findEpisodeServer(episode),
-                ];
-                for (const attempt of attempts) {
-                  try {
-                    resolved = await attempt();
-                    if (resolved) break;
-                  } catch (error) { errors.push(String(error && error.message || error)); }
+                try {
+                  resolved = await provider.findEpisodeServer(episode, serverValue(server));
+                } catch (error) {
+                  const message = String(error && error.message || error);
+                  errors.push(message);
+                  // Seanime's current contract passes the episode object. A
+                  // small number of legacy providers expect its ID instead;
+                  // retry only argument-shape errors so network failures are
+                  // not repeated three times.
+                  if (/argument|undefined|null|property|\\bid\\b|object/i.test(message)) {
+                    try {
+                      resolved = await provider.findEpisodeServer(
+                        episode.id || episode.url || episode,
+                        serverValue(server),
+                      );
+                    } catch (fallbackError) {
+                      errors.push(String(fallbackError && fallbackError.message || fallbackError));
+                    }
+                  }
                 }
-                if (!resolved) continue;
+                if (!resolved) return;
                 const serverHeaders = resolved && resolved.headers && typeof resolved.headers === 'object'
                   ? resolved.headers : {};
                 let sources = listFrom(resolved, ['videoSources', 'sources', 'streams']);
@@ -363,7 +714,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   });
                 }
               } catch (error) { errors.push(String(error && error.message || error)); }
-            }
+            }));
           }
           if (!output.length) {
             const detail = errors.length ? ' Last error: ' + errors[errors.length - 1] : '';
@@ -379,14 +730,22 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     ''', sourceUrl: 'tetotv://provider-runner.js');
     if (invocation.isError) throw StateError(invocation.stringResult);
     await runtime.dispatch();
-    return await completed.future.timeout(const Duration(seconds: 34));
+    return await completed.future.timeout(const Duration(seconds: 18));
   } finally {
     disposed = true;
     runtime.dispose();
   }
 }
 
-Future<Map<String, Object?>> _safeAddonRequest(dynamic raw) async {
+Future<Map<String, Object?>> _safeAddonRequest(
+  dynamic raw, {
+  Duration connectTimeout = const Duration(seconds: 6),
+  Duration receiveTimeout = const Duration(seconds: 8),
+  Duration? overallTimeout,
+  int maximumResponseBytes = 2 * 1024 * 1024,
+  WebProviderCancellation? cancellation,
+}) async {
+  cancellation?.throwIfCancelled();
   if (raw is! Map) throw const FormatException('Invalid provider request.');
   final uri = safePublicHttpsUri(raw['url']);
   if (uri == null) {
@@ -394,6 +753,7 @@ Future<Map<String, Object?>> _safeAddonRequest(dynamic raw) async {
   }
   var currentUri = uri;
   await validatePublicNetworkTarget(currentUri);
+  cancellation?.throwIfCancelled();
   final options = raw['options'] is Map ? raw['options'] as Map : const {};
   final method = '${options['method'] ?? 'GET'}'.toUpperCase();
   if (method != 'GET' && method != 'POST' && method != 'HEAD') {
@@ -418,37 +778,58 @@ Future<Map<String, Object?>> _safeAddonRequest(dynamic raw) async {
   }
   final dio = Dio(
     BaseOptions(
-      connectTimeout: const Duration(seconds: 7),
-      receiveTimeout: const Duration(seconds: 10),
+      connectTimeout: connectTimeout,
+      receiveTimeout: receiveTimeout,
       responseType: ResponseType.plain,
       validateStatus: (_) => true,
       followRedirects: false,
     ),
   );
+  final cancelToken = CancelToken();
+  final removeCancellationListener = cancellation?.addListener(
+    () => cancelToken.cancel(const WebProviderSearchCancelled()),
+  );
+  final overallDeadline = overallTimeout == null
+      ? null
+      : Timer(
+          overallTimeout,
+          () => cancelToken.cancel('Provider request deadline exceeded.'),
+        );
   Response<ResponseBody>? response;
   String responseText = '';
-  for (var redirect = 0; redirect < 4; redirect++) {
-    response = await dio.request<ResponseBody>(
-      currentUri.toString(),
-      data: body,
-      options: Options(
-        method: method,
-        headers: headers,
-        responseType: ResponseType.stream,
-      ),
-    );
-    responseText = await _boundedResponseText(response.data, 2 * 1024 * 1024);
-    final status = response.statusCode ?? 0;
-    final location = response.headers.value(HttpHeaders.locationHeader);
-    if (status < 300 || status >= 400 || location == null) break;
-    final redirectUri = safePublicHttpsUri(
-      currentUri.resolve(location).toString(),
-    );
-    if (redirectUri == null) {
-      throw const FormatException('Provider redirect was not public HTTPS.');
+  try {
+    for (var redirect = 0; redirect < 4; redirect++) {
+      cancellation?.throwIfCancelled();
+      response = await dio.request<ResponseBody>(
+        currentUri.toString(),
+        data: body,
+        cancelToken: cancelToken,
+        options: Options(
+          method: method,
+          headers: headers,
+          responseType: ResponseType.stream,
+        ),
+      );
+      responseText = await _boundedResponseText(
+        response.data,
+        maximumResponseBytes,
+      );
+      final status = response.statusCode ?? 0;
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      if (status < 300 || status >= 400 || location == null) break;
+      final redirectUri = safePublicHttpsUri(
+        currentUri.resolve(location).toString(),
+      );
+      if (redirectUri == null) {
+        throw const FormatException('Provider redirect was not public HTTPS.');
+      }
+      currentUri = redirectUri;
+      await validatePublicNetworkTarget(currentUri);
+      cancellation?.throwIfCancelled();
     }
-    currentUri = redirectUri;
-    await validatePublicNetworkTarget(currentUri);
+  } finally {
+    overallDeadline?.cancel();
+    removeCancellationListener?.call();
   }
   if (response == null) throw const HttpException('No provider response.');
   return {

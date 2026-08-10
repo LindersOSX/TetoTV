@@ -161,9 +161,25 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                   height: posterWidth * 1.5,
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(12),
-                                    child: NetworkArtwork(
-                                      url: anime.coverImageUrl,
-                                      cacheWidth: 240,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        NetworkArtwork(
+                                          url: anime.coverImageUrl,
+                                          cacheWidth: 240,
+                                        ),
+                                        if (animeAiringStatusLabel(
+                                              anime.status,
+                                            ) !=
+                                            null)
+                                          Positioned(
+                                            left: 7,
+                                            top: 7,
+                                            child: PosterAiringStatusBadge(
+                                              status: anime.status,
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -274,6 +290,17 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                               ? 760
                                               : (spacious ? 540 : 360),
                                         ),
+                                        if (animeAiringStatusLabel(
+                                              anime.status,
+                                            ) !=
+                                            null)
+                                          Positioned(
+                                            left: wide ? 18 : 9,
+                                            top: wide ? 18 : 9,
+                                            child: PosterAiringStatusBadge(
+                                              status: anime.status,
+                                            ),
+                                          ),
                                         if (anime.score != null ||
                                             anime.seasonYear != null ||
                                             anime.durationMinutes != null)

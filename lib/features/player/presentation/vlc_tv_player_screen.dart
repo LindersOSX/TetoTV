@@ -10,6 +10,10 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
+import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
+import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
+import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_stream_resolver.dart';
@@ -92,7 +96,13 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
   final String title;
   final DebridService debridService;
   final PlaybackLaunch launch;
-  final VoidCallback onUseMpv;
+  final void Function(
+    Duration position,
+    StreamReady stream,
+    ReleaseCandidate release,
+    List<PlaybackStreamOption> directStreams,
+  )
+  onUseMpv;
   final Duration? initialPosition;
   final String? subtitle;
   final int? anilistMediaId;
@@ -135,6 +145,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   DateTime _lastMediaSessionUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   late String _source;
   late ReleaseCandidate _release;
+  late StreamReady _currentStream;
+  List<PlaybackStreamOption> _directStreamOptions = const [];
+  StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
+  final Set<String> _failedDirectStreamUris = {};
   int _alternativeIndex = 0;
   List<SkipSegment> _skips = const [];
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
@@ -143,6 +157,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   double _subtitleSize = 34;
   int _subtitleDelayMs = 0;
   int _audioDelayMs = 0;
+  int _videoAspectIndex = 0;
   Duration? _queuedSeekTarget;
   bool _seekInProgress = false;
   int _seekBackSeconds = 10;
@@ -156,15 +171,27 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   TapDownDetails? _touchDoubleTapDetails;
   bool _reportedPlaybackSuccess = false;
 
+  bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
+    current: _currentStream,
+    options: _directStreamOptions,
+    failedUris: _failedDirectStreamUris,
+  );
+
   @override
   void initState() {
     super.initState();
     _source = widget.source;
     _release = widget.launch.selectedRelease;
+    _currentStream = widget.launch.stream;
+    _directStreamOptions = mergePlaybackStreamOptions([
+      PlaybackStreamOption(stream: _currentStream, release: _release),
+      ...widget.launch.directAlternatives,
+    ], const []);
     _mediaActionSubscription = AndroidTvBridge.instance.mediaActions.listen(
       _handleMediaAction,
     );
     unawaited(_bootstrap());
+    unawaited(_startWebSourceDiscovery());
     _scheduleControlsHide();
   }
 
@@ -217,7 +244,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   VlcPlayerController _createController(String source, VlcDecoderMode mode) {
-    final streamHeaders = widget.launch.stream.headers;
+    final streamHeaders = _currentStream.headers;
     final userAgent =
         streamHeaders['User-Agent'] ??
         streamHeaders['user-agent'] ??
@@ -351,7 +378,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _applyExternalSubtitle(VlcPlayerController controller) async {
-    final subtitle = widget.subtitle;
+    final subtitle =
+        _currentStream.externalSubtitle?.toString() ?? widget.subtitle;
     if (subtitle == null || subtitle.isEmpty) return;
     try {
       if (subtitle.startsWith('asset:///')) {
@@ -460,15 +488,29 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       unawaited(_persistPlayback(value.position));
       unawaited(_updateMediaSession());
       _checkSkips(value.position);
-      final ratio =
-          value.position.inMilliseconds / value.duration.inMilliseconds;
-      if (!_syncHandled && ratio >= .9) {
+      final threshold = ref
+          .read(settingsPreferencesProvider)
+          .trackerUpdateThreshold;
+      if (!_syncHandled &&
+          widget.episode != null &&
+          (widget.anilistMediaId != null || widget.malMediaId != null) &&
+          trackerUpdateThresholdReached(
+            position: value.position,
+            duration: value.duration,
+            threshold: threshold,
+          )) {
         _syncHandled = true;
         unawaited(_syncProgress());
       }
     }
     if (value.isEnded && !_completionHandled) {
       _completionHandled = true;
+      if (!_syncHandled &&
+          widget.episode != null &&
+          (widget.anilistMediaId != null || widget.malMediaId != null)) {
+        _syncHandled = true;
+        unawaited(_syncProgress());
+      }
       unawaited(_offerNextEpisode());
     }
   }
@@ -492,6 +534,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _handleEngineFailure(String message) async {
     if (_restarting || _failingOver) return;
+    if (_hasUntriedDirectStream) {
+      await _tryNextStream(message);
+      return;
+    }
     if (_decoderMode != VlcDecoderMode.software) {
       await _restart(
         VlcDecoderMode.software,
@@ -499,17 +545,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       );
       return;
     }
-    if (_alternativeIndex < widget.launch.alternatives.length) {
-      await _tryNextStream(message);
-      return;
-    }
-    if (mounted) setState(() => _playbackError = message);
+    await _tryNextStream(message);
     await _recordEngineFailure(message);
   }
 
   Future<void> _recordEngineSuccess() async {
     final database = ref.read(tetoTvDatabaseProvider);
-    if (widget.launch.stream.providerId case final providerId?) {
+    if (_currentStream.providerId case final providerId?) {
       await database.recordProviderSuccess(providerId);
       return;
     }
@@ -519,7 +561,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _recordEngineFailure(String reason) async {
     final database = ref.read(tetoTvDatabaseProvider);
-    if (widget.launch.stream.providerId case final providerId?) {
+    if (_currentStream.providerId case final providerId?) {
       await database.recordProviderFailure(providerId, reason);
     } else {
       final device = await AndroidTvBridge.instance.getDeviceProfile();
@@ -702,7 +744,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   void _focusSkipOnce(SkipSegment segment) {
     final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
     if (!_autoFocusedSkipSegments.add(key)) return;
-    _showControls();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _activeSkip == segment) _skipFocus.requestFocus();
     });
@@ -816,6 +857,20 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
+  Future<void> _cyclePicture() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    const values = ['', '16:9', '4:3'];
+    const labels = ['Picture: Original', 'Picture: 16:9', 'Picture: 4:3'];
+    _videoAspectIndex = (_videoAspectIndex + 1) % values.length;
+    try {
+      await controller.setVideoAspectRatio(values[_videoAspectIndex]);
+      _showMessage(labels[_videoAspectIndex]);
+    } catch (_) {
+      _showMessage('This device cannot change picture mode');
+    }
+  }
+
   Future<void> _saveTrackPreferences({
     String? audioLabel,
     String? subtitleLabel,
@@ -890,13 +945,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _tryNextStream(String reason) async {
-    if (_failingOver ||
-        _alternativeIndex >= widget.launch.alternatives.length) {
-      if (mounted) setState(() => _playbackError = reason);
-      return;
-    }
+    if (_failingOver) return;
     _failingOver = true;
     try {
+      if (await _switchToNextDirectStream()) return;
       while (_alternativeIndex < widget.launch.alternatives.length) {
         final candidate = widget.launch.alternatives[_alternativeIndex++];
         _showMessage('Trying another compatible stream...');
@@ -904,6 +956,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         if (ready == null) continue;
         _source = ready.uri.toString();
         _release = candidate;
+        _currentStream = ready;
         _preferences = _preferences.copyWith(
           subtitleEnabled: subtitlesEnabledByDefault(candidate),
         );
@@ -919,6 +972,42 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     } finally {
       _failingOver = false;
     }
+  }
+
+  Future<bool> _switchToNextDirectStream() async {
+    if (!_currentStream.isWebStream) return false;
+    _failedDirectStreamUris.add(_currentStream.uri.toString());
+    final candidates = _directStreamOptions.where(
+      (option) =>
+          option.stream.isWebStream &&
+          !_failedDirectStreamUris.contains(option.stream.uri.toString()),
+    );
+    for (final candidate in candidates) {
+      final requestedUri = candidate.stream.uri;
+      _failedDirectStreamUris.add(requestedUri.toString());
+      final option = await _preflightDirectStream(candidate);
+      if (option == null) continue;
+      if (validatedRedirectWasAlreadyAttempted(
+        requestedUri: requestedUri,
+        validatedUri: option.stream.uri,
+        attemptedUris: _failedDirectStreamUris,
+      )) {
+        continue;
+      }
+      _failedDirectStreamUris.add(option.stream.uri.toString());
+      _currentStream = option.stream;
+      _release = option.release;
+      _source = option.stream.uri.toString();
+      _decoderMode = _releaseRequiresSoftware(option.release)
+          ? VlcDecoderMode.software
+          : VlcDecoderMode.hardwareCopy;
+      await _restart(
+        _decoderMode,
+        reason: 'Recovered with ${playbackStreamOptionLabel(option)}',
+      );
+      return true;
+    }
+    return false;
   }
 
   Future<void> _returnToStreamPicker() async {
@@ -998,6 +1087,133 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     );
   }
 
+  Stream<WebStreamSearchProgress> _webSourceSearch({bool refresh = false}) =>
+      ref
+          .read(webStreamAggregatorProvider)
+          .watchSearchIncrementally(
+            widget.launch.episode,
+            refresh: refresh,
+          );
+
+  Future<void> _startWebSourceDiscovery({bool restart = false}) async {
+    if (!_currentStream.isWebStream ||
+        !ref.read(settingsPreferencesProvider).webStreamsEnabled) {
+      return;
+    }
+    if (_sourceDiscoverySubscription != null && !restart) return;
+    await _sourceDiscoverySubscription?.cancel();
+    _sourceDiscoverySubscription = _webSourceSearch().listen((progress) {
+      if (!mounted) return;
+      final merged = mergePlaybackStreamOptions(
+        _directStreamOptions,
+        progress.aggregation.streams.map(playbackOptionForWebStream),
+      );
+      final before = _directStreamOptions
+          .map((option) => option.stream.uri.toString())
+          .join('\n');
+      final after = merged
+          .map((option) => option.stream.uri.toString())
+          .join('\n');
+      if (before != after) setState(() => _directStreamOptions = merged);
+    }, onError: (_) {});
+  }
+
+  Future<PlaybackStreamOption?> _preflightDirectStream(
+    PlaybackStreamOption option,
+  ) async {
+    if (!option.stream.isWebStream) return option;
+    _showMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    try {
+      final validated = await const WebStreamValidator().validate(
+        option.stream.uri,
+        option.stream.headers,
+      );
+      final validatedOption = PlaybackStreamOption(
+        stream: StreamReady(
+          uri: validated.uri,
+          displayName: option.stream.displayName,
+          headers: validated.headers,
+          externalSubtitle: option.stream.externalSubtitle,
+          providerId: option.stream.providerId,
+          providerName: option.stream.providerName,
+        ),
+        release: option.release,
+      );
+      _directStreamOptions = replaceValidatedPlaybackStreamOption(
+        options: _directStreamOptions,
+        requestedUri: option.stream.uri,
+        validated: validatedOption,
+      );
+      return validatedOption;
+    } catch (error) {
+      _failedDirectStreamUris.add(option.stream.uri.toString());
+      _showMessage(
+        'That source is unavailable: '
+        "${error.toString().replaceFirst('FormatException: ', '')}",
+      );
+      return null;
+    }
+  }
+
+  Future<void> _openStreamSourcePicker() async {
+    _controlsTimer?.cancel();
+    final selected = await showPlayerStreamSourcePicker(
+      context: context,
+      initialOptions: _directStreamOptions,
+      selectedUri: _currentStream.uri,
+      onOptionsChanged: (options) {
+        if (mounted) setState(() => _directStreamOptions = options);
+      },
+      discover:
+          _currentStream.isWebStream &&
+              ref.read(settingsPreferencesProvider).webStreamsEnabled
+          ? _webSourceSearch
+          : null,
+    );
+    if (!mounted) return;
+    if (selected == null || selected.stream.uri == _currentStream.uri) {
+      _showControls();
+      return;
+    }
+    final option = await _preflightDirectStream(selected);
+    if (!mounted || option == null) {
+      _showControls();
+      return;
+    }
+    _failedDirectStreamUris.clear();
+    _currentStream = option.stream;
+    _source = option.stream.uri.toString();
+    _release = option.release;
+    _directStreamOptions = mergePlaybackStreamOptions(
+      [option],
+      _directStreamOptions.where(
+        (candidate) => candidate.stream.uri != selected.stream.uri,
+      ),
+    );
+    _decoderMode = _releaseRequiresSoftware(option.release)
+        ? VlcDecoderMode.software
+        : VlcDecoderMode.hardwareCopy;
+    await _restart(
+      _decoderMode,
+      reason: 'Playing ${playbackStreamOptionLabel(option)}',
+    );
+    _showControls();
+  }
+
+  // TODO: Remove after older persisted player-route labels are migrated.
+  // ignore: unused_element
+  static String _streamOptionLabel(PlaybackStreamOption option) {
+    final quality = option.release.quality?.trim();
+    final provider =
+        option.stream.providerName ??
+        option.release.provider ??
+        option.release.sourceId;
+    return [
+      if (quality != null && quality.isNotEmpty) quality,
+      provider,
+    ].join(' • ');
+  }
+
   Future<void> _openOptions() async {
     _controlsTimer?.cancel();
     final result = await showDialog<_VlcMenuResult>(
@@ -1011,6 +1227,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         audioDelayMs: _audioDelayMs,
         hasAlternateStreams:
             _alternativeIndex < widget.launch.alternatives.length,
+        hasDirectSources: _currentStream.isWebStream,
       ),
     );
     if (!mounted || result == null) {
@@ -1045,8 +1262,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         await _restart(_decoderMode, reason: 'Stream restarted');
       case 'nextStream':
         await _tryNextStream('Stream changed manually');
+      case 'sources':
+        await _openStreamSourcePicker();
       case 'mpv':
-        widget.onUseMpv();
+        widget.onUseMpv(
+          _controller?.value.position ?? Duration.zero,
+          _currentStream,
+          _release,
+          List.unmodifiable(_directStreamOptions),
+        );
     }
     _scheduleControlsHide();
   }
@@ -1189,26 +1413,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final wasPlaying = controller?.value.isPlaying == true;
     if (wasPlaying) await controller?.pause();
     if (!mounted) return;
-    final exit = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
-        title: const Text('Exit video?'),
-        content: const Text('Your current playback position will be saved.'),
-        actions: [
-          FilledButton(
-            autofocus: true,
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Continue watching'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Exit video'),
-          ),
-        ],
-      ),
-    );
+    final exit = await showPlayerExitConfirmation(context);
     _confirmingExit = false;
     if (!mounted) return;
     if (exit == true) {
@@ -1243,6 +1448,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _initializationWatchdog?.cancel();
     _videoWatchdog?.cancel();
     _trackDiscoveryTimer?.cancel();
+    _sourceDiscoverySubscription?.cancel();
     _rootFocus.dispose();
     _playFocus.dispose();
     _skipFocus.dispose();
@@ -1357,13 +1563,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                       child: _VlcPlayerChrome(
                         controller: controller,
                         title: widget.title,
-                        service: widget.debridService,
+                        streamLabel:
+                            _currentStream.providerName ??
+                            '${widget.debridService.displayName} stream',
                         playFocusNode: _playFocus,
-                        skipFocusNode: _skipFocus,
                         seekBackSeconds: _seekBackSeconds,
                         seekForwardSeconds: _seekForwardSeconds,
-                        canSkip: _canSkip,
-                        skipLabel: _activeSkip?.actionLabel,
                         mode: _decoderMode,
                         onRewind: () => unawaited(
                           _seekBy(Duration(seconds: -_seekBackSeconds)),
@@ -1372,10 +1577,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                         onForward: () => unawaited(
                           _seekBy(Duration(seconds: _seekForwardSeconds)),
                         ),
-                        onSkip: () => unawaited(_skipCurrentSegment()),
                         onAudio: () => unawaited(_openAudioTrackPicker()),
                         onSubtitles: () =>
                             unawaited(_openSubtitleTrackPicker()),
+                        onPicture: () => unawaited(_cyclePicture()),
                         onFixVideo: () => unawaited(
                           _decoderMode == VlcDecoderMode.software
                               ? _restart(
@@ -1387,11 +1592,28 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                                   reason: 'VLC software decoding enabled',
                                 ),
                         ),
+                        onSources: _currentStream.isWebStream
+                            ? () => unawaited(_openStreamSourcePicker())
+                            : null,
                         onOptions: () => unawaited(_openOptions()),
                       ),
                     ),
                   ),
                 ),
+                if (_canSkip && _activeSkip != null)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    right: MediaQuery.sizeOf(context).width < 720 ? 16 : 38,
+                    bottom: _controlsVisible
+                        ? (MediaQuery.sizeOf(context).height < 480 ? 132 : 184)
+                        : 26,
+                    child: TetoSkipSegmentOverlay(
+                      focusNode: _skipFocus,
+                      label: _activeSkip!.actionLabel,
+                      onPressed: () => unawaited(_skipCurrentSegment()),
+                    ),
+                  ),
                 if (_playbackError case final error?)
                   Positioned(
                     left: 36,
@@ -1402,7 +1624,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                       onRetry: () => unawaited(_restart(_decoderMode)),
                       onNextStream: () =>
                           unawaited(_tryNextStream('Selected after failure')),
-                      onUseMpv: widget.onUseMpv,
+                      onUseMpv: () => widget.onUseMpv(
+                        controller?.value.position ?? Duration.zero,
+                        _currentStream,
+                        _release,
+                        List.unmodifiable(_directStreamOptions),
+                      ),
                       onChooseStream: () => unawaited(_returnToStreamPicker()),
                     ),
                   ),
@@ -1439,55 +1666,64 @@ class _VlcPlayerChrome extends StatelessWidget {
   const _VlcPlayerChrome({
     required this.controller,
     required this.title,
-    required this.service,
+    required this.streamLabel,
     required this.playFocusNode,
-    required this.skipFocusNode,
     required this.seekBackSeconds,
     required this.seekForwardSeconds,
-    required this.canSkip,
-    required this.skipLabel,
     required this.mode,
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
-    required this.onSkip,
     required this.onAudio,
     required this.onSubtitles,
+    required this.onPicture,
     required this.onFixVideo,
+    this.onSources,
     required this.onOptions,
   });
 
   final VlcPlayerController? controller;
   final String title;
-  final DebridService service;
+  final String streamLabel;
   final FocusNode playFocusNode;
-  final FocusNode skipFocusNode;
   final int seekBackSeconds;
   final int seekForwardSeconds;
-  final bool canSkip;
-  final String? skipLabel;
   final VlcDecoderMode mode;
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
-  final VoidCallback onSkip;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
+  final VoidCallback onPicture;
   final VoidCallback onFixVideo;
+  final VoidCallback? onSources;
   final VoidCallback onOptions;
 
   @override
   Widget build(BuildContext context) {
+    final compact =
+        MediaQuery.sizeOf(context).width < 720 ||
+        MediaQuery.sizeOf(context).height < 480;
     return Align(
       alignment: Alignment.bottomCenter,
       child: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(28, 0, 28, 24),
+        minimum: EdgeInsets.fromLTRB(
+          compact ? 12 : 28,
+          0,
+          compact ? 12 : 28,
+          compact ? 10 : 24,
+        ),
         child: Container(
           key: const ValueKey('vlc-bottom-player-chrome'),
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 13),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 12 : 16,
+            compact ? 9 : 12,
+            compact ? 12 : 16,
+            compact ? 9 : 13,
+          ),
           decoration: BoxDecoration(
-            color: const Color(0xF5080808),
+            color: const Color(0xD6080808),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
             boxShadow: const [
@@ -1509,16 +1745,20 @@ class _VlcPlayerChrome extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.headlineSmall,
+                      style: compact
+                          ? Theme.of(context).textTheme.titleMedium
+                          : Theme.of(context).textTheme.headlineSmall,
                     ),
                   ),
-                  _EngineBadge(
-                    text: mode == VlcDecoderMode.software
-                        ? 'VLC software'
-                        : 'VLC compatibility',
-                  ),
-                  const SizedBox(width: 10),
-                  _EngineBadge(text: '${service.displayName} stream'),
+                  if (!compact) ...[
+                    _EngineBadge(
+                      text: mode == VlcDecoderMode.software
+                          ? 'VLC software'
+                          : 'VLC compatibility',
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  _EngineBadge(text: streamLabel),
                 ],
               ),
               const SizedBox(height: 10),
@@ -1561,16 +1801,6 @@ class _VlcPlayerChrome extends StatelessWidget {
                       label: 'Forward ${seekForwardSeconds}s',
                       onPressed: onForward,
                     ),
-                    if (canSkip) ...[
-                      const SizedBox(width: 8),
-                      _VlcControl(
-                        focusNode: skipFocusNode,
-                        icon: Icons.skip_next_rounded,
-                        label: skipLabel ?? 'Skip',
-                        primary: true,
-                        onPressed: onSkip,
-                      ),
-                    ],
                     const SizedBox(width: 18),
                     _VlcControl(
                       icon: Icons.audiotrack_rounded,
@@ -1585,10 +1815,24 @@ class _VlcPlayerChrome extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     _VlcControl(
+                      icon: Icons.aspect_ratio_rounded,
+                      label: 'Picture',
+                      onPressed: onPicture,
+                    ),
+                    const SizedBox(width: 8),
+                    _VlcControl(
                       icon: Icons.build_circle_outlined,
                       label: 'Fix video',
                       onPressed: onFixVideo,
                     ),
+                    if (onSources != null) ...[
+                      const SizedBox(width: 8),
+                      _VlcControl(
+                        icon: Icons.video_library_rounded,
+                        label: 'Sources',
+                        onPressed: onSources!,
+                      ),
+                    ],
                     const SizedBox(width: 18),
                     _VlcControl(
                       icon: Icons.tune_rounded,
@@ -1623,11 +1867,13 @@ class _VlcPlayerChrome extends StatelessWidget {
                               '${_formatDuration(value.position)}  /  '
                               '${_formatDuration(value.duration)}',
                             ),
-                            const Spacer(),
-                            const Text(
-                              'VLC compatibility renderer  •  J/L seek  •  C decoder',
-                              style: TextStyle(color: AppColors.textMuted),
-                            ),
+                            if (!compact) ...[
+                              const Spacer(),
+                              const Text(
+                                'VLC renderer  |  J/L seek  |  C decoder',
+                                style: TextStyle(color: AppColors.textMuted),
+                              ),
+                            ],
                           ],
                         ),
                       ],
@@ -1649,6 +1895,7 @@ class _EngineBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: const BoxConstraints(maxWidth: 170),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.accent.withValues(alpha: .18),
@@ -1657,6 +1904,8 @@ class _EngineBadge extends StatelessWidget {
       ),
       child: Text(
         text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(
           color: AppColors.accentBright,
           fontWeight: FontWeight.w800,
@@ -1692,7 +1941,7 @@ class _VlcControl extends StatelessWidget {
       child: Container(
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 11),
-        color: primary ? AppColors.accent : const Color(0xE6161616),
+        color: primary ? AppColors.accent : const Color(0x8F242429),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1782,6 +2031,7 @@ class _VlcOptionsDialog extends StatelessWidget {
     required this.subtitleDelayMs,
     required this.audioDelayMs,
     required this.hasAlternateStreams,
+    required this.hasDirectSources,
   });
 
   final VlcDecoderMode mode;
@@ -1790,6 +2040,7 @@ class _VlcOptionsDialog extends StatelessWidget {
   final int subtitleDelayMs;
   final int audioDelayMs;
   final bool hasAlternateStreams;
+  final bool hasDirectSources;
 
   void _close(BuildContext context, String type, Object value) {
     Navigator.of(context).pop<_VlcMenuResult>((type: type, value: value));
@@ -1857,92 +2108,111 @@ class _VlcOptionsDialog extends StatelessWidget {
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: 850,
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: const Color(0xFF080808),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .65)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Playback engine',
-              style: Theme.of(context).textTheme.headlineSmall,
+      insetPadding: const EdgeInsets.all(12),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 850),
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF080808),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: AppColors.accent.withValues(alpha: .65),
+              ),
             ),
-            const SizedBox(height: 16),
-            section('DECODER', [
-              for (final decoder in VlcDecoderMode.values)
-                chip(
-                  vlcDecoderLabel(decoder),
-                  'decoder',
-                  decoder,
-                  selected: decoder == mode,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Playback engine',
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-              chip(
-                'Restart stream',
-                'retry',
-                true,
-                icon: Icons.refresh_rounded,
-              ),
-              if (hasAlternateStreams)
-                chip(
-                  'Try next stream',
-                  'nextStream',
-                  true,
-                  icon: Icons.swap_horiz_rounded,
-                ),
-              chip(
-                'Use MPV advanced',
-                'mpv',
-                true,
-                icon: Icons.video_settings_rounded,
-              ),
-            ]),
-            const SizedBox(height: 8),
-            section('SPEED', [
-              for (final rate in const [.75, 1.0, 1.25, 1.5, 2.0])
-                chip('${rate}x', 'rate', rate, selected: playbackRate == rate),
-            ]),
-            const SizedBox(height: 8),
-            section('SUBTITLE SIZE', [
-              for (final size in const [28.0, 34.0, 42.0, 50.0])
-                chip(
-                  switch (size) {
-                    28 => 'Small',
-                    34 => 'Medium',
-                    42 => 'Large',
-                    _ => 'Extra large',
-                  },
-                  'subtitleSize',
-                  size,
-                  selected: subtitleSize == size,
-                ),
-            ]),
-            const SizedBox(height: 8),
-            section('SUBTITLE DELAY', [
-              for (final delay in const [-1000, -500, 0, 500, 1000])
-                chip(
-                  '${delay}ms',
-                  'subtitleDelay',
-                  delay,
-                  selected: subtitleDelayMs == delay,
-                ),
-            ]),
-            const SizedBox(height: 8),
-            section('AUDIO DELAY', [
-              for (final delay in const [-500, -250, 0, 250, 500])
-                chip(
-                  '${delay}ms',
-                  'audioDelay',
-                  delay,
-                  selected: audioDelayMs == delay,
-                ),
-            ]),
-          ],
+                const SizedBox(height: 16),
+                section('DECODER', [
+                  for (final decoder in VlcDecoderMode.values)
+                    chip(
+                      vlcDecoderLabel(decoder),
+                      'decoder',
+                      decoder,
+                      selected: decoder == mode,
+                    ),
+                  chip(
+                    'Restart stream',
+                    'retry',
+                    true,
+                    icon: Icons.refresh_rounded,
+                  ),
+                  if (hasAlternateStreams)
+                    chip(
+                      'Try next stream',
+                      'nextStream',
+                      true,
+                      icon: Icons.swap_horiz_rounded,
+                    ),
+                  if (hasDirectSources)
+                    chip(
+                      'Sources & quality',
+                      'sources',
+                      true,
+                      icon: Icons.video_library_rounded,
+                    ),
+                  chip(
+                    'Use MPV advanced',
+                    'mpv',
+                    true,
+                    icon: Icons.video_settings_rounded,
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                section('SPEED', [
+                  for (final rate in const [.75, 1.0, 1.25, 1.5, 2.0])
+                    chip(
+                      '${rate}x',
+                      'rate',
+                      rate,
+                      selected: playbackRate == rate,
+                    ),
+                ]),
+                const SizedBox(height: 8),
+                section('SUBTITLE SIZE', [
+                  for (final size in const [28.0, 34.0, 42.0, 50.0])
+                    chip(
+                      switch (size) {
+                        28 => 'Small',
+                        34 => 'Medium',
+                        42 => 'Large',
+                        _ => 'Extra large',
+                      },
+                      'subtitleSize',
+                      size,
+                      selected: subtitleSize == size,
+                    ),
+                ]),
+                const SizedBox(height: 8),
+                section('SUBTITLE DELAY', [
+                  for (final delay in const [-1000, -500, 0, 500, 1000])
+                    chip(
+                      '${delay}ms',
+                      'subtitleDelay',
+                      delay,
+                      selected: subtitleDelayMs == delay,
+                    ),
+                ]),
+                const SizedBox(height: 8),
+                section('AUDIO DELAY', [
+                  for (final delay in const [-500, -250, 0, 250, 500])
+                    chip(
+                      '${delay}ms',
+                      'audioDelay',
+                      delay,
+                      selected: audioDelayMs == delay,
+                    ),
+                ]),
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -39,6 +39,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _trackingProviderFocus = FocusNode(
     debugLabel: 'accounts.tracking.provider',
   );
+  final _trackingThresholdFocus = FocusNode(
+    debugLabel: 'accounts.tracking.update-threshold',
+  );
   final _debridStreamsFocus = FocusNode(
     debugLabel: 'accounts.streaming.debrid',
   );
@@ -93,6 +96,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _titleLanguageFocus.dispose();
     _debridProviderFocus.dispose();
     _trackingProviderFocus.dispose();
+    _trackingThresholdFocus.dispose();
     _debridStreamsFocus.dispose();
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
@@ -261,12 +265,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown &&
           _anilistTokenFocus.context != null) {
         target = _anilistTokenFocus;
+      } else if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingThresholdFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _malFocus) {
       if (key == LogicalKeyboardKey.arrowDown &&
           _malTokenFocus.context != null) {
         target = _malTokenFocus;
+      } else if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingThresholdFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _anilistTokenFocus) {
@@ -275,7 +283,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _anilistSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _anilistFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _anilistTokenFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingThresholdFocus;
+      }
     } else if (current == _malTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft &&
@@ -286,7 +296,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _malSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
       if (key == LogicalKeyboardKey.arrowLeft) target = _malTokenFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _appearanceFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _trackingThresholdFocus;
+      }
+    } else if (current == _trackingThresholdFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        final selectedSave =
+            preferences.trackingProvider == TrackingProvider.anilist
+            ? _anilistSaveFocus
+            : _malSaveFocus;
+        target = selectedSave.context == null
+            ? selectedTrackingAction
+            : selectedSave;
+      }
     } else if (current == _setupFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.system];
@@ -727,6 +749,32 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                 TrackingProvider.anilist
                             ? _anilistSaveFocus
                             : _malSaveFocus,
+                      ),
+                      const SizedBox(height: 8),
+                      _SettingsSelection<TrackerUpdateThreshold>(
+                        focusNode: _trackingThresholdFocus,
+                        label: 'When to update episode progress',
+                        value: preferences.trackerUpdateThreshold,
+                        options: [
+                          for (final threshold in TrackerUpdateThreshold.values)
+                            _SettingsOption(
+                              value: threshold,
+                              label: threshold.displayName,
+                              detail: threshold.description,
+                            ),
+                        ],
+                        onSelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setTrackerUpdateThreshold,
+                      ),
+                      const SizedBox(height: 5),
+                      const Text(
+                        'Trackers store whole completed episodes, so the '
+                        'selected percentage marks the current episode watched.',
+                        style: TextStyle(
+                          color: AppColors.textMuted,
+                          fontSize: 11,
+                        ),
                       ),
                       const SizedBox(height: 10),
                     ],

@@ -256,7 +256,7 @@ void main() {
       ),
       isTrue,
     );
-    expect(playerControlsIdleTimeout, const Duration(seconds: 10));
+    expect(playerControlsIdleTimeout, const Duration(seconds: 5));
   });
 
   test('another key or a late Down resets double-Down detection', () {

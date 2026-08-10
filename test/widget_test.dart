@@ -84,6 +84,124 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('featured carousel rotates the title and matching metadata', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const first = AnimeSummary(
+      id: 1,
+      title: 'First Trending Show',
+      description: 'First description',
+      episodes: 12,
+      score: 7.1,
+      seasonYear: 2025,
+    );
+    const second = AnimeSummary(
+      id: 2,
+      title: 'Second Trending Show',
+      description: 'Second description',
+      episodes: 24,
+      score: 8.8,
+      seasonYear: 2026,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith((_) async => [first, second]),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('First Trending Show'), findsOneWidget);
+    expect(find.text('First description'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 8));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Second Trending Show'), findsWidgets);
+    expect(find.text('Second description'), findsOneWidget);
+    expect(find.text('First description'), findsNothing);
+  });
+
+  testWidgets('home artwork keeps a fixed height across title lengths', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const hero = AnimeSummary(
+      id: 1,
+      title: 'Hero',
+      description: 'Hero',
+      episodes: null,
+      score: null,
+    );
+    const short = AnimeSummary(
+      id: 2,
+      title: 'Short',
+      description: 'Short',
+      episodes: null,
+      score: null,
+    );
+    const long = AnimeSummary(
+      id: 3,
+      title: 'A much longer title that needs the reserved second line',
+      description: 'Long',
+      episodes: null,
+      score: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith(
+            (_) async => const [hero, short, long],
+          ),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final shortArtwork = find.byKey(const ValueKey('home-artwork-2'));
+    final longArtwork = find.byKey(const ValueKey('home-artwork-3'));
+    expect(shortArtwork, findsOneWidget);
+    expect(longArtwork, findsOneWidget);
+    expect(
+      tester.getSize(shortArtwork).height,
+      tester.getSize(longArtwork).height,
+    );
+  });
+
   testWidgets('fresh installs open setup and can skip it', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(1280, 720);

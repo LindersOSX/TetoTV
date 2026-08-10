@@ -133,6 +133,7 @@ class MainActivity : FlutterActivity() {
         val intent = Intent(this, Media3PlayerActivity::class.java).apply {
             putExtra(Media3PlayerActivity.EXTRA_SOURCE, source)
             putExtra(Media3PlayerActivity.EXTRA_TITLE, data["title"] as? String)
+            putExtra(Media3PlayerActivity.EXTRA_STREAM_LABEL, data["streamLabel"] as? String)
             putExtra(
                 Media3PlayerActivity.EXTRA_SUBTITLE_URL,
                 data["subtitleUrl"] as? String ?: data["externalSubtitle"] as? String,

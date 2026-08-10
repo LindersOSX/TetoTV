@@ -43,6 +43,7 @@ query ($userId: Int!, $status: MediaListStatus!, $page: Int!) {
       startedAt { year month day }
       media {
         episodes
+        status
         title { userPreferred english romaji }
         coverImage { extraLarge }
       }
@@ -87,6 +88,7 @@ query ($userId: Int!, $status: MediaListStatus!, $page: Int!) {
               _ => null,
             },
             startDate: _fuzzyDate(startedAt),
+            airingStatus: media['status'] as String?,
           ),
         );
       }
