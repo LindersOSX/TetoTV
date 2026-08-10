@@ -9,7 +9,7 @@ playback path, with two independent compatibility engines.
 | --- | --- | --- |
 | TV UI | Flutter Material primitives plus a custom focus layer | Full control over a branded 10-foot UI; every action is focusable and remote-driven. |
 | TV navigation | `Focus`, `FocusTraversalGroup`, `Shortcuts`, and `Actions` | Predictable D-pad behavior without depending on the deprecated Android Leanback UI library. |
-| Video | AndroidX Media3 1.10.1 `PlayerView`/`SurfaceView`, then `media_kit`/libmpv and libVLC | Media3 renders directly to a native surface by default; MPV/libass handles styled ASS and unusual codecs; VLC is the final software fallback. |
+| Video | AndroidX Media3 1.11.0 `PlayerView`/`SurfaceView`, then `media_kit`/libmpv and libVLC | Media3 renders directly to a native surface by default; MPV/libass handles styled ASS and unusual codecs; VLC is the final software fallback. |
 | State | Riverpod | Testable feature-scoped state and dependency injection. |
 | Routing | `go_router` | Declarative home, detail, auth, and player navigation. |
 | HTTP | Dio for application APIs; Media3's OkHttp data source for playback | Typed/cancelable API boundaries plus redirect, range-request, and debrid-header support in the native player. |
@@ -70,7 +70,7 @@ flowchart LR
     H -->|Uncached: download completes| I
     I --> J["Debrid-only player gate"]
     J --> R{"H.264 Hi10P or software-only release?"}
-    R -->|No| K["Native Media3 1.10.1 PlayerView / SurfaceView"]
+    R -->|No| K["Native Media3 1.11.0 PlayerView / SurfaceView"]
     R -->|Yes| K1["MPV/libass with software preference"]
     K -->|Bad stream| D
     K -->|Unsupported, no first frame, or persistently choppy| K1
@@ -107,7 +107,7 @@ distribution.
 
 ## Player behavior in this foundation
 
-Normal playback starts in `Media3PlayerActivity` with AndroidX Media3 1.10.1.
+Normal playback starts in `Media3PlayerActivity` with AndroidX Media3 1.11.0.
 Its `PlayerView` is verified at runtime to own a real `SurfaceView`; failure to
 create that surface stops the native session instead of silently returning to
 a Flutter texture. `DefaultRenderersFactory` enables decoder fallback, while a

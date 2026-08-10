@@ -10,22 +10,21 @@ currently includes:
   covering system IME, now bottom-aligned and reduced to 710 logical pixels so
   the active field remains visible, with secure clipboard autofill;
 - denser responsive layouts for 1440p and 4K televisions;
-- QR/code pairing for Real-Debrid, TorBox, AniList, and MyAnimeList;
-- optional manual Real-Debrid token entry with pre-save validation;
+- QR/code pairing for Real-Debrid, TorBox, AniList, and MAL;
 - TorBox device-code pairing plus optional API-token validation and encrypted
   account storage;
 - AllDebrid phone PIN pairing and Premiumize personal-key validation;
 - encrypted token and OAuth refresh-credential storage;
 - Real-Debrid, TorBox, AllDebrid, and Premiumize magnet, cache/download
   progress, exact file selection, and secure direct-stream clients;
-- concrete AniList GraphQL and MyAnimeList v2 list/progress repositories;
+- concrete AniList GraphQL and MAL v2 list/progress repositories;
 - live AniList trending, seasonal, search, and details screens with cached art,
   a mapping-backed Kitsu search/details fallback for AniList outages, plus
   navigable sequel, prequel, spin-off, and related-title cards;
 - advanced AniList discovery filters, a weekly airing calendar with local TV
   reminders, franchise-order pages, and navigable studio/staff/cast credits;
 - tracker-backed Watching, Planning, Completed, Dropped, and On Hold My List
-  tabs, with remote-friendly status management for AniList and MyAnimeList;
+  tabs, with remote-friendly status management for AniList and MAL;
 - thumbnail-free episode controls that keep details pages compact and fast;
 - episode-to-debrid resolution with a configurable provider or manual magnet
   fallback;
@@ -36,7 +35,7 @@ currently includes:
 - exact Stremio `fileIdx` preservation for correct episode selection inside
   batch torrents;
 - a monotonic 90%-completion tracking outbox for both trackers;
-- a device-agnostic three-tier player: native Android Media3 1.10.1 is the
+- a device-agnostic three-tier player: native Android Media3 1.11.0 is the
   default, MPV/libass handles advanced ASS and unusual-codec compatibility,
   and VLC remains the final software fallback;
 - direct native `PlayerView`/`SurfaceView` video output with an OkHttp data
@@ -69,7 +68,7 @@ currently includes:
 
 AniList supplies the primary live discovery catalog. When AniList temporarily
 suspends public API access, search and selected-title details fall back to Kitsu
-entries that contain real AniList and MyAnimeList mappings, preserving tracker
+entries that contain real AniList and MAL mappings, preserving tracker
 and playback identifiers. Local fallback content keeps the shell usable while
 offline. Player diagnostics use bundled H.264/AAC and styled ASS assets only as
 offline playback smoke tests.
@@ -86,6 +85,9 @@ offline playback smoke tests.
    [Premiumize flow](docs/PREMIUMIZE.md).
 7. Retain the [third-party playback notices](docs/THIRD_PARTY_NOTICES.md) when
    redistributing builds.
+8. Review the [privacy disclosure](docs/PRIVACY.md) and the
+   [public-release checklist](docs/PUBLIC_RELEASE_CHECKLIST.md) before sharing
+   an APK outside a private test group.
 
 Then run:
 
@@ -122,10 +124,13 @@ an OAuth access token in this JSON file. Tracker client secrets belong only in
 the pairing broker; user credentials are stored with
 `flutter_secure_storage`.
 
-Release builds do not assume a broker hostname. The first AniList or MAL QR
-attempt opens a compact broker-address setup panel unless a real HTTPS origin
-was supplied with `AUTH_BROKER_BASE_URL`. The origin must resolve to the
-deployed `broker/` service and report both providers as ready from `/health`.
+Release builds include the trusted HTTPS broker origin declared in
+`lib/core/config/app_config.dart`. Phone-assisted source entry and
+private-release update metadata are pinned to that origin. Tracker OAuth uses
+it by default and supports an explicitly saved self-hosted broker for advanced
+deployments. Client secrets and the read-only GitHub release credential are
+server-side environment variables only; they must never be compiled into an
+APK.
 
 ## Current scope
 
@@ -134,11 +139,12 @@ search, supported debrid authorization, native Media3 playback
 with MPV/libass and VLC fallbacks, and the client-side tracking/streaming flow.
 Production deployment still requires:
 
-- registered AniList and MyAnimeList OAuth applications and an HTTPS deployment
+- registered AniList and MAL OAuth applications and an HTTPS deployment
   of the included `broker/`;
 - explicit user configuration of any source repository or Stremio-compatible
   manifest, for content the user is legally authorized to access;
-- a private Android release signing key;
+- a unique protected Android release signing key with encrypted offline
+  backups;
 - codec, audio passthrough, and remote QA on the target physical TV boxes.
 
 Local release APKs are placed in `build\fire-tv`. Release builds fail when
@@ -155,11 +161,12 @@ universal release APK when the target ABI is unknown.
 ## Distribution and source policy
 
 Public builds contain no torrent index, default marketplace repository,
-preconfigured Stremio manifest, or private GitHub credential. Source
+preconfigured Stremio manifest, or GitHub credential. Source
 repositories and compatible manifests must be entered and installed explicitly
-by the user. Public GitHub releases update without an API token; an optional
-fine-grained read-only token may be stored on-device only when the release
-repository is private.
+by the user. The app checks the fixed TetoTV update broker; the broker uses a
+fine-grained, repository-scoped, Contents-read-only credential from its server
+environment to read a private release and streams only the signed universal
+APK. No update-token field or shared update secret exists on the device.
 
 Any token previously compiled into an APK, committed, or shared outside the
 device must be treated as exposed and revoked. Moving a token into encrypted
@@ -171,3 +178,8 @@ Distributors remain responsible for the media sources, branding, policies, and
 legal requirements that apply to their release. Retain
 [the third-party notices](docs/THIRD_PARTY_NOTICES.md), the in-app legal notice,
 and the Kasane Teto attribution when redistributing the app.
+
+The sideload build requests Android's package-installer permission for its
+signed self-updater. That permission is not suitable for a normal Google Play
+listing. A Play-distributed variant must remove the in-app installer and
+`REQUEST_INSTALL_PACKAGES`, then use Play's update mechanism instead.

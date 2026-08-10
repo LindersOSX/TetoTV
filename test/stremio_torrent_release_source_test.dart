@@ -109,4 +109,61 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
+
+  test('rejects an oversized untrusted stream response', () async {
+    final addonDio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data:
+                  '{"streams":[],"padding":"'
+                  '${List.filled(2049, List.filled(1024, 'x').join()).join()}"}',
+            ),
+          ),
+        ),
+      );
+    final kitsuDio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: const {
+                'data': [
+                  {
+                    'relationships': {
+                      'item': {
+                        'data': {'id': '42'},
+                      },
+                    },
+                  },
+                ],
+              },
+            ),
+          ),
+        ),
+      );
+    final source = StremioTorrentReleaseSource(
+      manifestUrl: 'https://example.com/addon/manifest.json',
+      addonDio: addonDio,
+      kitsuDio: kitsuDio,
+      targetValidator: (_) async {},
+    );
+
+    await expectLater(
+      source.search(
+        const EpisodeReference(
+          anilistMediaId: 1,
+          malMediaId: 2,
+          title: 'Example',
+          episode: 1,
+        ),
+      ),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }

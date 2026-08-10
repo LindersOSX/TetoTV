@@ -19,4 +19,16 @@ class Provider {
     expect(configured, contains('blobDomain = "https://swiftstream.top"'));
     expect(configured, isNot(contains('{{')));
   });
+
+  test('rejects configuration expansion beyond the addon payload limit', () {
+    final payload =
+        'class Provider {}\n${List.filled(100000, '{{api}}').join()}';
+
+    expect(
+      () => applyAddonConfigDefaults(payload, {
+        'api': 'https://${List.filled(2040, 'a').join()}',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }

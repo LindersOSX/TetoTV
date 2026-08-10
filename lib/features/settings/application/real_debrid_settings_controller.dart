@@ -124,13 +124,11 @@ class RealDebridSettingsController
         // A token entered in Accounts is a standalone API token. Remove any
         // older device-flow metadata so a stale refresh token cannot later
         // overwrite the newly validated manual token.
-        await Future.wait([
-          _storage.write(key: realDebridTokenStorageKey, value: token),
-          _storage.delete(key: realDebridRefreshTokenStorageKey),
-          _storage.delete(key: realDebridClientIdStorageKey),
-          _storage.delete(key: realDebridClientSecretStorageKey),
-          _storage.delete(key: realDebridAccessExpiryStorageKey),
-        ]);
+        await _storage.delete(key: realDebridRefreshTokenStorageKey);
+        await _storage.delete(key: realDebridClientIdStorageKey);
+        await _storage.delete(key: realDebridClientSecretStorageKey);
+        await _storage.delete(key: realDebridAccessExpiryStorageKey);
+        await _storage.write(key: realDebridTokenStorageKey, value: token);
       }
       state = RealDebridSettingsState(hasSavedToken: true, account: account);
       return true;
@@ -191,17 +189,18 @@ class RealDebridSettingsController
       if (expiry.isAfter(now)) return currentToken;
       rethrow;
     }
-    await Future.wait([
-      _storage.write(key: realDebridTokenStorageKey, value: tokens.accessToken),
-      _storage.write(
-        key: realDebridRefreshTokenStorageKey,
-        value: tokens.refreshToken,
-      ),
-      _storage.write(
-        key: realDebridAccessExpiryStorageKey,
-        value: tokens.expiresAt.toUtc().toIso8601String(),
-      ),
-    ]);
+    await _storage.write(
+      key: realDebridRefreshTokenStorageKey,
+      value: tokens.refreshToken,
+    );
+    await _storage.write(
+      key: realDebridTokenStorageKey,
+      value: tokens.accessToken,
+    );
+    await _storage.write(
+      key: realDebridAccessExpiryStorageKey,
+      value: tokens.expiresAt.toUtc().toIso8601String(),
+    );
     return tokens.accessToken;
   }
 }

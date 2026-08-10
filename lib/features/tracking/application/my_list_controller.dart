@@ -214,10 +214,9 @@ class _TrackingProviderListResult {
 }
 
 final trackingStatusControllerProvider =
-    StateNotifierProvider.autoDispose<
-      TrackingStatusController,
-      AsyncValue<void>
-    >((ref) => TrackingStatusController(ref));
+    StateNotifierProvider<TrackingStatusController, AsyncValue<void>>(
+      (ref) => TrackingStatusController(ref),
+    );
 
 class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
   TrackingStatusController(this._ref) : super(const AsyncData(null));
@@ -231,6 +230,7 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
       final token = await _ref
           .read(trackingTokenServiceProvider)
           .accessToken(item.provider);
+      if (!mounted) return;
       if (token == null || token.isEmpty) {
         throw StateError('${item.provider.displayName} is not connected.');
       }
@@ -238,12 +238,13 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
         item.provider,
         token,
       ).updateStatus(mediaId: item.tracked.mediaId, status: status);
+      if (!mounted) return;
       _ref.invalidate(trackingListProvider(item.tracked.status));
       _ref.invalidate(trackingListProvider(status));
       _ref.invalidate(trackingHomeProvider);
       state = const AsyncData(null);
     } catch (error, stackTrace) {
-      state = AsyncError(error, stackTrace);
+      if (mounted) state = AsyncError(error, stackTrace);
       rethrow;
     }
   }

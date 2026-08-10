@@ -97,28 +97,26 @@ class _RealDebridPairingScreenState
       // after Premium access is confirmed so unusable credentials are never
       // treated as a connected streaming account.
       final storage = ref.read(secureStorageProvider);
-      await Future.wait([
-        storage.write(
-          key: realDebridTokenStorageKey,
-          value: tokens.accessToken,
-        ),
-        storage.write(
-          key: realDebridRefreshTokenStorageKey,
-          value: tokens.refreshToken,
-        ),
-        storage.write(
-          key: realDebridClientIdStorageKey,
-          value: credentials.clientId,
-        ),
-        storage.write(
-          key: realDebridClientSecretStorageKey,
-          value: credentials.clientSecret,
-        ),
-        storage.write(
-          key: realDebridAccessExpiryStorageKey,
-          value: tokens.expiresAt.toUtc().toIso8601String(),
-        ),
-      ]);
+      await storage.write(
+        key: realDebridRefreshTokenStorageKey,
+        value: tokens.refreshToken,
+      );
+      await storage.write(
+        key: realDebridClientIdStorageKey,
+        value: credentials.clientId,
+      );
+      await storage.write(
+        key: realDebridClientSecretStorageKey,
+        value: credentials.clientSecret,
+      );
+      await storage.write(
+        key: realDebridTokenStorageKey,
+        value: tokens.accessToken,
+      );
+      await storage.write(
+        key: realDebridAccessExpiryStorageKey,
+        value: tokens.expiresAt.toUtc().toIso8601String(),
+      );
       if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
       setState(() => _authorized = true);

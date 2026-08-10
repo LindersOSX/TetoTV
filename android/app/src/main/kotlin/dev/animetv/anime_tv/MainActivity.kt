@@ -19,6 +19,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.StatFs
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -34,6 +35,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.player.Media3PlayerActivity
+import dev.animetv.anime_tv.security.AppDeepLinkPolicy
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipFile
@@ -50,6 +52,36 @@ class MainActivity : FlutterActivity() {
     private var mediaSeekBackIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSeekForwardIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSessionWasActiveBeforeNativePlayer = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        sanitizeIncomingAppLink(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun getInitialRoute(): String? =
+        AppDeepLinkPolicy.initialRouteForExportedActivity()
+
+    override fun onNewIntent(intent: Intent) {
+        sanitizeIncomingAppLink(intent)
+        super.onNewIntent(intent)
+    }
+
+    /**
+     * MainActivity must be exported for TV launchers. Do not let that exported
+     * surface pass arbitrary URI routes to Dart, where malformed numeric route
+     * parameters could otherwise terminate the app. Manifest filters do not
+     * protect against explicit intents sent by another installed application.
+     */
+    private fun sanitizeIncomingAppLink(incoming: Intent) {
+        if (incoming.data == null) return
+        if (
+            incoming.action == Intent.ACTION_VIEW &&
+            AppDeepLinkPolicy.isAllowed(incoming.dataString)
+        ) return
+        incoming.action = Intent.ACTION_MAIN
+        incoming.data = null
+        incoming.removeCategory(Intent.CATEGORY_BROWSABLE)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -274,6 +306,25 @@ class MainActivity : FlutterActivity() {
                 return
             }
             try {
+                // The permission screen can remain open for an arbitrary
+                // amount of time. Re-inspect immediately before granting the
+                // package installer access so a stale/replaced download is
+                // never launched based on the earlier verdict.
+                val inspection = inspectApk(path)
+                if (inspection["compatible"] != true) {
+                    val issues = (inspection["issues"] as? List<*>)
+                        ?.filterIsInstance<String>()
+                        ?.joinToString(" ")
+                        .orEmpty()
+                    pending.error(
+                        "APK_INCOMPATIBLE",
+                        issues.ifBlank {
+                            "The downloaded APK is no longer valid for this device."
+                        },
+                        inspection,
+                    )
+                    return
+                }
                 launchApkInstaller(File(path))
                 pending.success("launched")
             } catch (error: Throwable) {
@@ -472,6 +523,15 @@ class MainActivity : FlutterActivity() {
             return mapOf(
                 "compatible" to false,
                 "issues" to listOf("The downloaded update file could not be found."),
+                "deviceAbis" to Build.SUPPORTED_ABIS.toList(),
+            )
+        }
+        if (file.length() !in 1L..MAX_UPDATE_APK_BYTES) {
+            return mapOf(
+                "compatible" to false,
+                "issues" to listOf(
+                    "The downloaded update has an invalid file size.",
+                ),
                 "deviceAbis" to Build.SUPPORTED_ABIS.toList(),
             )
         }
@@ -797,12 +857,13 @@ class MainActivity : FlutterActivity() {
     private fun publishWatchNext(data: Map<String, Any?>): Long? {
         val mediaId = (data["mediaId"] as? Number)?.toLong() ?: return null
         val episode = (data["episode"] as? Number)?.toInt() ?: 1
+        if (mediaId <= 0L || episode <= 0) return null
         val title = data["title"] as? String ?: return null
         val description = data["description"] as? String ?: "Continue watching on TetoTV"
         val poster = (data["posterUrl"] as? String)?.let(Uri::parse)
         val duration = (data["durationMs"] as? Number)?.toInt() ?: 0
         val position = (data["positionMs"] as? Number)?.toInt() ?: 0
-        val deepLink = "tetotv:///anime/$mediaId?episode=$episode".toUri()
+        val deepLink = AppDeepLinkPolicy.animeUri(mediaId, episode).toUri()
 
         val builder = WatchNextProgram.Builder()
             .setType(TvContractCompat.WatchNextPrograms.TYPE_TV_EPISODE)
@@ -948,5 +1009,6 @@ class MainActivity : FlutterActivity() {
         private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
         private const val MIN_SEEK_INCREMENT_MS = 5_000L
         private const val MAX_SEEK_INCREMENT_MS = 60_000L
+        private const val MAX_UPDATE_APK_BYTES = 512L * 1024L * 1024L
     }
 }

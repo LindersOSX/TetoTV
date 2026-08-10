@@ -1,0 +1,208 @@
+package dev.animetv.anime_tv.security
+
+import java.net.URI
+import java.net.InetAddress
+import java.util.Locale
+
+/**
+ * Security policy for URLs and headers supplied by Flutter or third-party
+ * source add-ons before they reach a native Android media stack.
+ */
+internal object NetworkRequestPolicy {
+    private const val MAX_HEADER_COUNT = 32
+    private const val MAX_HEADER_NAME_LENGTH = 100
+    private const val MAX_HEADER_VALUE_LENGTH = 8_192
+    private const val MAX_DIAGNOSTIC_LENGTH = 800
+
+    private val blockedRequestHeaders = setOf(
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "expect",
+        "host",
+        "keep-alive",
+        "proxy-connection",
+        "range",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    )
+
+    // These headers do not contain account credentials and are commonly
+    // required by CDN redirects or cross-origin HLS segments.
+    private val crossOriginSafeHeaders = setOf(
+        "accept",
+        "accept-language",
+        "origin",
+        "referer",
+        "user-agent",
+    )
+
+    private val uriPattern = Regex("(?i)https://[^\\s\\]>)\"']+")
+    private val authorizationPattern = Regex(
+        "(?i)\\b(authorization|proxy-authorization)" +
+            "\\b\\s*[:=]\\s*[^\\r\\n,;)]+",
+    )
+    private val credentialPattern = Regex(
+        "(?i)\\b(cookie|set-cookie|" +
+            "x-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token)" +
+            "\\b\\s*[:=]\\s*[^\\s,;]+",
+    )
+
+    data class Origin(
+        val scheme: String,
+        val host: String,
+        val port: Int,
+    )
+
+    fun httpsOrigin(value: String): Origin? = runCatching {
+        val uri = URI(value.trim())
+        if (!uri.scheme.equals("https", ignoreCase = true)) return@runCatching null
+        val host = uri.host?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        if (host.isEmpty()) return@runCatching null
+        val port = when (uri.port) {
+            -1 -> 443
+            in 1..65_535 -> uri.port
+            else -> return@runCatching null
+        }
+        Origin("https", host, port)
+    }.getOrNull()
+
+    fun origin(scheme: String, host: String, port: Int): Origin = Origin(
+        scheme = scheme.lowercase(Locale.ROOT),
+        host = host.lowercase(Locale.ROOT),
+        port = port,
+    )
+
+    fun sanitizeRequestHeaders(values: Map<String, String>): Map<String, String> {
+        val sanitized = linkedMapOf<String, String>()
+        for ((rawName, rawValue) in values) {
+            val name = rawName.trim()
+            val normalizedName = name.lowercase(Locale.ROOT)
+            val value = rawValue.trim()
+            if (
+                name.isEmpty() ||
+                name.length > MAX_HEADER_NAME_LENGTH ||
+                !name.all(::isHeaderNameCharacter) ||
+                normalizedName in blockedRequestHeaders ||
+                value.length > MAX_HEADER_VALUE_LENGTH ||
+                !value.all(::isHeaderValueCharacter)
+            ) continue
+
+            // HTTP field names are case-insensitive. Retain only the last
+            // supplied value so add-ons cannot smuggle duplicate credentials.
+            sanitized.keys.firstOrNull { it.equals(name, ignoreCase = true) }
+                ?.let(sanitized::remove)
+            if (sanitized.size >= MAX_HEADER_COUNT) continue
+            sanitized[name] = value
+        }
+        return sanitized
+    }
+
+    fun shouldForwardHeader(
+        headerName: String,
+        sourceOrigin: Origin,
+        requestOrigin: Origin,
+    ): Boolean =
+        sourceOrigin == requestOrigin ||
+            headerName.lowercase(Locale.ROOT) in crossOriginSafeHeaders
+
+    /**
+     * Returns true only for addresses that are safe for an untrusted media URL
+     * to contact. This check is deliberately applied to the DNS answer used by
+     * OkHttp, not only to a URL preflight, so a redirect or DNS rebinding cannot
+     * turn a public-looking stream into a request to the device or LAN.
+     */
+    fun isPublicNetworkAddress(address: InetAddress): Boolean {
+        if (
+            address.isAnyLocalAddress ||
+            address.isLoopbackAddress ||
+            address.isLinkLocalAddress ||
+            address.isSiteLocalAddress ||
+            address.isMulticastAddress
+        ) return false
+
+        val bytes = address.address
+        return when (bytes.size) {
+            4 -> isPublicIpv4(bytes)
+            16 -> isPublicIpv6(bytes)
+            else -> false
+        }
+    }
+
+    /** Removes expiring debrid URLs and credentials from user-visible errors. */
+    fun redactNetworkDiagnostic(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val withoutUris = uriPattern.replace(value, "https://[redacted]")
+        val withoutAuthorization = authorizationPattern.replace(withoutUris) { match ->
+            "${match.groupValues[1]}=[redacted]"
+        }
+        val withoutCredentials = credentialPattern.replace(withoutAuthorization) { match ->
+            "${match.groupValues[1]}=[redacted]"
+        }
+        return withoutCredentials.take(MAX_DIAGNOSTIC_LENGTH)
+    }
+
+    private fun isHeaderNameCharacter(value: Char): Boolean =
+        value in 'a'..'z' ||
+            value in 'A'..'Z' ||
+            value in '0'..'9' ||
+            value in "!#$%&'*+-.^_`|~"
+
+    private fun isHeaderValueCharacter(value: Char): Boolean =
+        value == '\t' || value.code in 0x20..0x7E
+
+    private fun isPublicIpv4(bytes: ByteArray): Boolean {
+        val first = bytes[0].toInt() and 0xFF
+        val second = bytes[1].toInt() and 0xFF
+        val third = bytes[2].toInt() and 0xFF
+        return when {
+            // Current network, private-use, shared address space, loopback.
+            first == 0 -> false
+            first == 10 -> false
+            first == 100 && second in 64..127 -> false
+            first == 127 -> false
+            // Link-local and RFC 1918.
+            first == 169 && second == 254 -> false
+            first == 172 && second in 16..31 -> false
+            first == 192 && second == 168 -> false
+            // IETF protocol assignments, documentation, deprecated anycast,
+            // benchmarking, and TEST-NET address blocks.
+            first == 192 && second == 0 && third == 0 -> false
+            first == 192 && second == 0 && third == 2 -> false
+            first == 192 && second == 88 && third == 99 -> false
+            first == 198 && second in 18..19 -> false
+            first == 198 && second == 51 && third == 100 -> false
+            first == 203 && second == 0 && third == 113 -> false
+            // Multicast, future/reserved use, and limited broadcast.
+            first >= 224 -> false
+            else -> true
+        }
+    }
+
+    private fun isPublicIpv6(bytes: ByteArray): Boolean {
+        val first = bytes[0].toInt() and 0xFF
+        val second = bytes[1].toInt() and 0xFF
+
+        // Reject IPv4-compatible and IPv4-mapped forms. Android commonly
+        // normalizes mapped literals to Inet4Address, but checking the raw
+        // representation keeps this policy safe across runtimes.
+        if (bytes.take(10).all { it == 0.toByte() }) {
+            val mapped = bytes[10] == 0xFF.toByte() && bytes[11] == 0xFF.toByte()
+            val compatible = bytes[10] == 0.toByte() && bytes[11] == 0.toByte()
+            if (mapped || compatible) return false
+        }
+
+        return when {
+            // Unique-local fc00::/7.
+            first and 0xFE == 0xFC -> false
+            // Link-local fe80::/10 and deprecated site-local fec0::/10.
+            first == 0xFE && second and 0xC0 == 0x80 -> false
+            first == 0xFE && second and 0xC0 == 0xC0 -> false
+            // IPv6 multicast ff00::/8.
+            first == 0xFF -> false
+            else -> true
+        }
+    }
+}

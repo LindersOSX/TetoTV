@@ -76,10 +76,18 @@ void main() {
   test('diagnostic text redacts URLs, tokens, magnets, and info hashes', () {
     final redacted = redactDiagnosticValue(
       'Bearer secret https://cdn.example/video magnet:?xt=urn:btih:abc '
-      '0123456789abcdef0123456789abcdef01234567',
+      '0123456789abcdef0123456789abcdef01234567 '
+      'github_'
+      'pat_exampleExampleExample123456 '
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature '
+      '{"access_token":"oauth-secret","client_secret":"client-secret"} '
+      'http://legacy.example/video',
     );
     expect(redacted, isNot(contains('secret')));
     expect(redacted, isNot(contains('cdn.example')));
+    expect(redacted, isNot(contains('legacy.example')));
+    expect(redacted, isNot(contains('github_pat_')));
+    expect(redacted, isNot(contains('eyJhbGci')));
     expect(redacted, contains('[MAGNET]'));
     expect(redacted, contains('[INFO_HASH]'));
   });

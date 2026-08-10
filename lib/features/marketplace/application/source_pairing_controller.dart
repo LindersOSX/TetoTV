@@ -426,7 +426,7 @@ bool _alreadySaved(String message) =>
 
 String _safeMessage(Object error) {
   final value = error.toString().replaceFirst(
-    RegExp(r'^[A-Za-z]+(?:Exception|Error):\s*'),
+    RegExp(r'^(?:Bad state|[A-Za-z]+(?:Exception|Error)):\s*'),
     '',
   );
   return value.length <= 220 ? value : '${value.substring(0, 220)}…';

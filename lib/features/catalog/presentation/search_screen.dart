@@ -76,6 +76,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Future<void> _search(String query) async {
+    if (!mounted) return;
     final normalized = query.trim();
     if (normalized.length < 2) return;
     final generation = ++_searchGeneration;

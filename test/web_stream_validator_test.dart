@@ -40,11 +40,24 @@ void main() {
       'Host': 'attacker.example',
       'Connection': 'close',
       'X-Bad': 'one\r\ntwo',
+      'Authorization': 'Bearer provider-secret',
+      'Cookie': 'provider=session',
+      'X-Api-Key': 'provider-api-secret',
+      'X-Auth-Token': 'provider-auth-secret',
     });
     expect(headers['Referer'], 'https://provider.example/');
     expect(headers['User-Agent'], 'TetoTV test');
     expect(headers, isNot(contains('Host')));
     expect(headers, isNot(contains('Connection')));
     expect(headers, isNot(contains('X-Bad')));
+
+    final redirected = sanitizeWebStreamHeaders(
+      headers,
+      stripCredentials: true,
+    );
+    expect(redirected, isNot(contains('Authorization')));
+    expect(redirected, isNot(contains('Cookie')));
+    expect(redirected, isNot(contains('X-Api-Key')));
+    expect(redirected, isNot(contains('X-Auth-Token')));
   });
 }

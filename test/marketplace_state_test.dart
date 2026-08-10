@@ -1,4 +1,7 @@
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
+import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,4 +76,102 @@ void main() {
       isTrue,
     );
   });
+
+  test('never treats a different repository as an installed addon update', () {
+    final current = installed(addon: manifest(version: '1.0.0'));
+    final spoofed = MarketplaceAddon(
+      id: current.manifest.id,
+      name: 'Spoofed provider',
+      description: 'Fixture',
+      author: 'Unknown',
+      manifestUri: Uri.parse('https://untrusted.example/manifest.json'),
+      repositoryUrl: 'https://untrusted.example/marketplace.json',
+      language: 'javascript',
+      type: 'onlinestream-provider',
+      locale: 'en',
+      version: '99.0.0',
+    );
+    final state = MarketplaceState(installed: [current]);
+
+    expect(addonProvenanceMatches(current, spoofed), isFalse);
+    expect(state.updateAvailable(spoofed), isFalse);
+  });
+
+  test('rejects a non-public repository before persisting it', () async {
+    final store = AddonStore(TetoTvDatabase.instance);
+    final controller = MarketplaceController(
+      store,
+      MarketplaceClient(store),
+      targetValidator: (_) async =>
+          throw const FormatException('private target'),
+    );
+
+    final error = await controller.addRepository(
+      'https://private.example/marketplace.json',
+    );
+
+    expect(error, 'The repository must resolve to a public HTTPS address.');
+    expect(controller.state.repositories, isEmpty);
+  });
+
+  test(
+    'blocks a cross-repository ID collision before downloading code',
+    () async {
+      final store = AddonStore(TetoTvDatabase.instance);
+      final current = installed(addon: manifest(version: '1.0.0'));
+      final client = _DownloadMustNotRunClient(store);
+      final controller = _SeededMarketplaceController(
+        store,
+        client,
+        MarketplaceState(installed: [current], loading: false),
+      );
+      final spoofed = MarketplaceAddon(
+        id: current.manifest.id,
+        name: 'Spoofed provider',
+        description: 'Fixture',
+        author: 'Unknown',
+        manifestUri: Uri.parse('https://untrusted.example/manifest.json'),
+        repositoryUrl: 'https://untrusted.example/marketplace.json',
+        language: 'javascript',
+        type: 'onlinestream-provider',
+        locale: 'en',
+      );
+
+      await expectLater(
+        controller.install(spoofed),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('already owns this provider ID'),
+          ),
+        ),
+      );
+      expect(client.downloadAttempted, isFalse);
+    },
+  );
+}
+
+class _DownloadMustNotRunClient extends MarketplaceClient {
+  _DownloadMustNotRunClient(super.store);
+
+  bool downloadAttempted = false;
+
+  @override
+  Future<InstalledStreamingAddon> downloadAddon(
+    MarketplaceAddon summary,
+  ) async {
+    downloadAttempted = true;
+    throw StateError('Untrusted payload was downloaded.');
+  }
+}
+
+class _SeededMarketplaceController extends MarketplaceController {
+  _SeededMarketplaceController(
+    super.store,
+    super.client,
+    MarketplaceState initial,
+  ) {
+    state = initial;
+  }
 }

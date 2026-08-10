@@ -46,6 +46,26 @@ flutter doctor -v
 
 Every Android item in `flutter doctor` should be green before continuing.
 
+## Configure release signing
+
+Before the first distributed release, create a unique protected signing key:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\tool\setup_release_signing.ps1
+```
+
+The script writes an ignored `android\key.properties` file and stores the
+PKCS#12 keystore outside the repository under the current Windows profile. It
+does not print the generated password. Back up both files separately in
+encrypted offline storage. Losing the key prevents future sideloaded APKs from
+updating existing installations; replacing it requires uninstalling the old
+app first.
+
+`-ReplaceExisting` is deliberately required when an old local configuration
+exists. Use it only before public distribution or as part of an intentional
+signing-key migration.
+
 ## 2. Initialize this project from scratch
 
 This repository is already initialized. These are the exact commands that

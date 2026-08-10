@@ -167,12 +167,28 @@ class MarketplaceClient {
 
 bool _looksLikeProvider(String payload) =>
     RegExp(r'\bclass\s+Provider\b').hasMatch(payload) &&
-    payload.length <= MarketplaceClient._maxPayloadBytes;
+    utf8.encode(payload).length <= MarketplaceClient._maxPayloadBytes;
 
 String applyAddonConfigDefaults(String source, Map<String, String> defaults) {
-  var configured = source;
-  for (final entry in defaults.entries) {
-    configured = configured.replaceAll('{{${entry.key}}}', entry.value);
+  var encodedLength = 0;
+  final output = StringBuffer();
+
+  void writeBounded(String value) {
+    encodedLength += utf8.encode(value).length;
+    if (encodedLength > MarketplaceClient._maxPayloadBytes) {
+      throw const FormatException('The configured addon payload is too large.');
+    }
+    output.write(value);
   }
-  return configured;
+
+  final placeholder = RegExp(r'\{\{([A-Za-z0-9._-]+)\}\}');
+  var cursor = 0;
+  for (final match in placeholder.allMatches(source)) {
+    writeBounded(source.substring(cursor, match.start));
+    final key = match.group(1)!;
+    writeBounded(defaults[key] ?? match.group(0)!);
+    cursor = match.end;
+  }
+  writeBounded(source.substring(cursor));
+  return output.toString();
 }

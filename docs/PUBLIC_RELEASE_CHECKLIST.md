@@ -1,0 +1,85 @@
+# Public-release checklist
+
+This checklist treats TetoTV as a public product even when a build is shared
+only with a private test group. Passing automated tests is necessary but is not
+the same as legal, store, or codec certification.
+
+## Release blockers
+
+- Sign every APK with a unique protected release key. Reject debug keys at
+  build time, keep at least two encrypted/offline backups, and never lose the
+  signing identity used by installed sideload builds.
+- Publish the privacy disclosure at an unauthenticated HTTPS URL, keep the
+  in-app disclosure accessible by remote and touch, and provide a working
+  public support/contact route.
+- Choose and publish an explicit software license before exposing the source
+  repository. APK distribution does not by itself grant permission to reuse
+  TetoTV's source or branding.
+- Configure the broker's server-only `GITHUB_RELEASE_TOKEN` with access to only
+  the TetoTV repository and **Contents: Read-only**. Confirm `/health` reports
+  update support without revealing the token.
+- Deploy exactly one broker instance while pairing state is process-local, or
+  move pairing/rate-limit state to an atomic shared TTL store before scaling.
+- Obtain any required AniList authorization for a client that also integrates
+  MAL, and confirm the current terms for every metadata, tracking, skip-time,
+  and debrid service.
+- Confirm that the intended Teto name/artwork use and monetization comply with
+  the official character guidelines and obtain permission where required.
+- Archive and ship the exact third-party notices, native binary provenance,
+  and LGPL source/relinking materials required for the release build.
+- Verify the vendored QuickJS 2026-06-04 archive and reviewed FFI bridge with
+  `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_quickjs.ps1`, then run the packaged runtime and
+  infinite-loop interruption tests on a 16 KiB-page Android device. Do not
+  reintroduce the legacy QuickJS 2021-03-27 JitPack AAR.
+- Decide whether automatic/manual AniSkip lookups are enabled in the public
+  product, and ensure the privacy disclosure and settings accurately describe
+  when episode identifiers and durations are sent.
+- Revoke any credential ever embedded in an older APK and remove compromised
+  historical assets before making release history public.
+
+## Distribution modes
+
+The GitHub/sideload build may keep the signed in-app updater and
+`REQUEST_INSTALL_PACKAGES`. A Google Play build must remove that permission and
+the direct APK installer, use Play-managed updates, complete the Data safety
+form, and link the public privacy policy. Do not upload the sideload flavor to
+Google Play.
+
+The extension marketplace downloads user-selected JavaScript and runs it in a
+bounded interpreter. A Play distribution must separately review or disable
+that feature and prove that every remotely loaded extension and resulting
+content complies with current Google Play dynamic-code, device/network-abuse,
+content, and intellectual-property policies. Passing Android security tests is
+not a Play policy approval.
+
+Choose a permanent application ID before the first store release. Changing
+`dev.animetv.anime_tv` later creates a different Android app and breaks normal
+in-place updates.
+
+## Technical gate
+
+1. Start from a reviewed, clean commit and explicitly stage files; never use a
+   broad add that could include screenshots, keystores, or local configuration.
+2. Run Flutter formatting, analysis, unit/widget/integration tests, broker
+   syntax/self-tests, Android JVM tests, release lint, and Kotlin compilation.
+3. Build universal plus ARM32, ARM64, and x86_64 APKs with the protected key.
+4. Verify package ID, version codes, signer identity, v2/v3 signatures,
+   zip/page alignment, supported ABIs, min/target SDKs, manifest permissions,
+   and absence of debug flags/secrets/default source URLs.
+5. Install the universal APK on at least one phone and one TV; test first-run
+   setup, D-pad/touch navigation, all pairing flows, source import, search,
+   stream recovery, audio/subtitle selection, resume, tracking, and update
+   download/install.
+6. Test a 32-bit Fire TV build, ARM64 Google TV/Chromecast build, foldable phone
+   portrait/landscape, and a 16-KiB-page Android device or emulator.
+7. Create releases as drafts, upload and verify all assets, then publish only
+   after the universal asset and broker update path pass an end-to-end test.
+
+## Content/source policy
+
+Release builds must contain no torrent index, default source repository,
+preconfigured Stremio manifest, provider credential, or instructions that
+promote an infringing source. Users must deliberately add compatible sources
+they trust and are authorized to use. This design reduces risk but does not
+guarantee immunity from copyright, trademark, service-terms, or platform
+complaints.

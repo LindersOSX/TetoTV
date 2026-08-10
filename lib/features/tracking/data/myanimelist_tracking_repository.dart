@@ -28,18 +28,28 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
         '?status=${myAnimeListStatus(status)}'
         '&limit=100&fields=list_status,num_episodes,status,title,alternative_titles,'
         'main_picture';
-    final pagingDio = Dio(
-      BaseOptions(
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': _dio.options.headers['Authorization'] as String,
-        },
-        connectTimeout: _dio.options.connectTimeout,
-        receiveTimeout: _dio.options.receiveTimeout,
-      ),
-    );
+    final visitedPageUrls = <String>{};
+    var pageCount = 0;
     while (nextUrl != null) {
-      final response = await pagingDio.get<Map<String, dynamic>>(nextUrl);
+      final pageUri = trustedMyAnimeListPageUri(nextUrl);
+      if (pageUri == null) {
+        throw const FormatException(
+          'MAL returned an untrusted pagination link.',
+        );
+      }
+      final canonicalUrl = pageUri.toString();
+      if (!visitedPageUrls.add(canonicalUrl)) {
+        throw const FormatException('MAL returned a pagination loop.');
+      }
+      pageCount++;
+      if (pageCount > 50) {
+        throw const FormatException('MAL returned too many result pages.');
+      }
+
+      // Reuse the configured client so interceptors, timeouts, and certificate
+      // behavior remain consistent. Most importantly, never attach the bearer
+      // token to a paging URL until its origin and path have been validated.
+      final response = await _dio.get<Map<String, dynamic>>(canonicalUrl);
       final body = response.data ?? const {};
       final entries = (body['data'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>();
@@ -121,6 +131,20 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
   }
+}
+
+Uri? trustedMyAnimeListPageUri(String value) {
+  final uri = Uri.tryParse(value);
+  if (uri == null ||
+      uri.scheme.toLowerCase() != 'https' ||
+      uri.host.toLowerCase() != 'api.myanimelist.net' ||
+      uri.port != 443 ||
+      uri.userInfo.isNotEmpty ||
+      uri.fragment.isNotEmpty ||
+      uri.path != '/v2/users/@me/animelist') {
+    return null;
+  }
+  return uri;
 }
 
 String myAnimeListStatus(TrackingListStatus status) => switch (status) {

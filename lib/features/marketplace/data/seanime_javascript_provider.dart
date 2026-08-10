@@ -30,7 +30,8 @@ class WebProviderSearchCancelled implements Exception {
 
 /// Cooperative cancellation shared by the provider worker pool and the
 /// isolate-backed Seanime runtime. Listeners run synchronously so navigation
-/// can kill active QuickJS isolates before another screen starts discovery.
+/// can request a graceful QuickJS shutdown before another screen starts
+/// discovery.
 class WebProviderCancellation {
   final Set<void Function()> _listeners = {};
   final Completer<void> _cancelledSignal = Completer<void>();
@@ -133,17 +134,10 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
           candidateSubtitle != null && await allowed(candidateSubtitle)
           ? candidateSubtitle
           : null;
-      final headers = <String, String>{};
-      final rawHeaders = item['headers'];
-      if (rawHeaders is Map) {
-        for (final entry in rawHeaders.entries.take(24)) {
-          final key = '${entry.key}'.trim();
-          final value = '${entry.value}'.trim();
-          if (key.isNotEmpty && key.length <= 80 && value.length <= 1024) {
-            headers[key] = value;
-          }
-        }
-      }
+      final headers = sanitizeAddonHeaders(
+        item['headers'],
+        maximumValueLength: 1024,
+      );
       results.add(
         WebStreamResult(
           providerId: id,
@@ -332,8 +326,9 @@ Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
     );
     final status = response['status'] as int? ?? 0;
     if (status < 200 || status >= 300) return const [];
+    final effectiveHeaders = response['requestHeaders'];
     return expandHlsResultVariants(
-      item,
+      {...item, if (effectiveHeaders is Map) 'headers': effectiveHeaders},
       '${response['body'] ?? ''}',
       Uri.parse('${response['url'] ?? uri}'),
     );
@@ -360,13 +355,18 @@ Future<List<Map<String, dynamic>>> _runProviderIsolate(
   final responses = ReceivePort();
   final errors = ReceivePort();
   final completed = Completer<List<Map<String, dynamic>>>();
+  final isolateStopped = Completer<void>();
   Isolate? isolate;
+  SendPort? controlPort;
+  var cancellationRequested = false;
   StreamSubscription<dynamic>? responseSubscription;
   StreamSubscription<dynamic>? errorSubscription;
   Timer? deadline;
   void Function()? removeCancellationListener;
   try {
     removeCancellationListener = cancellation?.addListener(() {
+      cancellationRequested = true;
+      controlPort?.send('cancel');
       if (!completed.isCompleted) {
         completed.completeError(const WebProviderSearchCancelled());
       }
@@ -375,12 +375,33 @@ Future<List<Map<String, dynamic>>> _runProviderIsolate(
       _providerIsolateEntry,
       [responses.sendPort, input],
       onError: errors.sendPort,
+      onExit: responses.sendPort,
       errorsAreFatal: true,
       paused: true,
       debugName: 'TetoTV provider ${input['id']}',
     );
     responseSubscription = responses.listen((dynamic message) {
-      if (completed.isCompleted || message is! Map) return;
+      if (message == null) {
+        if (!isolateStopped.isCompleted) isolateStopped.complete();
+        if (!completed.isCompleted) {
+          completed.completeError(
+            StateError('Provider worker exited before returning a result.'),
+          );
+        }
+        return;
+      }
+      if (message is! Map) return;
+      final workerControl = message['control'];
+      if (workerControl is SendPort) {
+        controlPort = workerControl;
+        if (cancellationRequested) controlPort!.send('cancel');
+        return;
+      }
+      if (completed.isCompleted) return;
+      if (message['cancelled'] == true) {
+        completed.completeError(const WebProviderSearchCancelled());
+        return;
+      }
       if (message['ok'] != true) {
         completed.completeError(
           StateError('${message['error'] ?? 'Provider failed'}'),
@@ -407,6 +428,8 @@ Future<List<Map<String, dynamic>>> _runProviderIsolate(
     });
     deadline = Timer(timeout, () {
       if (!completed.isCompleted) {
+        cancellationRequested = true;
+        controlPort?.send('cancel');
         completed.completeError(
           TimeoutException(
             'Provider exceeded its ${timeout.inSeconds}-second runtime limit.',
@@ -421,7 +444,29 @@ Future<List<Map<String, dynamic>>> _runProviderIsolate(
   } finally {
     removeCancellationListener?.call();
     deadline?.cancel();
-    isolate?.kill(priority: Isolate.immediate);
+    // Let the worker unwind _executeProvider's finally block and free its
+    // native QuickJS heap. A forced kill remains a bounded fallback for a
+    // wedged native call, but is no longer the normal cancellation path.
+    if (!isolateStopped.isCompleted) {
+      cancellationRequested = true;
+      controlPort?.send('cancel');
+      try {
+        // The native bytecode deadline is six seconds. Waiting beyond it lets
+        // even a worker currently stuck in synchronous JavaScript unwind and
+        // dispose its 48 MiB-bounded heap before forced termination.
+        await isolateStopped.future.timeout(const Duration(milliseconds: 7500));
+      } on TimeoutException {
+        isolate?.kill(priority: Isolate.immediate);
+        try {
+          await isolateStopped.future.timeout(
+            const Duration(milliseconds: 250),
+          );
+        } on TimeoutException {
+          // The isolate is already kill-requested; closing local ports below
+          // prevents this search from retaining any Dart-side resources.
+        }
+      }
+    }
     await responseSubscription?.cancel();
     await errorSubscription?.cancel();
     responses.close();
@@ -435,19 +480,35 @@ void _providerIsolateEntry(List<Object?> message) {
   final input = rawInput.map<String, Object?>(
     (key, value) => MapEntry('$key', value),
   );
+  final cancellation = WebProviderCancellation();
+  final controls = ReceivePort();
+  final controlSubscription = controls.listen((dynamic command) {
+    if (command == 'cancel') cancellation.cancel();
+  });
+  port.send({'control': controls.sendPort});
   unawaited(() async {
     try {
-      final result = await _executeProvider(input);
-      port.send({'ok': true, 'result': result});
+      final result = await _executeProvider(input, cancellation: cancellation);
+      if (cancellation.isCancelled) {
+        port.send({'cancelled': true});
+      } else {
+        port.send({'ok': true, 'result': result});
+      }
+    } on WebProviderSearchCancelled {
+      port.send({'cancelled': true});
     } catch (error) {
       port.send({'ok': false, 'error': error.toString()});
+    } finally {
+      await controlSubscription.cancel();
+      controls.close();
     }
   }());
 }
 
 Future<List<Map<String, dynamic>>> _executeProvider(
-  Map<String, Object?> input,
-) async {
+  Map<String, Object?> input, {
+  required WebProviderCancellation cancellation,
+}) async {
   final runtime = QuickJsRuntime2(
     timeout: 6000,
     memoryLimit: 48 * 1024 * 1024,
@@ -455,12 +516,20 @@ Future<List<Map<String, dynamic>>> _executeProvider(
   );
   var disposed = false;
   final completed = Completer<List<Map<String, dynamic>>>();
+  final networkBudget = AddonRuntimeNetworkBudget();
 
   runtime.onMessage('TetoNetwork', (dynamic request) {
     unawaited(() async {
       final id = request is Map ? '${request['id'] ?? ''}' : '';
+      var acquired = false;
       try {
-        final response = await _safeAddonRequest(request);
+        await networkBudget.acquire();
+        acquired = true;
+        final response = await _safeAddonRequest(
+          request,
+          cancellation: cancellation,
+        );
+        networkBudget.recordResponse('${response['body'] ?? ''}');
         if (!disposed) {
           runtime.evaluate(
             '__tetoNetworkFinish(${jsonEncode(id)}, ${jsonEncode(response)});',
@@ -474,6 +543,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           );
           await runtime.dispatch();
         }
+      } finally {
+        if (acquired) networkBudget.release();
       }
     }());
   });
@@ -502,21 +573,26 @@ Future<List<Map<String, dynamic>>> _executeProvider(
   });
 
   try {
+    cancellation.throwIfCancelled();
     final bootstrap = runtime.evaluate(_networkBootstrap);
     if (bootstrap.isError) throw StateError(bootstrap.stringResult);
+    cancellation.throwIfCancelled();
     final domRuntime = runtime.evaluate(
       input['domRuntime']! as String,
       sourceUrl: 'asset://linkedom.js',
     );
     if (domRuntime.isError) throw StateError(domRuntime.stringResult);
+    cancellation.throwIfCancelled();
     final compatibility = runtime.evaluate(_seanimeCompatibilityBootstrap);
     if (compatibility.isError) throw StateError(compatibility.stringResult);
+    cancellation.throwIfCancelled();
     final payload = input['payload']! as String;
     final provider = runtime.evaluate(
       payload,
       sourceUrl: 'addon://${input['id']}/provider.js',
     );
     if (provider.isError) throw StateError(provider.stringResult);
+    cancellation.throwIfCancelled();
     final invocation = runtime.evaluate('''
       (async function() {
         try {
@@ -731,12 +807,148 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     ''', sourceUrl: 'tetotv://provider-runner.js');
     if (invocation.isError) throw StateError(invocation.stringResult);
     await runtime.dispatch();
-    return await completed.future.timeout(const Duration(seconds: 18));
+    return await Future.any<List<Map<String, dynamic>>>([
+      completed.future,
+      cancellation.whenCancelled.then<List<Map<String, dynamic>>>(
+        (_) => throw const WebProviderSearchCancelled(),
+      ),
+    ]).timeout(const Duration(seconds: 18));
   } finally {
     disposed = true;
     runtime.dispose();
   }
 }
+
+class AddonRuntimeNetworkBudget {
+  AddonRuntimeNetworkBudget({
+    this.maximumRequests = 64,
+    this.maximumConcurrentRequests = 8,
+    this.maximumResponseBytes = 16 * 1024 * 1024,
+  });
+
+  final int maximumRequests;
+  final int maximumConcurrentRequests;
+  final int maximumResponseBytes;
+
+  final List<Completer<void>> _waiters = [];
+  var _requestCount = 0;
+  var _activeRequests = 0;
+  var _responseBytes = 0;
+
+  Future<void> acquire() async {
+    _requestCount++;
+    if (_requestCount > maximumRequests) {
+      throw const FormatException(
+        'Provider exceeded its network request limit.',
+      );
+    }
+    if (_responseBytes >= maximumResponseBytes) {
+      throw const FormatException(
+        'Provider exceeded its total response limit.',
+      );
+    }
+    if (_activeRequests < maximumConcurrentRequests) {
+      _activeRequests++;
+      return;
+    }
+    final waiter = Completer<void>();
+    _waiters.add(waiter);
+    await waiter.future;
+    if (_responseBytes >= maximumResponseBytes) {
+      release();
+      throw const FormatException(
+        'Provider exceeded its total response limit.',
+      );
+    }
+  }
+
+  void recordResponse(String value) {
+    _responseBytes += utf8.encode(value).length;
+    if (_responseBytes > maximumResponseBytes) {
+      throw const FormatException(
+        'Provider exceeded its total response limit.',
+      );
+    }
+  }
+
+  void release() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete();
+      return;
+    }
+    if (_activeRequests > 0) _activeRequests--;
+  }
+}
+
+const _forbiddenAddonHeaders = {
+  'connection',
+  'content-length',
+  'host',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+};
+
+// Cross-origin redirects must not forward arbitrary addon-supplied headers.
+// API credentials use many non-standard names (X-Api-Key, X-Auth-Token,
+// provider-specific headers, and so on), so a credential denylist will always
+// be incomplete. Keep only the small set needed for ordinary media requests.
+const _crossOriginSafeAddonHeaders = {
+  'accept',
+  'accept-language',
+  'content-type',
+  'range',
+  'referer',
+  'user-agent',
+};
+
+/// Sanitizes headers originating in untrusted add-on code before either the
+/// Dart HTTP stack or a native player sees them. Hop-by-hop framing headers
+/// and control characters are never forwarded.
+Map<String, String> sanitizeAddonHeaders(
+  Object? raw, {
+  String? defaultUserAgent,
+  bool stripCredentials = false,
+  int maximumValueLength = 4096,
+}) {
+  final result = <String, String>{};
+  final seen = <String>{};
+  if (defaultUserAgent != null) {
+    result['User-Agent'] = defaultUserAgent;
+    seen.add('user-agent');
+  }
+  if (raw is! Map) return Map.unmodifiable(result);
+  var totalLength = defaultUserAgent?.length ?? 0;
+  for (final entry in raw.entries.take(24)) {
+    final key = '${entry.key}'.trim();
+    final lower = key.toLowerCase();
+    final value = '${entry.value}'.trim();
+    if (key.isEmpty ||
+        key.length > 80 ||
+        !RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$").hasMatch(key) ||
+        _forbiddenAddonHeaders.contains(lower) ||
+        (stripCredentials && !_crossOriginSafeAddonHeaders.contains(lower)) ||
+        seen.contains(lower) ||
+        value.length > maximumValueLength ||
+        RegExp(r'[\x00-\x1f\x7f]').hasMatch(value)) {
+      continue;
+    }
+    totalLength += key.length + value.length;
+    if (totalLength > 16 * 1024) break;
+    seen.add(lower);
+    result[key] = value;
+  }
+  return Map.unmodifiable(result);
+}
+
+bool _sameOrigin(Uri left, Uri right) =>
+    left.scheme == right.scheme &&
+    left.host.toLowerCase() == right.host.toLowerCase() &&
+    left.port == right.port;
 
 Future<Map<String, Object?>> _safeAddonRequest(
   dynamic raw, {
@@ -762,18 +974,11 @@ Future<Map<String, Object?>> _safeAddonRequest(
       'Only GET, POST, and HEAD requests are permitted.',
     );
   }
-  final headers = <String, String>{'User-Agent': 'TetoTV addon runtime'};
-  final rawHeaders = options['headers'];
-  if (rawHeaders is Map) {
-    for (final entry in rawHeaders.entries.take(24)) {
-      final key = '${entry.key}'.trim();
-      final value = '${entry.value}'.trim();
-      if (key.isNotEmpty && key.length <= 80 && value.length <= 4096) {
-        headers[key] = value;
-      }
-    }
-  }
-  final body = options['body'] == null ? null : '${options['body']}';
+  var headers = sanitizeAddonHeaders(
+    options['headers'],
+    defaultUserAgent: 'TetoTV addon runtime',
+  );
+  var body = options['body'] == null ? null : '${options['body']}';
   if (body != null && utf8.encode(body).length > 128 * 1024) {
     throw const FormatException('Provider request body is too large.');
   }
@@ -798,6 +1003,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
         );
   Response<ResponseBody>? response;
   String responseText = '';
+  var currentMethod = method;
   try {
     for (var redirect = 0; redirect < 4; redirect++) {
       cancellation?.throwIfCancelled();
@@ -806,7 +1012,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
         data: body,
         cancelToken: cancelToken,
         options: Options(
-          method: method,
+          method: currentMethod,
           headers: headers,
           responseType: ResponseType.stream,
         ),
@@ -824,6 +1030,18 @@ Future<Map<String, Object?>> _safeAddonRequest(
       if (redirectUri == null) {
         throw const FormatException('Provider redirect was not public HTTPS.');
       }
+      if (!_sameOrigin(currentUri, redirectUri)) {
+        headers = sanitizeAddonHeaders(
+          headers,
+          defaultUserAgent: 'TetoTV addon runtime',
+          stripCredentials: true,
+        );
+      }
+      if (status == 303 ||
+          ((status == 301 || status == 302) && currentMethod == 'POST')) {
+        currentMethod = 'GET';
+        body = null;
+      }
       currentUri = redirectUri;
       await validatePublicNetworkTarget(currentUri);
       cancellation?.throwIfCancelled();
@@ -831,6 +1049,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
   } finally {
     overallDeadline?.cancel();
     removeCancellationListener?.call();
+    dio.close(force: true);
   }
   if (response == null) throw const HttpException('No provider response.');
   return {
@@ -838,10 +1057,14 @@ Future<Map<String, Object?>> _safeAddonRequest(
     'statusText': response.statusMessage ?? '',
     'url': response.realUri.toString(),
     'body': responseText,
-    'headers': {
+    // HLS expansion must reuse the post-redirect header set. In particular,
+    // credentials supplied for one origin cannot follow a master-playlist
+    // redirect and then leak to that other origin's variant URLs.
+    'requestHeaders': headers,
+    'headers': sanitizeAddonHeaders({
       for (final entry in response.headers.map.entries)
         entry.key: entry.value.join(', '),
-    },
+    }),
   };
 }
 

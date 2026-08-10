@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -50,6 +53,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
   final Dio _kitsuDio;
   final Future<void> Function(Uri uri) _targetValidator;
   final Map<int, String> _kitsuIds = {};
+  static const _maximumStreamResponseBytes = 2 * 1024 * 1024;
 
   @override
   String get id => 'stremio:${_manifestUri.host}${_manifestUri.path}';
@@ -66,6 +70,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       streamUri,
       options: Options(
         followRedirects: false,
+        responseType: ResponseType.stream,
         validateStatus: (status) =>
             status != null && status >= 200 && status < 400,
       ),
@@ -75,12 +80,16 @@ class StremioTorrentReleaseSource implements ReleaseSource {
         'Torrent source redirects are not accepted. Enter its final public HTTPS manifest URL.',
       );
     }
-    final body = response.data;
-    if (body is! Map<String, dynamic>) {
+    final declaredLength = int.tryParse(
+      response.headers.value('content-length') ?? '',
+    );
+    if (declaredLength != null &&
+        declaredLength > _maximumStreamResponseBytes) {
       throw const FormatException(
-        'The Stremio add-on returned an invalid stream response.',
+        'The Stremio add-on returned an oversized stream response.',
       );
     }
+    final body = await _boundedStreamResponse(response.data);
     return parseStreams(body);
   }
 
@@ -237,7 +246,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
 
   static Uri _validateManifestUrl(String value) {
     final uri = safePublicHttpsUri(value.trim());
-    if (uri == null || !uri.path.endsWith('manifest.json')) {
+    if (uri == null || !uri.path.toLowerCase().endsWith('/manifest.json')) {
       throw ArgumentError.value(
         value,
         'manifestUrl',
@@ -245,6 +254,41 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       );
     }
     return uri;
+  }
+
+  static Future<Map<String, dynamic>> _boundedStreamResponse(
+    Object? value,
+  ) async {
+    Object? decoded = value;
+    if (value is ResponseBody) {
+      final bytes = BytesBuilder(copy: false);
+      var length = 0;
+      await for (final chunk in value.stream) {
+        length += chunk.length;
+        if (length > _maximumStreamResponseBytes) {
+          throw const FormatException(
+            'The Stremio add-on returned an oversized stream response.',
+          );
+        }
+        bytes.add(chunk);
+      }
+      decoded = jsonDecode(
+        utf8.decode(bytes.takeBytes(), allowMalformed: false),
+      );
+    } else if (value is String) {
+      if (utf8.encode(value).length > _maximumStreamResponseBytes) {
+        throw const FormatException(
+          'The Stremio add-on returned an oversized stream response.',
+        );
+      }
+      decoded = jsonDecode(value);
+    }
+    if (decoded is! Map) {
+      throw const FormatException(
+        'The Stremio add-on returned an invalid stream response.',
+      );
+    }
+    return decoded.map((key, item) => MapEntry('$key', item));
   }
 
   static int _titleScore(Map<String, dynamic> item, Set<String> targets) {

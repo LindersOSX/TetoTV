@@ -376,13 +376,35 @@ bool _isNonPublicAddress(InternetAddress address) {
   final isUniqueLocal = (bytes[0] & 0xfe) == 0xfc; // fc00::/7
   final isLinkLocal =
       bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80; // fe80::/10
+  final isSiteLocal =
+      bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0xc0; // fec0::/10
   final isMulticast = bytes[0] == 0xff; // ff00::/8
+  final isDocumentation =
+      bytes[0] == 0x20 &&
+      bytes[1] == 0x01 &&
+      bytes[2] == 0x0d &&
+      bytes[3] == 0xb8; // 2001:db8::/32
+  final isNat64WellKnown =
+      bytes[0] == 0x00 &&
+      bytes[1] == 0x64 &&
+      bytes[2] == 0xff &&
+      bytes[3] == 0x9b &&
+      bytes.sublist(4, 12).every((byte) => byte == 0);
+  final nat64MapsNonPublic =
+      isNat64WellKnown && _isNonPublicIpv4(bytes.sublist(12));
+  final is6to4 = bytes[0] == 0x20 && bytes[1] == 0x02;
+  final sixToFourMapsNonPublic =
+      is6to4 && _isNonPublicIpv4(bytes.sublist(2, 6));
   return isUnspecified ||
       isLoopback ||
       isIpv4Compatible ||
       isUniqueLocal ||
       isLinkLocal ||
-      isMulticast;
+      isSiteLocal ||
+      isMulticast ||
+      isDocumentation ||
+      nat64MapsNonPublic ||
+      sixToFourMapsNonPublic;
 }
 
 bool _isNonPublicIpv4(List<int> bytes) {

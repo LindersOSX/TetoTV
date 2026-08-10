@@ -51,6 +51,8 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import dev.animetv.anime_tv.R
+import dev.animetv.anime_tv.security.NetworkRequestPolicy
+import dev.animetv.anime_tv.security.PublicNetworkDns
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
@@ -84,6 +86,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var pausedTitleView: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val metadataClient = OkHttpClient.Builder()
+        .dns(PublicNetworkDns())
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
@@ -251,7 +254,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getLongExtra(EXTRA_RESUME_UPDATED_AT_MS, 0L).coerceAtLeast(0L)
         malMediaId = intent.getIntExtra(EXTRA_MAL_MEDIA_ID, 0).coerceAtLeast(0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
-        if (source.isBlank() || (!source.startsWith("https://") && source != SMOKE_VIDEO_URI)) {
+        val sourceOrigin = NetworkRequestPolicy.httpsOrigin(source)
+        if (source.isBlank() || (sourceOrigin == null && source != SMOKE_VIDEO_URI)) {
             terminalError = "The native player requires an HTTPS debrid URL."
             finishWithResult(STATUS_ERROR)
             return
@@ -330,17 +334,44 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             .setBackBuffer(5_000, false)
             .build()
 
-        val httpClient = OkHttpClient.Builder()
+        val suppliedHeaders = NetworkRequestPolicy.sanitizeRequestHeaders(intentHeaders())
+        val httpClientBuilder = OkHttpClient.Builder()
+            .dns(PublicNetworkDns())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
-            .build()
+        if (sourceOrigin != null && suppliedHeaders.isNotEmpty()) {
+            // The same Media3 data-source factory also loads external subtitle
+            // files and cross-origin playlist segments. Never forward account
+            // credentials or add-on-specific secret headers outside the exact
+            // origin for which they were supplied.
+            httpClientBuilder.addNetworkInterceptor { chain ->
+                val request = chain.request()
+                val requestOrigin = NetworkRequestPolicy.origin(
+                    request.url.scheme,
+                    request.url.host,
+                    request.url.port,
+                )
+                val builder = request.newBuilder()
+                suppliedHeaders.keys
+                    .filterNot { header ->
+                        NetworkRequestPolicy.shouldForwardHeader(
+                            header,
+                            sourceOrigin,
+                            requestOrigin,
+                        )
+                    }
+                    .forEach(builder::removeHeader)
+                chain.proceed(builder.build())
+            }
+        }
+        val httpClient = httpClientBuilder.build()
         val requestHeaders = linkedMapOf(
             "Accept" to "*/*",
             "User-Agent" to "TetoTV/1.7 AndroidTV Media3",
-        ).apply { putAll(intentHeaders()) }
+        ).apply { putAll(suppliedHeaders) }
         val httpFactory = OkHttpDataSource.Factory(httpClient)
             .setUserAgent(requestHeaders.getValue("User-Agent"))
             .setDefaultRequestProperties(requestHeaders)
@@ -555,12 +586,15 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         )?.let(builder::setMimeType)
 
         val subtitleUrl = intent.getStringExtra(EXTRA_SUBTITLE_URL)?.let(::normalizeMediaUri)
-        if (!subtitleUrl.isNullOrBlank()) {
+        val allowedSubtitleUrl = subtitleUrl?.takeIf {
+            it == SMOKE_SUBTITLE_URI || NetworkRequestPolicy.httpsOrigin(it) != null
+        }
+        if (!allowedSubtitleUrl.isNullOrBlank()) {
             val subtitleMime = inferSubtitleMimeType(
                 intent.getStringExtra(EXTRA_SUBTITLE_MIME_TYPE),
-                subtitleUrl,
+                allowedSubtitleUrl,
             )
-            val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
+            val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.parse(allowedSubtitleUrl))
                 .setMimeType(subtitleMime)
                 .setLanguage(intent.getStringExtra(EXTRA_SUBTITLE_LANGUAGE) ?: "en")
                 .setLabel(intent.getStringExtra(EXTRA_SUBTITLE_LABEL) ?: "Subtitles")
@@ -641,8 +675,25 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         val successful = response.isSuccessful
                         val retryableStatus = response.code == 429 || response.code >= 500
                         val parsed = if (successful) {
-                            val payload = response.body?.string().orEmpty()
-                            runCatching { parseSkipSegments(payload, durationMs) }.getOrNull()
+                            val body = response.body
+                            val contentLength = body?.contentLength() ?: 0L
+                            val payload = runCatching {
+                                body?.source()?.let { source ->
+                                    if (contentLength > MAX_SKIP_RESPONSE_BYTES) {
+                                        null
+                                    } else {
+                                        source.request(MAX_SKIP_RESPONSE_BYTES + 1L)
+                                        if (source.buffer.size > MAX_SKIP_RESPONSE_BYTES) {
+                                            null
+                                        } else {
+                                            source.buffer.clone().readUtf8()
+                                        }
+                                    }
+                                }
+                            }.getOrNull()
+                            payload?.let {
+                                runCatching { parseSkipSegments(it, durationMs) }.getOrNull()
+                            }
                         } else {
                             null
                         }
@@ -750,8 +801,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     override fun onPlayerError(error: PlaybackException) {
         terminalError = buildString {
             append(error.errorCodeName)
-            if (!error.message.isNullOrBlank()) append(": ${error.message}")
-            error.cause?.let { append(" (${it.javaClass.simpleName}: ${it.message})") }
+            NetworkRequestPolicy.redactNetworkDiagnostic(error.message)?.let {
+                append(": $it")
+            }
+            error.cause?.let { cause ->
+                append(" (${cause.javaClass.simpleName}")
+                NetworkRequestPolicy.redactNetworkDiagnostic(cause.message)?.let {
+                    append(": $it")
+                }
+                append(')')
+            }
         }
         finishWithResult(STATUS_ERROR)
     }
@@ -1524,6 +1583,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         exitDialog = null
         activeTrackDialog?.dismiss()
         activeTrackDialog = null
+        metadataClient.dispatcher.cancelAll()
+        metadataClient.connectionPool.evictAll()
         handler.removeCallbacksAndMessages(null)
         if (::playerView.isInitialized) {
             (playerView.videoSurfaceView as? SurfaceView)?.holder?.removeCallback(surfaceCallback)
@@ -1696,6 +1757,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3
+        private const val MAX_SKIP_RESPONSE_BYTES = 256L * 1024L
         private const val SKIP_FETCH_RETRY_BASE_MS = 2_000L
         private const val MIN_SKIP_SEGMENT_MS = 8_000L
         private const val MAX_SKIP_SEGMENT_MS = 240_000L

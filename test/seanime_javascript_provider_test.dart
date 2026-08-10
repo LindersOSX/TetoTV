@@ -6,6 +6,69 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('sanitizes untrusted addon request and playback headers', () {
+    final headers = sanitizeAddonHeaders({
+      'Referer': 'https://example.com/',
+      'Host': 'internal.example',
+      'Content-Length': '999',
+      'X-Injected': 'safe\r\nAuthorization: hidden',
+      'Authorization': 'Bearer provider-session',
+      'X-Api-Key': 'provider-api-secret',
+      'X-Auth-Token': 'provider-auth-secret',
+    });
+
+    expect(headers['Referer'], 'https://example.com/');
+    expect(headers['Authorization'], 'Bearer provider-session');
+    expect(headers, isNot(contains('Host')));
+    expect(headers, isNot(contains('Content-Length')));
+    expect(headers, isNot(contains('X-Injected')));
+
+    final redirected = sanitizeAddonHeaders(headers, stripCredentials: true);
+    expect(redirected, isNot(contains('Authorization')));
+    expect(redirected, isNot(contains('X-Api-Key')));
+    expect(redirected, isNot(contains('X-Auth-Token')));
+    expect(redirected['Referer'], 'https://example.com/');
+  });
+
+  test(
+    'bounds addon network concurrency, request count, and responses',
+    () async {
+      final budget = AddonRuntimeNetworkBudget(
+        maximumRequests: 4,
+        maximumConcurrentRequests: 1,
+        maximumResponseBytes: 8,
+      );
+      await budget.acquire();
+      var secondStarted = false;
+      final second = budget.acquire().then((_) => secondStarted = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(secondStarted, isFalse);
+      budget.release();
+      await second;
+      budget.recordResponse('1234');
+      budget.release();
+
+      await budget.acquire();
+      expect(
+        () => budget.recordResponse('56789'),
+        throwsA(isA<FormatException>()),
+      );
+      budget.release();
+      await expectLater(budget.acquire(), throwsA(isA<FormatException>()));
+
+      final requestBudget = AddonRuntimeNetworkBudget(
+        maximumRequests: 1,
+        maximumConcurrentRequests: 1,
+      );
+      await requestBudget.acquire();
+      requestBudget.release();
+      await expectLater(
+        requestBudget.acquire(),
+        throwsA(isA<FormatException>()),
+      );
+    },
+  );
+
   test('no-match provider outcomes are not treated as runtime failures', () {
     expect(
       isSeanimeProviderNoMatch(

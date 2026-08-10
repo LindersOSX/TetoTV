@@ -18,13 +18,17 @@ import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/diagnostics_screen.dart';
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
+import 'package:anime_tv/features/settings/presentation/privacy_screen.dart';
+import 'package:anime_tv/features/settings/presentation/third_party_notices_screen.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 final appRouter = GoRouter(
+  errorBuilder: (context, state) => const _InvalidRouteScreen(),
   routes: [
     GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
     GoRoute(
@@ -50,34 +54,56 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/anime/:id',
-      builder: (context, state) =>
-          AnimeDetailsScreen(animeId: int.parse(state.pathParameters['id']!)),
+      builder: (context, state) {
+        final id = positiveRouteInt(state.pathParameters['id']);
+        return id == null
+            ? const _InvalidRouteScreen()
+            : AnimeDetailsScreen(animeId: id);
+      },
     ),
     GoRoute(
       path: '/anime/:id/franchise',
-      builder: (context, state) =>
-          FranchiseScreen(mediaId: int.parse(state.pathParameters['id']!)),
+      builder: (context, state) {
+        final id = positiveRouteInt(state.pathParameters['id']);
+        return id == null
+            ? const _InvalidRouteScreen()
+            : FranchiseScreen(mediaId: id);
+      },
     ),
     GoRoute(
       path: '/anime/:id/credits',
-      builder: (context, state) =>
-          CreditsScreen(mediaId: int.parse(state.pathParameters['id']!)),
+      builder: (context, state) {
+        final id = positiveRouteInt(state.pathParameters['id']);
+        return id == null
+            ? const _InvalidRouteScreen()
+            : CreditsScreen(mediaId: id);
+      },
     ),
     GoRoute(
       path: '/studio/:id',
-      builder: (context, state) => CatalogCollectionScreen(
-        id: int.parse(state.pathParameters['id']!),
-        name: state.uri.queryParameters['name'] ?? 'Studio',
-        type: CatalogCollectionType.studio,
-      ),
+      builder: (context, state) {
+        final id = positiveRouteInt(state.pathParameters['id']);
+        return id == null
+            ? const _InvalidRouteScreen()
+            : CatalogCollectionScreen(
+                id: id,
+                name: state.uri.queryParameters['name'] ?? 'Studio',
+                type: CatalogCollectionType.studio,
+              );
+      },
     ),
     GoRoute(
       path: '/staff/:id',
-      builder: (context, state) => CatalogCollectionScreen(
-        id: int.parse(state.pathParameters['id']!),
-        name: state.uri.queryParameters['name'] ?? 'Staff member',
-        type: CatalogCollectionType.staff,
-      ),
+      builder: (context, state) {
+        final id = positiveRouteInt(state.pathParameters['id']);
+        return id == null
+            ? const _InvalidRouteScreen()
+            : CatalogCollectionScreen(
+                id: id,
+                name: state.uri.queryParameters['name'] ?? 'Staff member',
+                type: CatalogCollectionType.staff,
+              );
+      },
     ),
     GoRoute(
       path: '/pair/anilist',
@@ -118,6 +144,14 @@ final appRouter = GoRouter(
       builder: (context, state) => const DiagnosticsScreen(),
     ),
     GoRoute(
+      path: '/settings/privacy',
+      builder: (context, state) => const PrivacyScreen(),
+    ),
+    GoRoute(
+      path: '/settings/notices',
+      builder: (context, state) => const ThirdPartyNoticesScreen(),
+    ),
+    GoRoute(
       path: '/settings/marketplace',
       builder: (context, state) => const MarketplaceScreen(),
     ),
@@ -125,13 +159,21 @@ final appRouter = GoRouter(
       path: '/resolve',
       builder: (context, state) {
         final query = state.uri.queryParameters;
+        final anilistMediaId = positiveRouteInt(query['anilistId']);
+        final episodeValue = query['episode'];
+        final episode = episodeValue == null
+            ? 1
+            : positiveRouteInt(episodeValue);
+        if (anilistMediaId == null || episode == null) {
+          return const _InvalidRouteScreen();
+        }
         return ResolveEpisodeScreen(
           episode: EpisodeReference(
-            anilistMediaId: int.parse(query['anilistId']!),
-            malMediaId: int.tryParse(query['malId'] ?? ''),
-            year: int.tryParse(query['year'] ?? ''),
+            anilistMediaId: anilistMediaId,
+            malMediaId: positiveRouteInt(query['malId']),
+            year: positiveRouteInt(query['year']),
             title: query['title'] ?? 'Anime',
-            episode: int.parse(query['episode'] ?? '1'),
+            episode: episode,
             alternativeTitles:
                 query['synonyms']
                     ?.split('|')
@@ -181,3 +223,45 @@ final appRouter = GoRouter(
     ),
   ],
 );
+
+int? positiveRouteInt(String? value) {
+  final parsed = int.tryParse(value ?? '');
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+class _InvalidRouteScreen extends StatelessWidget {
+  const _InvalidRouteScreen();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.link_off_rounded, size: 56),
+                const SizedBox(height: 16),
+                Text(
+                  'This link is invalid or incomplete.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  autofocus: true,
+                  onPressed: () => context.go('/'),
+                  icon: const Icon(Icons.home_rounded),
+                  label: const Text('Go home'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}

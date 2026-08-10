@@ -101,36 +101,37 @@ class TrackingTokenService {
       rethrow;
     }
 
-    final writes = <Future<void>>[
-      _storage.write(key: provider.tokenStorageKey, value: tokens.accessToken),
-    ];
     if (tokens.refreshToken case final rotated? when rotated.isNotEmpty) {
-      writes.add(
-        _storage.write(key: provider.refreshTokenStorageKey, value: rotated),
+      // Rotating refresh tokens must be committed before the new access
+      // token. A process interruption can then retry with the new refresh
+      // token instead of stranding a new access token with an invalidated one.
+      await _storage.write(
+        key: provider.refreshTokenStorageKey,
+        value: rotated,
       );
     }
+    await _storage.write(
+      key: provider.tokenStorageKey,
+      value: tokens.accessToken,
+    );
     if (tokens.expiresAt case final newExpiry?) {
-      writes.add(
-        _storage.write(
-          key: provider.expiresAtStorageKey,
-          value: newExpiry.toUtc().toIso8601String(),
-        ),
+      await _storage.write(
+        key: provider.expiresAtStorageKey,
+        value: newExpiry.toUtc().toIso8601String(),
       );
     } else {
-      writes.add(_storage.delete(key: provider.expiresAtStorageKey));
+      await _storage.delete(key: provider.expiresAtStorageKey);
     }
-    await Future.wait(writes);
     return tokens.accessToken;
   }
 
   Future<void> save(TrackingProvider provider, String token) async {
-    await Future.wait([
-      _storage.write(key: provider.tokenStorageKey, value: token.trim()),
-      // A manually entered token must not inherit an older QR session's
-      // refresh metadata or it can later be silently overwritten.
-      _storage.delete(key: provider.refreshTokenStorageKey),
-      _storage.delete(key: provider.expiresAtStorageKey),
-    ]);
+    // Clear rotated-session metadata first. If the app is interrupted, the
+    // previous access token remains usable but can no longer be silently
+    // overwritten by stale refresh metadata.
+    await _storage.delete(key: provider.refreshTokenStorageKey);
+    await _storage.delete(key: provider.expiresAtStorageKey);
+    await _storage.write(key: provider.tokenStorageKey, value: token.trim());
   }
 
   Future<void> clear(TrackingProvider provider) async {

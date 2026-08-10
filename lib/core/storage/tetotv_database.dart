@@ -478,7 +478,7 @@ class TetoTvDatabase {
       [
         deviceKey,
         infoHash.toLowerCase(),
-        reason,
+        redactDiagnosticValue(reason),
         DateTime.now().millisecondsSinceEpoch,
       ],
     );
@@ -772,8 +772,30 @@ class TetoTvDatabase {
           },
       ],
       'recentFrameTimings': timings,
-      'diagnosticEvents': events,
-      'providerHealth': providers,
+      // Redact again at the export boundary. This also protects reports that
+      // include rows written by an older app build with narrower rules.
+      'diagnosticEvents': [
+        for (final row in events)
+          {
+            ...row,
+            if (row['category'] case final String value)
+              'category': redactDiagnosticValue(value, maximum: 48),
+            if (row['message'] case final String value)
+              'message': redactDiagnosticValue(value, maximum: 500),
+            if (row['details_json'] case final String value)
+              'details_json': redactDiagnosticValue(value, maximum: 2000),
+          },
+      ],
+      'providerHealth': [
+        for (final row in providers)
+          {
+            ...row,
+            if (row['provider_id'] case final String value)
+              'provider_id': redactDiagnosticValue(value, maximum: 120),
+            if (row['last_error'] case final String value)
+              'last_error': redactDiagnosticValue(value, maximum: 300),
+          },
+      ],
       'devicePlayerProfiles': playerProfiles,
     };
   }
@@ -850,7 +872,7 @@ Future<void> _createReliabilityTables(DatabaseExecutor db) async {
 String redactDiagnosticValue(String value, {int maximum = 500}) {
   var redacted = value
       .replaceAll(
-        RegExp(r'''https://[^\s"']+''', caseSensitive: false),
+        RegExp(r'''https?://[^\s"']+''', caseSensitive: false),
         '[URL]',
       )
       .replaceAll(
@@ -858,11 +880,27 @@ String redactDiagnosticValue(String value, {int maximum = 500}) {
         '[MAGNET]',
       )
       .replaceAll(
+        RegExp(r'\bgithub_pat_[A-Za-z0-9_]+\b', caseSensitive: false),
+        '[REDACTED]',
+      )
+      .replaceAll(
+        RegExp(r'\bgh[pousr]_[A-Za-z0-9]{20,}\b', caseSensitive: false),
+        '[REDACTED]',
+      )
+      .replaceAll(
+        RegExp(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'),
+        '[REDACTED]',
+      )
+      .replaceAll(
+        RegExp(r'\bbearer\s+[^\s,;"\x27]+', caseSensitive: false),
+        'Bearer [REDACTED]',
+      )
+      .replaceAll(
         RegExp(
-          r'(bearer|token|api[_ -]?key)\s*[:= ]\s*[^\s,;]+',
+          r'''(["']?(?:authorization|access[_ -]?token|refresh[_ -]?token|token|api[_ -]?key|client[_ -]?secret|password)["']?\s*[:=]\s*["']?)[^\s,;"']+''',
           caseSensitive: false,
         ),
-        r'$1=[REDACTED]',
+        '[REDACTED]',
       )
       .replaceAll(RegExp(r'\b[a-fA-F0-9]{40}\b'), '[INFO_HASH]')
       .replaceAll(RegExp(r'[\r\n]+'), ' ')

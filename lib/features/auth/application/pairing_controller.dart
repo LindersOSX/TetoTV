@@ -122,23 +122,23 @@ class PairingController extends StateNotifier<AsyncValue<PairingSession?>> {
         }
         final refreshToken = result.refreshToken;
         final expiresAt = result.expiresAt;
-        await Future.wait([
-          _storage.write(key: _provider.tokenStorageKey, value: token),
-          if (refreshToken != null && refreshToken.isNotEmpty)
-            _storage.write(
-              key: _provider.refreshTokenStorageKey,
-              value: refreshToken,
-            )
-          else
-            _storage.delete(key: _provider.refreshTokenStorageKey),
-          if (expiresAt != null)
-            _storage.write(
-              key: _provider.expiresAtStorageKey,
-              value: expiresAt.toUtc().toIso8601String(),
-            )
-          else
-            _storage.delete(key: _provider.expiresAtStorageKey),
-        ]);
+        if (refreshToken != null && refreshToken.isNotEmpty) {
+          await _storage.write(
+            key: _provider.refreshTokenStorageKey,
+            value: refreshToken,
+          );
+        } else {
+          await _storage.delete(key: _provider.refreshTokenStorageKey);
+        }
+        await _storage.write(key: _provider.tokenStorageKey, value: token);
+        if (expiresAt != null) {
+          await _storage.write(
+            key: _provider.expiresAtStorageKey,
+            value: expiresAt.toUtc().toIso8601String(),
+          );
+        } else {
+          await _storage.delete(key: _provider.expiresAtStorageKey);
+        }
         if (!mounted || generation != _generation) return;
         _pollTimer?.cancel();
       } else if (result.status == PairingStatus.expired) {

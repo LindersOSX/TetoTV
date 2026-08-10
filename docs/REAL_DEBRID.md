@@ -1,15 +1,14 @@
 # Real-Debrid integration
 
-The app supports two account setup paths:
+The app uses Real-Debrid's official open-source device OAuth flow. The TV
+displays `https://real-debrid.com/device` as a QR code and a short user code.
+Access token, refresh token, and user-bound client credentials are encrypted
+with `flutter_secure_storage`.
 
-1. **Connect by phone** uses Real-Debrid's official open-source device OAuth
-   flow. The TV displays `https://real-debrid.com/device` as a QR code and a
-   short user code. Access token, refresh token, and user-bound client
-   credentials are encrypted with `flutter_secure_storage`.
-2. **Personal token** accepts a token from
-   `https://real-debrid.com/apitoken`. The app calls `GET /user` first and only
-   saves a valid token. This is intended for personal sideloading; do not ship
-   private tokens inside a public APK.
+TetoTV does not ask users to paste a Real-Debrid private API token. Existing
+encrypted credentials from older private builds remain usable until the user
+disconnects the account, but new connections use device OAuth only. Never ship
+account tokens inside an APK or source file.
 
 The OAuth client automatically refreshes an expiring access token when refresh
 credentials are present. Disconnect removes all Real-Debrid credentials from

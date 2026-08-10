@@ -162,6 +162,33 @@ void main() {
     },
   );
 
+  test(
+    'serializes rapid writes so the newest preference persists last',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final firstWriteGate = Completer<void>();
+      final writes = <String>[];
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+        writeValue: (key, value) async {
+          writes.add(value);
+          if (value == '0.8') await firstWriteGate.future;
+        },
+      );
+
+      final first = controller.setInterfaceScale(.8);
+      await Future<void>.delayed(Duration.zero);
+      final second = controller.setInterfaceScale(1.2);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(writes, ['0.8']);
+      expect(controller.state.interfaceScale, 1.2);
+      firstWriteGate.complete();
+      await Future.wait([first, second]);
+      expect(writes, ['0.8', '1.2']);
+    },
+  );
+
   test('tracker threshold only completes a whole episode when crossed', () {
     const duration = Duration(minutes: 24);
 

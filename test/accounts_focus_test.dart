@@ -148,7 +148,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
-    expect(find.text('Advanced: personal token'), findsOneWidget);
+    expect(find.text('Advanced: personal token'), findsNothing);
+    expect(find.text('Connect by QR'), findsOneWidget);
     expect(find.text('Debrid provider'), findsWidgets);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -216,6 +217,19 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.check',
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.privacy',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.legal',
+    );
+    expect(find.text('Third-party notices'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -342,6 +356,9 @@ void main() {
         LogicalKeyboardKey.arrowRight,
         LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.enter,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.arrowDown,
       ]) {
@@ -351,7 +368,7 @@ void main() {
 
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.debrid.token',
+        'accounts.torbox.token',
       );
       expect(tester.testTextInput.isVisible, isFalse);
 
@@ -379,7 +396,7 @@ void main() {
       }
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.debrid.token',
+        'accounts.torbox.token',
       );
       expect(tester.testTextInput.isVisible, isFalse);
 

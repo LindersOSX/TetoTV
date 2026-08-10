@@ -78,20 +78,18 @@ class DebridTokenService {
         clientSecret: values[1]!,
         refreshToken: values[2]!,
       );
-      await Future.wait([
-        _storage.write(
-          key: realDebridTokenStorageKey,
-          value: tokens.accessToken,
-        ),
-        _storage.write(
-          key: realDebridRefreshTokenStorageKey,
-          value: tokens.refreshToken,
-        ),
-        _storage.write(
-          key: realDebridAccessExpiryStorageKey,
-          value: tokens.expiresAt.toUtc().toIso8601String(),
-        ),
-      ]);
+      await _storage.write(
+        key: realDebridRefreshTokenStorageKey,
+        value: tokens.refreshToken,
+      );
+      await _storage.write(
+        key: realDebridTokenStorageKey,
+        value: tokens.accessToken,
+      );
+      await _storage.write(
+        key: realDebridAccessExpiryStorageKey,
+        value: tokens.expiresAt.toUtc().toIso8601String(),
+      );
       return tokens.accessToken;
     } catch (_) {
       // A refresh can fail briefly before the current token actually expires.

@@ -1042,7 +1042,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             completed: completed,
           ),
         );
-    if (force) ref.invalidate(recentPlaybackProvider);
+    if (force && mounted) ref.invalidate(recentPlaybackProvider);
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
         mediaId: mediaId,
@@ -1756,6 +1756,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       case 'rate':
         final rate = result.value as double;
         await _player.setRate(rate);
+        if (!mounted) return;
         setState(() => _playbackRate = rate);
         _showTrackMessage('Playback speed ${rate}x');
       case 'subtitleSize':
@@ -1784,8 +1785,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       case 'retry':
         await _retryPlayback();
     }
+    if (!mounted) return;
     await _applyPlayerTuning();
+    if (!mounted) return;
     await _saveSeriesPreferences();
+    if (!mounted) return;
     _scheduleControlsHide();
   }
 
@@ -2098,6 +2102,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (!mounted) return;
     if (exit == true) {
       await _persistPlayback(_player.state.position, force: true);
+      if (!mounted) return;
       setState(() => _allowExit = true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && context.canPop()) context.pop();

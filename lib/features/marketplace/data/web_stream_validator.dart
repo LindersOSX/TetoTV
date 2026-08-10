@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 
 class ValidatedWebStream {
   const ValidatedWebStream({
@@ -25,7 +26,7 @@ class WebStreamValidator {
     Uri uri,
     Map<String, String> headers,
   ) async {
-    final sanitized = sanitizeWebStreamHeaders(headers);
+    var sanitized = sanitizeWebStreamHeaders(headers);
     var target = uri;
     for (var redirect = 0; redirect <= 4; redirect++) {
       await validatePublicNetworkTarget(target);
@@ -48,7 +49,14 @@ class WebStreamValidator {
               'The provider returned too many redirects.',
             );
           }
-          target = target.resolve(location);
+          final redirected = target.resolve(location);
+          if (!_sameOrigin(target, redirected)) {
+            sanitized = sanitizeWebStreamHeaders(
+              sanitized,
+              stripCredentials: true,
+            );
+          }
+          target = redirected;
           continue;
         }
         if (response.statusCode == HttpStatus.unauthorized ||
@@ -91,22 +99,15 @@ class WebStreamValidator {
   }
 }
 
-Map<String, String> sanitizeWebStreamHeaders(Map<String, String> headers) {
-  const blocked = {
-    'host',
-    'connection',
-    'content-length',
-    'transfer-encoding',
-    'proxy-authorization',
-  };
-  return {
-    for (final entry in headers.entries)
-      if (!blocked.contains(entry.key.trim().toLowerCase()) &&
-          entry.key.trim().isNotEmpty &&
-          !entry.value.contains(RegExp(r'[\r\n]')))
-        entry.key.trim(): entry.value.trim(),
-  };
-}
+Map<String, String> sanitizeWebStreamHeaders(
+  Map<String, String> headers, {
+  bool stripCredentials = false,
+}) => sanitizeAddonHeaders(headers, stripCredentials: stripCredentials);
+
+bool _sameOrigin(Uri left, Uri right) =>
+    left.scheme == right.scheme &&
+    left.host.toLowerCase() == right.host.toLowerCase() &&
+    left.port == right.port;
 
 bool isPlayableWebResponse(Uri uri, String contentType, String sample) {
   final mime = contentType.toLowerCase().split(';').first.trim();

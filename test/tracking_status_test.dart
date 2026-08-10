@@ -1,7 +1,9 @@
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/myanimelist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
   test('maps all tracker list states to AniList values', () {
@@ -19,4 +21,19 @@ void main() {
     expect(myAnimeListStatus(TrackingListStatus.dropped), 'dropped');
     expect(myAnimeListStatus(TrackingListStatus.onHold), 'on_hold');
   });
+
+  test(
+    'status updater remains alive without a UI state subscription',
+    () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      final notifier = container.read(
+        trackingStatusControllerProvider.notifier,
+      );
+      await container.pump();
+
+      expect(notifier.mounted, isTrue);
+    },
+  );
 }

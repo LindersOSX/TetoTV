@@ -1,2 +1,4 @@
 assets/addon_runtime/linkedom.js -diff
 assets/typescript/sucrase.js -diff
+assets/addon_runtime/JS_RUNTIME_NOTICES.txt text eol=lf whitespace=-trailing-space
+third_party/flutter_js/android/src/main/c/** text eol=lf whitespace=-trailing-space

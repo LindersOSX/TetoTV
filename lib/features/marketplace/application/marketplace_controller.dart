@@ -66,7 +66,9 @@ class MarketplaceState {
 
   bool updateAvailable(MarketplaceAddon addon) {
     final current = installedById(addon.id);
-    return current != null && _installedAddonNeedsRefresh(current, addon);
+    return current != null &&
+        addonProvenanceMatches(current, addon) &&
+        _installedAddonNeedsRefresh(current, addon);
   }
 }
 
@@ -81,11 +83,16 @@ final marketplaceControllerProvider =
     });
 
 class MarketplaceController extends StateNotifier<MarketplaceState> {
-  MarketplaceController(this._store, this._client)
-    : super(const MarketplaceState());
+  MarketplaceController(
+    this._store,
+    this._client, {
+    Future<void> Function(Uri uri)? targetValidator,
+  }) : _targetValidator = targetValidator ?? validatePublicNetworkTarget,
+       super(const MarketplaceState());
 
   final AddonStore _store;
   final MarketplaceClient _client;
+  final Future<void> Function(Uri uri) _targetValidator;
 
   Future<void> load() async {
     try {
@@ -180,6 +187,11 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     if (state.repositories.length >= 32) {
       return 'Remove a repository before adding another (maximum 32).';
     }
+    try {
+      await _targetValidator(uri);
+    } catch (_) {
+      return 'The repository must resolve to a public HTTPS address.';
+    }
     final repository = AddonRepository(
       url: normalized,
       updatedAt: DateTime.now(),
@@ -222,10 +234,23 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     if (!addon.isCompatible) {
       throw const FormatException('This provider runtime is not supported.');
     }
+    final previous = state.installedById(addon.id);
+    if (previous != null && !addonProvenanceMatches(previous, addon)) {
+      throw const FormatException(
+        'Another repository already owns this provider ID. Uninstall it '
+        'before installing code from a different repository.',
+      );
+    }
     state = state.copyWith(busyAddonId: addon.id);
     try {
       final downloaded = await _client.downloadAddon(addon);
-      final previous = state.installedById(addon.id);
+      if (previous != null &&
+          !addonProvenanceMatches(previous, downloaded.manifest)) {
+        throw const FormatException(
+          'Another repository already owns this provider ID. Uninstall it '
+          'before installing code from a different repository.',
+        );
+      }
       final installed = InstalledStreamingAddon(
         manifest: downloaded.manifest,
         payload: downloaded.payload,
@@ -329,6 +354,16 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     );
   }
 }
+
+/// An add-on ID alone is not a trusted update identity. A second repository
+/// may legitimately or maliciously reuse it, so executable replacement is
+/// allowed only from the repository the user originally installed.
+bool addonProvenanceMatches(
+  InstalledStreamingAddon installed,
+  MarketplaceAddon candidate,
+) =>
+    installed.manifest.id == candidate.id &&
+    installed.manifest.repositoryUrl == candidate.repositoryUrl;
 
 bool _installedAddonNeedsRefresh(
   InstalledStreamingAddon installed,

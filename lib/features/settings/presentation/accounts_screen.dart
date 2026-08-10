@@ -30,7 +30,6 @@ class AccountsScreen extends ConsumerStatefulWidget {
 
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   _SettingsArea _activeArea = _SettingsArea.customize;
-  final _tokenController = TextEditingController();
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
@@ -94,6 +93,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.updates.automatic',
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
+  final _privacyFocus = FocusNode(debugLabel: 'accounts.system.privacy');
   final _legalFocus = FocusNode(debugLabel: 'accounts.system.legal');
   final _areaFocusNodes = {
     for (final area in _SettingsArea.values)
@@ -106,7 +106,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
 
   @override
   void dispose() {
-    _tokenController.dispose();
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
@@ -142,6 +141,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _malSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
+    _privacyFocus.dispose();
     _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
       node.dispose();
@@ -365,9 +365,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) {
         target = _automaticUpdatesFocus;
       }
-      if (key == LogicalKeyboardKey.arrowDown) target = _legalFocus;
-    } else if (current == _legalFocus) {
+      if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
+    } else if (current == _privacyFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowRight ||
+          key == LogicalKeyboardKey.arrowDown) {
+        target = _legalFocus;
+      }
+    } else if (current == _legalFocus) {
+      if (key == LogicalKeyboardKey.arrowLeft ||
+          key == LogicalKeyboardKey.arrowUp) {
+        target = _privacyFocus;
+      }
     }
 
     if (target == null || target.context == null) {
@@ -596,15 +605,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       switch (preferences.debridProvider) {
                         DebridService.realDebrid => _RealDebridPanel(
                           state: debrid,
-                          tokenController: _tokenController,
-                          onSave: () async {
-                            final saved = await ref
-                                .read(
-                                  realDebridSettingsControllerProvider.notifier,
-                                )
-                                .saveAndValidate(_tokenController.text);
-                            if (saved) _tokenController.clear();
-                          },
                           onDisconnect: () => ref
                               .read(
                                 realDebridSettingsControllerProvider.notifier,
@@ -613,8 +613,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           onDeviceConnect: () =>
                               context.push('/pair/realdebrid'),
                           connectFocusNode: _debridConnectFocus,
-                          tokenFocusNode: _tokenFocus,
-                          saveFocusNode: _tokenSaveFocus,
                         ),
                         DebridService.torBox => _TorBoxPanel(
                           state: torBox,
@@ -934,10 +932,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         icon: Icons.info_rounded,
                         title: 'ABOUT & LEGAL',
                         subtitle:
-                            'Independent software, attribution, and open-source notices.',
+                            'Privacy, attribution, and open-source notices.',
                       ),
                       const SizedBox(height: 8),
-                      _LegalNoticesPanel(focusNode: _legalFocus),
+                      _LegalNoticesPanel(
+                        privacyFocusNode: _privacyFocus,
+                        licenseFocusNode: _legalFocus,
+                      ),
                     ],
                   ],
                 ),
@@ -2230,9 +2231,13 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _LegalNoticesPanel extends StatelessWidget {
-  const _LegalNoticesPanel({required this.focusNode});
+  const _LegalNoticesPanel({
+    required this.privacyFocusNode,
+    required this.licenseFocusNode,
+  });
 
-  final FocusNode focusNode;
+  final FocusNode privacyFocusNode;
+  final FocusNode licenseFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -2267,15 +2272,24 @@ class _LegalNoticesPanel extends StatelessWidget {
               ),
             ],
           );
-          final licenses = _TvTextButton(
-            label: 'Open-source licenses',
-            icon: Icons.description_rounded,
-            focusNode: focusNode,
-            onPressed: () => showLicensePage(
-              context: context,
-              applicationName: 'TetoTV',
-              applicationLegalese: '$notice\n\n$attribution',
-            ),
+          final actions = Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.end,
+            children: [
+              _TvTextButton(
+                label: 'Privacy & data',
+                icon: Icons.privacy_tip_rounded,
+                focusNode: privacyFocusNode,
+                onPressed: () => context.push('/settings/privacy'),
+              ),
+              _TvTextButton(
+                label: 'Third-party notices',
+                icon: Icons.description_rounded,
+                focusNode: licenseFocusNode,
+                onPressed: () => context.push('/settings/notices'),
+              ),
+            ],
           );
           if (constraints.maxWidth < 620) {
             return Column(
@@ -2283,7 +2297,7 @@ class _LegalNoticesPanel extends StatelessWidget {
               children: [
                 copy,
                 const SizedBox(height: 12),
-                Align(alignment: Alignment.centerRight, child: licenses),
+                Align(alignment: Alignment.centerRight, child: actions),
               ],
             );
           }
@@ -2291,7 +2305,7 @@ class _LegalNoticesPanel extends StatelessWidget {
             children: [
               Expanded(child: copy),
               const SizedBox(width: 18),
-              licenses,
+              actions,
             ],
           );
         },
@@ -2383,23 +2397,15 @@ class _ServiceAccountHeader extends StatelessWidget {
 class _RealDebridPanel extends StatelessWidget {
   const _RealDebridPanel({
     required this.state,
-    required this.tokenController,
-    required this.onSave,
     required this.onDisconnect,
     required this.onDeviceConnect,
     required this.connectFocusNode,
-    required this.tokenFocusNode,
-    required this.saveFocusNode,
   });
 
   final RealDebridSettingsState state;
-  final TextEditingController tokenController;
-  final VoidCallback onSave;
   final VoidCallback onDisconnect;
   final VoidCallback onDeviceConnect;
   final FocusNode connectFocusNode;
-  final FocusNode tokenFocusNode;
-  final FocusNode saveFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -2422,7 +2428,7 @@ class _RealDebridPanel extends StatelessWidget {
                   : account.type.toUpperCase(),
             ),
             description: account == null
-                ? 'Authorize on your phone, or use a personal API token below.'
+                ? 'Authorize securely with Real-Debrid on your phone or computer.'
                 : 'Connected as ${account.username}. Cached torrents will '
                       'resolve almost instantly.',
             action: account == null
@@ -2446,31 +2452,6 @@ class _RealDebridPanel extends StatelessWidget {
               child: Text(
                 error,
                 style: const TextStyle(color: Color(0xFFFF929B)),
-              ),
-            ),
-          ],
-          if (account == null) ...[
-            const SizedBox(height: 10),
-            Divider(color: Colors.white.withValues(alpha: .08), height: 1),
-            const SizedBox(height: 10),
-            _ResponsiveTokenRow(
-              title: 'Advanced: personal token',
-              input: TvTextInput(
-                focusNode: tokenFocusNode,
-                controller: tokenController,
-                labelText: 'Personal API token',
-                hintText: 'Select to open the TV keyboard',
-                keyboardTitle: 'Enter Real-Debrid token',
-                obscureText: true,
-                onSubmitted: (_) => onSave(),
-              ),
-              action: _TvTextButton(
-                label: state.isLoading ? 'Checking…' : 'Save & verify',
-                icon: state.isLoading
-                    ? Icons.sync_rounded
-                    : Icons.verified_user_rounded,
-                onPressed: state.isLoading ? null : onSave,
-                focusNode: saveFocusNode,
               ),
             ),
           ],

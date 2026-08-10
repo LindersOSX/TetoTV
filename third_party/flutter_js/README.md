@@ -308,6 +308,10 @@ We just separated the code to allow build it and in this repository we have only
 
 ## QuickJs Android shared libraries
 
+> **TetoTV fork:** this checkout does not consume the historical JitPack AAR.
+> It builds the pinned QuickJS 2026-06-04 sources in `android/src/main/c` and
+> verifies their provenance with `tool/android/verify_vendored_quickjs.ps1`.
+
 The library wrapper, both QuickJS and JavascriptCore, are also compiled in a separated repository: https://github.com/fast-development/android-js-runtimes
 
 With the library being compiled and published to jitpack, applications using the wrappers, through flutter_js does not need to compile the shared library using Android NDK.

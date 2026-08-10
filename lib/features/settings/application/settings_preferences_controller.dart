@@ -284,17 +284,24 @@ final settingsPreferencesProvider =
     });
 
 class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
-  SettingsPreferencesController(this._storage, {this.readValue})
-    : super(const SettingsPreferences());
+  SettingsPreferencesController(
+    this._storage, {
+    this.readValue,
+    this.writeValue,
+    this.deleteValue,
+  }) : super(const SettingsPreferences());
 
   final FlutterSecureStorage _storage;
   final Future<String?> Function(String key)? readValue;
+  final Future<void> Function(String key, String value)? writeValue;
+  final Future<void> Function(String key)? deleteValue;
   bool _initialLandingPageConsumed = false;
   Future<void>? _loadFuture;
   bool _initialLoadComplete = false;
   int _revision = 0;
   final Map<String, int> _keyRevisions = {};
   final Set<String> _preloadMutations = {};
+  Future<void> _storageTail = Future<void>.value();
 
   /// Returns the configured non-Home route once per app process. This avoids
   /// redirecting again when the user intentionally navigates back to Home.
@@ -650,7 +657,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_defaultLandingPageKey: value.name},
   );
 
-  Future<void> resetCustomization() async {
+  Future<void> resetCustomization() {
     const defaults = SettingsPreferences();
     const keys = [
       _homeLayoutKey,
@@ -679,12 +686,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       clickSounds: defaults.clickSounds,
       defaultLandingPage: defaults.defaultLandingPage,
     );
-    for (final key in keys) {
-      await _storage.delete(key: key);
-    }
+    return _enqueueStorage(() async {
+      for (final key in keys) {
+        await _delete(key);
+      }
+    });
   }
 
-  Future<void> resetAppearance() async {
+  Future<void> resetAppearance() {
     const defaults = SettingsPreferences();
     const keys = [
       _captionTextColorKey,
@@ -709,25 +718,42 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,
     );
-    for (final key in keys) {
-      await _storage.delete(key: key);
-    }
+    return _enqueueStorage(() async {
+      for (final key in keys) {
+        await _delete(key);
+      }
+    });
   }
 
-  Future<void> _update(
-    SettingsPreferences next,
-    Map<String, String> values,
-  ) async {
+  Future<void> _update(SettingsPreferences next, Map<String, String> values) {
     _markMutated(values.keys);
     state = next;
-    try {
+    return _enqueueStorage(() async {
       for (final entry in values.entries) {
-        await _storage.write(key: entry.key, value: entry.value);
+        await _write(entry.key, entry.value);
       }
-    } catch (_) {
-      // Keep the in-memory preference if platform storage is unavailable.
-    }
+    });
   }
+
+  Future<void> _enqueueStorage(Future<void> Function() operation) {
+    final previous = _storageTail;
+    final request = () async {
+      await previous;
+      try {
+        await operation();
+      } catch (_) {
+        // Keep the in-memory preference if platform storage is unavailable.
+      }
+    }();
+    _storageTail = request;
+    return request;
+  }
+
+  Future<void> _write(String key, String value) =>
+      writeValue?.call(key, value) ?? _storage.write(key: key, value: value);
+
+  Future<void> _delete(String key) =>
+      deleteValue?.call(key) ?? _storage.delete(key: key);
 
   Future<void> _setNavigationVisibility({
     required bool visible,

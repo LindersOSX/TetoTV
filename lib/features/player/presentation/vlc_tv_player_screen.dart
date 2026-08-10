@@ -1278,6 +1278,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           List.unmodifiable(_directStreamOptions),
         );
     }
+    if (!mounted) return;
     _scheduleControlsHide();
   }
 
@@ -1426,6 +1427,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (controller != null) {
         await _persistPlayback(controller.value.position, force: true);
       }
+      if (!mounted) return;
       setState(() => _allowExit = true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && context.canPop()) context.pop();

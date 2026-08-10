@@ -6,14 +6,22 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
+import dev.animetv.anime_tv.security.AppDeepLinkPolicy
 
 class AiringReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val mediaId = intent.getLongExtra("mediaId", 0)
         val episode = intent.getIntExtra("episode", 1)
+        if (mediaId <= 0L || episode <= 0) return
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return
         val title = intent.getStringExtra("title") ?: "Anime"
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "airing_reminders"
@@ -28,7 +36,7 @@ class AiringReminderReceiver : BroadcastReceiver() {
         }
         val open = Intent(
             Intent.ACTION_VIEW,
-            "tetotv:///anime/$mediaId?episode=$episode".toUri(),
+            AppDeepLinkPolicy.animeUri(mediaId, episode).toUri(),
             context,
             MainActivity::class.java,
         )

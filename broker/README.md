@@ -40,6 +40,15 @@ Deploy behind HTTPS on a single Node instance. For horizontally scaled
 production hosting, replace the in-memory pairing and rate-limit maps with a
 shared TTL store such as Redis.
 
+OAuth and source-pairing creation are separately rate-limited and each flow is
+capped at 256 live in-memory sessions. MyAnimeList refresh requests also have a
+separate upstream-protection limit and all OAuth upstream calls have a bounded
+deadline. On Render, rate limits use the first `X-Forwarded-For` entry that
+Render sets to the real client. For any other host, set `TRUST_PROXY=1` only
+when a sanitizing reverse proxy is the sole network path to Node and appends
+the real peer as the rightmost entry; otherwise the broker intentionally keys
+limits from the socket address.
+
 The human-readable code can never retrieve a token. Only the TV holding the
 256-bit `device_code` can poll it, and successful delivery deletes the pairing.
 The `/pair` page supports both QR deep links and manual TV-code entry.
@@ -94,6 +103,43 @@ at one instance, or move these maps to an atomic shared TTL store before
 horizontal scaling; otherwise a create, browser submit, and device poll may
 reach different instances. Request sizes, URL lengths, live sessions, and
 per-address create/submit/poll rates are bounded in `server.mjs`.
+
+## Public deployment and privacy
+
+Every response from an HTTPS-configured deployment includes HSTS, no-referrer,
+no-sniff, frame-denial, cross-origin resource, and permissions headers. HTML
+pairing pages additionally use a restrictive Content Security Policy. Set
+`PUBLIC_BASE_URL` to one bare HTTPS origin; paths, credentials, query strings,
+fragments, and HTTP origins are rejected.
+
+The application process deliberately logs no request URLs, bodies, submitted
+source URLs, OAuth codes, tokens, provider response details, or GitHub token.
+It logs only startup and bounded error classes. Hosting-platform access logs
+are outside this process and may still contain request metadata, opaque pairing
+IDs, receipt IDs, and OAuth callback query parameters; configure and disclose
+their retention separately.
+
+The process keeps the following transient data only in memory:
+
+- OAuth state, PKCE verifier, device-code hash, and delivered provider tokens
+  for at most ten minutes; a successful authenticated device poll deletes the
+  entire pairing immediately.
+- Source URLs for at most ten minutes after browser submission; an
+  authenticated persistence acknowledgement deletes the URLs immediately and
+  retains count-only status for at most another ten minutes.
+- Namespace-and-address SHA-256 rate-limit keys for roughly one minute. The
+  raw address is not retained in the application map, though the hosting
+  provider may process it independently.
+- Sanitized GitHub release metadata for one minute (and the advertised latest
+  version for up to 24 hours). APK bytes are streamed and not persisted by the
+  broker.
+
+A public, unauthenticated disclosure is served at `/privacy`; `/health`
+advertises its canonical HTTPS URL. The page uses the same no-store, CSP,
+referrer, framing, MIME-sniffing, permissions, and HSTS protections as the
+broker's other public HTML. Keep its human-reviewed content synchronized with
+`docs/PRIVACY.md`, and re-review the official project-page contact and hosting
+provider retention before broad public or app-store distribution.
 
 ## Private GitHub release updates
 

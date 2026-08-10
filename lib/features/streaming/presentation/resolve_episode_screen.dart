@@ -273,11 +273,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   @override
   void initState() {
     super.initState();
-    _initialize();
+    unawaited(_initialize());
   }
 
   Future<void> _initialize() async {
     await ref.read(userTorrentSourcesControllerProvider.notifier).load();
+    if (!mounted) return;
     final tokenService = ref.read(debridTokenServiceProvider);
     final preferredDebrid = ref
         .read(settingsPreferencesProvider)

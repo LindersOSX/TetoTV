@@ -16,7 +16,8 @@ class AddonTypescriptCompiler {
   Future<String>? _compilerSource;
 
   Future<String> compile(String source) async {
-    if (source.isEmpty || source.length > _maximumSourceCharacters) {
+    if (source.isEmpty ||
+        utf8.encode(source).length > _maximumSourceCharacters) {
       throw const FormatException('The TypeScript addon payload is invalid.');
     }
     final compiler = await (_compilerSource ??= _bundle.loadString(
@@ -63,6 +64,12 @@ String _compileInQuickJs({required String compiler, required String source}) {
     final code = decoded['code'];
     if (code is! String || code.trim().isEmpty) {
       throw const FormatException('The TypeScript compiler returned no code.');
+    }
+    if (utf8.encode(code).length >
+        AddonTypescriptCompiler._maximumSourceCharacters) {
+      throw const FormatException(
+        'The compiled TypeScript addon payload is too large.',
+      );
     }
     return code;
   } finally {

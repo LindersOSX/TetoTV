@@ -280,6 +280,34 @@ void main() {
     });
 
     test(
+      'broker readiness errors omit StateError implementation jargon',
+      () async {
+        final api = _FakeSourcePairingApi(
+          session: _session('not-created'),
+          polls: const [],
+          readyError: StateError(
+            'The TetoTV pairing service must be updated before sources can be saved with confirmation.',
+          ),
+        );
+        final controller = SourcePairingController(
+          () async => 'https://pair.example',
+          (_) => api,
+          (_) async => const SourceImportSummary(),
+        );
+        addTearDown(controller.dispose);
+
+        await controller.start();
+
+        expect(controller.state.stage, SourcePairingStage.failed);
+        expect(controller.state.message, isNot(startsWith('Bad state:')));
+        expect(
+          controller.state.message,
+          startsWith('The TetoTV pairing service'),
+        );
+      },
+    );
+
+    test(
       'an importer exception becomes an immediate terminal failure',
       () async {
         final api = _FakeSourcePairingApi(
@@ -447,6 +475,7 @@ class _FakeSourcePairingApi implements SourcePairingApi {
     required this.session,
     required List<_Poll> polls,
     this.acknowledgementFailures = 0,
+    this.readyError,
   }) : _polls = Queue<_Poll>.of(polls);
 
   final SourcePairingSession session;
@@ -454,9 +483,13 @@ class _FakeSourcePairingApi implements SourcePairingApi {
   int cancelCalls = 0;
   int acknowledgeCalls = 0;
   final int acknowledgementFailures;
+  final Object? readyError;
 
   @override
-  Future<void> ensureReady() async {}
+  Future<void> ensureReady() async {
+    final error = readyError;
+    if (error != null) throw error;
+  }
 
   @override
   Future<SourcePairingSession> createSession() async => session;

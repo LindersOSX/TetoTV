@@ -5,14 +5,47 @@ import { pipeline } from "node:stream/promises";
 
 const port = Number(process.env.PORT || 8787);
 const selfTest = process.argv.includes("--self-test");
-const publicBaseUrl = String(
+
+function normalizePublicOrigin(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      return "";
+    }
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
+const publicBaseUrl = normalizePublicOrigin(
   process.env.PUBLIC_BASE_URL ||
     process.env.RENDER_EXTERNAL_URL ||
     (selfTest ? "https://auth.example.com" : ""),
-).replace(/\/+$/, "");
+);
 const ttlMs = 10 * 60 * 1000;
 const rateWindowMs = 60 * 1000;
 const maxRateLimitEntries = 4096;
+const maxOAuthPairings = 256;
+const oauthUpstreamTimeoutMs = 12_000;
+// Render puts its authenticated client address first in X-Forwarded-For.
+// A conventional explicitly trusted proxy appends its peer address last.
+// Never apply one convention to the other: the remaining entries can be
+// client-controlled.
+const forwardedForMode = selfTest
+  ? "rightmost"
+  : process.env.RENDER === "true" || process.env.RENDER_SERVICE_ID
+    ? "leftmost"
+    : process.env.TRUST_PROXY === "1"
+      ? "rightmost"
+      : "none";
 const githubReleaseRepository =
   process.env.GITHUB_RELEASE_REPOSITORY || "LindersOSX/TetoTV";
 const githubReleaseToken =
@@ -108,7 +141,29 @@ function json(response, status, value, extraHeaders = {}) {
   response.end(JSON.stringify(value));
 }
 
-function html(response, status, body, { refreshUrl = "" } = {}) {
+function applyGlobalSecurityHeaders(response) {
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=()",
+  );
+  if (publicBaseUrl.startsWith("https://")) {
+    response.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000",
+    );
+  }
+}
+
+function html(
+  response,
+  status,
+  body,
+  { refreshUrl = "", title = "TetoTV pairing" } = {},
+) {
   response.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
@@ -125,7 +180,7 @@ function html(response, status, body, { refreshUrl = "" } = {}) {
     : "";
   response.end(`<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">${refresh}
-<title>TetoTV pairing</title>
+<title>${escapeHtml(title)}</title>
 <style>
 body{margin:0;background:#080c16;color:#f5f5fb;font:18px system-ui;display:grid;min-height:100vh;place-items:center}
 main{width:min(580px,calc(100% - 40px));background:#131928;border:1px solid #293149;border-radius:24px;padding:32px;box-sizing:border-box}
@@ -136,6 +191,38 @@ textarea{min-height:150px;resize:vertical;overflow-wrap:anywhere}.code-input{fon
 code{color:#5bd8ec}small{display:block;margin-top:18px;color:#7f879e}
 .success{color:#67d49b}.warning{color:#ffd166}.error{color:#ff8798;font-weight:800}.count{font-size:22px;font-weight:800;color:#f5f5fb}
 </style><main>${body}</main></html>`);
+}
+
+function privacyPage(response) {
+  return html(
+    response,
+    200,
+    `<h1>TetoTV privacy disclosure</h1>
+     <p><small>Effective August 10, 2026</small></p>
+     <p>TetoTV is an independent Android application. It has no advertising or analytics SDK, no TetoTV account system, and does not sell personal data.</p>
+
+     <h2>Data kept on the device</h2>
+     <p>Account and debrid credentials use Android Keystore-backed secure storage. Playback history, resume positions, preferences, tracker-sync entries, installed source definitions, bounded diagnostics, and device playback capabilities remain in app storage until removed in TetoTV, Android app storage is cleared, or the app is uninstalled.</p>
+
+     <h2>Services selected by the user</h2>
+     <p>Features the user chooses can send the minimum required requests to AniList, MAL, Kitsu, a selected debrid provider, AniSkip, artwork hosts, and source repositories or extensions the user explicitly installs. Those independent services receive ordinary connection metadata and apply their own terms and privacy policies. TetoTV does not bundle or recommend a streaming-source repository.</p>
+
+     <h2>Pairing and update broker</h2>
+     <p>OAuth pairing keeps one-time state, a device-code hash, PKCE data, and token material in process memory for at most ten minutes. A successful authenticated device poll deletes the complete pairing immediately.</p>
+     <p>Phone-assisted source entry keeps submitted URLs in volatile memory for at most ten minutes after submission. The URLs are deleted when the authenticated app acknowledges local processing or the session expires. A count-only confirmation can remain for at most another ten minutes.</p>
+     <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app.</p>
+     <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
+
+     <h2>Diagnostics and choices</h2>
+     <p>Diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
+
+     <h2>Security, children, and changes</h2>
+     <p>Network integrations require HTTPS and user-added endpoints are constrained against private or local network targets. TetoTV is not directed to children and does not knowingly collect a child's personal information. This disclosure will be updated when material features or hosting practices change.</p>
+
+     <h2>Contact</h2>
+     <p>Privacy questions and deletion requests can be sent to the TetoTV maintainer through the <a href="https://github.com/LindersOSX/TetoTV">official TetoTV project page</a>.</p>`,
+    { title: "TetoTV privacy disclosure" },
+  );
 }
 
 const escapeHtml = (value) =>
@@ -149,21 +236,26 @@ const escapeHtml = (value) =>
 const normalizeCode = (value) =>
   String(value || "").trim().toUpperCase();
 
-function rateLimited(request, limit = 600, namespace = "global") {
-  // Render appends the connection address to X-Forwarded-For. Use the
-  // rightmost bounded value so a client-supplied first entry cannot create an
-  // unlimited stream of rate-limit buckets.
-  const forwarded = String(request.headers["x-forwarded-for"] || "").slice(
-    0,
-    2048,
-  );
-  const address = String(
-    forwarded
-      ? forwarded.split(",").at(-1)
-      : request.socket.remoteAddress || "",
+function clientAddress(request, mode = forwardedForMode) {
+  const rawForwarded = String(request.headers["x-forwarded-for"] || "");
+  const boundedForwarded =
+    mode === "leftmost"
+      ? rawForwarded.slice(0, 2048)
+      : rawForwarded.slice(-2048);
+  const values = boundedForwarded.split(",");
+  return String(
+    mode === "leftmost" && boundedForwarded
+      ? values.at(0)
+      : mode === "rightmost" && boundedForwarded
+        ? values.at(-1)
+        : request.socket.remoteAddress || "",
   )
     .trim()
     .slice(0, 256);
+}
+
+function rateLimited(request, limit = 600, namespace = "global") {
+  const address = clientAddress(request);
   const key = createHash("sha256")
     .update(`${namespace}:${address}`)
     .digest("base64url");
@@ -636,6 +728,9 @@ async function createPairing(request, response, provider) {
   }
   await drainBody(request);
   cleanup();
+  if (pairings.size >= maxOAuthPairings) {
+    return json(response, 503, { error: "pairing_capacity_reached" });
+  }
   let userCode;
   do userCode = newUserCode();
   while (codes.has(userCode));
@@ -791,14 +886,11 @@ async function exchangeCode(pairing, code) {
         redirect_uri: callbackUrl(pairing.provider),
         code,
       }),
+      signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
     });
     const body = await result.json();
     if (!result.ok || !body.access_token) {
-      const detail =
-        body.error_description || body.message || body.error || "unknown error";
-      throw new Error(
-        `AniList token exchange failed (${result.status}: ${String(detail).slice(0, 160)}).`,
-      );
+      throw new Error(`AniList token exchange failed (${result.status}).`);
     }
     return {
       accessToken: body.access_token,
@@ -823,14 +915,11 @@ async function exchangeCode(pairing, code) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form,
+    signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
   });
   const body = await result.json();
   if (!result.ok || !body.access_token) {
-    const detail =
-      body.error_description || body.message || body.error || "unknown error";
-    throw new Error(
-      `MyAnimeList token exchange failed (${result.status}: ${String(detail).slice(0, 160)}).`,
-    );
+    throw new Error(`MyAnimeList token exchange failed (${result.status}).`);
   }
   return {
     accessToken: body.access_token,
@@ -846,7 +935,15 @@ async function refreshMyAnimeListToken(request, response) {
   if (!config.clientId || !config.clientSecret) {
     return json(response, 503, { error: "provider_not_configured" });
   }
-  const body = await readJson(request);
+  const body = await readJson(request, { requireBody: true });
+  if (
+    !body ||
+    Array.isArray(body) ||
+    typeof body !== "object" ||
+    Object.keys(body).sort().join(",") !== "refresh_token"
+  ) {
+    return json(response, 400, { error: "invalid_refresh_token" });
+  }
   const refreshToken = String(body.refresh_token || "");
   if (refreshToken.length < 20 || refreshToken.length > 4096) {
     return json(response, 400, { error: "invalid_refresh_token" });
@@ -864,6 +961,7 @@ async function refreshMyAnimeListToken(request, response) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form,
+    signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
   });
   const tokenBody = await result.json();
   if (!result.ok || !tokenBody.access_token) {
@@ -891,6 +989,7 @@ async function oauthCallback(response, url, provider) {
   const pairing = [...pairings.values()].find(
     (value) =>
       value.provider === provider &&
+      value.status === "pending" &&
       value.state &&
       safeEqual(value.state, state),
   );
@@ -902,6 +1001,9 @@ async function oauthCallback(response, url, provider) {
     );
   }
   try {
+    // Claim this state before contacting the provider so concurrent callback
+    // replays cannot fan one authorization code out into many token requests.
+    pairing.status = "exchanging";
     pairing.tokenSet = await exchangeCode(pairing, code);
     pairing.status = "authorized";
     pairing.state = null;
@@ -912,7 +1014,10 @@ async function oauthCallback(response, url, provider) {
       `<h1>Connected</h1><p>${providerConfig(provider).name} is linked. You can return to TetoTV.</p>`,
     );
   } catch (error) {
-    console.error(`${provider} OAuth callback failed:`, error.message);
+    pairing.status = "pending";
+    // Provider responses can echo authorization codes or other sensitive
+    // request details. Keep production logs useful without recording them.
+    console.error(`${provider} OAuth callback failed (${error?.name || "Error"}).`);
     return html(
       response,
       502,
@@ -1245,8 +1350,7 @@ function allowedGithubDownloadUrl(url) {
   return (
     hostname === "github.com" ||
     hostname === "objects.githubusercontent.com" ||
-    hostname === "release-assets.githubusercontent.com" ||
-    hostname.endsWith(".githubusercontent.com")
+    hostname === "release-assets.githubusercontent.com"
   );
 }
 
@@ -1422,6 +1526,7 @@ const server = createServer(
     requestTimeout: 20_000,
   },
   async (request, response) => {
+  applyGlobalSecurityHeaders(response);
   try {
     if (rateLimited(request)) {
       return json(
@@ -1438,6 +1543,8 @@ const server = createServer(
     if (request.method === "GET" && url.pathname === "/health") {
       return json(response, 200, {
         status: "ok",
+        privacy_policy: true,
+        privacy_policy_url: `${publicBaseUrl}/privacy`,
         providers: {
           anilist:
             Boolean(process.env.ANILIST_CLIENT_ID) &&
@@ -1454,6 +1561,9 @@ const server = createServer(
         source_pairing_version: 2,
         app_updates: updateProxyConfigured(),
       });
+    }
+    if (request.method === "GET" && url.pathname === "/privacy") {
+      return privacyPage(response);
     }
     if (
       request.method === "GET" &&
@@ -1605,18 +1715,42 @@ const server = createServer(
       /^\/v1\/(anilist|myanimelist)\/pairings$/,
     );
     if (request.method === "POST" && createMatch) {
+      if (rateLimited(request, 5, "oauth-create")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
       return await createPairing(request, response, createMatch[1]);
     }
     const pollMatch = url.pathname.match(
       /^\/v1\/(anilist|myanimelist)\/pairings\/([A-Za-z0-9_-]+)$/,
     );
     if (request.method === "GET" && pollMatch) {
+      if (rateLimited(request, 180, "oauth-poll")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
       return pollPairing(request, response, pollMatch[1], pollMatch[2]);
     }
     if (
       request.method === "POST" &&
       url.pathname === "/v1/myanimelist/token/refresh"
     ) {
+      if (rateLimited(request, 10, "oauth-refresh")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
       return await refreshMyAnimeListToken(request, response);
     }
     if (request.method === "GET" && url.pathname === "/pair") {
@@ -1642,7 +1776,9 @@ const server = createServer(
     if (error instanceof SyntaxError) {
       return json(response, 400, { error: "invalid_json" });
     }
-    console.error("Broker request failed:", error.message);
+    // Never write request bodies, URLs, OAuth codes, or provider response
+    // details to production logs. The error class is sufficient for alerting.
+    console.error(`Broker request failed (${error?.name || "Error"}).`);
     return json(response, 500, { error: "internal_error" });
   }
   },
@@ -1652,9 +1788,10 @@ server.listen(port, async () => {
   console.log(`TetoTV auth broker listening on port ${port}`);
   if (selfTest) {
     try {
-      const health = await fetch(`http://127.0.0.1:${port}/health`).then(
-        (response) => response.json(),
-      );
+      const healthResponse = await fetch(`http://127.0.0.1:${port}/health`);
+      const health = await healthResponse.json();
+      const privacyResponse = await fetch(`http://127.0.0.1:${port}/privacy`);
+      const privacyBody = await privacyResponse.text();
       const updateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
       );
@@ -1707,6 +1844,71 @@ server.listen(port, async () => {
         `http://127.0.0.1:${port}/v1/myanimelist/pairings`,
         { method: "POST" },
       ).then((response) => response.json());
+      const oauthRateResponses = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          fetch(`http://127.0.0.1:${port}/v1/anilist/pairings`, {
+            method: "POST",
+            headers: { "X-Forwarded-For": "self-test-oauth-create-rate" },
+          }),
+        ),
+      );
+      const oversizedForwardedRateResponses = [];
+      for (let index = 0; index < 6; index += 1) {
+        oversizedForwardedRateResponses.push(
+          await fetch(`http://127.0.0.1:${port}/v1/anilist/pairings`, {
+            method: "POST",
+            headers: {
+              "X-Forwarded-For":
+                `${String(index).repeat(3_000)}, 203.0.113.10`,
+            },
+          }),
+        );
+      }
+      const oauthRefreshRateResponses = [];
+      for (let index = 0; index < 11; index += 1) {
+        oauthRefreshRateResponses.push(
+          await fetch(
+            `http://127.0.0.1:${port}/v1/myanimelist/token/refresh`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Forwarded-For": "self-test-oauth-refresh-rate",
+              },
+              body: JSON.stringify({ refresh_token: "short" }),
+            },
+          ),
+        );
+      }
+      const capacityIds = [];
+      while (pairings.size < maxOAuthPairings) {
+        const id = `self-test-capacity-${capacityIds.length}`;
+        const userCode = `CAP-${capacityIds.length}`;
+        capacityIds.push(id);
+        pairings.set(id, {
+          provider: "anilist",
+          userCode,
+          deviceHash: digest("self-test"),
+          expiresAt: Date.now() + ttlMs,
+          status: "pending",
+          tokenSet: null,
+          state: null,
+          codeVerifier: null,
+        });
+        codes.set(userCode, id);
+      }
+      const oauthCapacityResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/anilist/pairings`,
+        {
+          method: "POST",
+          headers: { "X-Forwarded-For": "self-test-oauth-capacity" },
+        },
+      );
+      for (const id of capacityIds) {
+        const pairing = pairings.get(id);
+        if (pairing) codes.delete(pairing.userCode);
+        pairings.delete(id);
+      }
       const malAuthorize = await fetch(
         `http://127.0.0.1:${port}/authorize?code=${encodeURIComponent(malPairing.user_code)}`,
         { redirect: "manual" },
@@ -1968,12 +2170,44 @@ server.listen(port, async () => {
       );
       if (
         health.status !== "ok" ||
+        normalizePublicOrigin("https://example.com/path") !== "" ||
+        normalizePublicOrigin("http://example.com") !== "" ||
+        clientAddress(
+          {
+            headers: {
+              "x-forwarded-for":
+                `203.0.113.11, ${"9".repeat(3_000)}`,
+            },
+            socket: { remoteAddress: "127.0.0.1" },
+          },
+          "leftmost",
+        ) !== "203.0.113.11" ||
+        healthResponse.headers.get("strict-transport-security") !==
+          "max-age=31536000" ||
+        health.privacy_policy !== true ||
+        health.privacy_policy_url !== "https://auth.example.com/privacy" ||
+        privacyResponse.status !== 200 ||
+        !privacyResponse.headers
+          .get("content-type")
+          ?.startsWith("text/html; charset=utf-8") ||
+        privacyResponse.headers.get("cache-control") !== "no-store" ||
+        privacyResponse.headers.get("strict-transport-security") !==
+          "max-age=31536000" ||
+        !privacyResponse.headers
+          .get("content-security-policy")
+          ?.includes("default-src 'none'") ||
+        !privacyBody.includes("TetoTV privacy disclosure") ||
+        !privacyBody.includes("at most ten minutes") ||
+        !privacyBody.includes("official TetoTV project page") ||
+        privacyBody.includes(githubReleaseToken) ||
         health.source_pairing !== true ||
         health.source_pairing_version !== 2 ||
         health.app_updates !== true ||
         updateProxyConfigured({ token: "" }) !== false ||
         updateMetadataResponse.status !== 200 ||
         updateMetadataResponse.headers.get("cache-control") !== "no-store" ||
+        updateMetadataResponse.headers.get("strict-transport-security") !==
+          "max-age=31536000" ||
         updateMetadata.version !== "1.11.6" ||
         updateMetadata.tag_name !== "v1.11.6" ||
         updateMetadata.asset?.name !== "TetoTV-v1.11.6-universal.apk" ||
@@ -1989,6 +2223,8 @@ server.listen(port, async () => {
         updateHead.headers.get("etag") !==
           `"asset-116001-${selfTestApk.length}"` ||
         updateDownload.status !== 200 ||
+        updateDownload.headers.get("strict-transport-security") !==
+          "max-age=31536000" ||
         updateDownload.headers.get("content-type") !==
           "application/vnd.android.package-archive" ||
         updateDownloadBody.length !== selfTestApk.length ||
@@ -2023,6 +2259,18 @@ server.listen(port, async () => {
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(malPairing.user_code) ||
+        oauthRateResponses
+          .map((value) => value.status)
+          .sort()
+          .join(",") !== "201,201,201,201,201,429" ||
+        oversizedForwardedRateResponses
+          .map((value) => value.status)
+          .join(",") !== "201,201,201,201,201,429" ||
+        oauthRefreshRateResponses
+          .slice(0, 10)
+          .some((value) => value.status !== 400) ||
+        oauthRefreshRateResponses.at(-1)?.status !== 429 ||
+        oauthCapacityResponse.status !== 503 ||
         malAuthorize.status !== 302 ||
         malAuthorizeUrl.searchParams.has("redirect_uri") ||
         !malAuthorizeUrl.searchParams.get("code_challenge") ||
@@ -2039,6 +2287,8 @@ server.listen(port, async () => {
         sourcePage.includes(sourcePairing.pairing_id) ||
         sourcePage.includes(sourcePairing.device_code) ||
         sourcePageResponse.headers.get("cache-control") !== "no-store" ||
+        sourcePageResponse.headers.get("strict-transport-security") !==
+          "max-age=31536000" ||
         !String(sourcePageResponse.headers.get("content-security-policy")).includes(
           "default-src 'none'",
         ) ||
