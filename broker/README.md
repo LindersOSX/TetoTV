@@ -36,6 +36,12 @@ the same origin in TetoTV's on-screen QR setup, or set it as
 `AUTH_BROKER_BASE_URL` in the Flutter JSON configuration before building. Do
 not copy either provider client secret into Flutter configuration.
 
+The current production app deliberately uses two deployments of this broker:
+`https://tetotv-auth.onrender.com` remains the AniList/MyAnimeList OAuth origin,
+while `https://tetotv-updates-lindows.onrender.com` handles source pairing and
+private app updates. Keep tracker callback registrations pointed at the auth
+origin.
+
 Deploy behind HTTPS on a single Node instance. For horizontally scaled
 production hosting, replace the in-memory pairing and rate-limit maps with a
 shared TTL store such as Redis.
@@ -152,10 +158,14 @@ GITHUB_RELEASE_TOKEN=<fine-grained token>
 GITHUB_RELEASE_REPOSITORY=LindersOSX/TetoTV
 ```
 
-Restrict the fine-grained token to only the TetoTV repository, grant only
-`Contents: Read-only`, and set an expiration date. Never pass this value as a
-Flutter build define, commit it to `.env`, or expose it in a client settings
-field. The broker health response reports only `app_updates: true` or `false`.
+Restrict the fine-grained token to only the TetoTV repository and grant only
+`Contents: Read-only`. Prefer an expiration date. For the current private
+deployment, `No expiration` is acceptable only while that one-repository,
+read-only scope remains enforced and there is a documented plan to revoke the
+token immediately if Render or GitHub access is compromised or no longer
+needed. Never pass this value as a Flutter build define, commit it to `.env`,
+or expose it in a client settings field. The broker health response reports
+only `app_updates: true` or `false`.
 
 The Android app uses the following public broker contract and sends no GitHub
 credential:
@@ -202,7 +212,7 @@ Example sanitized metadata:
     "name": "TetoTV-v1.11.6-universal.apk",
     "size": 113650688,
     "content_type": "application/vnd.android.package-archive",
-    "download_url": "https://tetotv-auth.onrender.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk"
+    "download_url": "https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk"
   }
 }
 ```

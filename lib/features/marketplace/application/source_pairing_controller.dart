@@ -28,7 +28,7 @@ final sourcePairingControllerProvider =
       );
       return SourcePairingController(
         () async {
-          final origin = AppConfig.authBrokerBaseUrl.trim();
+          final origin = AppConfig.sourcePairingBrokerBaseUrl.trim();
           return origin.isEmpty ? null : origin;
         },
         (baseUrl) => SourcePairingClient(baseUrl: baseUrl),

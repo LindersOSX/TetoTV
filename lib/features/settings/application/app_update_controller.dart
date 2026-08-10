@@ -15,7 +15,7 @@ const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
 const pendingReleaseNotesVersionStorageKey = 'pending_release_notes_version';
 const pendingReleaseNotesStorageKey = 'pending_release_notes';
 const tetoTvRepository = 'LindersOSX/TetoTV';
-const tetoTvUpdateBroker = 'https://tetotv-auth.onrender.com';
+const tetoTvUpdateBroker = 'https://tetotv-updates-lindows.onrender.com';
 
 final appUpdateControllerProvider =
     StateNotifierProvider<AppUpdateController, AppUpdateState>((ref) {
