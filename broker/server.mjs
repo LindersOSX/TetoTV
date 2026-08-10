@@ -189,6 +189,7 @@ a,button{display:block;width:100%;box-sizing:border-box;border:0;margin-top:24px
 input,textarea{display:block;width:100%;box-sizing:border-box;margin-top:22px;padding:16px 18px;border:1px solid #39435f;border-radius:12px;background:#090e1a;color:#f5f5fb;font:700 18px system-ui}
 textarea{min-height:150px;resize:vertical;overflow-wrap:anywhere}.code-input{font-size:22px;letter-spacing:3px;text-transform:uppercase}
 code{color:#5bd8ec}small{display:block;margin-top:18px;color:#7f879e}
+label{display:block;margin-top:22px;font-weight:800}label+textarea{margin-top:8px}.field-help{margin-top:8px}
 .success{color:#67d49b}.warning{color:#ffd166}.error{color:#ff8798;font-weight:800}.count{font-size:22px;font-weight:800;color:#f5f5fb}
 </style><main>${body}</main></html>`);
 }
@@ -382,6 +383,44 @@ function validSubmittedUrl(value, { manifest = false } = {}) {
   } catch {
     return false;
   }
+}
+
+function sourcePairingValidationError(repositoryUrls, manifestUrls) {
+  if (repositoryUrls.length > 8) {
+    return "The Marketplace repositories field accepts up to eight URLs.";
+  }
+  if (manifestUrls.length > 8) {
+    return "The Stremio manifests field accepts up to eight URLs.";
+  }
+  if (repositoryUrls.length + manifestUrls.length === 0) {
+    return "Enter at least one marketplace repository or Stremio manifest URL.";
+  }
+  if (repositoryUrls.some((value) => !validSubmittedUrl(value))) {
+    return "Every Marketplace repository entry must be a valid public HTTPS URL without embedded username/password credentials.";
+  }
+  if (manifestUrls.some((value) => !validSubmittedUrl(value))) {
+    return "Every Stremio manifest entry must be a valid public HTTPS URL without embedded username/password credentials.";
+  }
+  const marketplaceUrlInManifestField = manifestUrls.some((value) => {
+    try {
+      return new URL(value).pathname
+        .toLowerCase()
+        .endsWith("/marketplace.json");
+    } catch {
+      return false;
+    }
+  });
+  if (marketplaceUrlInManifestField) {
+    return "A marketplace.json URL was entered under Stremio manifests. Move it to Marketplace repositories. Stremio manifest URLs must end in /manifest.json.";
+  }
+  if (
+    manifestUrls.some(
+      (value) => !validSubmittedUrl(value, { manifest: true }),
+    )
+  ) {
+    return "Every URL under Stremio manifests must end in /manifest.json. Marketplace repository URLs belong in the Marketplace repositories field.";
+  }
+  return "";
 }
 
 async function createSourcePairing(request, response) {
@@ -607,10 +646,17 @@ function cancelSourcePairing(request, response, pairingId) {
   response.end();
 }
 
-function sourcePairingForm(response, pairing, errorMessage = "") {
+function sourcePairingForm(
+  response,
+  pairing,
+  errorMessage = "",
+  { repositoryUrls = [], manifestUrls = [] } = {},
+) {
   const error = errorMessage
     ? `<p class="error" role="alert">${escapeHtml(errorMessage)}</p>`
     : "";
+  const repositoryValue = escapeHtml(repositoryUrls.join("\n"));
+  const manifestValue = escapeHtml(manifestUrls.join("\n"));
   return html(
     response,
     errorMessage ? 400 : 200,
@@ -619,8 +665,12 @@ function sourcePairingForm(response, pairing, errorMessage = "") {
      ${error}
      <form method="post" action="/source-pair" autocomplete="off">
        <input type="hidden" name="code" value="${escapeHtml(pairing.userCode)}">
-       <textarea name="repository_urls" aria-label="Marketplace repository URLs" placeholder="Marketplace repositories&#10;https://example.com/marketplace.json" maxlength="16391"></textarea>
-       <textarea name="manifest_urls" aria-label="Stremio manifest URLs" placeholder="Stremio manifests&#10;https://example.com/addon/manifest.json" maxlength="16391"></textarea>
+       <label for="repository-urls">Marketplace repositories</label>
+       <textarea id="repository-urls" name="repository_urls" aria-label="Marketplace repository URLs" placeholder="https://example.com/marketplace.json" maxlength="16391">${repositoryValue}</textarea>
+       <small class="field-help">Repository catalogs, commonly ending in marketplace.json.</small>
+       <label for="manifest-urls">Stremio manifests</label>
+       <textarea id="manifest-urls" name="manifest_urls" aria-label="Stremio manifest URLs" placeholder="https://example.com/addon/manifest.json" maxlength="16391">${manifestValue}</textarea>
+       <small class="field-help">Individual Stremio add-ons. Each URL must end in /manifest.json.</small>
        <button type="submit">Send securely</button>
      </form>
      <small>TetoTV never uploads saved account tokens. Submitted URLs are encrypted in transit, held in memory until this device confirms the local save, then deleted.</small>`,
@@ -689,19 +739,16 @@ async function submitSourcePairing(request, response) {
       .filter(Boolean);
   const repositoryUrls = lines("repository_urls");
   const manifestUrls = lines("manifest_urls");
-  if (
-    repositoryUrls.length > 8 ||
-    manifestUrls.length > 8 ||
-    repositoryUrls.length + manifestUrls.length === 0 ||
-    repositoryUrls.some((value) => !validSubmittedUrl(value)) ||
-    manifestUrls.some(
-      (value) => !validSubmittedUrl(value, { manifest: true }),
-    )
-  ) {
+  const validationError = sourcePairingValidationError(
+    repositoryUrls,
+    manifestUrls,
+  );
+  if (validationError) {
     return sourcePairingForm(
       response,
       pairing,
-      "Enter up to eight valid public HTTPS URLs per section. Manifest paths must end in /manifest.json, and embedded username/password credentials are not allowed.",
+      validationError,
+      { repositoryUrls, manifestUrls },
     );
   }
   pairing.submitted = {
@@ -1937,6 +1984,35 @@ server.listen(port, async () => {
           body: "{bad",
         },
       );
+      const misplacedMarketplaceUrl =
+        "https://raw.githubusercontent.com/example/project/refs/heads/main/marketplace.json";
+      const misplacedMarketplacePairing = await fetch(
+        `http://127.0.0.1:${port}/v1/source-pairings`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "self-test-misplaced-marketplace",
+          },
+          body: "{}",
+        },
+      ).then((response) => response.json());
+      const misplacedMarketplaceResponse = await fetch(
+        `http://127.0.0.1:${port}/source-pair`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Forwarded-For": "self-test-misplaced-marketplace",
+          },
+          body: new URLSearchParams({
+            code: misplacedMarketplacePairing.user_code,
+            manifest_urls: misplacedMarketplaceUrl,
+          }),
+        },
+      );
+      const misplacedMarketplacePage =
+        await misplacedMarketplaceResponse.text();
       const sourcePairing = await fetch(
         `http://127.0.0.1:${port}/v1/source-pairings`,
         {
@@ -2280,6 +2356,16 @@ server.listen(port, async () => {
         sourceWrongContentType.status !== 415 ||
         sourceUnexpectedBody.status !== 400 ||
         sourceMalformedBody.status !== 400 ||
+        misplacedMarketplaceResponse.status !== 400 ||
+        !misplacedMarketplacePage.includes(
+          "A marketplace.json URL was entered under Stremio manifests.",
+        ) ||
+        !misplacedMarketplacePage.includes(
+          "Move it to Marketplace repositories.",
+        ) ||
+        !misplacedMarketplacePage.includes(misplacedMarketplaceUrl) ||
+        validSubmittedUrl(misplacedMarketplaceUrl, { manifest: true }) ||
+        sourcePairingValidationError([misplacedMarketplaceUrl], []) !== "" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(sourcePairing.user_code) ||
         !/^[A-Za-z0-9_-]{43}$/.test(sourcePairing.device_code) ||
         !sourcePage.includes('name="repository_urls"') ||
