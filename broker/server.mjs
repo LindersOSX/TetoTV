@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 const port = Number(process.env.PORT || 8787);
 const selfTest = process.argv.includes("--self-test");
@@ -11,17 +13,45 @@ const publicBaseUrl = String(
 const ttlMs = 10 * 60 * 1000;
 const rateWindowMs = 60 * 1000;
 const maxRateLimitEntries = 4096;
+const githubReleaseRepository =
+  process.env.GITHUB_RELEASE_REPOSITORY || "LindersOSX/TetoTV";
+const githubReleaseToken =
+  process.env.GITHUB_RELEASE_TOKEN ||
+  (selfTest ? "self-test-github-release-token" : "");
+const githubReleaseApiVersion = "2022-11-28";
+const releaseMetadataTtlMs = 60 * 1000;
+const versionedReleaseTtlMs = 24 * 60 * 60 * 1000;
+const maxReleaseAssetBytes = 300 * 1024 * 1024;
+const maxReleaseNotesLength = 32_000;
+// This deployment is intentionally small/private. Move APK delivery to
+// object storage/CDN before raising these process-wide safeguards.
+const maxConcurrentUpdateDownloads = 4;
+const maxUpdateDownloadsPerMinute = 12;
 const pairings = new Map();
 const codes = new Map();
 const sourcePairings = new Map();
 const sourceCodes = new Map();
 const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
+let cachedLatestRelease = null;
+let latestReleaseRequest = null;
+let activeUpdateDownloads = 0;
+let updateDownloadWindowStartedAt = 0;
+let updateDownloadsInWindow = 0;
+const cachedVersionedReleases = new Map();
 
 class RequestInputError extends Error {
   constructor(status, message) {
     super(message);
     this.status = status;
+  }
+}
+
+class UpdateProxyError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -152,6 +182,19 @@ function cleanupRateLimits(now = Date.now()) {
   for (const [key, bucket] of rateLimits) {
     if (now - bucket.startedAt >= rateWindowMs) rateLimits.delete(key);
   }
+}
+
+function globallyRateLimitedUpdateDownload(now = Date.now()) {
+  if (
+    !updateDownloadWindowStartedAt ||
+    now - updateDownloadWindowStartedAt >= rateWindowMs
+  ) {
+    updateDownloadWindowStartedAt = now;
+    updateDownloadsInWindow = 1;
+    return false;
+  }
+  updateDownloadsInWindow += 1;
+  return updateDownloadsInWindow > maxUpdateDownloadsPerMinute;
 }
 
 function cleanup() {
@@ -742,6 +785,500 @@ async function oauthCallback(response, url, provider) {
   }
 }
 
+const releaseTagPattern = /^v(\d+\.\d+\.\d+)$/;
+const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const allowedApkContentTypes = new Set([
+  "application/octet-stream",
+  "application/vnd.android.package-archive",
+  "application/zip",
+]);
+const selfTestApk = selfTest ? Buffer.alloc(65_536, 0x5a) : null;
+const selfTestGithubRequests = [];
+
+function updateProxyConfigured({
+  baseUrl = publicBaseUrl,
+  repository = githubReleaseRepository,
+  token = githubReleaseToken,
+} = {}) {
+  return (
+    baseUrl.startsWith("https://") &&
+    repositoryPattern.test(repository) &&
+    token.length >= 20
+  );
+}
+
+function githubRepositoryApiPath() {
+  if (!repositoryPattern.test(githubReleaseRepository)) {
+    throw new UpdateProxyError(503, "updates_not_configured");
+  }
+  const [owner, repository] = githubReleaseRepository.split("/");
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
+}
+
+function githubHeaders({ accept = "application/vnd.github+json", token = true } = {}) {
+  return {
+    Accept: accept,
+    "User-Agent": "TetoTV-update-broker",
+    "X-GitHub-Api-Version": githubReleaseApiVersion,
+    ...(token ? { Authorization: `Bearer ${githubReleaseToken}` } : {}),
+  };
+}
+
+function cleanText(value, maximumLength) {
+  return String(value || "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .slice(0, maximumLength);
+}
+
+function sanitizeLatestRelease(value) {
+  if (!value || typeof value !== "object" || value.draft || value.prerelease) {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  const tagName = String(value.tag_name || "");
+  const tagMatch = tagName.match(releaseTagPattern);
+  if (!tagMatch) {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  const expectedAssetName = `TetoTV-${tagName}-universal.apk`;
+  const matchingAssets = Array.isArray(value.assets)
+    ? value.assets.filter((asset) => asset?.name === expectedAssetName)
+    : [];
+  if (matchingAssets.length !== 1) {
+    throw new UpdateProxyError(502, "invalid_release_asset");
+  }
+  const asset = matchingAssets[0];
+  const releaseId = Number(value.id);
+  const assetId = Number(asset.id);
+  const size = Number(asset.size);
+  if (
+    !Number.isSafeInteger(releaseId) ||
+    releaseId <= 0 ||
+    !Number.isSafeInteger(assetId) ||
+    assetId <= 0 ||
+    asset.state !== "uploaded" ||
+    !Number.isSafeInteger(size) ||
+    size < 65_536 ||
+    size > maxReleaseAssetBytes
+  ) {
+    throw new UpdateProxyError(502, "invalid_release_asset");
+  }
+  const publishedAt = new Date(value.published_at || "");
+  if (!Number.isFinite(publishedAt.getTime())) {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  const digestValue = String(asset.digest || "").toLowerCase();
+  const digestValueIsValid = /^sha256:[0-9a-f]{64}$/.test(digestValue);
+  return {
+    releaseId,
+    version: tagMatch[1],
+    tagName,
+    name: cleanText(value.name || `TetoTV ${tagName}`, 160),
+    releaseNotes: cleanText(value.body, maxReleaseNotesLength),
+    publishedAt: publishedAt.toISOString(),
+    asset: {
+      id: assetId,
+      name: expectedAssetName,
+      size,
+      contentType: "application/vnd.android.package-archive",
+      ...(digestValueIsValid ? { digest: digestValue } : {}),
+    },
+  };
+}
+
+async function selfTestGithubFetch(url, options = {}) {
+  const parsed = new URL(url);
+  const authorization = new Headers(options.headers).get("authorization");
+  selfTestGithubRequests.push({
+    hostname: parsed.hostname,
+    pathname: parsed.pathname,
+    authorization,
+  });
+  const repositoryPath = githubRepositoryApiPath();
+  if (
+    parsed.origin === "https://api.github.com" &&
+    parsed.pathname === `${repositoryPath}/releases/latest`
+  ) {
+    return new Response(
+      JSON.stringify({
+        id: 116,
+        tag_name: "v1.11.6",
+        name: "TetoTV v1.11.6",
+        body: "Private release notes",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-08-10T00:00:00Z",
+        assets: [
+          {
+            id: 116001,
+            name: "TetoTV-v1.11.6-universal.apk",
+            state: "uploaded",
+            size: selfTestApk.length,
+            content_type: "application/octet-stream",
+            digest:
+              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+  if (
+    parsed.origin === "https://api.github.com" &&
+    parsed.pathname === `${repositoryPath}/releases/assets/116001`
+  ) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: "https://release-assets.githubusercontent.com/tetotv/latest.apk?signature=hidden",
+      },
+    });
+  }
+  if (
+    parsed.origin === "https://release-assets.githubusercontent.com" &&
+    parsed.pathname === "/tetotv/latest.apk"
+  ) {
+    const requestedRange = new Headers(options.headers).get("range");
+    const parsedRange = requestedRange
+      ? parseSingleRange(requestedRange, selfTestApk.length)
+      : null;
+    if (requestedRange && !parsedRange) {
+      return new Response(null, { status: 416 });
+    }
+    const start = parsedRange?.start ?? 0;
+    const end = parsedRange?.end ?? selfTestApk.length - 1;
+    const body = selfTestApk.subarray(start, end + 1);
+    return new Response(body, {
+      status: parsedRange ? 206 : 200,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(body.length),
+        ...(parsedRange
+          ? {
+              "Content-Range": `bytes ${start}-${end}/${selfTestApk.length}`,
+            }
+          : {}),
+      },
+    });
+  }
+  throw new Error("Unexpected mocked GitHub request.");
+}
+
+const githubFetch = selfTest ? selfTestGithubFetch : fetch;
+
+async function requestGithubRelease(path) {
+  if (!updateProxyConfigured()) {
+    throw new UpdateProxyError(503, "updates_not_configured");
+  }
+  let result;
+  try {
+    result = await githubFetch(
+      `https://api.github.com${githubRepositoryApiPath()}${path}`,
+      {
+        headers: githubHeaders(),
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+  } catch {
+    throw new UpdateProxyError(502, "update_service_unavailable");
+  }
+  if (result.status === 404) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  if (!result.ok) {
+    throw new UpdateProxyError(502, "update_service_unavailable");
+  }
+  let body;
+  try {
+    body = await result.json();
+  } catch {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  return sanitizeLatestRelease(body);
+}
+
+function cacheVersionedRelease(release, now = Date.now()) {
+  for (const [tag, cached] of cachedVersionedReleases) {
+    if (cached.expiresAt <= now) cachedVersionedReleases.delete(tag);
+  }
+  while (cachedVersionedReleases.size >= 32) {
+    cachedVersionedReleases.delete(cachedVersionedReleases.keys().next().value);
+  }
+  cachedVersionedReleases.set(release.tagName, {
+    release,
+    expiresAt: now + versionedReleaseTtlMs,
+  });
+}
+
+async function fetchLatestRelease() {
+  const now = Date.now();
+  if (cachedLatestRelease?.expiresAt > now) {
+    return cachedLatestRelease.release;
+  }
+  if (latestReleaseRequest) return latestReleaseRequest;
+  latestReleaseRequest = (async () => {
+    const release = await requestGithubRelease("/releases/latest");
+    const receivedAt = Date.now();
+    cachedLatestRelease = {
+      release,
+      expiresAt: receivedAt + releaseMetadataTtlMs,
+    };
+    cacheVersionedRelease(release, receivedAt);
+    return release;
+  })();
+  try {
+    return await latestReleaseRequest;
+  } finally {
+    latestReleaseRequest = null;
+  }
+}
+
+async function fetchReleaseByTag(tagName) {
+  if (!releaseTagPattern.test(tagName)) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  const now = Date.now();
+  const cached = cachedVersionedReleases.get(tagName);
+  if (cached?.expiresAt > now) return cached.release;
+  if (cached) cachedVersionedReleases.delete(tagName);
+  const latest = await fetchLatestRelease();
+  if (latest.tagName !== tagName) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  cacheVersionedRelease(latest);
+  return latest;
+}
+
+function publicReleaseMetadata(release) {
+  return {
+    version: release.version,
+    tag_name: release.tagName,
+    name: release.name,
+    release_notes: release.releaseNotes,
+    published_at: release.publishedAt,
+    asset: {
+      name: release.asset.name,
+      size: release.asset.size,
+      content_type: release.asset.contentType,
+      download_url:
+        `${publicBaseUrl}/v1/app-updates/releases/${release.tagName}` +
+        `/assets/${release.asset.id}/universal.apk`,
+      ...(release.asset.digest ? { digest: release.asset.digest } : {}),
+    },
+  };
+}
+
+async function latestReleaseMetadata(response) {
+  const release = await fetchLatestRelease();
+  return json(response, 200, publicReleaseMetadata(release));
+}
+
+function parseSingleRange(value, size) {
+  const match = String(value || "").match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (!match[1] && !match[2])) return null;
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : size - 1;
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      start >= size ||
+      end < start
+    ) {
+      return null;
+    }
+    end = Math.min(end, size - 1);
+  }
+  return { start, end, header: `bytes=${start}-${end}` };
+}
+
+function allowedGithubDownloadUrl(url) {
+  if (url.protocol !== "https:" || url.username || url.password) return false;
+  const hostname = url.hostname.toLowerCase();
+  return (
+    hostname === "github.com" ||
+    hostname === "objects.githubusercontent.com" ||
+    hostname === "release-assets.githubusercontent.com" ||
+    hostname.endsWith(".githubusercontent.com")
+  );
+}
+
+async function fetchGithubAsset(release, range, signal) {
+  let currentUrl = new URL(
+    `https://api.github.com${githubRepositoryApiPath()}/releases/assets/${release.asset.id}`,
+  );
+  let firstRequest = true;
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+    let result;
+    try {
+      result = await githubFetch(currentUrl, {
+        headers: {
+          ...githubHeaders({
+            accept: "application/octet-stream",
+            token: firstRequest,
+          }),
+          ...(range ? { Range: range.header } : {}),
+        },
+        redirect: "manual",
+        signal,
+      });
+    } catch {
+      throw new UpdateProxyError(502, "update_download_unavailable");
+    }
+    if ([301, 302, 303, 307, 308].includes(result.status)) {
+      if (redirectCount >= 3) {
+        throw new UpdateProxyError(502, "update_download_unavailable");
+      }
+      const location = result.headers.get("location");
+      let redirected;
+      try {
+        redirected = new URL(location || "", currentUrl);
+      } catch {
+        throw new UpdateProxyError(502, "update_download_unavailable");
+      }
+      if (!allowedGithubDownloadUrl(redirected)) {
+        throw new UpdateProxyError(502, "update_download_unavailable");
+      }
+      currentUrl = redirected;
+      firstRequest = false;
+      continue;
+    }
+    const expectedStatus = range ? 206 : 200;
+    if (result.status !== expectedStatus || !result.body) {
+      throw new UpdateProxyError(502, "update_download_unavailable");
+    }
+    return result;
+  }
+  throw new UpdateProxyError(502, "update_download_unavailable");
+}
+
+function apkHeaders(release, range = null) {
+  const length = range
+    ? range.end - range.start + 1
+    : release.asset.size;
+  return {
+    "Content-Type": "application/vnd.android.package-archive",
+    "Content-Length": String(length),
+    "Content-Disposition": `attachment; filename="${release.asset.name}"`,
+    ETag: `"asset-${release.asset.id}-${release.asset.size}"`,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    ...(range
+      ? {
+          "Content-Range": `bytes ${range.start}-${range.end}/${release.asset.size}`,
+        }
+      : {}),
+  };
+}
+
+async function downloadRelease(request, response, tagName, assetId) {
+  const release = await fetchReleaseByTag(tagName);
+  if (release.asset.id !== assetId) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  const etag = `"asset-${release.asset.id}-${release.asset.size}"`;
+  const rangeHeader =
+    request.headers["if-range"] && request.headers["if-range"] !== etag
+      ? null
+      : request.headers.range;
+  const range = rangeHeader
+    ? parseSingleRange(rangeHeader, release.asset.size)
+    : null;
+  if (rangeHeader && !range) {
+    response.writeHead(416, {
+      "Content-Range": `bytes */${release.asset.size}`,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    return response.end();
+  }
+  if (request.method === "HEAD") {
+    response.writeHead(range ? 206 : 200, apkHeaders(release, range));
+    return response.end();
+  }
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 20 * 60 * 1000);
+  timeout.unref?.();
+  request.once("aborted", () => abortController.abort());
+  const abortOnDisconnect = () => {
+    if (!response.writableFinished) abortController.abort();
+  };
+  response.once("close", abortOnDisconnect);
+  try {
+    const upstream = await fetchGithubAsset(
+      release,
+      range,
+      abortController.signal,
+    );
+    const contentType = String(upstream.headers.get("content-type") || "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    if (!allowedApkContentTypes.has(contentType)) {
+      throw new UpdateProxyError(502, "invalid_release_asset");
+    }
+    const expectedLength = range
+      ? range.end - range.start + 1
+      : release.asset.size;
+    const upstreamLength = Number(upstream.headers.get("content-length"));
+    if (
+      upstream.headers.has("content-length") &&
+      (!Number.isSafeInteger(upstreamLength) || upstreamLength !== expectedLength)
+    ) {
+      throw new UpdateProxyError(502, "invalid_release_asset");
+    }
+    if (range) {
+      const expectedContentRange =
+        `bytes ${range.start}-${range.end}/${release.asset.size}`;
+      if (upstream.headers.get("content-range") !== expectedContentRange) {
+        throw new UpdateProxyError(502, "invalid_release_asset");
+      }
+    }
+
+    response.writeHead(range ? 206 : 200, apkHeaders(release, range));
+    let received = 0;
+    const enforceLength = new Transform({
+      transform(chunk, _encoding, callback) {
+        received += chunk.length;
+        if (received > expectedLength) {
+          callback(new Error("Upstream asset exceeded its declared size."));
+        } else {
+          callback(null, chunk);
+        }
+      },
+      flush(callback) {
+        callback(
+          received === expectedLength
+            ? null
+            : new Error("Upstream asset ended before its declared size."),
+        );
+      },
+    });
+    try {
+      await pipeline(Readable.fromWeb(upstream.body), enforceLength, response);
+    } catch {
+      response.destroy();
+    }
+  } finally {
+    clearTimeout(timeout);
+    response.off("close", abortOnDisconnect);
+  }
+}
+
 const server = createServer(
   {
     maxHeaderSize: 16_384,
@@ -778,7 +1315,80 @@ const server = createServer(
           myanimelist: callbackUrl("myanimelist"),
         },
         source_pairing: true,
+        app_updates: updateProxyConfigured(),
       });
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/v1/app-updates/latest"
+    ) {
+      if (rateLimited(request, 60, "update-metadata")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await latestReleaseMetadata(response);
+    }
+    const updateDownloadMatch = url.pathname.match(
+      /^\/v1\/app-updates\/releases\/(v\d+\.\d+\.\d+)\/assets\/([1-9]\d*)\/universal\.apk$/,
+    );
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      updateDownloadMatch
+    ) {
+      if (
+        request.method === "GET" &&
+        rateLimited(request, 4, "update-download")
+      ) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      const assetId = Number(updateDownloadMatch[2]);
+      if (!Number.isSafeInteger(assetId)) {
+        return json(response, 404, { error: "update_not_found" });
+      }
+      if (request.method === "GET") {
+        if (globallyRateLimitedUpdateDownload()) {
+          return json(
+            response,
+            429,
+            { error: "rate_limited" },
+            { "Retry-After": "60" },
+          );
+        }
+        if (activeUpdateDownloads >= maxConcurrentUpdateDownloads) {
+          return json(
+            response,
+            503,
+            { error: "update_download_busy" },
+            { "Retry-After": "10" },
+          );
+        }
+        activeUpdateDownloads += 1;
+        try {
+          return await downloadRelease(
+            request,
+            response,
+            updateDownloadMatch[1],
+            assetId,
+          );
+        } finally {
+          activeUpdateDownloads -= 1;
+        }
+      }
+      return await downloadRelease(
+        request,
+        response,
+        updateDownloadMatch[1],
+        assetId,
+      );
     }
     if (request.method === "POST" && url.pathname === "/v1/source-pairings") {
       if (rateLimited(request, 5, "source-create")) {
@@ -862,6 +1472,9 @@ const server = createServer(
     }
     return json(response, 404, { error: "not_found" });
   } catch (error) {
+    if (error instanceof UpdateProxyError) {
+      return json(response, error.status, { error: error.code });
+    }
     if (error instanceof RequestInputError) {
       return json(response, error.status, { error: "invalid_request" });
     }
@@ -881,6 +1494,39 @@ server.listen(port, async () => {
       const health = await fetch(`http://127.0.0.1:${port}/health`).then(
         (response) => response.json(),
       );
+      const updateMetadataResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-updates/latest`,
+      );
+      const updateMetadata = await updateMetadataResponse.json();
+      const advertisedUpdateUrl = new URL(updateMetadata.asset.download_url);
+      const localUpdateUrl =
+        `http://127.0.0.1:${port}${advertisedUpdateUrl.pathname}`;
+      // Force the first binary request through the immutable tag lookup rather
+      // than relying on metadata's in-memory release object.
+      cachedVersionedReleases.clear();
+      const updateHead = await fetch(
+        localUpdateUrl,
+        { method: "HEAD" },
+      );
+      const updateDownload = await fetch(localUpdateUrl);
+      const updateDownloadBody = Buffer.from(
+        await updateDownload.arrayBuffer(),
+      );
+      const updateRange = await fetch(localUpdateUrl, {
+        headers: { Range: "bytes=16-31" },
+      });
+      const updateRangeBody = Buffer.from(await updateRange.arrayBuffer());
+      const invalidUpdateRange = await fetch(localUpdateUrl, {
+        headers: { Range: "bytes=999999-1000000" },
+      });
+      const mismatchedIfRange = await fetch(localUpdateUrl, {
+        method: "HEAD",
+        headers: { Range: "bytes=16-31", "If-Range": '"old-asset"' },
+      });
+      const wrongAssetDownload = await fetch(
+        localUpdateUrl.replace("/assets/116001/", "/assets/116002/"),
+      );
+      const wrongAssetBody = await wrongAssetDownload.text();
       const pairing = await fetch(
         `http://127.0.0.1:${port}/v1/anilist/pairings`,
         { method: "POST" },
@@ -1045,6 +1691,55 @@ server.listen(port, async () => {
       if (
         health.status !== "ok" ||
         health.source_pairing !== true ||
+        health.app_updates !== true ||
+        updateProxyConfigured({ token: "" }) !== false ||
+        updateMetadataResponse.status !== 200 ||
+        updateMetadataResponse.headers.get("cache-control") !== "no-store" ||
+        updateMetadata.version !== "1.11.6" ||
+        updateMetadata.tag_name !== "v1.11.6" ||
+        updateMetadata.asset?.name !== "TetoTV-v1.11.6-universal.apk" ||
+        updateMetadata.asset?.download_url !==
+          "https://auth.example.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk" ||
+        advertisedUpdateUrl.search ||
+        advertisedUpdateUrl.hash ||
+        JSON.stringify(updateMetadata).includes(githubReleaseToken) ||
+        JSON.stringify(updateMetadata).includes("api.github.com") ||
+        updateHead.status !== 200 ||
+        updateHead.headers.get("content-length") !== String(selfTestApk.length) ||
+        updateHead.headers.get("accept-ranges") !== "bytes" ||
+        updateHead.headers.get("etag") !==
+          `"asset-116001-${selfTestApk.length}"` ||
+        updateDownload.status !== 200 ||
+        updateDownload.headers.get("content-type") !==
+          "application/vnd.android.package-archive" ||
+        updateDownloadBody.length !== selfTestApk.length ||
+        updateRange.status !== 206 ||
+        updateRange.headers.get("content-range") !==
+          `bytes 16-31/${selfTestApk.length}` ||
+        updateRangeBody.length !== 16 ||
+        invalidUpdateRange.status !== 416 ||
+        mismatchedIfRange.status !== 200 ||
+        mismatchedIfRange.headers.has("content-range") ||
+        wrongAssetDownload.status !== 404 ||
+        wrongAssetBody.includes(githubReleaseToken) ||
+        wrongAssetBody.includes("api.github.com") ||
+        !selfTestGithubRequests.some(
+          (entry) =>
+            entry.hostname === "api.github.com" &&
+            entry.pathname.endsWith("/releases/latest") &&
+            entry.authorization === `Bearer ${githubReleaseToken}`,
+        ) ||
+        !selfTestGithubRequests.some(
+          (entry) =>
+            entry.hostname === "api.github.com" &&
+            entry.pathname.endsWith("/releases/assets/116001") &&
+            entry.authorization === `Bearer ${githubReleaseToken}`,
+        ) ||
+        !selfTestGithubRequests.some(
+          (entry) =>
+            entry.hostname === "release-assets.githubusercontent.com" &&
+            entry.authorization === null,
+        ) ||
         health.callbacks.myanimelist !==
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||

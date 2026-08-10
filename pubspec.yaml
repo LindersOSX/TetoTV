@@ -4,7 +4,7 @@ publish_to: 'none'
 # Reserve 10,000 version-code values per public release. Flutter adds an
 # ABI-specific offset to split APKs, so the next universal APK must still be
 # newer than every split APK from the previous release.
-version: 1.11.6+130001
+version: 1.11.7+140001
 
 environment:
   sdk: ^3.12.2
@@ -22,6 +22,7 @@ dependencies:
   media_kit_video: ^2.0.1
   qr_flutter: ^4.1.0
   cached_network_image: ^3.4.1
+  crypto: ^3.0.6
   path: ^1.9.1
   path_provider: ^2.1.5
   sqflite: ^2.4.2

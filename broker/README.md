@@ -66,3 +66,69 @@ at one instance, or move these maps to an atomic shared TTL store before
 horizontal scaling; otherwise a create, browser submit, and device poll may
 reach different instances. Request sizes, URL lengths, live sessions, and
 per-address create/submit/poll rates are bounded in `server.mjs`.
+
+## Private GitHub release updates
+
+The broker can publish a deliberately narrow view of the latest private
+TetoTV release without putting a GitHub credential in the APK. Add these
+server-side environment variables in Render:
+
+```text
+GITHUB_RELEASE_TOKEN=<fine-grained token>
+GITHUB_RELEASE_REPOSITORY=LindersOSX/TetoTV
+```
+
+Restrict the fine-grained token to only the TetoTV repository, grant only
+`Contents: Read-only`, and set an expiration date. Never pass this value as a
+Flutter build define, commit it to `.env`, or expose it in a client settings
+field. The broker health response reports only `app_updates: true` or `false`.
+
+The Android app uses the following public broker contract and sends no GitHub
+credential:
+
+```text
+GET /v1/app-updates/latest
+GET /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
+HEAD /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
+```
+
+The metadata endpoint returns only the version, tag, title, release notes,
+publication time, and a single sanitized universal-APK descriptor. The
+descriptor's `download_url` points back to an immutable tag-and-asset-ID path
+on the broker. The APK endpoint accepts one standard `Range`, returns `206`
+when requested, and emits an asset-specific `ETag`, allowing interrupted
+downloads to resume without combining bytes from different releases.
+
+The proxy will serve only a non-draft, non-prerelease `vX.Y.Z` release and the
+exact `TetoTV-vX.Y.Z-universal.apk` asset from the configured repository. It
+does not accept repository or upstream URL parameters from the client. The
+strict tag and numeric asset-ID path segments must match a broker-allowlisted
+release. GitHub redirects are followed only a bounded number of times to HTTPS
+GitHub download hosts, and the Authorization header is removed before the
+redirected request. Metadata and binary size/type are validated, responses use
+`no-store`, and metadata/download calls have separate per-address rate limits.
+Metadata cache misses are coalesced. APK delivery is capped at four concurrent
+streams, twelve starts per minute process-wide, and four starts per minute per
+address for this private/friends deployment. Move binary delivery to dedicated
+object storage or a CDN before using the updater at public scale.
+Versioned paths are accepted only for the latest release or a release recently
+advertised by this broker; arbitrary historical tags and asset IDs are not a
+GitHub download oracle.
+
+Example sanitized metadata:
+
+```json
+{
+  "version": "1.11.6",
+  "tag_name": "v1.11.6",
+  "name": "TetoTV v1.11.6",
+  "release_notes": "...",
+  "published_at": "2026-08-10T00:00:00.000Z",
+  "asset": {
+    "name": "TetoTV-v1.11.6-universal.apk",
+    "size": 113650688,
+    "content_type": "application/vnd.android.package-archive",
+    "download_url": "https://tetotv-auth.onrender.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk"
+  }
+}
+```

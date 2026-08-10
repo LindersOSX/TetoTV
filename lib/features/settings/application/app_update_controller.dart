@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -14,18 +15,30 @@ const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
 const pendingReleaseNotesVersionStorageKey = 'pending_release_notes_version';
 const pendingReleaseNotesStorageKey = 'pending_release_notes';
 const tetoTvRepository = 'LindersOSX/TetoTV';
+const tetoTvUpdateBroker = 'https://tetotv-auth.onrender.com';
 
 final appUpdateControllerProvider =
     StateNotifierProvider<AppUpdateController, AppUpdateState>((ref) {
       final bridge = AndroidTvBridge.instance;
       final controller = AppUpdateController(
         ref.watch(secureStorageProvider),
-        GitHubAppReleaseSource(
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 15),
-              receiveTimeout: const Duration(seconds: 30),
-              sendTimeout: const Duration(seconds: 15),
+        BrokerFirstAppReleaseSource(
+          BrokerAppReleaseSource(
+            Dio(
+              BaseOptions(
+                connectTimeout: const Duration(seconds: 15),
+                receiveTimeout: const Duration(seconds: 30),
+                sendTimeout: const Duration(seconds: 15),
+              ),
+            ),
+          ),
+          GitHubAppReleaseSource(
+            Dio(
+              BaseOptions(
+                connectTimeout: const Duration(seconds: 15),
+                receiveTimeout: const Duration(seconds: 30),
+                sendTimeout: const Duration(seconds: 15),
+              ),
             ),
           ),
         ),
@@ -65,7 +78,6 @@ class AppUpdateState {
     this.downloadedPath,
     this.message,
     this.progress = 0,
-    this.hasAccessToken = false,
     this.automaticUpdates = true,
   });
 
@@ -76,7 +88,6 @@ class AppUpdateState {
   final String? downloadedPath;
   final String? message;
   final double progress;
-  final bool hasAccessToken;
   final bool automaticUpdates;
 
   bool get isBusy =>
@@ -92,7 +103,6 @@ class AppUpdateState {
     Object? downloadedPath = _notProvided,
     Object? message = _notProvided,
     double? progress,
-    bool? hasAccessToken,
     bool? automaticUpdates,
   }) {
     return AppUpdateState(
@@ -111,7 +121,6 @@ class AppUpdateState {
           ? this.message
           : message as String?,
       progress: progress ?? this.progress,
-      hasAccessToken: hasAccessToken ?? this.hasAccessToken,
       automaticUpdates: automaticUpdates ?? this.automaticUpdates,
     );
   }
@@ -125,12 +134,14 @@ class AppReleaseAsset {
     required this.apiUrl,
     required this.publicUrl,
     required this.size,
+    this.sha256Digest,
   });
 
   final String name;
   final String apiUrl;
   final String publicUrl;
   final int size;
+  final String? sha256Digest;
 }
 
 class AppReleaseInfo {
@@ -150,17 +161,214 @@ class AppReleaseInfo {
 }
 
 abstract class AppReleaseSource {
-  Future<AppReleaseInfo> latest({
-    required String token,
-    required List<String> deviceAbis,
-  });
+  Future<AppReleaseInfo> latest({required List<String> deviceAbis});
 
   Future<void> download({
     required AppReleaseInfo release,
-    required String token,
     required String destination,
     required void Function(int received, int total) onProgress,
   });
+}
+
+/// Reads private release metadata and APK bytes through the fixed TetoTV
+/// update broker. GitHub credentials remain server-side and this client never
+/// accepts or sends an update credential.
+class BrokerAppReleaseSource implements AppReleaseSource {
+  BrokerAppReleaseSource(this._dio);
+
+  final Dio _dio;
+
+  static final Uri _latestUri = Uri.parse(
+    '$tetoTvUpdateBroker/v1/app-updates/latest',
+  );
+
+  @override
+  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      _latestUri.toString(),
+      options: Options(headers: _headers('application/json')),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw StateError('The update service returned an empty release.');
+    }
+    final rawAsset = data['asset'];
+    if (rawAsset is! Map) {
+      throw FormatException('The update service returned no APK metadata.');
+    }
+    final assetData = rawAsset.cast<Object?, Object?>();
+    final assetName = _requiredString(assetData['name'], 'asset name');
+    if (path.basename(assetName) != assetName ||
+        !assetName.toLowerCase().endsWith('.apk')) {
+      throw FormatException('The update service returned an invalid APK name.');
+    }
+    final size = (assetData['size'] as num?)?.toInt() ?? 0;
+    if (size <= 0) {
+      throw FormatException('The update service returned an invalid APK size.');
+    }
+    final contentType = _requiredString(
+      assetData['content_type'],
+      'asset content type',
+    ).toLowerCase();
+    if (contentType != 'application/vnd.android.package-archive' &&
+        contentType != 'application/octet-stream') {
+      throw FormatException(
+        'The update service returned an invalid APK content type.',
+      );
+    }
+    final tag = _requiredString(data['tag_name'], 'release tag');
+    final downloadUri = _trustedBrokerAssetUri(
+      _requiredString(assetData['download_url'], 'asset download URL'),
+      tag,
+    );
+    final digest = _parseSha256Digest(assetData['digest']);
+    final advertisedVersion = _requiredString(data['version'], 'version');
+    final tagVersion = normalizeAppVersion(tag);
+    final version = normalizeAppVersion(advertisedVersion);
+    if (version.isEmpty || compareAppVersions(version, tagVersion) != 0) {
+      throw FormatException('The update service returned mismatched versions.');
+    }
+    return AppReleaseInfo(
+      tagName: tag,
+      version: version,
+      name: _optionalString(data['name']) ?? tag,
+      notes: _optionalString(data['release_notes']) ?? '',
+      asset: AppReleaseAsset(
+        name: assetName,
+        apiUrl: downloadUri.toString(),
+        publicUrl: downloadUri.toString(),
+        size: size,
+        sha256Digest: digest,
+      ),
+    );
+  }
+
+  @override
+  Future<void> download({
+    required AppReleaseInfo release,
+    required String destination,
+    required void Function(int received, int total) onProgress,
+  }) {
+    final uri = _trustedBrokerAssetUri(
+      release.asset.publicUrl,
+      release.tagName,
+    );
+    return _dio.download(
+      uri.toString(),
+      destination,
+      options: Options(
+        headers: _headers('application/vnd.android.package-archive'),
+        followRedirects: true,
+        maxRedirects: 2,
+        receiveTimeout: const Duration(minutes: 20),
+      ),
+      onReceiveProgress: onProgress,
+      deleteOnError: true,
+    );
+  }
+
+  static Map<String, String> _headers(String accept) => {
+    'Accept': accept,
+    'User-Agent': 'TetoTV-Android-Updater',
+  };
+
+  static Uri _trustedBrokerAssetUri(String value, String tag) {
+    if (!RegExp(r'^v[0-9]+\.[0-9]+\.[0-9]+$').hasMatch(tag)) {
+      throw FormatException(
+        'The update service returned an invalid release tag.',
+      );
+    }
+    final uri = Uri.tryParse(value);
+    final base = Uri.parse(tetoTvUpdateBroker);
+    if (uri == null ||
+        uri.scheme != base.scheme ||
+        uri.host != base.host ||
+        uri.port != base.port ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw FormatException(
+        'The update service returned an untrusted APK download URL.',
+      );
+    }
+    final segments = uri.pathSegments;
+    if (segments.length != 7 ||
+        segments[0] != 'v1' ||
+        segments[1] != 'app-updates' ||
+        segments[2] != 'releases' ||
+        segments[3] != tag ||
+        segments[4] != 'assets' ||
+        segments[6] != 'universal.apk') {
+      throw FormatException(
+        'The update service returned an invalid APK download path.',
+      );
+    }
+    final assetIdText = segments[5];
+    final assetId = int.tryParse(assetIdText);
+    if (!RegExp(r'^[1-9][0-9]*$').hasMatch(assetIdText) ||
+        assetId == null ||
+        assetId > 9007199254740991) {
+      throw FormatException(
+        'The update service returned an invalid APK asset ID.',
+      );
+    }
+    final expected = Uri.parse(
+      '$tetoTvUpdateBroker/v1/app-updates/releases/$tag/assets/'
+      '$assetIdText/universal.apk',
+    );
+    if (uri != expected) {
+      throw FormatException(
+        'The update service returned a non-canonical APK download URL.',
+      );
+    }
+    return uri;
+  }
+}
+
+/// Prefers the credential-free broker. The anonymous GitHub path is retained
+/// solely as a future public-repository fallback; it never receives a token.
+class BrokerFirstAppReleaseSource implements AppReleaseSource {
+  BrokerFirstAppReleaseSource(this._broker, this._anonymousGitHub);
+
+  final BrokerAppReleaseSource _broker;
+  final GitHubAppReleaseSource _anonymousGitHub;
+
+  @override
+  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
+    try {
+      return await _broker.latest(deviceAbis: deviceAbis);
+    } on DioException catch (brokerError, brokerStack) {
+      try {
+        return await _anonymousGitHub.latest(deviceAbis: deviceAbis);
+      } catch (_) {
+        Error.throwWithStackTrace(brokerError, brokerStack);
+      }
+    }
+  }
+
+  @override
+  Future<void> download({
+    required AppReleaseInfo release,
+    required String destination,
+    required void Function(int received, int total) onProgress,
+  }) {
+    final uri = Uri.tryParse(release.asset.publicUrl);
+    final isBrokerAsset =
+        uri != null &&
+        uri.scheme == 'https' &&
+        uri.host == Uri.parse(tetoTvUpdateBroker).host;
+    return isBrokerAsset
+        ? _broker.download(
+            release: release,
+            destination: destination,
+            onProgress: onProgress,
+          )
+        : _anonymousGitHub.download(
+            release: release,
+            destination: destination,
+            onProgress: onProgress,
+          );
+  }
 }
 
 class GitHubAppReleaseSource implements AppReleaseSource {
@@ -169,20 +377,8 @@ class GitHubAppReleaseSource implements AppReleaseSource {
   final Dio _dio;
 
   @override
-  Future<AppReleaseInfo> latest({
-    required String token,
-    required List<String> deviceAbis,
-  }) async {
-    late final Response<Map<String, dynamic>> response;
-    try {
-      response = await _latestResponse(token);
-    } on DioException catch (error) {
-      if (token.trim().isEmpty || !_isGitHubAccessDenied(error)) rethrow;
-      // A saved private-repository token can later expire or be revoked after
-      // the repository becomes public. Retry without it so that stale optional
-      // credentials never break the built-in public update path.
-      response = await _latestResponse('');
-    }
+  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
+    final response = await _latestResponse();
     final data = response.data;
     if (data == null) throw StateError('GitHub returned an empty release.');
     final assets = (data['assets'] as List? ?? const [])
@@ -195,6 +391,7 @@ class GitHubAppReleaseSource implements AppReleaseSource {
             apiUrl: item['url'] as String? ?? '',
             publicUrl: item['browser_download_url'] as String? ?? '',
             size: (item['size'] as num?)?.toInt() ?? 0,
+            sha256Digest: _parseSha256Digest(item['digest']),
           ),
         )
         .where(
@@ -221,52 +418,29 @@ class GitHubAppReleaseSource implements AppReleaseSource {
   @override
   Future<void> download({
     required AppReleaseInfo release,
-    required String token,
     required String destination,
     required void Function(int received, int total) onProgress,
-  }) async {
-    final authenticated = token.trim().isNotEmpty;
-    try {
-      await _download(
-        url: authenticated ? release.asset.apiUrl : release.asset.publicUrl,
-        token: token,
-        destination: destination,
-        onProgress: onProgress,
-      );
-    } on DioException catch (error) {
-      if (!authenticated || !_isGitHubAccessDenied(error)) rethrow;
-      // Some HTTP stacks may leave a short partial file even when
-      // `deleteOnError` is enabled. Never append or compare an authenticated
-      // error body with the anonymous public-release retry.
-      final partial = File(destination);
-      if (await partial.exists()) await partial.delete();
-      await _download(
-        url: release.asset.publicUrl,
-        token: '',
-        destination: destination,
-        onProgress: onProgress,
-      );
-    }
-  }
+  }) => _download(
+    url: release.asset.publicUrl,
+    destination: destination,
+    onProgress: onProgress,
+  );
 
-  Future<Response<Map<String, dynamic>>> _latestResponse(String token) =>
+  Future<Response<Map<String, dynamic>>> _latestResponse() =>
       _dio.get<Map<String, dynamic>>(
         'https://api.github.com/repos/$tetoTvRepository/releases/latest',
-        options: Options(
-          headers: _headers(token, 'application/vnd.github+json'),
-        ),
+        options: Options(headers: _headers('application/vnd.github+json')),
       );
 
   Future<void> _download({
     required String url,
-    required String token,
     required String destination,
     required void Function(int received, int total) onProgress,
   }) => _dio.download(
     url,
     destination,
     options: Options(
-      headers: _headers(token, 'application/octet-stream'),
+      headers: _headers('application/octet-stream'),
       followRedirects: true,
       receiveTimeout: const Duration(minutes: 20),
     ),
@@ -274,17 +448,33 @@ class GitHubAppReleaseSource implements AppReleaseSource {
     deleteOnError: true,
   );
 
-  static Map<String, String> _headers(String token, String accept) => {
+  static Map<String, String> _headers(String accept) => {
     'Accept': accept,
-    if (token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'TetoTV-AndroidTV-Updater',
   };
 }
 
-bool _isGitHubAccessDenied(DioException error) {
-  final status = error.response?.statusCode;
-  return status == 401 || status == 403 || status == 404;
+String _requiredString(Object? value, String field) {
+  final result = _optionalString(value);
+  if (result == null) throw FormatException('Missing update $field.');
+  return result;
+}
+
+String? _optionalString(Object? value) {
+  if (value is! String) return null;
+  final result = value.trim();
+  return result.isEmpty ? null : result;
+}
+
+String? _parseSha256Digest(Object? value) {
+  if (value == null) return null;
+  final raw = _requiredString(value, 'asset digest').toLowerCase();
+  final match = RegExp(r'^sha256:([0-9a-f]{64})$').firstMatch(raw);
+  if (match == null) {
+    throw FormatException('The update service returned an invalid APK digest.');
+  }
+  return match.group(1);
 }
 
 AppReleaseAsset selectApkAsset(
@@ -396,7 +586,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   final Duration automaticCheckInterval;
   final ApkInspector? apkInspector;
 
-  String _token = '';
   bool _loaded = false;
   Future<void>? _loadRequest;
 
@@ -417,30 +606,16 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       _storage.read(key: automaticUpdatesStorageKey),
       _currentVersionLoader(),
     ]);
-    _token = (values[0] ?? '').trim();
+    // Versions before the broker migration could store a GitHub credential on
+    // the device. It is no longer used and is removed during the first load.
+    if (values[0] != null) {
+      await _storage.delete(key: githubUpdateTokenStorageKey);
+    }
     _loaded = true;
     if (!mounted) return;
     state = state.copyWith(
       currentVersion: values[2] ?? 'unknown',
-      hasAccessToken: _token.isNotEmpty,
       automaticUpdates: values[1] != 'false',
-    );
-  }
-
-  Future<void> saveAccessToken(String token) async {
-    await load();
-    _token = token.trim();
-    if (_token.isEmpty) {
-      await _storage.delete(key: githubUpdateTokenStorageKey);
-    } else {
-      await _storage.write(key: githubUpdateTokenStorageKey, value: _token);
-    }
-    state = state.copyWith(
-      phase: AppUpdatePhase.idle,
-      hasAccessToken: _token.isNotEmpty,
-      message: _token.isEmpty
-          ? 'Private-release credential removed. Public updates need no token.'
-          : 'Private-release access saved in encrypted device storage.',
     );
   }
 
@@ -499,11 +674,10 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     state = state.copyWith(
       phase: AppUpdatePhase.checking,
       progress: 0,
-      message: automatic ? null : 'Checking for a signed GitHub release…',
+      message: automatic ? null : 'Checking the secure update service…',
     );
     try {
       final release = await _releaseSource.latest(
-        token: _token,
         deviceAbis: await _deviceAbisLoader(),
       );
       if (compareAppVersions(release.version, state.currentVersion) <= 0) {
@@ -533,9 +707,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       state = state.copyWith(
         phase: AppUpdatePhase.error,
         message: status == 401 || status == 403 || status == 404
-            ? _token.isEmpty
-                  ? 'No public TetoTV release is available right now.'
-                  : 'GitHub release access was denied. Try again later.'
+            ? 'No TetoTV update is available right now.'
             : 'Update check failed: ${error.message ?? 'network error'}',
       );
     } catch (error) {
@@ -582,7 +754,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       var lastPercent = -1;
       await _releaseSource.download(
         release: selected,
-        token: _token,
         destination: destination,
         onProgress: (received, total) {
           if (total <= 0 || !mounted) return;
@@ -600,11 +771,22 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       final size = await file.length();
       final expected = selected.asset.size;
       if (size < 1024 * 1024 || (expected > 0 && size != expected)) {
-        await file.delete().catchError((_) => file);
+        await _deleteUpdateFile(file);
         throw StateError('The downloaded APK was incomplete.');
+      }
+      final expectedDigest = selected.asset.sha256Digest;
+      if (expectedDigest != null) {
+        final actualDigest = (await sha256.bind(file.openRead()).first)
+            .toString()
+            .toLowerCase();
+        if (actualDigest != expectedDigest.toLowerCase()) {
+          await _deleteUpdateFile(file);
+          throw StateError('The downloaded APK failed its integrity check.');
+        }
       }
       final inspection = await apkInspector?.call(destination);
       if (inspection != null && !inspection.compatible) {
+        await _deleteUpdateFile(file);
         throw StateError(
           'This APK is not compatible: ${inspection.issues.join(' ')}',
         );
@@ -665,7 +847,9 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
 String _safeUpdateError(Object error) {
   if (error is DioException) {
     final status = error.response?.statusCode;
-    return status == null ? 'network error' : 'GitHub returned HTTP $status';
+    return status == null
+        ? 'network error'
+        : 'update service returned HTTP $status';
   }
   if (error is StateError || error is FormatException) {
     var message = error.toString();
@@ -682,4 +866,12 @@ String _safeUpdateError(Object error) {
     return message.length <= 240 ? message : '${message.substring(0, 240)}…';
   }
   return 'unexpected error';
+}
+
+Future<void> _deleteUpdateFile(File file) async {
+  try {
+    if (await file.exists()) await file.delete();
+  } catch (_) {
+    // Best effort: Android's installer is never opened after validation fails.
+  }
 }
