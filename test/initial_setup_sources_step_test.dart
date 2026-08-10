@@ -108,7 +108,7 @@ void _expectSourcesStep(WidgetTester tester) {
   expect(find.text('2'), findsOneWidget);
   expect(find.text('Marketplace repositories'), findsOneWidget);
   expect(find.text('3'), findsOneWidget);
-  expect(find.text('torrent manifests'), findsOneWidget);
+  expect(find.text('Torrent source manifests'), findsOneWidget);
   expect(find.text('Add sources with phone'), findsOneWidget);
   expect(find.text('Open Marketplace manually'), findsOneWidget);
   expect(find.text('Skip setup'), findsOneWidget);

@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -28,10 +29,12 @@ void main() {
             onForward: () {},
             onAudio: () {},
             onSubtitles: () {},
+            onCaptionSize: () {},
             onPicture: () {},
             onFixVideo: () {},
             onSources: () {},
             onOptions: () {},
+            onDismiss: () {},
           ),
         ),
       ),
@@ -39,8 +42,9 @@ void main() {
 
     expect(find.text('Audio'), findsOneWidget);
     expect(find.text('CC'), findsOneWidget);
+    expect(find.text('Size'), findsOneWidget);
     expect(find.text('Picture'), findsOneWidget);
-    expect(find.text('Fix video'), findsOneWidget);
+    expect(find.text('Player'), findsOneWidget);
     expect(find.text('Sources'), findsOneWidget);
     expect(find.text('Options'), findsOneWidget);
     expect(find.text('03:00  /  24:00'), findsOneWidget);
@@ -96,10 +100,12 @@ void main() {
             onForward: () {},
             onAudio: () {},
             onSubtitles: () {},
+            onCaptionSize: () {},
             onPicture: () {},
             onFixVideo: () {},
             onSources: () {},
             onOptions: () {},
+            onDismiss: () {},
           ),
         ),
       ),
@@ -108,5 +114,46 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Sources'), findsOneWidget);
     expect(find.byType(SingleChildScrollView), findsOneWidget);
+  });
+
+  testWidgets('D-pad Down dismisses the visible player HUD immediately', (
+    tester,
+  ) async {
+    final playFocus = FocusNode();
+    addTearDown(playFocus.dispose);
+    var dismissed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TetoPlayerChrome(
+            engineKey: 'dismiss',
+            title: 'Episode',
+            streamLabel: 'Web stream',
+            position: Duration.zero,
+            duration: const Duration(minutes: 24),
+            isPlaying: true,
+            playFocusNode: playFocus,
+            seekBackSeconds: 10,
+            seekForwardSeconds: 10,
+            onRewind: () {},
+            onPlayPause: () {},
+            onForward: () {},
+            onAudio: () {},
+            onSubtitles: () {},
+            onCaptionSize: () {},
+            onPicture: () {},
+            onFixVideo: () {},
+            onOptions: () {},
+            onDismiss: () => dismissed = true,
+          ),
+        ),
+      ),
+    );
+    playFocus.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+
+    expect(dismissed, isTrue);
   });
 }

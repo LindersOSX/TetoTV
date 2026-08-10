@@ -1,5 +1,7 @@
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
@@ -16,105 +18,91 @@ class DiscoverScreen extends ConsumerStatefulWidget {
 }
 
 class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
-  String? _genre;
-  String? _format;
-  String? _status;
-  String _sort = 'POPULARITY_DESC';
+  CatalogFilters _filters = const CatalogFilters();
   late Future<List<AnimeSummary>> _results;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _results = _discover();
   }
 
-  void _load() {
-    _results = ref
-        .read(catalogClientProvider)
-        .discover(
-          CatalogFilters(
-            genre: _genre,
-            format: _format,
-            status: _status,
-            sort: _sort,
-          ),
-        );
-  }
+  Future<List<AnimeSummary>> _discover() =>
+      ref.read(catalogClientProvider).discover(_filters);
 
-  void _change(VoidCallback update) {
+  Future<void> _openFilters() async {
+    final next = await showDialog<CatalogFilters>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _DiscoverFiltersDialog(initial: _filters),
+    );
+    if (next == null || !mounted) return;
     setState(() {
-      update();
-      _load();
+      _filters = next;
+      _results = _discover();
+    });
+  }
+
+  void _reset() {
+    setState(() {
+      _filters = const CatalogFilters();
+      _results = _discover();
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final summary = _filterSummary(_filters);
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(34, 24, 34, 0),
+        minimum: context.responsiveScreenPadding.copyWith(bottom: 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                _Back(onPressed: context.pop),
-                const SizedBox(width: 16),
-                Text(
-                  'Discover',
-                  style: Theme.of(context).textTheme.headlineSmall,
+                _HeaderButton(
+                  icon: Icons.arrow_back_rounded,
+                  label: context.isCompactWidth ? null : 'Back',
+                  onPressed: context.pop,
                 ),
-                const SizedBox(width: 18),
-                const Expanded(
-                  child: Text(
-                    'Filter AniList by genre, format, status, and ranking',
-                    style: TextStyle(color: AppColors.textMuted),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Discover',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      Text(
+                        summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: AppColors.textMuted),
+                      ),
+                    ],
                   ),
+                ),
+                if (_hasFilters(_filters)) ...[
+                  _HeaderButton(
+                    icon: Icons.filter_alt_off_rounded,
+                    label: context.isCompactWidth ? null : 'Reset',
+                    onPressed: _reset,
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                _HeaderButton(
+                  icon: Icons.tune_rounded,
+                  label: context.isCompactWidth ? null : 'Filters',
+                  autofocus: true,
+                  onPressed: _openFilters,
                 ),
               ],
             ),
             const SizedBox(height: 14),
-            _FilterRow(
-              label: 'GENRE',
-              values: const [
-                null,
-                'Action',
-                'Adventure',
-                'Comedy',
-                'Drama',
-                'Fantasy',
-                'Romance',
-                'Sci-Fi',
-              ],
-              selected: _genre,
-              onSelected: (value) => _change(() => _genre = value),
-            ),
-            _FilterRow(
-              label: 'FORMAT',
-              values: const [null, 'TV', 'MOVIE', 'ONA', 'OVA', 'TV_SHORT'],
-              selected: _format,
-              onSelected: (value) => _change(() => _format = value),
-            ),
-            _FilterRow(
-              label: 'STATUS',
-              values: const [null, 'RELEASING', 'FINISHED', 'NOT_YET_RELEASED'],
-              selected: _status,
-              onSelected: (value) => _change(() => _status = value),
-            ),
-            _FilterRow(
-              label: 'SORT',
-              values: const [
-                'POPULARITY_DESC',
-                'TRENDING_DESC',
-                'SCORE_DESC',
-                'START_DATE_DESC',
-              ],
-              selected: _sort,
-              onSelected: (value) => _change(() => _sort = value!),
-            ),
-            const SizedBox(height: 8),
             Expanded(
               child: FutureBuilder<List<AnimeSummary>>(
                 future: _results,
@@ -127,15 +115,24 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                     );
                   }
                   if (snapshot.hasError) {
-                    return Center(
+                    return _DiscoverError(
+                      message: snapshot.error.toString(),
+                      onRetry: () => setState(() => _results = _discover()),
+                    );
+                  }
+                  final items = snapshot.data ?? const <AnimeSummary>[];
+                  if (items.isEmpty) {
+                    return const Center(
                       child: Text(
-                        'Could not load discovery: ${snapshot.error}',
+                        'No anime matched these filters.',
+                        style: TextStyle(color: AppColors.textMuted),
                       ),
                     );
                   }
                   return CatalogGrid(
-                    items: snapshot.data ?? const [],
+                    items: items,
                     titlePreference: titlePreference,
+                    autofocus: false,
                   );
                 },
               ),
@@ -147,91 +144,626 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   }
 }
 
-class _FilterRow extends StatelessWidget {
-  const _FilterRow({
-    required this.label,
-    required this.values,
-    required this.selected,
-    required this.onSelected,
-  });
+class _DiscoverFiltersDialog extends StatefulWidget {
+  const _DiscoverFiltersDialog({required this.initial});
 
-  final String label;
-  final List<String?> values;
-  final String? selected;
-  final ValueChanged<String?> onSelected;
+  final CatalogFilters initial;
+
+  @override
+  State<_DiscoverFiltersDialog> createState() => _DiscoverFiltersDialogState();
+}
+
+class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
+  late final TextEditingController _titleController;
+  String? _genre;
+  String? _tag;
+  String? _format;
+  String? _season;
+  String? _status;
+  int? _year;
+  int? _minimumScore;
+  String _sort = 'POPULARITY_DESC';
+  bool _includeAdult = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.initial.search ?? '');
+    _genre = widget.initial.genre;
+    _tag = widget.initial.tag;
+    _format = widget.initial.format;
+    _season = widget.initial.season;
+    _status = widget.initial.status;
+    _year = widget.initial.year;
+    _minimumScore = widget.initial.minimumScore;
+    _sort = widget.initial.sort;
+    _includeAdult = widget.initial.includeAdult;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    super.dispose();
+  }
+
+  CatalogFilters get _value => CatalogFilters(
+    search: _titleController.text.trim().isEmpty
+        ? null
+        : _titleController.text.trim(),
+    genre: _genre,
+    tag: _tag,
+    format: _format,
+    season: _season,
+    status: _status,
+    year: _year,
+    minimumScore: _minimumScore,
+    includeAdult: _includeAdult,
+    sort: _sort,
+  );
+
+  void _clear() {
+    setState(() {
+      _titleController.clear();
+      _genre = null;
+      _tag = null;
+      _format = null;
+      _season = null;
+      _status = null;
+      _year = null;
+      _minimumScore = null;
+      _sort = 'POPULARITY_DESC';
+      _includeAdult = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 39,
-      child: Row(
-        children: [
-          SizedBox(
-            width: 70,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: AppColors.textMuted,
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: EdgeInsets.all(context.isCompactWidth ? 10 : 28),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF080808),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.accent.withValues(alpha: .65)),
           ),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: values.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 6),
-              itemBuilder: (context, index) {
-                final value = values[index];
-                final active = selected == value;
-                return TvFocusable(
-                  onPressed: () => onSelected(value),
-                  borderRadius: BorderRadius.circular(7),
-                  child: Container(
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.symmetric(horizontal: 11),
-                    color: active
-                        ? AppColors.accent
-                        : AppColors.selectableSurface,
-                    child: Text(
-                      (value ?? 'ANY').replaceAll('_', ' '),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
+          child: Padding(
+            padding: EdgeInsets.all(context.isCompactWidth ? 14 : 22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Discover filters',
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
                     ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      TvTextInput(
+                        controller: _titleController,
+                        labelText: 'Title',
+                        hintText: 'Search by title',
+                        keyboardTitle: 'Discover title',
+                        autofocus: true,
+                      ),
+                      const SizedBox(height: 9),
+                      _FilterField(
+                        icon: Icons.sort_rounded,
+                        label: 'Sort',
+                        value: _sortLabels[_sort] ?? _sort,
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Sort results',
+                            current: _sort,
+                            options: _sortLabels,
+                            allowAny: false,
+                          );
+                          if (value != null && mounted) {
+                            setState(() => _sort = value);
+                          }
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.category_outlined,
+                        label: 'Genre',
+                        value: _genre ?? 'All genres',
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Genre',
+                            current: _genre,
+                            options: {for (final item in _genres) item: item},
+                          );
+                          if (mounted) setState(() => _genre = value);
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.sell_outlined,
+                        label: 'Tag',
+                        value: _tag ?? 'All tags',
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Tag',
+                            current: _tag,
+                            options: {for (final item in _tags) item: item},
+                          );
+                          if (mounted) setState(() => _tag = value);
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.tv_rounded,
+                        label: 'Format',
+                        value: _format == null
+                            ? 'All formats'
+                            : _pretty(_format!),
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Format',
+                            current: _format,
+                            options: _formatLabels,
+                          );
+                          if (mounted) setState(() => _format = value);
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.eco_outlined,
+                        label: 'Season',
+                        value: _season == null
+                            ? 'All seasons'
+                            : _pretty(_season!),
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Season',
+                            current: _season,
+                            options: _seasonLabels,
+                          );
+                          if (mounted) setState(() => _season = value);
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.calendar_month_outlined,
+                        label: 'Year',
+                        value: _year?.toString() ?? 'Timeless',
+                        onPressed: () async {
+                          final now = DateTime.now().year;
+                          final value = await _choose(
+                            context,
+                            title: 'Release year',
+                            current: _year?.toString(),
+                            options: {
+                              for (var year = now + 2; year >= now - 35; year--)
+                                '$year': '$year',
+                            },
+                          );
+                          if (mounted) {
+                            setState(() => _year = int.tryParse(value ?? ''));
+                          }
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.podcasts_rounded,
+                        label: 'Status',
+                        value: _status == null
+                            ? 'All statuses'
+                            : _statusLabels[_status]!,
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Release status',
+                            current: _status,
+                            options: _statusLabels,
+                          );
+                          if (mounted) setState(() => _status = value);
+                        },
+                      ),
+                      _FilterField(
+                        icon: Icons.star_outline_rounded,
+                        label: 'Minimum score',
+                        value: _minimumScore == null
+                            ? 'All scores'
+                            : '${_minimumScore! / 10}/10 or higher',
+                        onPressed: () async {
+                          final value = await _choose(
+                            context,
+                            title: 'Minimum score',
+                            current: _minimumScore?.toString(),
+                            options: const {
+                              '90': '9/10 or higher',
+                              '80': '8/10 or higher',
+                              '70': '7/10 or higher',
+                              '60': '6/10 or higher',
+                            },
+                          );
+                          if (mounted) {
+                            setState(
+                              () => _minimumScore = int.tryParse(value ?? ''),
+                            );
+                          }
+                        },
+                      ),
+                      TvFocusable(
+                        onPressed: () =>
+                            setState(() => _includeAdult = !_includeAdult),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 54),
+                          margin: const EdgeInsets.only(top: 7),
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          decoration: BoxDecoration(
+                            color: AppColors.selectableSurface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _includeAdult
+                                    ? Icons.toggle_on_rounded
+                                    : Icons.toggle_off_rounded,
+                                color: _includeAdult
+                                    ? AppColors.accentBright
+                                    : AppColors.textMuted,
+                                size: 34,
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Include adult titles',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                );
-              },
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(onPressed: _clear, child: const Text('Reset')),
+                    const SizedBox(width: 10),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(context).pop(_value),
+                      icon: const Icon(Icons.search_rounded),
+                      label: const Text('Show results'),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _Back extends StatelessWidget {
-  const _Back({required this.onPressed});
+class _FilterField extends StatelessWidget {
+  const _FilterField({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
   final VoidCallback onPressed;
 
   @override
-  Widget build(BuildContext context) => TvFocusable(
-    onPressed: onPressed,
-    child: const ColoredBox(
-      color: AppColors.selectableSurface,
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 7),
+    child: TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 56),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: AppColors.selectableSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white12),
+        ),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.arrow_back_rounded, size: 18),
-            SizedBox(width: 6),
-            Text('Back'),
+            Icon(icon, color: AppColors.textMuted, size: 21),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: AppColors.textMuted,
+            ),
           ],
         ),
       ),
     ),
   );
 }
+
+Future<String?> _choose(
+  BuildContext context, {
+  required String title,
+  required String? current,
+  required Map<String, String> options,
+  bool allowAny = true,
+}) async {
+  const any = '__ANY__';
+  final result = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: AppColors.panel,
+      title: Text(title),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 500, maxHeight: 460),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            if (allowAny)
+              _ChoiceTile(
+                label: 'Any',
+                selected: current == null,
+                onPressed: () => Navigator.of(context).pop(any),
+              ),
+            for (final option in options.entries)
+              _ChoiceTile(
+                label: option.value,
+                selected: current == option.key,
+                onPressed: () => Navigator.of(context).pop(option.key),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+  return result == any ? null : result ?? current;
+}
+
+class _ChoiceTile extends StatelessWidget {
+  const _ChoiceTile({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 7),
+    child: TvFocusable(
+      autofocus: selected,
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(9),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+        color: selected ? AppColors.accent : AppColors.panelRaised,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            if (selected) const Icon(Icons.check_rounded, size: 20),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _HeaderButton extends StatelessWidget {
+  const _HeaderButton({
+    required this.icon,
+    required this.onPressed,
+    this.label,
+    this.autofocus = false,
+  });
+
+  final IconData icon;
+  final String? label;
+  final bool autofocus;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    autofocus: autofocus,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(10),
+    child: Container(
+      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      padding: EdgeInsets.symmetric(horizontal: label == null ? 10 : 13),
+      color: AppColors.selectableSurface,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20),
+          if (label != null) ...[
+            const SizedBox(width: 7),
+            Text(label!, style: const TextStyle(fontWeight: FontWeight.w800)),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+class _DiscoverError extends StatelessWidget {
+  const _DiscoverError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Could not load discovery: $message',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Retry'),
+        ),
+      ],
+    ),
+  );
+}
+
+bool _hasFilters(CatalogFilters filters) =>
+    filters.search != null ||
+    filters.genre != null ||
+    filters.tag != null ||
+    filters.format != null ||
+    filters.status != null ||
+    filters.season != null ||
+    filters.year != null ||
+    filters.minimumScore != null ||
+    filters.includeAdult ||
+    filters.sort != 'POPULARITY_DESC';
+
+String _filterSummary(CatalogFilters filters) {
+  final values = <String>[
+    if (filters.search != null) '“${filters.search}”',
+    _sortLabels[filters.sort] ?? _pretty(filters.sort),
+    if (filters.genre != null) filters.genre!,
+    if (filters.format != null) _pretty(filters.format!),
+    if (filters.status != null) _statusLabels[filters.status]!,
+  ];
+  return values.join(' • ');
+}
+
+String _pretty(String value) => value
+    .split('_')
+    .map(
+      (part) => part.isEmpty
+          ? part
+          : '${part.substring(0, 1)}${part.substring(1).toLowerCase()}',
+    )
+    .join(' ');
+
+const _sortLabels = <String, String>{
+  'POPULARITY_DESC': 'Most popular',
+  'TRENDING_DESC': 'Trending now',
+  'SCORE_DESC': 'Highest score',
+  'START_DATE_DESC': 'Newest releases',
+  'FAVOURITES_DESC': 'Most favorited',
+  'TITLE_ENGLISH': 'Title A–Z',
+};
+
+const _formatLabels = <String, String>{
+  'TV': 'TV',
+  'TV_SHORT': 'TV Short',
+  'MOVIE': 'Movie',
+  'SPECIAL': 'Special',
+  'OVA': 'OVA',
+  'ONA': 'ONA',
+  'MUSIC': 'Music',
+};
+
+const _seasonLabels = <String, String>{
+  'WINTER': 'Winter',
+  'SPRING': 'Spring',
+  'SUMMER': 'Summer',
+  'FALL': 'Fall',
+};
+
+const _statusLabels = <String, String>{
+  'RELEASING': 'Airing',
+  'FINISHED': 'Finished',
+  'NOT_YET_RELEASED': 'Unreleased',
+  'CANCELLED': 'Cancelled',
+  'HIATUS': 'On hiatus',
+};
+
+const _genres = <String>[
+  'Action',
+  'Adventure',
+  'Comedy',
+  'Drama',
+  'Ecchi',
+  'Fantasy',
+  'Horror',
+  'Mahou Shoujo',
+  'Mecha',
+  'Music',
+  'Mystery',
+  'Psychological',
+  'Romance',
+  'Sci-Fi',
+  'Slice of Life',
+  'Sports',
+  'Supernatural',
+  'Thriller',
+];
+
+const _tags = <String>[
+  'Isekai',
+  'School',
+  'Shounen',
+  'Shoujo',
+  'Seinen',
+  'Josei',
+  'Romantic Comedy',
+  'Time Manipulation',
+  'Super Power',
+  'Martial Arts',
+  'Historical',
+  'Military',
+  'Demons',
+  'Vampire',
+  'Space',
+  'Cyberpunk',
+];

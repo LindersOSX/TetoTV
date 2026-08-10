@@ -390,16 +390,16 @@ function sourcePairingValidationError(repositoryUrls, manifestUrls) {
     return "The Marketplace repositories field accepts up to eight URLs.";
   }
   if (manifestUrls.length > 8) {
-    return "The Stremio manifests field accepts up to eight URLs.";
+    return "The Torrent source manifests field accepts up to eight URLs.";
   }
   if (repositoryUrls.length + manifestUrls.length === 0) {
-    return "Enter at least one marketplace repository or Stremio manifest URL.";
+    return "Enter at least one Marketplace repository or Torrent source manifest URL.";
   }
   if (repositoryUrls.some((value) => !validSubmittedUrl(value))) {
     return "Every Marketplace repository entry must be a valid public HTTPS URL without embedded username/password credentials.";
   }
   if (manifestUrls.some((value) => !validSubmittedUrl(value))) {
-    return "Every Stremio manifest entry must be a valid public HTTPS URL without embedded username/password credentials.";
+    return "Every Torrent source manifest entry must be a valid public HTTPS URL without embedded username/password credentials.";
   }
   const marketplaceUrlInManifestField = manifestUrls.some((value) => {
     try {
@@ -411,14 +411,14 @@ function sourcePairingValidationError(repositoryUrls, manifestUrls) {
     }
   });
   if (marketplaceUrlInManifestField) {
-    return "A marketplace.json URL was entered under Stremio manifests. Move it to Marketplace repositories. Stremio manifest URLs must end in /manifest.json.";
+    return "A marketplace.json URL was entered under Torrent source manifests. Move it to Marketplace repositories. Torrent source manifest URLs must end in /manifest.json.";
   }
   if (
     manifestUrls.some(
       (value) => !validSubmittedUrl(value, { manifest: true }),
     )
   ) {
-    return "Every URL under Stremio manifests must end in /manifest.json. Marketplace repository URLs belong in the Marketplace repositories field.";
+    return "Every URL under Torrent source manifests must end in /manifest.json. Marketplace repository URLs belong in the Marketplace repositories field.";
   }
   return "";
 }
@@ -668,9 +668,9 @@ function sourcePairingForm(
        <label for="repository-urls">Marketplace repositories</label>
        <textarea id="repository-urls" name="repository_urls" aria-label="Marketplace repository URLs" placeholder="https://example.com/marketplace.json" maxlength="16391">${repositoryValue}</textarea>
        <small class="field-help">Repository catalogs, commonly ending in marketplace.json.</small>
-       <label for="manifest-urls">Stremio manifests</label>
-       <textarea id="manifest-urls" name="manifest_urls" aria-label="Stremio manifest URLs" placeholder="https://example.com/addon/manifest.json" maxlength="16391">${manifestValue}</textarea>
-       <small class="field-help">Individual Stremio add-ons. Each URL must end in /manifest.json.</small>
+       <label for="manifest-urls">Torrent source manifests</label>
+       <textarea id="manifest-urls" name="manifest_urls" aria-label="Torrent source manifest URLs" placeholder="https://example.com/addon/manifest.json" maxlength="16391">${manifestValue}</textarea>
+       <small class="field-help">Individual torrent-source add-ons. Each URL must end in /manifest.json.</small>
        <button type="submit">Send securely</button>
      </form>
      <small>TetoTV never uploads saved account tokens. Submitted URLs are encrypted in transit, held in memory until this device confirms the local save, then deleted.</small>`,
@@ -2358,7 +2358,7 @@ server.listen(port, async () => {
         sourceMalformedBody.status !== 400 ||
         misplacedMarketplaceResponse.status !== 400 ||
         !misplacedMarketplacePage.includes(
-          "A marketplace.json URL was entered under Stremio manifests.",
+          "A marketplace.json URL was entered under Torrent source manifests.",
         ) ||
         !misplacedMarketplacePage.includes(
           "Move it to Marketplace repositories.",

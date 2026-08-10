@@ -131,7 +131,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var dropWindowFrames = 0
     private var consecutiveChoppyWindows = 0
     private var activeTrackDialog: Dialog? = null
-    private var lastDpadDownAtMs = 0L
     private var consumedNavigationKeyUp: Int? = null
     private var malMediaId = 0
     private var episodeNumber = 0
@@ -472,10 +471,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             }
         fixVideoButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_fix_video).apply {
-                setOnClickListener {
-                    persistCheckpoint()
-                    finishWithResult(STATUS_USE_MPV)
-                }
+                setOnClickListener { showPlayerPicker(this) }
             }
         optionsButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_player_options).apply {
@@ -1072,7 +1068,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             "Audio tracks",
             "Closed captions",
             "Caption size",
-            "Use compatibility player",
+            "Choose player",
         )
         try {
             val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
@@ -1085,10 +1081,61 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                             1 -> showTrackPicker(C.TRACK_TYPE_AUDIO, audioTrackButton)
                             2 -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
                             3 -> showSubtitleSizePicker(captionSizeButton)
-                            4 -> {
-                                persistCheckpoint()
-                                finishWithResult(STATUS_USE_MPV)
-                            }
+                            4 -> showPlayerPicker(sourceButton)
+                        }
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+            activeTrackDialog = dialog
+            dialog.setOnDismissListener {
+                if (activeTrackDialog === dialog) activeTrackDialog = null
+                if (!isFinishing && !isDestroyed) {
+                    playerView.showController()
+                    sourceButton.requestFocus()
+                    armControllerAutoHide()
+                }
+            }
+            dialog.show()
+        } catch (_: Throwable) {
+            activeTrackDialog = null
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_track_picker_error,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
+        }
+    }
+
+    private fun showPlayerPicker(sourceButton: View) {
+        handler.removeCallbacks(hideControllerRunnable)
+        activeTrackDialog?.dismiss()
+        val labels = arrayOf(
+            "Media3 - current",
+            "MPV - best for subtitles and web streams",
+            "VLC - compatibility player",
+        )
+        try {
+            val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+                .setTitle("Choose player")
+                .setSingleChoiceItems(labels, 0) { picker, index ->
+                    picker.dismiss()
+                    when (index) {
+                        1 -> {
+                            persistCheckpoint()
+                            finishWithResult(STATUS_USE_MPV)
+                        }
+                        2 -> {
+                            persistCheckpoint()
+                            finishWithResult(STATUS_USE_VLC)
+                        }
+                        else -> {
+                            playerView.showController()
+                            sourceButton.requestFocus()
+                            armControllerAutoHide()
                         }
                     }
                 }
@@ -1298,21 +1345,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
         val isInitialKeyDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         if (isInitialKeyDown) {
-            val now = SystemClock.elapsedRealtime()
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                if (
-                    playerView.isControllerFullyVisible &&
-                    now - lastDpadDownAtMs in 1..DOUBLE_DPAD_DOWN_WINDOW_MS
-                ) {
-                    lastDpadDownAtMs = 0L
+                if (playerView.isControllerFullyVisible) {
                     consumedNavigationKeyUp = event.keyCode
                     handler.removeCallbacks(hideControllerRunnable)
                     playerView.hideController()
                     return true
                 }
-                lastDpadDownAtMs = now
-            } else {
-                lastDpadDownAtMs = 0L
             }
 
             if (event.keyCode in CONTROLLER_NAVIGATION_KEYS) {
@@ -1750,11 +1789,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val STATUS_STOPPED = "stopped"
         const val STATUS_ERROR = "error"
         const val STATUS_USE_MPV = "use_mpv"
+        const val STATUS_USE_VLC = "use_vlc"
 
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
-        private const val DOUBLE_DPAD_DOWN_WINDOW_MS = 450L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3
         private const val MAX_SKIP_RESPONSE_BYTES = 256L * 1024L

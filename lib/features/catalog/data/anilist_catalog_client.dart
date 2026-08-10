@@ -223,14 +223,17 @@ class AniListCatalogClient {
   }) async {
     const query = r'''
       query DiscoverAnime(
-        $page: Int!, $genre: String, $format: MediaFormat,
+        $page: Int!, $search: String, $genre: String, $tag: String,
+        $format: MediaFormat,
         $status: MediaStatus, $season: MediaSeason, $year: Int,
-        $sort: [MediaSort!]
+        $minimumScore: Int, $isAdult: Boolean, $sort: [MediaSort!]
       ) {
         Page(page: $page, perPage: 30) {
           media(
-            type: ANIME, isAdult: false, genre: $genre, format: $format,
-            status: $status, season: $season, seasonYear: $year, sort: $sort
+            type: ANIME, search: $search, isAdult: $isAdult,
+            genre: $genre, tag: $tag, format: $format,
+            status: $status, season: $season, seasonYear: $year,
+            averageScore_greater: $minimumScore, sort: $sort
           ) {
             id idMal title { userPreferred english romaji }
             description(asHtml: false) episodes averageScore genres
@@ -242,11 +245,15 @@ class AniListCatalogClient {
     ''';
     return _mediaPage(query, {
       'page': page,
+      'search': filters.search,
       'genre': filters.genre,
+      'tag': filters.tag,
       'format': filters.format,
       'status': filters.status,
       'season': filters.season,
       'year': filters.year,
+      'minimumScore': filters.minimumScore,
+      'isAdult': filters.includeAdult,
       'sort': [filters.sort],
     });
   }

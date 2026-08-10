@@ -174,6 +174,8 @@ void main() {
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
     await tester.pump(const Duration(milliseconds: 700));
+    expect(primaryCalls, 0);
+    expect(secondaryCalls, 0);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
     await tester.pump();
 
@@ -205,6 +207,53 @@ void main() {
 
     expect(primaryCalls, 1);
     expect(secondaryCalls, 0);
+  });
+
+  testWidgets('held Select cannot activate a dialog action before release', (
+    tester,
+  ) async {
+    var confirmed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TvFocusable(
+              autofocus: true,
+              onPressed: () {},
+              onLongPress: () {
+                showDialog<void>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Manage show'),
+                    actions: [
+                      TextButton(
+                        autofocus: true,
+                        onPressed: () {
+                          confirmed = true;
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('Confirm'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: const SizedBox(width: 100, height: 100),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    await tester.pump(const Duration(milliseconds: 800));
+    expect(find.text('Manage show'), findsNothing);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Manage show'), findsOneWidget);
+    expect(confirmed, isFalse);
   });
 
   testWidgets('D-pad scrolls a virtualized list when focus reaches its edge', (

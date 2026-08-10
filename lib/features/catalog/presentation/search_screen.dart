@@ -31,6 +31,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   AsyncValue<List<AnimeSummary>> _results = const AsyncData([]);
   var _searchGeneration = 0;
   var _hasSearched = false;
+  var _voiceSearching = false;
 
   @override
   void initState() {
@@ -97,8 +98,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Future<void> _voiceSearch() async {
+    if (_voiceSearching) return;
+    setState(() => _voiceSearching = true);
     final query = await AndroidTvBridge.instance.voiceSearch();
     if (!mounted) return;
+    setState(() => _voiceSearching = false);
     if (query == null || query.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -159,8 +163,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     height: 52,
                     alignment: Alignment.center,
                     color: AppColors.panel,
-                    child: const Icon(
-                      Icons.mic_rounded,
+                    child: Icon(
+                      _voiceSearching
+                          ? Icons.graphic_eq_rounded
+                          : Icons.mic_rounded,
                       color: AppColors.accentBright,
                       size: 25,
                     ),

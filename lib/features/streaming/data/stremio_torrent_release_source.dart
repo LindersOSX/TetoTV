@@ -469,7 +469,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       throw ArgumentError.value(
         value,
         'manifestUrl',
-        'Use an HTTPS Stremio manifest URL ending in manifest.json.',
+        'Use an HTTPS Torrent source manifest URL ending in manifest.json.',
       );
     }
     return uri;
@@ -589,7 +589,7 @@ class _StremioStreamCapability {
     final resources = body['resources'];
     if (resources is! List<dynamic>) {
       throw const FormatException(
-        'The Stremio manifest does not declare stream resources.',
+        'The Torrent source manifest does not declare stream resources.',
       );
     }
     for (final resource in resources) {
@@ -612,7 +612,7 @@ class _StremioStreamCapability {
       }
     }
     throw const FormatException(
-      'The Stremio manifest does not declare a stream resource.',
+      'The Torrent source manifest does not declare a stream resource.',
     );
   }
 

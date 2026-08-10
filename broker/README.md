@@ -64,7 +64,7 @@ the Android Keystore between refreshes.
 ## Companion source entry
 
 TetoTV can also create a ten-minute code for `/source-pair`, letting a user
-paste long Marketplace repository and Stremio manifest URLs on a phone or PC.
+paste long Marketplace repository and Torrent source manifest URLs on a phone or PC.
 The browser receives only the human code. The 256-bit device code stays on the
 TV, and the first valid browser submission wins. An authenticated device poll
 leases the payload without deleting it, allowing safe redelivery after a

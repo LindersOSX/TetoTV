@@ -23,6 +23,8 @@ import android.os.Bundle
 import android.os.StatFs
 import android.provider.Settings
 import android.speech.RecognizerIntent
+import android.speech.RecognitionListener
+import android.speech.SpeechRecognizer
 import androidx.core.content.edit
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -49,6 +51,7 @@ class MainActivity : FlutterActivity() {
     private var pendingApkInstallResult: MethodChannel.Result? = null
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
+    private var speechRecognizer: SpeechRecognizer? = null
     private var mediaSeekBackIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSeekForwardIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSessionWasActiveBeforeNativePlayer = false
@@ -422,6 +425,23 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != VOICE_SEARCH_PERMISSION_REQUEST_CODE) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            beginEmbeddedVoiceSearch()
+        } else {
+            finishEmbeddedVoiceSearch(
+                value = null,
+                errorMessage = "Microphone permission is required for voice search.",
+            )
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun startVoiceSearch(result: MethodChannel.Result) {
         if (pendingVoiceSearchResult != null) {
@@ -436,6 +456,10 @@ class MainActivity : FlutterActivity() {
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Search anime")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
+        if (intent.resolveActivity(packageManager) == null) {
+            startEmbeddedVoiceSearch(result)
+            return
+        }
         pendingVoiceSearchResult = result
         try {
             startActivityForResult(intent, VOICE_SEARCH_REQUEST_CODE)
@@ -449,6 +473,92 @@ class MainActivity : FlutterActivity() {
         } catch (error: Throwable) {
             pendingVoiceSearchResult = null
             result.error("VOICE_SEARCH", error.message, null)
+        }
+    }
+
+    private fun startEmbeddedVoiceSearch(result: MethodChannel.Result) {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            result.error(
+                "VOICE_SEARCH_UNAVAILABLE",
+                "This device does not have a speech recognition service installed.",
+                null,
+            )
+            return
+        }
+        pendingVoiceSearchResult = result
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.RECORD_AUDIO),
+                VOICE_SEARCH_PERMISSION_REQUEST_CODE,
+            )
+            return
+        }
+        beginEmbeddedVoiceSearch()
+    }
+
+    private fun beginEmbeddedVoiceSearch() {
+        if (pendingVoiceSearchResult == null) return
+        speechRecognizer?.destroy()
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).also { recognizer ->
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) = Unit
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                override fun onError(error: Int) {
+                    finishEmbeddedVoiceSearch(
+                        value = null,
+                        errorMessage = when (error) {
+                            SpeechRecognizer.ERROR_NO_MATCH -> "No title was recognized."
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech was heard."
+                            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                                "Microphone permission is required for voice search."
+                            else -> "Voice search could not recognize a title."
+                        },
+                    )
+                }
+
+                override fun onResults(results: Bundle?) {
+                    val matches = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    finishEmbeddedVoiceSearch(value = matches?.firstOrNull())
+                }
+            })
+            recognizer.startListening(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                    )
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Search anime")
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                },
+            )
+        }
+    }
+
+    private fun finishEmbeddedVoiceSearch(
+        value: String?,
+        errorMessage: String? = null,
+    ) {
+        val pending = pendingVoiceSearchResult
+        pendingVoiceSearchResult = null
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        if (pending == null) return
+        if (errorMessage == null) {
+            pending.success(value)
+        } else {
+            pending.error("VOICE_SEARCH", errorMessage, null)
         }
     }
 
@@ -998,6 +1108,9 @@ class MainActivity : FlutterActivity() {
             null,
         )
         pendingVoiceSearchResult = null
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
     }
@@ -1006,6 +1119,7 @@ class MainActivity : FlutterActivity() {
         private const val NATIVE_PLAYER_REQUEST_CODE = 7314
         private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
         private const val VOICE_SEARCH_REQUEST_CODE = 7316
+        private const val VOICE_SEARCH_PERMISSION_REQUEST_CODE = 7317
         private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
         private const val MIN_SEEK_INCREMENT_MS = 5_000L
         private const val MAX_SEEK_INCREMENT_MS = 60_000L

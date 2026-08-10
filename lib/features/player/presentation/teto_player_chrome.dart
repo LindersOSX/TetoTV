@@ -1,6 +1,7 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// Visual language shared by every Flutter-backed playback engine.
 ///
@@ -23,10 +24,12 @@ class TetoPlayerChrome extends StatelessWidget {
     required this.onForward,
     required this.onAudio,
     required this.onSubtitles,
+    required this.onCaptionSize,
     required this.onPicture,
     required this.onFixVideo,
     this.onSources,
     required this.onOptions,
+    required this.onDismiss,
     this.engineLabel,
     this.footerHint = 'D-pad controls  |  J/L seek  |  Menu/Y options',
     super.key,
@@ -47,10 +50,12 @@ class TetoPlayerChrome extends StatelessWidget {
   final VoidCallback onForward;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
+  final VoidCallback onCaptionSize;
   final VoidCallback onPicture;
   final VoidCallback onFixVideo;
   final VoidCallback? onSources;
   final VoidCallback onOptions;
+  final VoidCallback onDismiss;
   final String footerHint;
 
   @override
@@ -137,6 +142,7 @@ class TetoPlayerChrome extends StatelessWidget {
                           icon: Icons.replay_rounded,
                           label: 'Back ${seekBackSeconds}s',
                           onPressed: onRewind,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 8),
                         TetoPlayerControl(
@@ -147,36 +153,49 @@ class TetoPlayerChrome extends StatelessWidget {
                               : Icons.play_arrow_rounded,
                           label: isPlaying ? 'Pause' : 'Play',
                           onPressed: onPlayPause,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 8),
                         TetoPlayerControl(
                           icon: Icons.forward_rounded,
                           label: 'Forward ${seekForwardSeconds}s',
                           onPressed: onForward,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 18),
                         TetoPlayerControl(
                           icon: Icons.audiotrack_rounded,
                           label: 'Audio',
                           onPressed: onAudio,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 8),
                         TetoPlayerControl(
                           icon: Icons.closed_caption_rounded,
                           label: 'CC',
                           onPressed: onSubtitles,
+                          onDismiss: onDismiss,
+                        ),
+                        const SizedBox(width: 8),
+                        TetoPlayerControl(
+                          icon: Icons.text_fields_rounded,
+                          label: 'Size',
+                          onPressed: onCaptionSize,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 8),
                         TetoPlayerControl(
                           icon: Icons.aspect_ratio_rounded,
                           label: 'Picture',
                           onPressed: onPicture,
+                          onDismiss: onDismiss,
                         ),
                         const SizedBox(width: 8),
                         TetoPlayerControl(
-                          icon: Icons.build_circle_outlined,
-                          label: 'Fix video',
+                          icon: Icons.smart_display_outlined,
+                          label: 'Player',
                           onPressed: onFixVideo,
+                          onDismiss: onDismiss,
                         ),
                         if (onSources != null) ...[
                           const SizedBox(width: 8),
@@ -184,6 +203,7 @@ class TetoPlayerChrome extends StatelessWidget {
                             icon: Icons.video_library_rounded,
                             label: 'Sources',
                             onPressed: onSources!,
+                            onDismiss: onDismiss,
                           ),
                         ],
                         const SizedBox(width: 18),
@@ -191,11 +211,12 @@ class TetoPlayerChrome extends StatelessWidget {
                           icon: Icons.tune_rounded,
                           label: 'Options',
                           onPressed: onOptions,
+                          onDismiss: onDismiss,
                         ),
                       ],
                     ),
                   ),
-                  SizedBox(height: compact ? 7 : 9),
+                  SizedBox(height: compact ? 15 : 18),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(999),
                     child: LinearProgressIndicator(
@@ -307,6 +328,7 @@ class TetoPlayerControl extends StatelessWidget {
     required this.onPressed,
     this.focusNode,
     this.primary = false,
+    this.onDismiss,
     super.key,
   });
 
@@ -315,12 +337,23 @@ class TetoPlayerControl extends StatelessWidget {
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final bool primary;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
+      onKeyEvent: onDismiss == null
+          ? null
+          : (_, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                onDismiss!();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
       focusScale: 1.025,
       borderRadius: BorderRadius.circular(8),
       child: Container(

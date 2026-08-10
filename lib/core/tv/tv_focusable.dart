@@ -19,6 +19,7 @@ class TvFocusable extends StatefulWidget {
     this.focusNode,
     this.onFocusChanged,
     this.onLongPress,
+    this.onKeyEvent,
     super.key,
   });
 
@@ -30,6 +31,7 @@ class TvFocusable extends StatefulWidget {
   final FocusNode? focusNode;
   final ValueChanged<bool>? onFocusChanged;
   final VoidCallback? onLongPress;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   @override
   State<TvFocusable> createState() => _TvFocusableState();
@@ -42,8 +44,9 @@ class _TvFocusableState extends State<TvFocusable> {
   bool _pressed = false;
   bool _navigationSoundsEnabled = true;
   bool _clickSoundsEnabled = true;
+  LogicalKeyboardKey? _remotePressKey;
   Timer? _holdTimer;
-  bool _holdTriggered = false;
+  bool _holdEligible = false;
 
   FocusNode get _focusNode => widget.focusNode ?? _fallbackFocusNode;
 
@@ -77,33 +80,57 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   KeyEventResult _handleRemoteActivation(FocusNode node, KeyEvent event) {
-    if (widget.onLongPress == null ||
-        (event.logicalKey != LogicalKeyboardKey.select &&
-            event.logicalKey != LogicalKeyboardKey.enter)) {
+    final customResult = widget.onKeyEvent?.call(node, event);
+    if (customResult == KeyEventResult.handled) {
+      return KeyEventResult.handled;
+    }
+    // Controls without a secondary/hold action use Flutter's standard
+    // ActivateIntent. Keeping their Enter event unconsumed also lets parent
+    // keyboard/dialog handlers observe physical Enter.
+    if (widget.onLongPress == null) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.select &&
+        event.logicalKey != LogicalKeyboardKey.enter) {
       return KeyEventResult.ignored;
     }
     if (event is KeyDownEvent) {
       _holdTimer?.cancel();
-      _holdTriggered = false;
-      _holdTimer = Timer(const Duration(milliseconds: 650), () {
-        if (!mounted) return;
-        _holdTriggered = true;
-        _activate(widget.onLongPress);
-      });
+      _holdEligible = false;
+      _remotePressKey = event.logicalKey;
+      if (widget.onLongPress != null) {
+        _holdTimer = Timer(const Duration(milliseconds: 650), () {
+          _holdEligible = true;
+        });
+      }
       return KeyEventResult.handled;
     }
     if (event is KeyRepeatEvent) return KeyEventResult.handled;
     if (event is KeyUpEvent) {
+      final pressedKey = _remotePressKey;
       _holdTimer?.cancel();
       _holdTimer = null;
-      if (!_holdTriggered) _activate(widget.onPressed);
-      _holdTriggered = false;
+      _remotePressKey = null;
+      if (pressedKey != event.logicalKey) {
+        _holdEligible = false;
+        return KeyEventResult.handled;
+      }
+      if (widget.onLongPress != null && _holdEligible) {
+        _activate(widget.onLongPress);
+      } else {
+        _activate(widget.onPressed);
+      }
+      _holdEligible = false;
       return KeyEventResult.handled;
     }
     return KeyEventResult.handled;
   }
 
   void _handleFocus(bool focused) {
+    if (!focused) {
+      _holdTimer?.cancel();
+      _holdTimer = null;
+      _remotePressKey = null;
+      _holdEligible = false;
+    }
     setState(() => _focused = focused);
     widget.onFocusChanged?.call(focused);
     if (focused) {

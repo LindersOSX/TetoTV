@@ -242,7 +242,7 @@ class _WaitingForSources extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Paste Marketplace repository and Stremio manifest URLs on your phone. This TV validates every destination before saving it.',
+              'Paste Marketplace repository and Torrent source manifest URLs on your phone. This device validates every destination before saving it.',
               textAlign: TextAlign.start,
               style: TextStyle(color: AppColors.textMuted),
             ),

@@ -380,7 +380,7 @@ class _SourcesStep extends ConsumerWidget {
       icon: Icons.add_link_rounded,
       title: 'Add streaming sources',
       subtitle:
-          'TetoTV does not bundle or recommend streaming sources. Add only repositories and torrent manifests you trust and are authorized to use.',
+          'TetoTV does not bundle or recommend streaming sources. Add only Marketplace repositories and Torrent source manifests you trust and are authorized to use.',
       child: Column(
         children: [
           Wrap(
@@ -399,8 +399,8 @@ class _SourcesStep extends ConsumerWidget {
                 icon: Icons.cloud_download_outlined,
                 count: manifestCount,
                 label: manifestCount == 1
-                    ? 'torrent manifest'
-                    : 'torrent manifests',
+                    ? 'Torrent source manifest'
+                    : 'Torrent source manifests',
               ),
             ],
           ),

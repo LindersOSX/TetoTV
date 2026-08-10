@@ -79,7 +79,7 @@ class UserTorrentSourcesController
     await load();
     final normalized = normalizeUserTorrentManifestUrl(rawUrl);
     if (normalized == null) {
-      return 'Enter a public HTTPS Stremio manifest URL ending in manifest.json.';
+      return 'Enter a public HTTPS Torrent source manifest URL ending in manifest.json.';
     }
     if (state.manifestUrls.contains(normalized)) {
       return 'That torrent source is already added.';

@@ -18,6 +18,7 @@ import 'package:anime_tv/features/settings/application/setup_progress_controller
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -168,6 +169,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ref.invalidate(dismissedContinueWatchingProvider);
   }
 
+  Future<void> _manageShelfItem(_ShelfItem item) async {
+    final action = await showDialog<Object>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => _HomeShowActionsDialog(item: item),
+    );
+    if (!mounted || action == null) return;
+    if (action == _HomeShowAction.removeLocal) {
+      await _removeFromLocalHistory(item);
+      return;
+    }
+    if (action == _HomeShowAction.open) {
+      final route =
+          item.route ??
+          (item.animeId == null
+              ? Uri(
+                  path: '/search',
+                  queryParameters: {'q': item.title},
+                ).toString()
+              : '/anime/${item.animeId}');
+      if (mounted) await context.push(route);
+      return;
+    }
+    if (action is! TrackingListStatus || item.trackingItems.isEmpty) return;
+
+    var failures = 0;
+    for (final tracked in item.trackingItems) {
+      try {
+        await ref
+            .read(trackingStatusControllerProvider.notifier)
+            .update(tracked, action);
+      } catch (_) {
+        failures++;
+      }
+    }
+    if (!mounted) return;
+    ref.invalidate(trackingHomeProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failures == 0
+              ? '${item.title} moved to ${action.displayName}.'
+              : 'Updated ${item.trackingItems.length - failures} of '
+                    '${item.trackingItems.length} connected lists.',
+        ),
+        backgroundColor: failures == 0
+            ? AppColors.accent
+            : const Color(0xFF7D1E32),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _heroFocus.dispose();
@@ -231,17 +284,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final completedItems = tracking?.completed
         .map((item) => _ShelfItem.fromTracked(item, titlePreference))
         .toList(growable: false);
-    final historyItems = localHistory
-        ?.map(_ShelfItem.fromCheckpoint)
-        .toList(growable: false);
+    final historyItems = _historyShelfItems(
+      localHistory: localHistory,
+      tracking: tracking,
+    );
     final watchingItems = _mergeContinueWatching(
       localHistory: localHistory,
       trackedWatching: tracking?.watching,
       dismissedIds: dismissedIds,
       titlePreference: titlePreference,
     );
+    final followed = <HomeTrackedAnime>[
+      ...?tracking?.watching,
+      ...?tracking?.planToWatch,
+    ];
     final airingItems = seasonal
-        ?.where((anime) => anime.nextAiringEpisode != null)
+        ?.where(
+          (anime) =>
+              anime.nextAiringEpisode != null &&
+              _isTrackedAnime(anime, followed),
+        )
         .take(20)
         .map(
           (anime) => _ShelfItem.fromAnime(anime, titlePreference).copyWith(
@@ -260,7 +322,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 title: shelf.displayName,
                 items: watchingItems,
                 preferences: preferences,
-                onRemove: _removeFromLocalHistory,
+                onManage: _manageShelfItem,
               ),
             ),
           );
@@ -273,7 +335,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: historyItems,
                   preferences: preferences,
-                  onRemove: _removeFromLocalHistory,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -322,6 +384,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: plannedItems,
                   preferences: preferences,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -348,6 +411,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: completedItems,
                   preferences: preferences,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -717,13 +781,13 @@ class _MediaShelf extends StatelessWidget {
     required this.title,
     required this.items,
     required this.preferences,
-    this.onRemove,
+    this.onManage,
   });
 
   final String title;
   final List<_ShelfItem> items;
   final SettingsPreferences preferences;
-  final ValueChanged<_ShelfItem>? onRemove;
+  final ValueChanged<_ShelfItem>? onManage;
 
   @override
   Widget build(BuildContext context) {
@@ -770,7 +834,7 @@ class _MediaShelf extends StatelessWidget {
                           ).toString(),
                         )
                       : context.push('/anime/${item.animeId}'),
-                  onLongPress: onRemove == null ? null : () => onRemove!(item),
+                  onLongPress: onManage == null ? null : () => onManage!(item),
                 );
               },
             ),
@@ -1136,6 +1200,8 @@ List<_ShelfItem> _mergeContinueWatching({
   final merged = <_ShelfItem>[];
   final localAniListIds = <int>{};
   final localMalIds = <int>{};
+  final localAniListIndexes = <int, int>{};
+  final localMalIndexes = <int, int>{};
 
   // Recent local playback contains the most useful resume position, so it is
   // deliberately added first and wins whenever the tracker has the same media
@@ -1146,7 +1212,12 @@ List<_ShelfItem> _mergeContinueWatching({
       continue;
     }
     if (checkpoint.malMediaId case final malId?) localMalIds.add(malId);
+    final index = merged.length;
     merged.add(_ShelfItem.fromCheckpoint(checkpoint));
+    localAniListIndexes[checkpoint.anilistMediaId] = index;
+    if (checkpoint.malMediaId case final malId?) {
+      localMalIndexes[malId] = index;
+    }
   }
 
   final seenTrackerIds = <String>{};
@@ -1162,7 +1233,20 @@ List<_ShelfItem> _mergeContinueWatching({
         tracked.tracked.mediaId,
       ),
     };
-    if (matchesLocal) continue;
+    if (matchesLocal) {
+      final index = switch (tracked.provider) {
+        TrackingProvider.anilist =>
+          localAniListIndexes[aniListId ?? tracked.tracked.mediaId],
+        TrackingProvider.myAnimeList =>
+          localMalIndexes[tracked.tracked.mediaId],
+      };
+      if (index != null) {
+        merged[index] = merged[index].copyWith(
+          trackingItems: [...merged[index].trackingItems, tracked],
+        );
+      }
+      continue;
+    }
 
     final trackerKey = '${tracked.provider.name}:${tracked.tracked.mediaId}';
     if (!seenTrackerIds.add(trackerKey)) continue;
@@ -1186,6 +1270,8 @@ class _ShelfItem {
     this.durationMinutes,
     this.historyMediaId,
     this.airingStatus,
+    this.malMediaId,
+    this.trackingItems = const [],
   });
 
   final String title;
@@ -1200,6 +1286,8 @@ class _ShelfItem {
   final int? durationMinutes;
   final int? historyMediaId;
   final String? airingStatus;
+  final int? malMediaId;
+  final List<HomeTrackedAnime> trackingItems;
 
   bool get hasPosterMetadata =>
       score != null || releaseYear != null || durationMinutes != null;
@@ -1230,10 +1318,14 @@ class _ShelfItem {
       animeId: checkpoint.anilistMediaId,
       coverImageUrl: checkpoint.coverImageUrl,
       historyMediaId: checkpoint.anilistMediaId,
+      malMediaId: checkpoint.malMediaId,
     );
   }
 
-  _ShelfItem copyWith({String? subtitle}) => _ShelfItem(
+  _ShelfItem copyWith({
+    String? subtitle,
+    List<HomeTrackedAnime>? trackingItems,
+  }) => _ShelfItem(
     title,
     subtitle ?? this.subtitle,
     color,
@@ -1246,6 +1338,8 @@ class _ShelfItem {
     durationMinutes: durationMinutes,
     historyMediaId: historyMediaId,
     airingStatus: airingStatus,
+    malMediaId: malMediaId,
+    trackingItems: trackingItems ?? this.trackingItems,
   );
 
   factory _ShelfItem.fromTracked(
@@ -1273,7 +1367,6 @@ class _ShelfItem {
           ? null
           : (tracked.progress / tracked.totalEpisodes!).clamp(0, 1),
       animeId: item.anilistId,
-      historyMediaId: item.anilistId,
       coverImageUrl: item.coverImageUrl,
       route: item.anilistId == null
           ? Uri(
@@ -1282,9 +1375,130 @@ class _ShelfItem {
             ).toString()
           : null,
       airingStatus: tracked.airingStatus,
+      trackingItems: [item],
     );
   }
 }
+
+enum _HomeShowAction { open, removeLocal }
+
+class _HomeShowActionsDialog extends StatelessWidget {
+  const _HomeShowActionsDialog({required this.item});
+
+  final _ShelfItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = item.trackingItems.isEmpty
+        ? null
+        : item.trackingItems.first.tracked.status;
+    return AlertDialog(
+      backgroundColor: AppColors.panel,
+      title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 680),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (item.trackingItems.isNotEmpty) ...[
+              Text(
+                'Update status on ${item.trackingItems.map((entry) => entry.provider.displayName).join(' and ')}',
+                style: const TextStyle(color: AppColors.textMuted),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 9,
+                runSpacing: 9,
+                children: [
+                  for (final status in TrackingListStatus.values)
+                    TvFocusable(
+                      autofocus: status == current,
+                      onPressed: () => Navigator.of(context).pop(status),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: 126,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        alignment: Alignment.center,
+                        color: status == current
+                            ? AppColors.accent
+                            : AppColors.panelRaised,
+                        child: Text(
+                          status.displayName,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ] else
+              const Text(
+                'Connect AniList or MAL to change this show\'s list status.',
+                style: TextStyle(color: AppColors.textMuted),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          autofocus: item.trackingItems.isEmpty,
+          onPressed: () => Navigator.of(context).pop(_HomeShowAction.open),
+          child: const Text('Open show'),
+        ),
+        if (item.historyMediaId != null)
+          FilledButton.tonal(
+            onPressed: () =>
+                Navigator.of(context).pop(_HomeShowAction.removeLocal),
+            child: const Text('Remove locally'),
+          ),
+      ],
+    );
+  }
+}
+
+List<_ShelfItem>? _historyShelfItems({
+  required List<PlaybackCheckpoint>? localHistory,
+  required TrackingHomeData? tracking,
+}) {
+  if (localHistory == null) return null;
+  final tracked = <HomeTrackedAnime>[
+    ...?tracking?.watching,
+    ...?tracking?.planToWatch,
+    ...?tracking?.completed,
+  ];
+  return [
+    for (final checkpoint in localHistory)
+      _ShelfItem.fromCheckpoint(checkpoint).copyWith(
+        trackingItems: [
+          for (final item in tracked)
+            if ((item.provider == TrackingProvider.anilist &&
+                    (item.anilistId ?? item.tracked.mediaId) ==
+                        checkpoint.anilistMediaId) ||
+                (item.provider == TrackingProvider.myAnimeList &&
+                    checkpoint.malMediaId == item.tracked.mediaId))
+              item,
+        ],
+      ),
+  ];
+}
+
+bool _isTrackedAnime(AnimeSummary anime, List<HomeTrackedAnime> tracked) {
+  final normalized = _normalizedAnimeTitle(anime.title);
+  return tracked.any((item) {
+    if (item.provider == TrackingProvider.anilist &&
+        (item.anilistId ?? item.tracked.mediaId) == anime.id) {
+      return true;
+    }
+    if (item.provider == TrackingProvider.myAnimeList &&
+        anime.idMal == item.tracked.mediaId) {
+      return true;
+    }
+    return _normalizedAnimeTitle(item.tracked.title) == normalized;
+  });
+}
+
+String _normalizedAnimeTitle(String value) =>
+    value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
 
 String _shortDuration(Duration duration) {
   final minutes = duration.inMinutes;

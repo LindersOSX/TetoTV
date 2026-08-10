@@ -32,6 +32,7 @@ const _interfaceModeKey = 'appearance_interface_mode';
 const _navigationSoundsKey = 'audio_navigation_sounds';
 const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
+const _preferredPlayerKey = 'player_preferred_engine';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -148,6 +149,24 @@ extension ContentDensityLabel on ContentDensity {
   };
 }
 
+enum PreferredPlayer { automatic, media3, mpv, vlc }
+
+extension PreferredPlayerLabel on PreferredPlayer {
+  String get displayName => switch (this) {
+    PreferredPlayer.automatic => 'Automatic',
+    PreferredPlayer.media3 => 'Media3',
+    PreferredPlayer.mpv => 'MPV',
+    PreferredPlayer.vlc => 'VLC',
+  };
+
+  String get description => switch (this) {
+    PreferredPlayer.automatic => 'Best engine for this device and stream',
+    PreferredPlayer.media3 => 'Native Android hardware player',
+    PreferredPlayer.mpv => 'Best subtitle and web-stream compatibility',
+    PreferredPlayer.vlc => 'Alternate compatibility player',
+  };
+}
+
 class SettingsPreferences {
   const SettingsPreferences({
     this.debridProvider = DebridService.realDebrid,
@@ -178,6 +197,7 @@ class SettingsPreferences {
     this.navigationSounds = true,
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
+    this.preferredPlayer = PreferredPlayer.automatic,
   });
 
   final DebridService debridProvider;
@@ -208,6 +228,7 @@ class SettingsPreferences {
   final bool navigationSounds;
   final bool clickSounds;
   final LandingPage defaultLandingPage;
+  final PreferredPlayer preferredPlayer;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -238,6 +259,7 @@ class SettingsPreferences {
     bool? navigationSounds,
     bool? clickSounds,
     LandingPage? defaultLandingPage,
+    PreferredPlayer? preferredPlayer,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -269,6 +291,7 @@ class SettingsPreferences {
     navigationSounds: navigationSounds ?? this.navigationSounds,
     clickSounds: clickSounds ?? this.clickSounds,
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
+    preferredPlayer: preferredPlayer ?? this.preferredPlayer,
   );
 }
 
@@ -351,6 +374,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_navigationSoundsKey),
       _safeRead(_clickSoundsKey),
       _safeRead(_defaultLandingPageKey),
+      _safeRead(_preferredPlayerKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -487,6 +511,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         defaultLandingPage: LandingPage.values.firstWhere(
           (page) => page.name == valueAt(27),
           orElse: () => LandingPage.home,
+        ),
+      );
+    }
+    if (canRestore(_preferredPlayerKey, 28)) {
+      restored = restored.copyWith(
+        preferredPlayer: PreferredPlayer.values.firstWhere(
+          (player) => player.name == valueAt(28),
+          orElse: () => PreferredPlayer.automatic,
         ),
       );
     }
@@ -657,6 +689,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_defaultLandingPageKey: value.name},
   );
 
+  Future<void> setPreferredPlayer(PreferredPlayer value) => _update(
+    state.copyWith(preferredPlayer: value),
+    {_preferredPlayerKey: value.name},
+  );
+
   Future<void> resetCustomization() {
     const defaults = SettingsPreferences();
     const keys = [
@@ -705,6 +742,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _interfaceModeKey,
       _seekBackSecondsKey,
       _seekForwardSecondsKey,
+      _preferredPlayerKey,
     ];
     _markMutated(keys);
     state = state.copyWith(
@@ -717,6 +755,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       interfaceMode: defaults.interfaceMode,
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,
+      preferredPlayer: defaults.preferredPlayer,
     );
     return _enqueueStorage(() async {
       for (final key in keys) {

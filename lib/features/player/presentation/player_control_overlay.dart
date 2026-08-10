@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -133,6 +134,38 @@ Future<T?> showPlayerTrackPicker<T>({
       options: options,
       selectedValue: selectedValue,
     ),
+  );
+}
+
+Future<PreferredPlayer?> showPlayerEnginePicker({
+  required BuildContext context,
+  required PreferredPlayer current,
+}) {
+  return showPlayerTrackPicker<PreferredPlayer>(
+    context: context,
+    title: 'Choose player',
+    icon: Icons.smart_display_rounded,
+    selectedValue: current,
+    options: const [
+      PlayerTrackOption(
+        value: PreferredPlayer.media3,
+        label: 'Media3',
+        detail: 'Android native player',
+        icon: Icons.android_rounded,
+      ),
+      PlayerTrackOption(
+        value: PreferredPlayer.mpv,
+        label: 'MPV',
+        detail: 'Best subtitle and web-stream support',
+        icon: Icons.subtitles_rounded,
+      ),
+      PlayerTrackOption(
+        value: PreferredPlayer.vlc,
+        label: 'VLC',
+        detail: 'Compatibility player',
+        icon: Icons.video_settings_rounded,
+      ),
+    ],
   );
 }
 

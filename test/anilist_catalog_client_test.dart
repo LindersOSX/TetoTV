@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
+import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -401,5 +402,60 @@ void main() {
         expect(results.single.synonyms, ['Still valid']);
       },
     );
+
+    test('discover forwards the complete filter set to AniList', () async {
+      Map<String, dynamic>? requestBody;
+      final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              requestBody = Map<String, dynamic>.from(
+                options.data as Map<String, dynamic>,
+              );
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  data: const {
+                    'data': {
+                      'Page': {'media': <dynamic>[]},
+                    },
+                  },
+                  requestOptions: options,
+                  statusCode: 200,
+                ),
+              );
+            },
+          ),
+        );
+      final client = AniListCatalogClient(dio: dio);
+
+      await client.discover(
+        const CatalogFilters(
+          search: 'Frieren',
+          genre: 'Fantasy',
+          tag: 'Elf',
+          format: 'TV',
+          status: 'RELEASING',
+          season: 'FALL',
+          year: 2026,
+          minimumScore: 80,
+          includeAdult: true,
+          sort: 'SCORE_DESC',
+        ),
+      );
+
+      expect(requestBody?['variables'], {
+        'page': 1,
+        'search': 'Frieren',
+        'genre': 'Fantasy',
+        'tag': 'Elf',
+        'format': 'TV',
+        'status': 'RELEASING',
+        'season': 'FALL',
+        'year': 2026,
+        'minimumScore': 80,
+        'isAdult': true,
+        'sort': ['SCORE_DESC'],
+      });
+    });
   });
 }

@@ -99,18 +99,26 @@ class AiringScheduleEntry {
 
 class CatalogFilters {
   const CatalogFilters({
+    this.search,
     this.genre,
+    this.tag,
     this.format,
     this.status,
     this.season,
     this.year,
+    this.minimumScore,
+    this.includeAdult = false,
     this.sort = 'POPULARITY_DESC',
   });
+  final String? search;
   final String? genre;
+  final String? tag;
   final String? format;
   final String? status;
   final String? season;
   final int? year;
+  final int? minimumScore;
+  final bool includeAdult;
   final String sort;
 }
 

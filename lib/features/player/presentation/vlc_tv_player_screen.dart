@@ -82,6 +82,7 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
     required this.debridService,
     required this.launch,
     required this.onUseMpv,
+    this.onSelectEngine,
     this.initialPosition,
     this.subtitle,
     this.anilistMediaId,
@@ -102,6 +103,14 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
     List<PlaybackStreamOption> directStreams,
   )
   onUseMpv;
+  final void Function(
+    PreferredPlayer player,
+    Duration position,
+    StreamReady stream,
+    ReleaseCandidate release,
+    List<PlaybackStreamOption> directStreams,
+  )?
+  onSelectEngine;
   final Duration? initialPosition;
   final String? subtitle;
   final int? anilistMediaId;
@@ -118,7 +127,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
   final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
-  final _doubleDownDetector = PlayerDoubleDownDetector();
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   Timer? _controlsTimer;
   Timer? _trackMessageTimer;
@@ -760,7 +768,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     try {
-      final tracks = await controller.getAudioTracks();
+      var tracks = await controller.getAudioTracks();
+      for (var attempt = 0; tracks.isEmpty && attempt < 5; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        tracks = await controller.getAudioTracks();
+      }
       final ids = tracks.keys.where((id) => id >= 0).toList()..sort();
       if (ids.isEmpty) {
         _showMessage('No alternate audio tracks');
@@ -807,7 +820,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     try {
-      final tracks = await controller.getSpuTracks();
+      var tracks = await controller.getSpuTracks();
+      for (var attempt = 0; tracks.isEmpty && attempt < 5; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        tracks = await controller.getSpuTracks();
+      }
       final ids = <int>[-1, ...tracks.keys.where((id) => id >= 0)]..sort();
       final current = await controller.getSpuTrack() ?? -1;
       if (!mounted) return;
@@ -1222,6 +1240,41 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     ].join(' • ');
   }
 
+  Future<void> _openPlayerPicker() async {
+    _controlsTimer?.cancel();
+    final selected = await showPlayerEnginePicker(
+      context: context,
+      current: PreferredPlayer.vlc,
+    );
+    if (!mounted || selected == null || selected == PreferredPlayer.vlc) {
+      if (mounted) _showControls();
+      return;
+    }
+    final position = _controller?.value.position ?? Duration.zero;
+    final callback = widget.onSelectEngine;
+    if (callback != null) {
+      callback(
+        selected,
+        position,
+        _currentStream,
+        _release,
+        List.unmodifiable(_directStreamOptions),
+      );
+      return;
+    }
+    if (selected == PreferredPlayer.mpv) {
+      widget.onUseMpv(
+        position,
+        _currentStream,
+        _release,
+        List.unmodifiable(_directStreamOptions),
+      );
+      return;
+    }
+    _showMessage('This player is not available from this screen');
+    _showControls();
+  }
+
   Future<void> _openOptions() async {
     _controlsTimer?.cancel();
     final result = await showDialog<_VlcMenuResult>(
@@ -1289,7 +1342,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    if (event is KeyDownEvent && _doubleDownDetector.register(key)) {
+    if (event is KeyDownEvent &&
+        key == LogicalKeyboardKey.arrowDown &&
+        _controlsVisible) {
       _hideControls();
       return KeyEventResult.handled;
     }
@@ -1384,7 +1439,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   void _hideControls() {
     _controlsTimer?.cancel();
-    _doubleDownDetector.reset();
     if (mounted && _controlsVisible) {
       setState(() => _controlsVisible = false);
     }
@@ -1570,7 +1624,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     child: AnimatedOpacity(
                       opacity: _controlsVisible ? 1 : 0,
                       duration: const Duration(milliseconds: 180),
-                      child: _VlcPlayerChrome(
+                      child: _UnifiedVlcPlayerChrome(
                         controller: controller,
                         title: widget.title,
                         streamLabel:
@@ -1590,22 +1644,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                         onAudio: () => unawaited(_openAudioTrackPicker()),
                         onSubtitles: () =>
                             unawaited(_openSubtitleTrackPicker()),
+                        onCaptionSize: () => unawaited(_openOptions()),
                         onPicture: () => unawaited(_cyclePicture()),
-                        onFixVideo: () => unawaited(
-                          _decoderMode == VlcDecoderMode.software
-                              ? _restart(
-                                  VlcDecoderMode.hardwareCopy,
-                                  reason: 'VLC hardware-copy decoding enabled',
-                                )
-                              : _restart(
-                                  VlcDecoderMode.software,
-                                  reason: 'VLC software decoding enabled',
-                                ),
-                        ),
+                        onFixVideo: () => unawaited(_openPlayerPicker()),
                         onSources: _currentStream.isWebStream
                             ? () => unawaited(_openStreamSourcePicker())
                             : null,
                         onOptions: () => unawaited(_openOptions()),
+                        onDismiss: _hideControls,
                       ),
                     ),
                   ),
@@ -1672,6 +1718,88 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 }
 
+class _UnifiedVlcPlayerChrome extends StatelessWidget {
+  const _UnifiedVlcPlayerChrome({
+    required this.controller,
+    required this.title,
+    required this.streamLabel,
+    required this.playFocusNode,
+    required this.seekBackSeconds,
+    required this.seekForwardSeconds,
+    required this.mode,
+    required this.onRewind,
+    required this.onPlayPause,
+    required this.onForward,
+    required this.onAudio,
+    required this.onSubtitles,
+    required this.onCaptionSize,
+    required this.onPicture,
+    required this.onFixVideo,
+    this.onSources,
+    required this.onOptions,
+    required this.onDismiss,
+  });
+
+  final VlcPlayerController? controller;
+  final String title;
+  final String streamLabel;
+  final FocusNode playFocusNode;
+  final int seekBackSeconds;
+  final int seekForwardSeconds;
+  final VlcDecoderMode mode;
+  final VoidCallback onRewind;
+  final VoidCallback onPlayPause;
+  final VoidCallback onForward;
+  final VoidCallback onAudio;
+  final VoidCallback onSubtitles;
+  final VoidCallback onCaptionSize;
+  final VoidCallback onPicture;
+  final VoidCallback onFixVideo;
+  final VoidCallback? onSources;
+  final VoidCallback onOptions;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final activeController = controller;
+    if (activeController == null) {
+      return _chrome(null);
+    }
+    return ValueListenableBuilder<VlcPlayerValue>(
+      valueListenable: activeController,
+      builder: (context, value, child) => _chrome(value),
+    );
+  }
+
+  Widget _chrome(VlcPlayerValue? value) {
+    return TetoPlayerChrome(
+      engineKey: 'vlc',
+      engineLabel: vlcDecoderLabel(mode),
+      title: title,
+      streamLabel: streamLabel,
+      position: value?.position ?? Duration.zero,
+      duration: value?.duration ?? Duration.zero,
+      isPlaying: value?.isPlaying ?? false,
+      playFocusNode: playFocusNode,
+      seekBackSeconds: seekBackSeconds,
+      seekForwardSeconds: seekForwardSeconds,
+      onRewind: onRewind,
+      onPlayPause: onPlayPause,
+      onForward: onForward,
+      onAudio: onAudio,
+      onSubtitles: onSubtitles,
+      onCaptionSize: onCaptionSize,
+      onPicture: onPicture,
+      onFixVideo: onFixVideo,
+      onSources: onSources,
+      onOptions: onOptions,
+      onDismiss: onDismiss,
+    );
+  }
+}
+
+// TODO: Remove after the shared chrome has shipped through one stable release.
+// ignore: unused_element
 class _VlcPlayerChrome extends StatelessWidget {
   const _VlcPlayerChrome({
     required this.controller,
@@ -1688,6 +1816,7 @@ class _VlcPlayerChrome extends StatelessWidget {
     required this.onSubtitles,
     required this.onPicture,
     required this.onFixVideo,
+    // ignore: unused_element_parameter
     this.onSources,
     required this.onOptions,
   });

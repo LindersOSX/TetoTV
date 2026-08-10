@@ -38,6 +38,10 @@ TetoTV makes network requests only for app features the user uses:
   disabled;
 - source repositories and extensions installed by the user receive the title,
   episode, and related request data needed to find sources;
+- voice search uses Android's selected speech-recognition service. If a
+  device cannot open its system voice prompt, TetoTV requests microphone
+  permission and sends the spoken query to that recognition service only
+  while the user has opened voice search;
 - when a user-added Stremio source cannot use the available Kitsu identifier,
   Cinemeta may receive the anime title and year to resolve the corresponding
   IMDb series and episode identifier; and

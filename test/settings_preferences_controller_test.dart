@@ -29,6 +29,7 @@ void main() {
     await controller.setInterfaceScale(.8);
     await controller.setNavigationSounds(false);
     await controller.setClickSounds(false);
+    await controller.setPreferredPlayer(PreferredPlayer.vlc);
     await controller.setDefaultLandingPage(LandingPage.myList);
 
     final restored = SettingsPreferencesController(storage);
@@ -53,6 +54,7 @@ void main() {
     expect(restored.state.interfaceScale, .8);
     expect(restored.state.navigationSounds, isFalse);
     expect(restored.state.clickSounds, isFalse);
+    expect(restored.state.preferredPlayer, PreferredPlayer.vlc);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
   });
 
@@ -156,7 +158,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 28, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 29, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

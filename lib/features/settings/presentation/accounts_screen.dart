@@ -734,7 +734,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 14),
                       const _SectionHeader(
                         icon: Icons.stream_rounded,
-                        title: 'STREAM SOURCES',
+                        title: 'SOURCES',
                         subtitle:
                             'Choose which source types are searched for each episode.',
                       ),
@@ -1526,6 +1526,19 @@ class _CustomizationPanel extends StatelessWidget {
           ),
           const _PreferenceDivider(),
           const _MiniSectionLabel('PLAYER CONTROLS'),
+          _SettingsSelection<PreferredPlayer>(
+            label: 'Preferred player',
+            value: preferences.preferredPlayer,
+            options: [
+              for (final player in PreferredPlayer.values)
+                _SettingsOption(
+                  value: player,
+                  label: player.displayName,
+                  detail: player.description,
+                ),
+            ],
+            onSelected: controller.setPreferredPlayer,
+          ),
           _PreferenceRow(
             label: 'Rewind',
             children: [
@@ -1657,8 +1670,8 @@ class _StreamingSourcesPanel extends StatelessWidget {
             ],
           );
           final marketplace = _TvTextButton(
-            label: 'Marketplace',
-            icon: Icons.storefront_rounded,
+            label: 'Manage sources',
+            icon: Icons.hub_rounded,
             focusNode: marketplaceFocusNode,
             onPressed: onMarketplace,
           );

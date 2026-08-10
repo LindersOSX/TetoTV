@@ -43,14 +43,14 @@ class MarketplaceScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Streaming Marketplace',
+                        'Sources',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
                       if (!context.isCompactWidth)
                         Text(
-                          'Install isolated web-stream providers from repositories you trust.',
+                          'Add Marketplace repositories and Torrent source manifests you trust.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                     ],
@@ -73,6 +73,44 @@ class MarketplaceScreen extends ConsumerWidget {
                     )
                   : CustomScrollView(
                       slivers: [
+                        _section(
+                          context,
+                          icon: Icons.hub_rounded,
+                          title: 'Sources',
+                          subtitle:
+                              'Enter URLs manually or use one QR code to add both source types from your phone.',
+                        ),
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                _MarketplaceButton(
+                                  icon: Icons.phone_android_rounded,
+                                  label: 'Add sources with phone',
+                                  onPressed: () =>
+                                      showSourcePairingDialog(context),
+                                ),
+                                _MarketplaceButton(
+                                  icon: Icons.add_link_rounded,
+                                  label: 'Add Torrent source manifest',
+                                  onPressed: () => _addTorrentSource(
+                                    context,
+                                    torrentSourceController,
+                                  ),
+                                ),
+                                _MarketplaceButton(
+                                  icon: Icons.playlist_add_rounded,
+                                  label: 'Add Marketplace repository',
+                                  onPressed: () =>
+                                      _addRepository(context, controller),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         _section(
                           context,
                           icon: Icons.cloud_download_outlined,
@@ -105,35 +143,10 @@ class MarketplaceScreen extends ConsumerWidget {
                               );
                             },
                           ),
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 4, bottom: 24),
-                            child: Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _MarketplaceButton(
-                                  icon: Icons.add_link_rounded,
-                                  label: 'Add torrent manifest',
-                                  onPressed: () => _addTorrentSource(
-                                    context,
-                                    torrentSourceController,
-                                  ),
-                                ),
-                                _MarketplaceButton(
-                                  icon: Icons.phone_android_rounded,
-                                  label: 'Add sources with phone',
-                                  onPressed: () =>
-                                      showSourcePairingDialog(context),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
                         _section(
                           context,
                           icon: Icons.hub_outlined,
-                          title: 'Repositories',
+                          title: 'Marketplace repositories',
                           subtitle:
                               'Catalogs are cached locally. Disabling one keeps installed addons.',
                         ),
@@ -158,29 +171,6 @@ class MarketplaceScreen extends ConsumerWidget {
                               ),
                             );
                           },
-                        ),
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 4, bottom: 24),
-                            child: Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _MarketplaceButton(
-                                  icon: Icons.add_link_rounded,
-                                  label: 'Add repository',
-                                  onPressed: () =>
-                                      _addRepository(context, controller),
-                                ),
-                                _MarketplaceButton(
-                                  icon: Icons.phone_android_rounded,
-                                  label: 'Add sources with phone',
-                                  onPressed: () =>
-                                      showSourcePairingDialog(context),
-                                ),
-                              ],
-                            ),
-                          ),
                         ),
                         if (state.installed.isNotEmpty) ...[
                           _section(
@@ -759,7 +749,7 @@ Future<void> _addRepository(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.panel,
-        title: const Text('Add repository'),
+        title: const Text('Add Marketplace repository'),
         content: SizedBox(
           width: 680,
           child: TvTextInput(
@@ -809,7 +799,7 @@ Future<void> _addTorrentSource(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Only add a Stremio-compatible torrent manifest you trust and use it for content you are authorized to access.',
+                'Only add a Torrent source manifest you trust and use it for content you are authorized to access.',
               ),
               const SizedBox(height: 14),
               TvTextInput(

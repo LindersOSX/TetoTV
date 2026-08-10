@@ -5,6 +5,8 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -17,6 +19,7 @@ class AiringCalendarScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final schedule = ref.watch(airingWeekProvider);
+    final tracking = ref.watch(trackingHomeProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     return Scaffold(
       backgroundColor: Colors.black,
@@ -57,8 +60,36 @@ class AiringCalendarScreen extends ConsumerWidget {
                 error: (error, _) =>
                     Center(child: Text('Could not load schedule: $error')),
                 data: (entries) {
+                  if (tracking.isLoading) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.accentBright,
+                      ),
+                    );
+                  }
+                  final followed = <HomeTrackedAnime>[
+                    ...?tracking.valueOrNull?.watching,
+                    ...?tracking.valueOrNull?.planToWatch,
+                  ];
+                  final visibleEntries = entries
+                      .where((entry) => _isFollowed(entry.anime, followed))
+                      .toList(growable: false);
+                  if (visibleEntries.isEmpty) {
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 540),
+                        child: const Text(
+                          'No followed shows are airing this week. Add a show '
+                          'to Watching or Planning on AniList or MAL, then '
+                          'refresh your list.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppColors.textMuted),
+                        ),
+                      ),
+                    );
+                  }
                   final days = <DateTime, List<AiringScheduleEntry>>{};
-                  for (final entry in entries) {
+                  for (final entry in visibleEntries) {
                     final local = entry.airingAt.toLocal();
                     final day = DateTime(local.year, local.month, local.day);
                     (days[day] ??= []).add(entry);
@@ -208,3 +239,21 @@ class AiringCalendarScreen extends ConsumerWidget {
     );
   }
 }
+
+bool _isFollowed(AnimeSummary anime, List<HomeTrackedAnime> followed) {
+  final normalized = _normalizedTitle(anime.title);
+  return followed.any((item) {
+    if (item.provider == TrackingProvider.anilist &&
+        (item.anilistId ?? item.tracked.mediaId) == anime.id) {
+      return true;
+    }
+    if (item.provider == TrackingProvider.myAnimeList &&
+        anime.idMal == item.tracked.mediaId) {
+      return true;
+    }
+    return _normalizedTitle(item.tracked.title) == normalized;
+  });
+}
+
+String _normalizedTitle(String value) =>
+    value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
