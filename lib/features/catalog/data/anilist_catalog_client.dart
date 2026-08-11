@@ -243,19 +243,42 @@ class AniListCatalogClient {
         }
       }
     ''';
-    return _mediaPage(query, {
+    final variables = <String, dynamic>{
       'page': page,
-      'search': filters.search,
-      'genre': filters.genre,
-      'tag': filters.tag,
-      'format': filters.format,
-      'status': filters.status,
-      'season': filters.season,
-      'year': filters.year,
-      'minimumScore': filters.minimumScore,
       'isAdult': filters.includeAdult,
       'sort': [filters.sort],
-    });
+    };
+    void addIfPresent(String key, Object? value) {
+      if (value != null) variables[key] = value;
+    }
+
+    final search = filters.search?.trim();
+    addIfPresent('search', search == null || search.isEmpty ? null : search);
+    addIfPresent('genre', filters.genre);
+    addIfPresent('tag', filters.tag);
+    addIfPresent('format', filters.format);
+    addIfPresent('status', filters.status);
+    addIfPresent('season', filters.season);
+    addIfPresent('year', filters.year);
+    addIfPresent('minimumScore', filters.minimumScore);
+    try {
+      return await _mediaPage(query, variables, useStaleOnError: false);
+    } on StateError catch (error) {
+      // AniList occasionally rejects an otherwise valid filter request with
+      // "Illegal operation and value combination" when a sort is combined
+      // with other media arguments. Retry the same filters without a server
+      // sort instead of leaving Discover unusable. The small returned page is
+      // then sorted locally to retain the user's requested ordering.
+      if (!_isIllegalDiscoverCombination(error)) rethrow;
+      final retryVariables = Map<String, dynamic>.from(variables)
+        ..remove('sort');
+      final results = await _mediaPage(
+        query,
+        retryVariables,
+        useStaleOnError: false,
+      );
+      return _sortDiscoverResults(results, filters.sort);
+    }
   }
 
   Future<List<AiringScheduleEntry>> airingSchedule({
@@ -650,4 +673,49 @@ class AniListCatalogClient {
         .replaceAll('&#039;', "'")
         .trim();
   }
+}
+
+bool _isIllegalDiscoverCombination(StateError error) {
+  final message = error.message.toString().toLowerCase();
+  return message.contains('illegal operation') &&
+      message.contains('value combination');
+}
+
+List<AnimeSummary> _sortDiscoverResults(
+  List<AnimeSummary> values,
+  String sort,
+) {
+  final results = List<AnimeSummary>.of(values);
+  int compareNullableNum(num? left, num? right, {required bool descending}) {
+    if (left == null && right == null) return 0;
+    if (left == null) return 1;
+    if (right == null) return -1;
+    return descending ? right.compareTo(left) : left.compareTo(right);
+  }
+
+  switch (sort) {
+    case 'SCORE_DESC':
+      results.sort(
+        (a, b) => compareNullableNum(a.score, b.score, descending: true),
+      );
+      break;
+    case 'START_DATE_DESC':
+      results.sort(
+        (a, b) =>
+            compareNullableNum(a.seasonYear, b.seasonYear, descending: true),
+      );
+      break;
+    case 'TITLE_ENGLISH':
+      results.sort(
+        (a, b) => (a.titleEnglish ?? a.title).toLowerCase().compareTo(
+          (b.titleEnglish ?? b.title).toLowerCase(),
+        ),
+      );
+      break;
+    default:
+      // Popularity, trending, and favourites do not exist on AnimeSummary.
+      // Preserve AniList's fallback order for those choices.
+      break;
+  }
+  return results;
 }

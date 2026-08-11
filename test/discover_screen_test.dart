@@ -30,7 +30,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'opened dialog');
 
-    expect(find.text('Discover filters'), findsOneWidget);
+    expect(find.text('Find your next anime'), findsOneWidget);
+    expect(
+      find.text('Choose only the filters you care about.'),
+      findsOneWidget,
+    );
     expect(find.text('Genre'), findsOneWidget);
     expect(find.text('Tag'), findsOneWidget);
     expect(find.text('Format'), findsOneWidget);
@@ -38,7 +42,10 @@ void main() {
     expect(find.text('Year'), findsOneWidget);
     expect(find.text('Status'), findsOneWidget);
     expect(find.text('Minimum score'), findsOneWidget);
-    await tester.drag(find.byType(ListView).first, const Offset(0, -360));
+    await tester.drag(
+      find.byType(SingleChildScrollView).first,
+      const Offset(0, -360),
+    );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'scrolled dialog');
     expect(find.text('Include adult titles'), findsOneWidget);
@@ -71,6 +78,36 @@ void main() {
 
     expect(catalog.requests, hasLength(2));
     expect(catalog.requests.last.genre, 'Fantasy');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('illegal AniList combinations show a useful recovery state', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          catalogClientProvider.overrideWithValue(
+            _FakeCatalog(
+              error: StateError('Illegal operation and value combination'),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'AniList rejected that filter combination. Reset the filters or try again.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Reset filters'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.textContaining('Bad state'), findsNothing);
+    expect(find.textContaining('Illegal operation'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -129,7 +166,7 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'discover.filters.sort',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -140,7 +177,7 @@ void main() {
     await tester.tap(find.text('Fantasy').last);
     await tester.pumpAndSettle();
 
-    for (var index = 0; index < 8; index++) {
+    for (var index = 0; index < 5; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump(const Duration(milliseconds: 140));
     }
@@ -166,9 +203,10 @@ void main() {
 }
 
 class _FakeCatalog extends AniListCatalogClient {
-  _FakeCatalog({this.results = const []});
+  _FakeCatalog({this.results = const [], this.error});
 
   final List<AnimeSummary> results;
+  final Object? error;
   final requests = <CatalogFilters>[];
 
   @override
@@ -177,6 +215,7 @@ class _FakeCatalog extends AniListCatalogClient {
     int page = 1,
   }) async {
     requests.add(filters);
+    if (error != null) throw error!;
     return results;
   }
 }

@@ -458,6 +458,95 @@ void main() {
       });
     });
 
+    test('discover omits unused nullable arguments', () async {
+      Map<String, dynamic>? requestBody;
+      final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              requestBody = Map<String, dynamic>.from(
+                options.data as Map<String, dynamic>,
+              );
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  data: const {
+                    'data': {
+                      'Page': {'media': <dynamic>[]},
+                    },
+                  },
+                  requestOptions: options,
+                  statusCode: 200,
+                ),
+              );
+            },
+          ),
+        );
+      final client = AniListCatalogClient(dio: dio);
+
+      await client.discover(const CatalogFilters());
+
+      expect(requestBody?['variables'], {
+        'page': 1,
+        'isAdult': false,
+        'sort': ['POPULARITY_DESC'],
+      });
+    });
+
+    test(
+      'discover retries AniList illegal combinations without sort',
+      () async {
+        final requests = <Map<String, dynamic>>[];
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                final body = Map<String, dynamic>.from(
+                  options.data as Map<String, dynamic>,
+                );
+                requests.add(
+                  Map<String, dynamic>.from(
+                    body['variables'] as Map<String, dynamic>,
+                  ),
+                );
+                handler.resolve(
+                  Response<Map<String, dynamic>>(
+                    data: requests.length == 1
+                        ? const {
+                            'errors': [
+                              {
+                                'message':
+                                    'Illegal operation and value combination',
+                              },
+                            ],
+                          }
+                        : const {
+                            'data': {
+                              'Page': {'media': <dynamic>[]},
+                            },
+                          },
+                    requestOptions: options,
+                    statusCode: 200,
+                  ),
+                );
+              },
+            ),
+          );
+        final client = AniListCatalogClient(dio: dio);
+
+        await expectLater(
+          client.discover(
+            const CatalogFilters(genre: 'Fantasy', sort: 'SCORE_DESC'),
+          ),
+          completion(isEmpty),
+        );
+
+        expect(requests, hasLength(2));
+        expect(requests.first['sort'], ['SCORE_DESC']);
+        expect(requests.last, isNot(contains('sort')));
+        expect(requests.last['genre'], 'Fantasy');
+      },
+    );
+
     test(
       'airing calendar follows AniList pagination beyond the first 50',
       () async {
