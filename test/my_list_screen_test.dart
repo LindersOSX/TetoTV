@@ -7,6 +7,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -81,6 +82,14 @@ void main() {
       expect(find.text(status.displayName), findsWidgets);
     }
     expect(find.text('Watching is empty'), findsOneWidget);
+    expect(find.text('Search'), findsNothing);
+    expect(find.text('Home'), findsNothing);
+    expect(find.text('Discover'), findsNothing);
+    expect(find.text('Calendar'), findsNothing);
+    expect(find.byIcon(Icons.search_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.home_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.explore_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.calendar_month_rounded), findsOneWidget);
     final activeMyList = find.ancestor(
       of: find.byIcon(Icons.video_library_rounded),
       matching: find.byType(TvFocusable),
@@ -265,4 +274,86 @@ void main() {
     expect(find.textContaining('Showing the previous results'), findsOneWidget);
     expect(find.textContaining('Could not refresh AniList'), findsOneWidget);
   });
+
+  testWidgets('a planned title can be removed instead of marked Dropped', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = _RemovingRepository();
+    const planned = HomeTrackedAnime(
+      tracked: TrackedAnime(
+        mediaId: 77,
+        title: 'Maybe Later',
+        status: TrackingListStatus.planToWatch,
+        progress: 0,
+      ),
+      provider: TrackingProvider.anilist,
+      anilistId: 77,
+      coverImageUrl: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
+          trackingListProvider(TrackingListStatus.planToWatch).overrideWith(
+            (_) async => const TrackingListResult(items: [planned]),
+          ),
+          trackingRepositoryFactoryProvider.overrideWithValue(
+            (_, _) => repository,
+          ),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Planning').first);
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Maybe Later'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Remove from Planning'), findsOneWidget);
+    expect(find.text('Dropped'), findsWidgets);
+    await tester.tap(find.text('Remove from Planning'));
+    await tester.pumpAndSettle();
+
+    expect(repository.removals, [77]);
+    expect(find.textContaining('removed from AniList'), findsOneWidget);
+  });
+}
+
+class _RemovingRepository implements TrackingRepository {
+  final removals = <int>[];
+
+  @override
+  Future<int?> currentProgress(int mediaId) async => null;
+
+  @override
+  Future<List<TrackedAnime>> list(TrackingListStatus status) async => const [];
+
+  @override
+  Future<void> removeFromList({required int mediaId}) async {
+    removals.add(mediaId);
+  }
+
+  @override
+  Future<void> updateProgress({
+    required int mediaId,
+    required int completedEpisodes,
+  }) async {}
+
+  @override
+  Future<void> updateStatus({
+    required int mediaId,
+    required TrackingListStatus status,
+  }) async {}
 }

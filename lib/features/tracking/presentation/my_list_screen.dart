@@ -108,7 +108,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     HomeTrackedAnime item,
     TitleLanguagePreference titlePreference,
   ) async {
-    final selected = await showDialog<TrackingListStatus>(
+    final selected = await showDialog<_MyListSelection>(
       context: context,
       barrierDismissible: true,
       builder: (dialogContext) => _StatusDialog(
@@ -120,18 +120,25 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         },
       ),
     );
-    if (selected == null || selected == item.tracked.status || !mounted) return;
+    if (selected == null || !mounted) return;
+    if (!selected.remove && selected.status == item.tracked.status) return;
     setState(() => _updating = true);
     try {
-      await ref
-          .read(trackingStatusControllerProvider.notifier)
-          .update(item, selected);
+      final controller = ref.read(trackingStatusControllerProvider.notifier);
+      if (selected.remove) {
+        await controller.remove(item);
+      } else {
+        await controller.update(item, selected.status!);
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${item.tracked.displayTitle(titlePreference)} moved to '
-            '${selected.displayName}.',
+            selected.remove
+                ? '${item.tracked.displayTitle(titlePreference)} removed from '
+                      '${item.provider.displayName}.'
+                : '${item.tracked.displayTitle(titlePreference)} moved to '
+                      '${selected.status!.displayName}.',
           ),
           backgroundColor: AppColors.accent,
         ),
@@ -162,7 +169,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _MyListHeader(),
+            _MyListHeader(preferences: preferences),
             LayoutBuilder(
               builder: (context, constraints) {
                 final tabs = Row(
@@ -330,7 +337,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
 }
 
 class _MyListHeader extends StatelessWidget {
-  const _MyListHeader();
+  const _MyListHeader({required this.preferences});
+
+  final SettingsPreferences preferences;
 
   @override
   Widget build(BuildContext context) {
@@ -355,18 +364,20 @@ class _MyListHeader extends StatelessWidget {
           SizedBox(width: compact ? 7 : 10),
           if (!compact || MediaQuery.sizeOf(context).width >= 420)
             Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
-          SizedBox(width: compact ? 4 : 28),
-          _NavButton(
-            icon: Icons.search_rounded,
-            label: 'Search',
-            compact: compact,
-            onPressed: () => context.push('/search'),
-          ),
-          SizedBox(width: compact ? 2 : 6),
+          SizedBox(width: compact ? 4 : 14),
+          if (preferences.showSearch) ...[
+            _NavButton(
+              icon: Icons.search_rounded,
+              label: 'Search',
+              compact: true,
+              onPressed: () => context.push('/search'),
+            ),
+            SizedBox(width: compact ? 2 : 6),
+          ],
           _NavButton(
             icon: Icons.home_rounded,
             label: 'Home',
-            compact: compact,
+            compact: true,
             onPressed: () => context.go('/'),
           ),
           SizedBox(width: compact ? 2 : 6),
@@ -378,6 +389,24 @@ class _MyListHeader extends StatelessWidget {
             autofocus: true,
             onPressed: () {},
           ),
+          if (preferences.showDiscover) ...[
+            SizedBox(width: compact ? 2 : 6),
+            _NavButton(
+              icon: Icons.explore_rounded,
+              label: 'Discover',
+              compact: true,
+              onPressed: () => context.push('/discover'),
+            ),
+          ],
+          if (preferences.showCalendar) ...[
+            SizedBox(width: compact ? 2 : 6),
+            _NavButton(
+              icon: Icons.calendar_month_rounded,
+              label: 'Calendar',
+              compact: true,
+              onPressed: () => context.push('/calendar'),
+            ),
+          ],
           const Spacer(),
           _NavButton(
             icon: Icons.settings_rounded,
@@ -821,20 +850,46 @@ class _StatusDialog extends StatelessWidget {
                   _DialogChoice(
                     status: status,
                     current: status == item.tracked.status,
-                    onPressed: () => Navigator.of(context).pop(status),
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(_MyListSelection.status(status)),
                   ),
               ],
             ),
             const SizedBox(height: 22),
-            Align(
-              alignment: Alignment.centerRight,
-              child: _OpenButton(onPressed: onOpen),
+            Row(
+              children: [
+                Expanded(
+                  child: _RemoveButton(
+                    label: 'Remove from ${item.tracked.status.displayName}',
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(const _MyListSelection.remove()),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                _OpenButton(onPressed: onOpen),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Remove deletes the tracker list entry. Dropped keeps the show '
+              'in your list as something you started and stopped.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _MyListSelection {
+  const _MyListSelection.status(this.status) : remove = false;
+  const _MyListSelection.remove() : status = null, remove = true;
+
+  final TrackingListStatus? status;
+  final bool remove;
 }
 
 class _DialogChoice extends StatelessWidget {
@@ -888,6 +943,39 @@ class _OpenButton extends StatelessWidget {
         child: const Text(
           'View episodes',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+}
+
+class _RemoveButton extends StatelessWidget {
+  const _RemoveButton({required this.label, required this.onPressed});
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        color: const Color(0xFF4A1420),
+        child: Row(
+          children: [
+            const Icon(Icons.remove_circle_outline_rounded, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
         ),
       ),
     );

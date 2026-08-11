@@ -258,6 +258,29 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  Future<void> remove(HomeTrackedAnime item) async {
+    state = const AsyncLoading();
+    try {
+      final token = await _ref
+          .read(trackingTokenServiceProvider)
+          .accessToken(item.provider);
+      if (!mounted) return;
+      if (token == null || token.isEmpty) {
+        throw StateError('${item.provider.displayName} is not connected.');
+      }
+      await _ref
+          .read(trackingRepositoryFactoryProvider)(item.provider, token)
+          .removeFromList(mediaId: item.tracked.mediaId);
+      if (!mounted) return;
+      _ref.invalidate(trackingListProvider(item.tracked.status));
+      _ref.invalidate(trackingHomeProvider);
+      state = const AsyncData(null);
+    } catch (error, stackTrace) {
+      if (mounted) state = AsyncError(error, stackTrace);
+      rethrow;
+    }
+  }
+
   /// Adds or updates a catalog title on every connected tracker for which the
   /// catalog supplied a real provider media ID.
   ///

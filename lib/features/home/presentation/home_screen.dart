@@ -527,18 +527,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
     }
 
+    final responsivePadding = context.responsiveScreenPadding;
+    final contentHorizontalPadding = EdgeInsets.only(
+      left: responsivePadding.left,
+      right: responsivePadding.right,
+    );
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
         child: CustomScrollView(
           controller: _scrollController,
           slivers: [
-            SliverToBoxAdapter(
-              child: _Header(
-                preferences: preferences,
-                homeFocusNode: _homeNavFocus,
-                onHomePressed: _handleHomeActivation,
+            SliverPadding(
+              padding: contentHorizontalPadding,
+              sliver: SliverToBoxAdapter(
+                child: _Header(
+                  preferences: preferences,
+                  homeFocusNode: _homeNavFocus,
+                  onHomePressed: _handleHomeActivation,
+                ),
               ),
             ),
             if (preferences.showHero)
@@ -558,7 +566,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 height: preferences.homeLayout == HomeLayout.compact ? 10 : 18,
               ),
             ),
-            ...shelfSlivers,
+            for (final shelfSliver in shelfSlivers)
+              SliverPadding(
+                padding: contentHorizontalPadding,
+                sliver: shelfSliver,
+              ),
             const SliverToBoxAdapter(child: SizedBox(height: 42)),
           ],
         ),
@@ -685,6 +697,7 @@ class _HeroPanel extends StatelessWidget {
     final compact = context.isCompactWidth;
     final dense = preferences.homeLayout == HomeLayout.compact;
     return Container(
+      key: const ValueKey('home-hero'),
       height: dense ? (compact ? 270 : 224) : (compact ? 340 : 292),
       clipBehavior: Clip.hardEdge,
       decoration: const BoxDecoration(color: AppColors.panel),

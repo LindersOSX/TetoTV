@@ -351,7 +351,13 @@ void main() {
           trackingHomeProvider.overrideWith(
             (_) async => const TrackingHomeData(
               watching: [],
-              planToWatch: [
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          trackingListProvider(TrackingListStatus.planToWatch).overrideWith(
+            (_) async => const TrackingListResult(
+              items: [
                 HomeTrackedAnime(
                   tracked: TrackedAnime(
                     mediaId: 188,
@@ -364,7 +370,6 @@ void main() {
                   coverImageUrl: null,
                 ),
               ],
-              completed: [],
             ),
           ),
           trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
@@ -381,7 +386,12 @@ void main() {
 
     await tester.longPress(find.text('Remove Planned Show'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Remove from list'));
+    expect(find.text('Remove from Planning'), findsOneWidget);
+    expect(
+      find.textContaining('Dropped keeps the show in your list'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Remove from Planning'));
     await tester.pumpAndSettle();
 
     expect(repositories[TrackingProvider.anilist]!.removals, [188]);
