@@ -12,6 +12,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -27,6 +28,7 @@ class SearchScreen extends ConsumerStatefulWidget {
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _queryController = TextEditingController();
   final _searchFocusNode = FocusNode(debugLabel: 'search_input');
+  final _firstResultFocusNode = FocusNode(debugLabel: 'search.result.first');
   Timer? _debounce;
   AsyncValue<List<AnimeSummary>> _results = const AsyncData([]);
   var _searchGeneration = 0;
@@ -48,6 +50,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _debounce?.cancel();
     _queryController.dispose();
     _searchFocusNode.dispose();
+    _firstResultFocusNode.dispose();
     super.dispose();
   }
 
@@ -73,10 +76,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       _queueSearch(query);
       return;
     }
-    unawaited(_search(query));
+    unawaited(_search(query, focusFirstResult: true));
   }
 
-  Future<void> _search(String query) async {
+  Future<void> _search(String query, {bool focusFirstResult = false}) async {
     if (!mounted) return;
     final normalized = query.trim();
     if (normalized.length < 2) return;
@@ -89,6 +92,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       final results = await ref.read(catalogClientProvider).search(normalized);
       if (mounted && generation == _searchGeneration) {
         setState(() => _results = AsyncData(results));
+        if (focusFirstResult && results.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _firstResultFocusNode.context != null) {
+              _firstResultFocusNode.requestFocus();
+            }
+          });
+        }
       }
     } catch (error, stackTrace) {
       if (mounted && generation == _searchGeneration) {
@@ -100,18 +110,29 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Future<void> _voiceSearch() async {
     if (_voiceSearching) return;
     setState(() => _voiceSearching = true);
-    final query = await AndroidTvBridge.instance.voiceSearch();
+    String? query;
+    String? failure;
+    try {
+      query = await AndroidTvBridge.instance.voiceSearch();
+    } on PlatformException catch (error) {
+      failure = error.message;
+    } catch (_) {
+      failure = 'Voice search could not start on this device.';
+    }
     if (!mounted) return;
     setState(() => _voiceSearching = false);
     if (query == null || query.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Voice search is unavailable or no title was recognized.',
+            failure ??
+                'No title was recognized. Check the microphone permission and try again.',
           ),
           backgroundColor: AppColors.panelRaised,
+          duration: const Duration(seconds: 5),
         ),
       );
+      _searchFocusNode.requestFocus();
       return;
     }
     _queryController.value = TextEditingValue(
@@ -264,6 +285,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               return _SearchCard(
                 anime: anime,
                 titlePreference: titlePreference,
+                focusNode: index == 0 ? _firstResultFocusNode : null,
                 onPressed: () => context.push('/anime/${anime.id}'),
               );
             },
@@ -279,6 +301,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             return _SearchCard(
               anime: anime,
               titlePreference: titlePreference,
+              focusNode: index == 0 ? _firstResultFocusNode : null,
               onPressed: () => context.push('/anime/${anime.id}'),
             );
           },
@@ -293,11 +316,13 @@ class _SearchCard extends StatelessWidget {
     required this.anime,
     required this.titlePreference,
     required this.onPressed,
+    this.focusNode,
   });
 
   final AnimeSummary anime;
   final TitleLanguagePreference titlePreference;
   final VoidCallback onPressed;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -307,6 +332,7 @@ class _SearchCard extends StatelessWidget {
         width: 122,
         height: 225,
         child: TvFocusable(
+          focusNode: focusNode,
           onPressed: onPressed,
           child: ColoredBox(
             color: Colors.black,

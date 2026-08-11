@@ -401,13 +401,9 @@ class AndroidTvBridge {
 
   Future<String?> voiceSearch() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
-    try {
-      final result = await _channel.invokeMethod<String>('voiceSearch');
-      final query = result?.trim() ?? '';
-      return query.isEmpty ? null : query;
-    } on PlatformException {
-      return null;
-    }
+    final result = await _channel.invokeMethod<String>('voiceSearch');
+    final query = result?.trim() ?? '';
+    return query.isEmpty ? null : query;
   }
 
   Future<void> setPreferredFrameRate(double fps) async {

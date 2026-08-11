@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -24,7 +25,7 @@ class AiringCalendarScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(34, 24, 34, 24),
+        minimum: context.responsiveScreenPadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -43,9 +44,29 @@ class AiringCalendarScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const Spacer(),
-                const Text(
-                  'Times use your TV timezone',
-                  style: TextStyle(color: AppColors.textMuted),
+                if (!context.isCompactWidth)
+                  const Text(
+                    'Times use your device timezone',
+                    style: TextStyle(color: AppColors.textMuted),
+                  ),
+                const SizedBox(width: 10),
+                TvFocusable(
+                  onPressed: () {
+                    ref.invalidate(airingWeekProvider);
+                    ref.invalidate(trackingHomeProvider);
+                  },
+                  borderRadius: BorderRadius.circular(9),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.refresh_rounded, size: 18),
+                        SizedBox(width: 6),
+                        Text('Refresh'),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -64,6 +85,16 @@ class AiringCalendarScreen extends ConsumerWidget {
                     return const Center(
                       child: CircularProgressIndicator(
                         color: AppColors.accentBright,
+                      ),
+                    );
+                  }
+                  if (tracking.hasError) {
+                    return const Center(
+                      child: Text(
+                        'Your AniList or MAL calendar could not be loaded. '
+                        'Check the tracker connection in Settings, then select Refresh.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppColors.textMuted),
                       ),
                     );
                   }

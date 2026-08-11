@@ -457,5 +457,75 @@ void main() {
         'sort': ['SCORE_DESC'],
       });
     });
+
+    test(
+      'airing calendar follows AniList pagination beyond the first 50',
+      () async {
+        final requestedPages = <int>[];
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                final body = options.data as Map<String, dynamic>;
+                final variables = body['variables'] as Map<String, dynamic>;
+                final page = variables['page'] as int;
+                requestedPages.add(page);
+                handler.resolve(
+                  Response<Map<String, dynamic>>(
+                    data: {
+                      'data': {
+                        'Page': {
+                          'pageInfo': {'hasNextPage': page == 1},
+                          'airingSchedules': [
+                            {
+                              'episode': page,
+                              'airingAt': 1_800_000_000 + page,
+                              'media': _calendarMedia(page),
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    requestOptions: options,
+                    statusCode: 200,
+                  ),
+                );
+              },
+            ),
+          );
+        final client = AniListCatalogClient(dio: dio);
+
+        final entries = await client.airingSchedule(
+          from: DateTime(2027),
+          to: DateTime(2027, 1, 8),
+        );
+
+        expect(requestedPages, [1, 2]);
+        expect(entries.map((entry) => entry.anime.id), [1, 2]);
+      },
+    );
   });
 }
+
+Map<String, dynamic> _calendarMedia(int id) => {
+  'id': id,
+  'idMal': id + 100,
+  'title': {
+    'userPreferred': 'Show $id',
+    'english': 'Show $id',
+    'romaji': 'Show $id',
+  },
+  'description': '',
+  'episodes': 12,
+  'averageScore': 80,
+  'genres': <String>[],
+  'coverImage': {'extraLarge': null},
+  'bannerImage': null,
+  'format': 'TV',
+  'status': 'RELEASING',
+  'season': 'WINTER',
+  'seasonYear': 2027,
+  'duration': 24,
+  'synonyms': <String>[],
+  'nextAiringEpisode': {'episode': id + 1},
+};

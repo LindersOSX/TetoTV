@@ -263,8 +263,9 @@ class AniListCatalogClient {
     required DateTime to,
   }) async {
     const query = r'''
-      query AiringCalendar($from: Int!, $to: Int!) {
-        Page(page: 1, perPage: 50) {
+      query AiringCalendar($page: Int!, $from: Int!, $to: Int!) {
+        Page(page: $page, perPage: 50) {
+          pageInfo { hasNextPage }
           airingSchedules(
             airingAt_greater: $from, airingAt_lesser: $to, sort: TIME
           ) {
@@ -279,15 +280,22 @@ class AniListCatalogClient {
         }
       }
     ''';
-    final data = await _graphQl(query, {
-      'from': from.millisecondsSinceEpoch ~/ 1000,
-      'to': to.millisecondsSinceEpoch ~/ 1000,
-    });
-    final page = data['Page'] as Map<String, dynamic>?;
-    final schedules = page?['airingSchedules'] as List<dynamic>? ?? const [];
-    return schedules
-        .whereType<Map<String, dynamic>>()
-        .map((item) {
+    final entries = <AiringScheduleEntry>[];
+    var pageNumber = 1;
+    var hasNextPage = true;
+    // A week normally spans several AniList pages. Fetching only page one
+    // made the followed-only calendar appear empty whenever a user's show was
+    // outside the first 50 global airings.
+    while (hasNextPage && pageNumber <= 20) {
+      final data = await _graphQl(query, {
+        'page': pageNumber,
+        'from': from.millisecondsSinceEpoch ~/ 1000,
+        'to': to.millisecondsSinceEpoch ~/ 1000,
+      });
+      final page = data['Page'] as Map<String, dynamic>?;
+      final schedules = page?['airingSchedules'] as List<dynamic>? ?? const [];
+      entries.addAll(
+        schedules.whereType<Map<String, dynamic>>().map((item) {
           return AiringScheduleEntry(
             anime: _mapAnime(item['media'] as Map<String, dynamic>),
             episode: item['episode'] as int,
@@ -295,8 +303,13 @@ class AniListCatalogClient {
               (item['airingAt'] as int) * 1000,
             ),
           );
-        })
-        .toList(growable: false);
+        }),
+      );
+      final pageInfo = page?['pageInfo'] as Map<String, dynamic>?;
+      hasNextPage = pageInfo?['hasNextPage'] == true;
+      pageNumber++;
+    }
+    return entries;
   }
 
   Future<List<AnimeSummary>> studioAnime(int studioId) async {

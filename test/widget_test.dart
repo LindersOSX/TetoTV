@@ -89,6 +89,42 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('double activating the in-app Home action refreshes shelves', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith((_) async => const []),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.home_rounded));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byIcon(Icons.home_rounded));
+    await tester.pump();
+
+    expect(find.text('Refreshing Home…'), findsOneWidget);
+  });
+
   testWidgets('featured carousel rotates the title and matching metadata', (
     tester,
   ) async {

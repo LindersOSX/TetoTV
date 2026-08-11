@@ -47,6 +47,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _catalogFocusSettled = false;
   Timer? _heroTimer;
   int _heroIndex = 0;
+  DateTime? _lastHomeActivation;
 
   @override
   void initState() {
@@ -123,6 +124,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _homeNavFocus.requestFocus();
     }
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
+  }
+
+  void _handleHomeActivation() {
+    final now = DateTime.now();
+    final previous = _lastHomeActivation;
+    _lastHomeActivation = now;
+    _focusHero();
+    if (previous == null ||
+        now.difference(previous) > const Duration(milliseconds: 650)) {
+      return;
+    }
+    _lastHomeActivation = null;
+    ref.invalidate(trendingAnimeProvider);
+    ref.invalidate(seasonalAnimeProvider);
+    ref.invalidate(trackingHomeProvider);
+    ref.invalidate(recentPlaybackProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing Home…'),
+        duration: Duration(milliseconds: 1200),
+      ),
+    );
   }
 
   Future<void> _removeFromLocalHistory(_ShelfItem item) async {
@@ -431,6 +454,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               child: _Header(
                 preferences: preferences,
                 homeFocusNode: _homeNavFocus,
+                onHomePressed: _handleHomeActivation,
               ),
             ),
             if (preferences.showHero)
@@ -460,10 +484,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.preferences, required this.homeFocusNode});
+  const _Header({
+    required this.preferences,
+    required this.homeFocusNode,
+    required this.onHomePressed,
+  });
 
   final SettingsPreferences preferences;
   final FocusNode homeFocusNode;
+  final VoidCallback onHomePressed;
 
   @override
   Widget build(BuildContext context) {
@@ -505,7 +534,7 @@ class _Header extends StatelessWidget {
             active: true,
             autofocus: !preferences.showHero,
             focusNode: homeFocusNode,
-            onPressed: () {},
+            onPressed: onHomePressed,
           ),
           if (preferences.showMyList) ...[
             SizedBox(width: compact ? 2 : 6),

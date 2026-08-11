@@ -534,30 +534,38 @@ Future<String?> _choose(
   const any = '__ANY__';
   final result = await showDialog<String>(
     context: context,
-    builder: (context) => AlertDialog(
-      backgroundColor: AppColors.panel,
-      title: Text(title),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500, maxHeight: 460),
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            if (allowAny)
-              _ChoiceTile(
-                label: 'Any',
-                selected: current == null,
-                onPressed: () => Navigator.of(context).pop(any),
-              ),
-            for (final option in options.entries)
-              _ChoiceTile(
-                label: option.value,
-                selected: current == option.key,
-                onPressed: () => Navigator.of(context).pop(option.key),
-              ),
-          ],
+    builder: (context) {
+      final viewport = MediaQuery.sizeOf(context);
+      final contentWidth = (viewport.width - 80).clamp(280.0, 500.0);
+      final contentHeight = (viewport.height - 140).clamp(220.0, 460.0);
+      return AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: Text(title),
+        // AlertDialog asks its content for intrinsic dimensions. A lazy
+        // viewport cannot provide those, so give the picker an explicit,
+        // responsive box before placing the ListView inside it.
+        content: SizedBox(
+          width: contentWidth,
+          height: contentHeight,
+          child: ListView(
+            children: [
+              if (allowAny)
+                _ChoiceTile(
+                  label: 'Any',
+                  selected: current == null,
+                  onPressed: () => Navigator.of(context).pop(any),
+                ),
+              for (final option in options.entries)
+                _ChoiceTile(
+                  label: option.value,
+                  selected: current == option.key,
+                  onPressed: () => Navigator.of(context).pop(option.key),
+                ),
+            ],
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
   return result == any ? null : result ?? current;
 }

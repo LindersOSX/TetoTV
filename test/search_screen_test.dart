@@ -96,6 +96,35 @@ void main() {
     expect(client.requests, contains('Cowboy Bebop'));
     expect(find.text('Results for “Cowboy Bebop”'), findsOneWidget);
   });
+
+  testWidgets('built-in keyboard submission focuses the first result', (
+    tester,
+  ) async {
+    final client = _DeferredCatalogClient();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(client)],
+        child: const MaterialApp(home: SearchScreen()),
+      ),
+    );
+
+    await tester.tap(find.byType(TvTextInput));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('c'));
+    await tester.tap(find.text('o'));
+    await tester.tap(find.text('w'));
+    await tester.tap(find.text('DONE'));
+    await tester.pump();
+    client.complete('cow', [_anime(11, 'Cowboy Bebop')]);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Cowboy Bebop'), findsOneWidget);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'search.result.first',
+    );
+  });
   testWidgets('focused long result titles stay inside the card', (
     tester,
   ) async {

@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 enum _SettingsArea { customize, streaming, tracking, system }
 
@@ -93,6 +94,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.updates.automatic',
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
+  final _discordFocus = FocusNode(debugLabel: 'accounts.system.discord');
   final _privacyFocus = FocusNode(debugLabel: 'accounts.system.privacy');
   final _legalFocus = FocusNode(debugLabel: 'accounts.system.legal');
   final _areaFocusNodes = {
@@ -141,6 +143,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _malSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
+    _discordFocus.dispose();
     _privacyFocus.dispose();
     _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
@@ -365,9 +368,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) {
         target = _automaticUpdatesFocus;
       }
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
+    } else if (current == _discordFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
     } else if (current == _privacyFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
         target = _legalFocus;
@@ -927,6 +933,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           }
                         },
                       ),
+                      const SizedBox(height: 12),
+                      const _SectionHeader(
+                        icon: Icons.forum_rounded,
+                        title: 'COMMUNITY',
+                        subtitle:
+                            'Join the TetoTV Discord for announcements, support, and feature requests.',
+                      ),
+                      const SizedBox(height: 8),
+                      _DiscordCommunityPanel(focusNode: _discordFocus),
                       const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.info_rounded,
@@ -2342,6 +2357,115 @@ class _LegalNoticesPanel extends StatelessWidget {
               Expanded(child: copy),
               const SizedBox(width: 18),
               actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DiscordCommunityPanel extends StatelessWidget {
+  const _DiscordCommunityPanel({required this.focusNode});
+
+  static const inviteUrl = 'https://discord.gg/juC6k7d4WY';
+  final FocusNode focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    final qr = Semantics(
+      label: 'QR code for the TetoTV Discord invite',
+      child: Container(
+        width: 132,
+        height: 132,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: QrImageView(
+          data: inviteUrl,
+          version: QrVersions.auto,
+          padding: EdgeInsets.zero,
+          eyeStyle: const QrEyeStyle(
+            eyeShape: QrEyeShape.square,
+            color: Colors.black,
+          ),
+          dataModuleStyle: const QrDataModuleStyle(
+            dataModuleShape: QrDataModuleShape.square,
+            color: Colors.black,
+          ),
+        ),
+      ),
+    );
+    final copy = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Join the TetoTV Discord',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 5),
+        const Text(
+          'Scan the code with your phone, or select the invite below to copy it.',
+          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        TvFocusable(
+          focusNode: focusNode,
+          borderRadius: BorderRadius.circular(10),
+          onPressed: () async {
+            await Clipboard.setData(const ClipboardData(text: inviteUrl));
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Discord invite copied.')),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+            color: AppColors.selectableSurface,
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.copy_rounded,
+                  size: 18,
+                  color: AppColors.accentBright,
+                ),
+                SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    inviteUrl,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 620) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                qr,
+                const SizedBox(height: 14),
+                Align(alignment: Alignment.centerLeft, child: copy),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              qr,
+              const SizedBox(width: 18),
+              Expanded(child: copy),
             ],
           );
         },

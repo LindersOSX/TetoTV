@@ -20,6 +20,8 @@ import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -52,6 +54,15 @@ class MainActivity : FlutterActivity() {
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
     private var speechRecognizer: SpeechRecognizer? = null
+    private val voiceSearchHandler = Handler(Looper.getMainLooper())
+    private val voiceSearchTimeout = Runnable {
+        if (pendingVoiceSearchResult != null) {
+            finishEmbeddedVoiceSearch(
+                value = null,
+                errorMessage = "Voice search timed out. Please try again.",
+            )
+        }
+    }
     private var mediaSeekBackIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSeekForwardIncrementMs = DEFAULT_SEEK_INCREMENT_MS
     private var mediaSessionWasActiveBeforeNativePlayer = false
@@ -448,6 +459,13 @@ class MainActivity : FlutterActivity() {
             result.error("VOICE_SEARCH_BUSY", "Voice search is already open.", null)
             return
         }
+        // Prefer the embedded recognizer. Several Google TV builds advertise
+        // a recognition Activity that immediately closes when launched from a
+        // TV app, while their SpeechRecognizer service works correctly.
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            startEmbeddedVoiceSearch(result)
+            return
+        }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -503,6 +521,8 @@ class MainActivity : FlutterActivity() {
     private fun beginEmbeddedVoiceSearch() {
         if (pendingVoiceSearchResult == null) return
         speechRecognizer?.destroy()
+        voiceSearchHandler.removeCallbacks(voiceSearchTimeout)
+        voiceSearchHandler.postDelayed(voiceSearchTimeout, VOICE_SEARCH_TIMEOUT_MS)
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).also { recognizer ->
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -551,6 +571,7 @@ class MainActivity : FlutterActivity() {
     ) {
         val pending = pendingVoiceSearchResult
         pendingVoiceSearchResult = null
+        voiceSearchHandler.removeCallbacks(voiceSearchTimeout)
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -1108,6 +1129,7 @@ class MainActivity : FlutterActivity() {
             null,
         )
         pendingVoiceSearchResult = null
+        voiceSearchHandler.removeCallbacks(voiceSearchTimeout)
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -1120,6 +1142,7 @@ class MainActivity : FlutterActivity() {
         private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
         private const val VOICE_SEARCH_REQUEST_CODE = 7316
         private const val VOICE_SEARCH_PERMISSION_REQUEST_CODE = 7317
+        private const val VOICE_SEARCH_TIMEOUT_MS = 20_000L
         private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
         private const val MIN_SEEK_INCREMENT_MS = 5_000L
         private const val MAX_SEEK_INCREMENT_MS = 60_000L

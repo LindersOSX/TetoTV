@@ -40,12 +40,47 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'scrolled dialog');
     expect(find.text('Include adult titles'), findsOneWidget);
   });
+
+  testWidgets('applying a filter reloads Discover with the selected value', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final catalog = _FakeCatalog();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(catalog)],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All genres'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fantasy').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+
+    expect(catalog.requests, hasLength(2));
+    expect(catalog.requests.last.genre, 'Fantasy');
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _FakeCatalog extends AniListCatalogClient {
+  final requests = <CatalogFilters>[];
+
   @override
   Future<List<AnimeSummary>> discover(
     CatalogFilters filters, {
     int page = 1,
-  }) async => const [];
+  }) async {
+    requests.add(filters);
+    return const [];
+  }
 }
