@@ -80,7 +80,8 @@ broker restart can end an active pairing session.
 
 ## Anonymous live activity count
 
-When **Anonymous live count** is enabled in Settings, the app creates a random
+Anonymous live counting is disabled by default and requires an explicit choice
+during first-time setup or in Settings. When enabled, the app creates a random
 per-launch session token. The token is kept only in app and broker memory and
 is not a persistent device or user identifier. TetoTV reports only whether
 that app session is active or currently playing video. It does not send the

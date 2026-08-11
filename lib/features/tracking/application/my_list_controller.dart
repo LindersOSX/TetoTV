@@ -268,6 +268,18 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
     required int anilistId,
     required int? malId,
     required TrackingListStatus status,
+  }) =>
+      _changeCatalogStatus(anilistId: anilistId, malId: malId, status: status);
+
+  Future<CatalogTrackingUpdateResult> removeCatalogStatus({
+    required int anilistId,
+    required int? malId,
+  }) => _changeCatalogStatus(anilistId: anilistId, malId: malId);
+
+  Future<CatalogTrackingUpdateResult> _changeCatalogStatus({
+    required int anilistId,
+    required int? malId,
+    TrackingListStatus? status,
   }) async {
     state = const AsyncLoading();
     final updated = <TrackingProvider>{};
@@ -300,9 +312,15 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
         }
 
         try {
-          await _ref
-              .read(trackingRepositoryFactoryProvider)(provider, token)
-              .updateStatus(mediaId: mediaId, status: status);
+          final repository = _ref.read(trackingRepositoryFactoryProvider)(
+            provider,
+            token,
+          );
+          if (status == null) {
+            await repository.removeFromList(mediaId: mediaId);
+          } else {
+            await repository.updateStatus(mediaId: mediaId, status: status);
+          }
           updated.add(provider);
         } catch (error) {
           failures[provider] = error;
@@ -327,8 +345,8 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
             .join(failures.length == 2 ? ' and ' : ', ');
         throw StateError(
           names.isEmpty
-              ? 'The connected tracker could not update this title.'
-              : 'Could not update $names. Reconnect it in Settings and try again.',
+              ? 'The connected tracker could not change this title.'
+              : 'Could not change $names. Reconnect it in Settings and try again.',
         );
       }
 

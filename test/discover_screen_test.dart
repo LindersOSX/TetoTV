@@ -1,11 +1,16 @@
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -260,6 +265,128 @@ void main() {
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('holding a Discover result can add it to Planning', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+      TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+    });
+    final repositories = <TrackingProvider, _DiscoverRecordingRepository>{};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          catalogClientProvider.overrideWithValue(
+            _FakeCatalog(
+              results: const [
+                AnimeSummary(
+                  id: 88,
+                  idMal: 99,
+                  title: 'Discover Planning Show',
+                  description: '',
+                  episodes: 12,
+                  score: 8,
+                ),
+              ],
+            ),
+          ),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
+            return repositories.putIfAbsent(
+              provider,
+              _DiscoverRecordingRepository.new,
+            );
+          }),
+        ],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('Discover Planning Show'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Planning'));
+    await tester.pumpAndSettle();
+
+    expect(repositories[TrackingProvider.anilist]!.statusUpdates, [
+      (mediaId: 88, status: TrackingListStatus.planToWatch),
+    ]);
+    expect(repositories[TrackingProvider.myAnimeList]!.statusUpdates, [
+      (mediaId: 99, status: TrackingListStatus.planToWatch),
+    ]);
+  });
+
+  testWidgets('holding a planned Discover result can remove it from lists', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+      TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+    });
+    final repositories = <TrackingProvider, _DiscoverRecordingRepository>{};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          catalogClientProvider.overrideWithValue(
+            _FakeCatalog(
+              results: const [
+                AnimeSummary(
+                  id: 188,
+                  idMal: 199,
+                  title: 'Remove Planned Show',
+                  description: '',
+                  episodes: 12,
+                  score: 8,
+                ),
+              ],
+            ),
+          ),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [
+                HomeTrackedAnime(
+                  tracked: TrackedAnime(
+                    mediaId: 188,
+                    title: 'Remove Planned Show',
+                    status: TrackingListStatus.planToWatch,
+                    progress: 0,
+                  ),
+                  provider: TrackingProvider.anilist,
+                  anilistId: 188,
+                  coverImageUrl: null,
+                ),
+              ],
+              completed: [],
+            ),
+          ),
+          trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
+            return repositories.putIfAbsent(
+              provider,
+              _DiscoverRecordingRepository.new,
+            );
+          }),
+        ],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('Remove Planned Show'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from list'));
+    await tester.pumpAndSettle();
+
+    expect(repositories[TrackingProvider.anilist]!.removals, [188]);
+    expect(repositories[TrackingProvider.myAnimeList]!.removals, [199]);
+  });
 }
 
 class _FakeCatalog extends AniListCatalogClient {
@@ -277,5 +404,35 @@ class _FakeCatalog extends AniListCatalogClient {
     requests.add(filters);
     if (error != null) throw error!;
     return results;
+  }
+}
+
+class _DiscoverRecordingRepository implements TrackingRepository {
+  final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
+  final removals = <int>[];
+
+  @override
+  Future<int?> currentProgress(int mediaId) async => null;
+
+  @override
+  Future<List<TrackedAnime>> list(TrackingListStatus status) async => const [];
+
+  @override
+  Future<void> removeFromList({required int mediaId}) async {
+    removals.add(mediaId);
+  }
+
+  @override
+  Future<void> updateProgress({
+    required int mediaId,
+    required int completedEpisodes,
+  }) async {}
+
+  @override
+  Future<void> updateStatus({
+    required int mediaId,
+    required TrackingListStatus status,
+  }) async {
+    statusUpdates.add((mediaId: mediaId, status: status));
   }
 }

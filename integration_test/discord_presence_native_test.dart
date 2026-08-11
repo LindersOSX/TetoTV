@@ -13,4 +13,21 @@ void main() {
     expect(info['version'], '1.10.18369');
     expect(info['status'], isA<String>());
   });
+
+  testWidgets('Discord account linking starts without terminating the app', (
+    _,
+  ) async {
+    final authentication = AndroidTvBridge.instance
+        .discordAuthenticate()
+        .then<Object?>((value) => value)
+        .catchError((Object error) => error);
+
+    await Future.any<Object?>([
+      authentication,
+      Future<void>.delayed(const Duration(seconds: 5)),
+    ]);
+
+    final info = await AndroidTvBridge.instance.discordSdkInfo();
+    expect(info['available'], isTrue);
+  });
 }

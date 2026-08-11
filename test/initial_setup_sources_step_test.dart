@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
+import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
@@ -9,6 +12,7 @@ import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +21,40 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('setup asks before enabling live count or linking Discord', (
+    tester,
+  ) async {
+    final discord = await _pumpSetup(tester, const Size(1280, 720));
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Privacy and Discord'), findsOneWidget);
+    expect(find.text('Keep off'), findsOneWidget);
+    expect(find.text('Enable live count'), findsOneWidget);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(InitialSetupScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
+      isFalse,
+    );
+
+    await tester.tap(find.text('Enable live count'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
+      isTrue,
+    );
+
+    await tester.tap(find.text('Link Discord (optional)'));
+    await tester.pumpAndSettle();
+    expect(discord.authenticateCalls, 1);
+    expect(find.text('Discord linked and enabled'), findsOneWidget);
+  });
+
   testWidgets('TV setup places Sources between Debrid and tracking', (
     tester,
   ) async {
@@ -26,7 +64,7 @@ void main() {
     // focus then stays there while each page advances.
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
-    for (var index = 0; index < 4; index++) {
+    for (var index = 0; index < 5; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
     }
@@ -49,7 +87,7 @@ void main() {
     tester,
   ) async {
     await _pumpSetup(tester, const Size(390, 844));
-    for (var index = 0; index < 4; index++) {
+    for (var index = 0; index < 5; index++) {
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
     }
@@ -59,7 +97,7 @@ void main() {
   });
 }
 
-Future<void> _pumpSetup(WidgetTester tester, Size size) async {
+Future<_SetupDiscordPlatform> _pumpSetup(WidgetTester tester, Size size) async {
   FlutterSecureStorage.setMockInitialValues({
     userTorrentSourceManifestsStorageKey:
         '["https://one.example/manifest.json",'
@@ -88,6 +126,7 @@ Future<void> _pumpSetup(WidgetTester tester, Size size) async {
   );
   final pairing = _StaticSourcePairingController();
   final deviceSetup = _StaticDeviceSetupController();
+  final discord = _SetupDiscordPlatform();
 
   await tester.pumpWidget(
     ProviderScope(
@@ -95,11 +134,13 @@ Future<void> _pumpSetup(WidgetTester tester, Size size) async {
         marketplaceControllerProvider.overrideWith((_) => marketplace),
         sourcePairingControllerProvider.overrideWith((_) => pairing),
         deviceSetupProvider.overrideWith((_) => deviceSetup),
+        discordPresencePlatformProvider.overrideWithValue(discord),
       ],
       child: const MaterialApp(home: InitialSetupScreen()),
     ),
   );
   await tester.pumpAndSettle();
+  return discord;
 }
 
 void _expectSourcesStep(WidgetTester tester) {
@@ -155,4 +196,43 @@ class _StaticDeviceSetupController extends DeviceSetupController {
 
   @override
   Future<void> scan() async {}
+}
+
+class _SetupDiscordPlatform implements DiscordPresencePlatform {
+  int authenticateCalls = 0;
+
+  @override
+  Stream<DiscordBridgeEvent> get events => const Stream.empty();
+
+  @override
+  Future<DiscordTokenBundle> authenticate() async {
+    authenticateCalls++;
+    return DiscordTokenBundle(
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      tokenType: 0,
+      expiresAt: DateTime.now().add(const Duration(days: 7)),
+      scopes: 'openid sdk.social_layer_presence',
+    );
+  }
+
+  @override
+  Future<void> connect(DiscordTokenBundle token) async {}
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  Future<DiscordTokenBundle> refreshToken(String refreshToken) =>
+      throw UnimplementedError();
+
+  @override
+  Future<bool> revoke(String token) async => true;
+
+  @override
+  Future<Map<Object?, Object?>> sdkInfo() async => {
+    'available': true,
+    'status': 'disconnected',
+    'version': '1.10.18369',
+  };
 }

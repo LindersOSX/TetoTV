@@ -199,7 +199,7 @@ class SettingsPreferences {
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.automatic,
-    this.anonymousUsageCountEnabled = true,
+    this.anonymousUsageCountEnabled = false,
   });
 
   final DebridService debridProvider;
@@ -531,7 +531,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     }
     if (canRestore(_anonymousUsageCountKey, 29)) {
       restored = restored.copyWith(
-        anonymousUsageCountEnabled: valueAt(29) != 'false',
+        anonymousUsageCountEnabled: valueAt(29) == 'true',
       );
     }
     state = restored;

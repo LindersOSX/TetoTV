@@ -4,6 +4,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
@@ -28,7 +29,7 @@ class InitialSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
-  static const _stepCount = 7;
+  static const _stepCount = 8;
   final _pages = PageController();
   int _step = 0;
 
@@ -112,6 +113,7 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
                 children: [
                   const _WelcomeStep(),
                   _CustomizationStep(preferences: preferences),
+                  _PrivacyCommunityStep(preferences: preferences),
                   const _DeviceStep(),
                   const _DebridStep(),
                   const _SourcesStep(),
@@ -240,6 +242,89 @@ class _CustomizationStep extends ConsumerWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrivacyCommunityStep extends ConsumerWidget {
+  const _PrivacyCommunityStep({required this.preferences});
+
+  final SettingsPreferences preferences;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.read(settingsPreferencesProvider.notifier);
+    final discord = ref.watch(discordPresenceControllerProvider);
+    final discordController = ref.read(
+      discordPresenceControllerProvider.notifier,
+    );
+    final discordLabel = discord.busy
+        ? 'Connecting Discord'
+        : !discord.loaded
+        ? 'Checking Discord'
+        : !discord.available
+        ? 'Discord unavailable on this device'
+        : discord.linked
+        ? discord.enabled
+              ? 'Discord linked and enabled'
+              : 'Discord linked but disabled'
+        : 'Link Discord (optional)';
+    return _SetupPage(
+      icon: Icons.privacy_tip_outlined,
+      title: 'Privacy and Discord',
+      subtitle:
+          'Both choices are optional and start off. You can change either one later in Settings.',
+      child: Column(
+        children: [
+          _SetupChoiceRow(
+            label: 'Show this session in the anonymous live viewer count?',
+            children: [
+              _SetupChoice(
+                label: 'Keep off',
+                selected: !preferences.anonymousUsageCountEnabled,
+                onPressed: () => settings.setAnonymousUsageCountEnabled(false),
+              ),
+              _SetupChoice(
+                label: 'Enable live count',
+                selected: preferences.anonymousUsageCountEnabled,
+                onPressed: () => settings.setAnonymousUsageCountEnabled(true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          const Text(
+            'Only active/streaming state is counted. No show, episode, account, device ID, source, or URL is sent.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+          const SizedBox(height: 18),
+          if (discord.busy || !discord.loaded || !discord.available)
+            _FeaturePill(Icons.forum_rounded, discordLabel)
+          else
+            _SetupButton(
+              label: discordLabel,
+              icon: discord.linked ? Icons.check_rounded : Icons.forum_rounded,
+              primary: !discord.linked,
+              onPressed: discord.linked
+                  ? () => discordController.setEnabled(!discord.enabled)
+                  : discordController.linkAccount,
+            ),
+          const SizedBox(height: 9),
+          const Text(
+            'Discord Rich Presence can show what you are watching. TetoTV never sees or stores your Discord password.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+          if (discord.error case final error?) ...[
+            const SizedBox(height: 9),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.accentBright),
+            ),
+          ],
         ],
       ),
     );

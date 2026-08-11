@@ -154,6 +154,30 @@ mutation ($mediaId: Int!, $status: MediaListStatus!) {
     );
   }
 
+  @override
+  Future<void> removeFromList({required int mediaId}) async {
+    final viewerId = await _viewerId();
+    final lookup = await _graphQl(
+      r'''
+query ($mediaId: Int!, $userId: Int!) {
+  MediaList(mediaId: $mediaId, userId: $userId) { id }
+}
+''',
+      {'mediaId': mediaId, 'userId': viewerId},
+    );
+    final entry = lookup['MediaList'] as Map<String, dynamic>?;
+    final entryId = entry?['id'] as int?;
+    if (entryId == null) return;
+    await _graphQl(
+      r'''
+mutation ($id: Int!) {
+  DeleteMediaListEntry(id: $id) { deleted }
+}
+''',
+      {'id': entryId},
+    );
+  }
+
   Future<int> _viewerId() async {
     if (_cachedViewerId case final id?) return id;
     final data = await _graphQl('query { Viewer { id } }', const {});

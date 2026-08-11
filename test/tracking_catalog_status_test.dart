@@ -63,10 +63,38 @@ void main() {
       ),
     );
   });
+
+  test(
+    'catalog removal deletes the title from every connected tracker',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+        TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+      });
+      final repositories = <TrackingProvider, _RecordingRepository>{};
+      final container = ProviderContainer(
+        overrides: [
+          trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
+            return repositories.putIfAbsent(provider, _RecordingRepository.new);
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final result = await container
+          .read(trackingStatusControllerProvider.notifier)
+          .removeCatalogStatus(anilistId: 303, malId: 404);
+
+      expect(result.updated, TrackingProvider.values.toSet());
+      expect(repositories[TrackingProvider.anilist]!.removals, [303]);
+      expect(repositories[TrackingProvider.myAnimeList]!.removals, [404]);
+    },
+  );
 }
 
 class _RecordingRepository implements TrackingRepository {
   final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
+  final removals = <int>[];
 
   @override
   Future<int?> currentProgress(int mediaId) async => null;
@@ -79,6 +107,11 @@ class _RecordingRepository implements TrackingRepository {
     required int mediaId,
     required int completedEpisodes,
   }) async {}
+
+  @override
+  Future<void> removeFromList({required int mediaId}) async {
+    removals.add(mediaId);
+  }
 
   @override
   Future<void> updateStatus({

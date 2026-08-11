@@ -8,6 +8,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -215,6 +216,13 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                       firstFocusNode: _firstResultFocus,
                       onNavigateUpFromFirstRow: () =>
                           _focusAndReveal(_filtersFocus, towardEnd: false),
+                      onLongPress: (anime) => unawaited(
+                        manageCatalogTrackingStatus(
+                          context: context,
+                          ref: ref,
+                          anime: anime,
+                        ),
+                      ),
                     );
                   },
                 ),

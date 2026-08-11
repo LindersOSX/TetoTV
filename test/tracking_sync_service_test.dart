@@ -58,6 +58,9 @@ class _FakeRepo implements TrackingRepository {
   Future<int?> currentProgress(int mediaId) async => 0;
 
   @override
+  Future<void> removeFromList({required int mediaId}) async {}
+
+  @override
   Future<void> updateProgress({
     required int mediaId,
     required int completedEpisodes,

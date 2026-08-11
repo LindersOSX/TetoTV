@@ -64,4 +64,6 @@ abstract interface class TrackingRepository {
     required int mediaId,
     required TrackingListStatus status,
   });
+
+  Future<void> removeFromList({required int mediaId});
 }

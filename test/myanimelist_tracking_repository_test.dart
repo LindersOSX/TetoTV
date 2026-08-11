@@ -79,6 +79,23 @@ void main() {
     );
     expect(requestCount, 2);
   });
+
+  test('removes an anime from the MAL list with DELETE', () async {
+    RequestOptions? captured;
+    final dio = _testDio((request) {
+      captured = request;
+      return _response(request, const {});
+    });
+    final repository = MyAnimeListTrackingRepository(
+      accessToken: 'unused-by-injected-client',
+      dio: dio,
+    );
+
+    await repository.removeFromList(mediaId: 5150);
+
+    expect(captured?.method, 'DELETE');
+    expect(captured?.uri.path, '/v2/anime/5150/my_list_status');
+  });
 }
 
 Dio _testDio(Response<dynamic> Function(RequestOptions) responder) {

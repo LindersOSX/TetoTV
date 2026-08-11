@@ -359,6 +359,7 @@ class _DeferredCatalogClient extends AniListCatalogClient {
 
 class _SearchRecordingRepository implements TrackingRepository {
   final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
+  final removals = <int>[];
 
   @override
   Future<int?> currentProgress(int mediaId) async => null;
@@ -371,6 +372,11 @@ class _SearchRecordingRepository implements TrackingRepository {
     required int mediaId,
     required int completedEpisodes,
   }) async {}
+
+  @override
+  Future<void> removeFromList({required int mediaId}) async {
+    removals.add(mediaId);
+  }
 
   @override
   Future<void> updateStatus({

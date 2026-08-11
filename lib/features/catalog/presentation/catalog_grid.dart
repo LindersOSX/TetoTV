@@ -15,6 +15,7 @@ class CatalogGrid extends StatelessWidget {
     this.autofocus = true,
     this.firstFocusNode,
     this.onNavigateUpFromFirstRow,
+    this.onLongPress,
     super.key,
   });
 
@@ -23,6 +24,7 @@ class CatalogGrid extends StatelessWidget {
   final bool autofocus;
   final FocusNode? firstFocusNode;
   final VoidCallback? onNavigateUpFromFirstRow;
+  final ValueChanged<AnimeSummary>? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -61,6 +63,9 @@ class CatalogGrid extends StatelessWidget {
                 return KeyEventResult.ignored;
               },
               onPressed: () => context.push('/anime/${anime.id}'),
+              onLongPress: onLongPress == null
+                  ? null
+                  : () => onLongPress!(anime),
               focusScale: 1.035,
               borderRadius: BorderRadius.circular(7),
               child: ColoredBox(

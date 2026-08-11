@@ -299,26 +299,60 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*, jobject) {
     post([] {
         if (!g_client) return;
-        discordpp::DeviceAuthorizationArgs args;
+        auto verifier = g_client->CreateAuthorizationCodeVerifier();
+        const std::string verifier_value = verifier.Verifier();
+        discordpp::AuthorizationArgs args;
         args.SetClientId(kApplicationId);
         args.SetScopes(discordpp::Client::GetDefaultPresenceScopes());
-        g_client->GetTokenFromDevice(
+        args.SetCodeChallenge(verifier.Challenge());
+        g_client->Authorize(
             std::move(args),
-            [](discordpp::ClientResult result,
-               std::string access_token,
-               std::string refresh_token,
-               discordpp::AuthorizationTokenType token_type,
-               std::int32_t expires_in,
-               std::string scopes) {
-                const bool ok = succeeded(result);
-                notify_auth("onAuthResult",
-                            ok,
-                            ok ? access_token : std::string{},
-                            ok ? refresh_token : std::string{},
-                            static_cast<int>(token_type),
-                            ok ? expires_in : 0,
-                            ok ? scopes : std::string{},
-                            ok ? std::string{} : safe_error(result));
+            [verifier_value](discordpp::ClientResult result,
+                             std::string code,
+                             std::string redirect_uri) {
+                if (!succeeded(result)) {
+                    notify_auth("onAuthResult",
+                                false,
+                                {},
+                                {},
+                                0,
+                                0,
+                                {},
+                                safe_error(result));
+                    return;
+                }
+                if (!g_client || code.empty() || redirect_uri.empty()) {
+                    notify_auth("onAuthResult",
+                                false,
+                                {},
+                                {},
+                                0,
+                                0,
+                                {},
+                                "Discord did not return a usable authorization code.");
+                    return;
+                }
+                g_client->GetToken(
+                    kApplicationId,
+                    code,
+                    verifier_value,
+                    redirect_uri,
+                    [](discordpp::ClientResult token_result,
+                       std::string access_token,
+                       std::string refresh_token,
+                       discordpp::AuthorizationTokenType token_type,
+                       std::int32_t expires_in,
+                       std::string scopes) {
+                        const bool ok = succeeded(token_result);
+                        notify_auth("onAuthResult",
+                                    ok,
+                                    ok ? access_token : std::string{},
+                                    ok ? refresh_token : std::string{},
+                                    static_cast<int>(token_type),
+                                    ok ? expires_in : 0,
+                                    ok ? scopes : std::string{},
+                                    ok ? std::string{} : safe_error(token_result));
+                    });
             });
     });
 }
@@ -420,6 +454,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeDisconnect(JNIEnv*, j
         g_pending_presence.reset();
         g_ready.store(false);
         if (g_client) {
+            g_client->AbortAuthorize();
             g_client->ClearRichPresence();
             g_client->Disconnect();
         }

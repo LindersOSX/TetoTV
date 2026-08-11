@@ -131,6 +131,10 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
   }
+
+  @override
+  Future<void> removeFromList({required int mediaId}) =>
+      _dio.delete<void>('/anime/$mediaId/my_list_status');
 }
 
 Uri? trustedMyAnimeListPageUri(String value) {

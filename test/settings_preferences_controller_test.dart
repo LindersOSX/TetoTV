@@ -60,7 +60,7 @@ void main() {
     expect(restored.state.anonymousUsageCountEnabled, isFalse);
   });
 
-  test('existing users retain both stream sources by default', () async {
+  test('fresh installs keep anonymous live counting off by default', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = SettingsPreferencesController(
       const FlutterSecureStorage(),
@@ -80,11 +80,23 @@ void main() {
     expect(controller.state.showMyList, isTrue);
     expect(controller.state.showDiscover, isTrue);
     expect(controller.state.showCalendar, isTrue);
-    expect(controller.state.anonymousUsageCountEnabled, isTrue);
+    expect(controller.state.anonymousUsageCountEnabled, isFalse);
     expect(
       controller.state.trackerUpdateThreshold,
       TrackerUpdateThreshold.nearlyFinished,
     );
+  });
+
+  test('anonymous live counting persists only after explicit opt in', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setAnonymousUsageCountEnabled(true);
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+
+    expect(restored.state.anonymousUsageCountEnabled, isTrue);
   });
 
   test('hidden navigation route cannot remain the landing page', () async {
