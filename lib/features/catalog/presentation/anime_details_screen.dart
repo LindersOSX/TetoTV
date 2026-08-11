@@ -9,6 +9,7 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -84,36 +85,34 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       1,
       knownEpisodes,
     );
-    _EpisodeActions episodeActions({required bool autofocusPrimary}) =>
-        _EpisodeActions(
-          isAvailable: !isUnreleased,
-          autofocusPrimary: autofocusPrimary,
-          selectedEpisode: selectedEpisode,
-          resumeEpisode: targetEpisode,
-          totalEpisodes: knownEpisodes,
-          hasProgress: progress > 0 || localResume,
-          resumePosition: localResume ? localPlayback.position : null,
-          onDecrease: !isUnreleased && selectedEpisode > 1
-              ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
-              : null,
-          onIncrease: !isUnreleased && selectedEpisode < knownEpisodes
-              ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
-              : null,
-          onPlayFromBeginning: isUnreleased
-              ? null
-              : () => _openEpisode(
-                  context,
-                  anime,
-                  selectedEpisode,
-                  restart: true,
-                ),
-          onResume: isUnreleased
-              ? null
-              : () => _openEpisode(context, anime, targetEpisode),
-          onPlaySelected: isUnreleased
-              ? null
-              : () => _openEpisode(context, anime, selectedEpisode),
-        );
+    _EpisodeActions episodeActions({
+      required bool autofocusPrimary,
+    }) => _EpisodeActions(
+      isAvailable: !isUnreleased,
+      autofocusPrimary: autofocusPrimary,
+      selectedEpisode: selectedEpisode,
+      resumeEpisode: targetEpisode,
+      totalEpisodes: knownEpisodes,
+      hasProgress: progress > 0 || localResume,
+      resumePosition: localResume ? localPlayback.position : null,
+      onDecrease: !isUnreleased && selectedEpisode > 1
+          ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
+          : null,
+      onIncrease: !isUnreleased && selectedEpisode < knownEpisodes
+          ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
+          : null,
+      onPlayFromBeginning: isUnreleased
+          ? null
+          : () => _openEpisode(context, anime, selectedEpisode, restart: true),
+      onResume: isUnreleased
+          ? null
+          : () => _openEpisode(context, anime, targetEpisode),
+      onPlaySelected: isUnreleased
+          ? null
+          : () => _openEpisode(context, anime, selectedEpisode),
+      onManageList: () =>
+          manageCatalogTrackingStatus(context: context, ref: ref, anime: anime),
+    );
     final onFranchise = anime.relatedAnime.isEmpty
         ? null
         : () => context.push('/anime/${anime.id}/franchise');
@@ -676,6 +675,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.onPlayFromBeginning,
     required this.onResume,
     required this.onPlaySelected,
+    required this.onManageList,
   });
 
   final bool isAvailable;
@@ -690,6 +690,7 @@ class _EpisodeActions extends StatelessWidget {
   final VoidCallback? onPlayFromBeginning;
   final VoidCallback? onResume;
   final VoidCallback? onPlaySelected;
+  final VoidCallback onManageList;
 
   @override
   Widget build(BuildContext context) {
@@ -735,6 +736,15 @@ class _EpisodeActions extends StatelessWidget {
             trailing: 'EP-$selectedEpisode',
             icon: Icons.skip_next_rounded,
             onPressed: onPlaySelected,
+            large: large,
+          ),
+          SizedBox(height: large ? 14 : 6),
+          _EpisodeActionButton(
+            key: const ValueKey('episode-action-manage-list'),
+            label: 'My List status',
+            icon: Icons.playlist_add_check_rounded,
+            trailingIcon: Icons.arrow_drop_down_rounded,
+            onPressed: onManageList,
             large: large,
           ),
           SizedBox(height: large ? 22 : 7),
@@ -800,6 +810,7 @@ class _EpisodeActionButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.trailing,
+    this.trailingIcon,
     this.primary = false,
     this.autofocus = false,
     this.large = false,
@@ -807,6 +818,7 @@ class _EpisodeActionButton extends StatelessWidget {
 
   final String label;
   final String? trailing;
+  final IconData? trailingIcon;
   final IconData icon;
   final VoidCallback? onPressed;
   final bool primary;
@@ -845,6 +857,10 @@ class _EpisodeActionButton extends StatelessWidget {
                 fontWeight: FontWeight.w800,
               ),
             ),
+          if (trailingIcon case final value?) ...[
+            if (trailing != null) SizedBox(width: large ? 10 : 6),
+            Icon(value, size: large ? 25 : 19, color: Colors.white70),
+          ],
         ],
       ),
     );

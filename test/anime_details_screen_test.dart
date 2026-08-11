@@ -2,7 +2,9 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -77,6 +79,9 @@ void main() {
               completed: [],
             ),
           ),
+          trackingListProvider(
+            TrackingListStatus.planToWatch,
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
         ],
         child: const MaterialApp(home: AnimeDetailsScreen(animeId: 1)),
       ),
@@ -85,6 +90,7 @@ void main() {
 
     expect(find.text('Play from beginning'), findsOneWidget);
     expect(find.text('Start watching'), findsOneWidget);
+    expect(find.text('My List status'), findsOneWidget);
     expect(find.text('Episode 1 of 24'), findsOneWidget);
     expect(find.text('Related series'), findsOneWidget);
     expect(find.text('RELATED'), findsNothing);
@@ -111,6 +117,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.tap(find.text('My List status'));
+    await tester.pumpAndSettle();
+    expect(find.text('Planning'), findsOneWidget);
+    expect(find.text('Watching'), findsOneWidget);
+    expect(find.text('Completed'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
