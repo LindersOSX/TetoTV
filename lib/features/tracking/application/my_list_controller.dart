@@ -10,6 +10,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 enum MyListSort { title, score, lastUpdated, startDate }
 
+typedef TrackingRepositoryFactory =
+    TrackingRepository Function(TrackingProvider provider, String accessToken);
+
+final trackingRepositoryFactoryProvider = Provider<TrackingRepositoryFactory>(
+  (_) => trackingRepository,
+);
+
 extension MyListSortLabel on MyListSort {
   String get displayName => switch (this) {
     MyListSort.title => 'Title',
@@ -108,7 +115,10 @@ final trackingListProvider = FutureProvider.autoDispose
             if (token == null || token.isEmpty) {
               return _TrackingProviderListResult.disconnected(provider);
             }
-            final repository = trackingRepository(provider, token);
+            final repository = ref.read(trackingRepositoryFactoryProvider)(
+              provider,
+              token,
+            );
             try {
               final entries = await repository.list(status);
               return _TrackingProviderListResult.succeeded(
@@ -234,10 +244,9 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
       if (token == null || token.isEmpty) {
         throw StateError('${item.provider.displayName} is not connected.');
       }
-      await trackingRepository(
-        item.provider,
-        token,
-      ).updateStatus(mediaId: item.tracked.mediaId, status: status);
+      await _ref
+          .read(trackingRepositoryFactoryProvider)(item.provider, token)
+          .updateStatus(mediaId: item.tracked.mediaId, status: status);
       if (!mounted) return;
       _ref.invalidate(trackingListProvider(item.tracked.status));
       _ref.invalidate(trackingListProvider(status));
@@ -248,6 +257,114 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
       rethrow;
     }
   }
+
+  /// Adds or updates a catalog title on every connected tracker for which the
+  /// catalog supplied a real provider media ID.
+  ///
+  /// Search/Home results are AniList catalog entries and may not already have
+  /// a [HomeTrackedAnime] row. Keeping this operation here prevents the UI
+  /// from fabricating list entries merely to call [update].
+  Future<CatalogTrackingUpdateResult> updateCatalogStatus({
+    required int anilistId,
+    required int? malId,
+    required TrackingListStatus status,
+  }) async {
+    state = const AsyncLoading();
+    final updated = <TrackingProvider>{};
+    final missingMediaId = <TrackingProvider>{};
+    final failures = <TrackingProvider, Object>{};
+    var connectedProviders = 0;
+
+    try {
+      for (final provider in TrackingProvider.values) {
+        String? token;
+        try {
+          token = await _ref
+              .read(trackingTokenServiceProvider)
+              .accessToken(provider);
+        } catch (error) {
+          failures[provider] = error;
+          continue;
+        }
+        if (token == null || token.isEmpty) continue;
+        connectedProviders++;
+
+        final mediaId = switch (provider) {
+          TrackingProvider.anilist => anilistId > 0 ? anilistId : null,
+          TrackingProvider.myAnimeList =>
+            malId != null && malId > 0 ? malId : null,
+        };
+        if (mediaId == null) {
+          missingMediaId.add(provider);
+          continue;
+        }
+
+        try {
+          await _ref
+              .read(trackingRepositoryFactoryProvider)(provider, token)
+              .updateStatus(mediaId: mediaId, status: status);
+          updated.add(provider);
+        } catch (error) {
+          failures[provider] = error;
+        }
+      }
+
+      if (updated.isEmpty) {
+        if (connectedProviders == 0 && failures.isEmpty) {
+          throw StateError(
+            'Connect AniList or MAL in Settings before changing a show status.',
+          );
+        }
+        if (connectedProviders > 0 &&
+            missingMediaId.length == connectedProviders &&
+            failures.isEmpty) {
+          throw StateError(
+            'This title is missing the media ID required by the connected tracker.',
+          );
+        }
+        final names = failures.keys
+            .map((provider) => provider.displayName)
+            .join(failures.length == 2 ? ' and ' : ', ');
+        throw StateError(
+          names.isEmpty
+              ? 'The connected tracker could not update this title.'
+              : 'Could not update $names. Reconnect it in Settings and try again.',
+        );
+      }
+
+      for (final listStatus in TrackingListStatus.values) {
+        _ref.invalidate(trackingListProvider(listStatus));
+      }
+      _ref.invalidate(trackingHomeProvider);
+      state = const AsyncData(null);
+      return CatalogTrackingUpdateResult(
+        updated: Set.unmodifiable(updated),
+        missingMediaId: Set.unmodifiable(missingMediaId),
+        failures: Map.unmodifiable(failures),
+      );
+    } catch (error, stackTrace) {
+      if (mounted) state = AsyncError(error, stackTrace);
+      rethrow;
+    }
+  }
+}
+
+class CatalogTrackingUpdateResult {
+  const CatalogTrackingUpdateResult({
+    required this.updated,
+    required this.missingMediaId,
+    required this.failures,
+  });
+
+  final Set<TrackingProvider> updated;
+  final Set<TrackingProvider> missingMediaId;
+  final Map<TrackingProvider, Object> failures;
+
+  bool get isPartial => missingMediaId.isNotEmpty || failures.isNotEmpty;
+
+  String get updatedProviderNames => updated
+      .map((provider) => provider.displayName)
+      .join(updated.length == 2 ? ' and ' : ', ');
 }
 
 TrackingRepository trackingRepository(

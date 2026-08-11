@@ -99,11 +99,19 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    var trendingLoads = 0;
+    var seasonalLoads = 0;
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          trendingAnimeProvider.overrideWith((_) async => const []),
-          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trendingAnimeProvider.overrideWith((_) async {
+            trendingLoads++;
+            return const [];
+          }),
+          seasonalAnimeProvider.overrideWith((_) async {
+            seasonalLoads++;
+            return const [];
+          }),
           trackingHomeProvider.overrideWith(
             (_) async => const TrackingHomeData(
               watching: [],
@@ -119,10 +127,72 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.home_rounded));
     await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(find.byIcon(Icons.home_rounded));
-    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.navigation.home',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
 
-    expect(find.text('Refreshing Home…'), findsOneWidget);
+    expect(trendingLoads, greaterThan(1));
+    expect(seasonalLoads, greaterThan(1));
+  });
+
+  testWidgets('holding an unwatched Home shelf card opens status actions', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const hero = AnimeSummary(
+      id: 1,
+      title: 'Featured title',
+      description: '',
+      episodes: 12,
+      score: null,
+    );
+    const unwatched = AnimeSummary(
+      id: 2,
+      idMal: 22,
+      title: 'Unwatched trending title',
+      description: '',
+      episodes: 12,
+      score: null,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith((_) async => [hero, unwatched]),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Unwatched trending title'));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Unwatched trending title'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Planning'), findsOneWidget);
+    expect(
+      find.text(
+        'Add or update this show on your connected AniList and MAL accounts.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('featured carousel rotates the title and matching metadata', (

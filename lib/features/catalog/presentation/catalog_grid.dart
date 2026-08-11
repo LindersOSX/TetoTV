@@ -12,12 +12,14 @@ class CatalogGrid extends StatelessWidget {
     required this.items,
     required this.titlePreference,
     this.autofocus = true,
+    this.firstFocusNode,
     super.key,
   });
 
   final List<AnimeSummary> items;
   final TitleLanguagePreference titlePreference;
   final bool autofocus;
+  final FocusNode? firstFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -33,6 +35,7 @@ class CatalogGrid extends StatelessWidget {
       itemBuilder: (context, index) {
         final anime = items[index];
         return TvFocusable(
+          focusNode: index == 0 ? firstFocusNode : null,
           autofocus: autofocus && index == 0,
           onPressed: () => context.push('/anime/${anime.id}'),
           focusScale: 1.035,

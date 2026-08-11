@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -7,6 +9,7 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -20,6 +23,10 @@ class DiscoverScreen extends ConsumerStatefulWidget {
 class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   CatalogFilters _filters = const CatalogFilters();
   late Future<List<AnimeSummary>> _results;
+  final _backFocus = FocusNode(debugLabel: 'discover.back');
+  final _resetFocus = FocusNode(debugLabel: 'discover.reset');
+  final _filtersFocus = FocusNode(debugLabel: 'discover.filters');
+  final _firstResultFocus = FocusNode(debugLabel: 'discover.result.first');
 
   @override
   void initState() {
@@ -50,94 +57,148 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     });
   }
 
+  KeyEventResult _handleNavigation(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final current = FocusManager.instance.primaryFocus;
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown &&
+        (current == _backFocus ||
+            current == _resetFocus ||
+            current == _filtersFocus) &&
+        _firstResultFocus.context != null) {
+      _focusAndReveal(_firstResultFocus, towardEnd: true);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+        current == _firstResultFocus) {
+      _filtersFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _focusAndReveal(FocusNode node, {required bool towardEnd}) {
+    node.requestFocus();
+    final target = node.context;
+    if (target == null) return;
+    unawaited(
+      Scrollable.ensureVisible(
+        target,
+        alignment: towardEnd ? 1 : 0,
+        alignmentPolicy: towardEnd
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _backFocus.dispose();
+    _resetFocus.dispose();
+    _filtersFocus.dispose();
+    _firstResultFocus.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final summary = _filterSummary(_filters);
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        minimum: context.responsiveScreenPadding.copyWith(bottom: 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                _HeaderButton(
-                  icon: Icons.arrow_back_rounded,
-                  label: context.isCompactWidth ? null : 'Back',
-                  onPressed: context.pop,
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Discover',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                      Text(
-                        summary,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: AppColors.textMuted),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_hasFilters(_filters)) ...[
+    return Focus(
+      onKeyEvent: _handleNavigation,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          minimum: context.responsiveScreenPadding.copyWith(bottom: 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
                   _HeaderButton(
-                    icon: Icons.filter_alt_off_rounded,
-                    label: context.isCompactWidth ? null : 'Reset',
-                    onPressed: _reset,
+                    focusNode: _backFocus,
+                    icon: Icons.arrow_back_rounded,
+                    label: context.isCompactWidth ? null : 'Back',
+                    onPressed: context.pop,
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Discover',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        Text(
+                          summary,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: AppColors.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_hasFilters(_filters)) ...[
+                    _HeaderButton(
+                      focusNode: _resetFocus,
+                      icon: Icons.filter_alt_off_rounded,
+                      label: context.isCompactWidth ? null : 'Reset',
+                      onPressed: _reset,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _HeaderButton(
+                    focusNode: _filtersFocus,
+                    icon: Icons.tune_rounded,
+                    label: context.isCompactWidth ? null : 'Filters',
+                    autofocus: true,
+                    onPressed: _openFilters,
+                  ),
                 ],
-                _HeaderButton(
-                  icon: Icons.tune_rounded,
-                  label: context.isCompactWidth ? null : 'Filters',
-                  autofocus: true,
-                  onPressed: _openFilters,
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Expanded(
-              child: FutureBuilder<List<AnimeSummary>>(
-                future: _results,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.accentBright,
-                      ),
-                    );
-                  }
-                  if (snapshot.hasError) {
-                    return _DiscoverError(
-                      message: snapshot.error.toString(),
-                      onRetry: () => setState(() => _results = _discover()),
-                    );
-                  }
-                  final items = snapshot.data ?? const <AnimeSummary>[];
-                  if (items.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        'No anime matched these filters.',
-                        style: TextStyle(color: AppColors.textMuted),
-                      ),
-                    );
-                  }
-                  return CatalogGrid(
-                    items: items,
-                    titlePreference: titlePreference,
-                    autofocus: false,
-                  );
-                },
               ),
-            ),
-          ],
+              const SizedBox(height: 14),
+              Expanded(
+                child: FutureBuilder<List<AnimeSummary>>(
+                  future: _results,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.accentBright,
+                        ),
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return _DiscoverError(
+                        message: snapshot.error.toString(),
+                        onRetry: () => setState(() => _results = _discover()),
+                      );
+                    }
+                    final items = snapshot.data ?? const <AnimeSummary>[];
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'No anime matched these filters.',
+                          style: TextStyle(color: AppColors.textMuted),
+                        ),
+                      );
+                    }
+                    return CatalogGrid(
+                      items: items,
+                      titlePreference: titlePreference,
+                      autofocus: false,
+                      firstFocusNode: _firstResultFocus,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -155,6 +216,19 @@ class _DiscoverFiltersDialog extends StatefulWidget {
 
 class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
   late final TextEditingController _titleController;
+  final _closeFocus = FocusNode(debugLabel: 'discover.filters.close');
+  final _titleFocus = FocusNode(debugLabel: 'discover.filters.title');
+  final _sortFocus = FocusNode(debugLabel: 'discover.filters.sort');
+  final _genreFocus = FocusNode(debugLabel: 'discover.filters.genre');
+  final _tagFocus = FocusNode(debugLabel: 'discover.filters.tag');
+  final _formatFocus = FocusNode(debugLabel: 'discover.filters.format');
+  final _seasonFocus = FocusNode(debugLabel: 'discover.filters.season');
+  final _yearFocus = FocusNode(debugLabel: 'discover.filters.year');
+  final _statusFocus = FocusNode(debugLabel: 'discover.filters.status');
+  final _scoreFocus = FocusNode(debugLabel: 'discover.filters.score');
+  final _adultFocus = FocusNode(debugLabel: 'discover.filters.adult');
+  final _resetFocus = FocusNode(debugLabel: 'discover.filters.reset');
+  final _applyFocus = FocusNode(debugLabel: 'discover.filters.apply');
   String? _genre;
   String? _tag;
   String? _format;
@@ -183,6 +257,19 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
   @override
   void dispose() {
     _titleController.dispose();
+    _closeFocus.dispose();
+    _titleFocus.dispose();
+    _sortFocus.dispose();
+    _genreFocus.dispose();
+    _tagFocus.dispose();
+    _formatFocus.dispose();
+    _seasonFocus.dispose();
+    _yearFocus.dispose();
+    _statusFocus.dispose();
+    _scoreFocus.dispose();
+    _adultFocus.dispose();
+    _resetFocus.dispose();
+    _applyFocus.dispose();
     super.dispose();
   }
 
@@ -216,243 +303,337 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
     });
   }
 
+  List<FocusNode> get _verticalFocusOrder => [
+    _closeFocus,
+    _titleFocus,
+    _sortFocus,
+    _genreFocus,
+    _tagFocus,
+    _formatFocus,
+    _seasonFocus,
+    _yearFocus,
+    _statusFocus,
+    _scoreFocus,
+    _adultFocus,
+    _applyFocus,
+  ];
+
+  KeyEventResult _handleNavigation(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final current = FocusManager.instance.primaryFocus;
+    if (current == null) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft && current == _applyFocus) {
+      _focusAndReveal(_resetFocus, towardEnd: false);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight && current == _resetFocus) {
+      _focusAndReveal(_applyFocus, towardEnd: true);
+      return KeyEventResult.handled;
+    }
+    if (key != LogicalKeyboardKey.arrowUp &&
+        key != LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.ignored;
+    }
+    if (current == _resetFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        _focusAndReveal(_adultFocus, towardEnd: false);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.handled;
+    }
+    final order = _verticalFocusOrder;
+    final index = order.indexOf(current);
+    if (index < 0) return KeyEventResult.ignored;
+    final next = key == LogicalKeyboardKey.arrowUp ? index - 1 : index + 1;
+    if (next < 0 || next >= order.length) return KeyEventResult.handled;
+    _focusAndReveal(order[next], towardEnd: next > index);
+    return KeyEventResult.handled;
+  }
+
+  void _focusAndReveal(FocusNode node, {required bool towardEnd}) {
+    node.requestFocus();
+    final target = node.context;
+    if (target == null) return;
+    unawaited(
+      Scrollable.ensureVisible(
+        target,
+        alignment: towardEnd ? 1 : 0,
+        alignmentPolicy: towardEnd
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: EdgeInsets.all(context.isCompactWidth ? 10 : 28),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: const Color(0xFF080808),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .65)),
-          ),
-          child: Padding(
-            padding: EdgeInsets.all(context.isCompactWidth ? 14 : 22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Discover filters',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: ListView(
+    return Focus(
+      onKeyEvent: _handleNavigation,
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.all(context.isCompactWidth ? 10 : 28),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFF080808),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: AppColors.accent.withValues(alpha: .65),
+              ),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(context.isCompactWidth ? 14 : 22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      TvTextInput(
-                        controller: _titleController,
-                        labelText: 'Title',
-                        hintText: 'Search by title',
-                        keyboardTitle: 'Discover title',
-                        autofocus: true,
-                      ),
-                      const SizedBox(height: 9),
-                      _FilterField(
-                        icon: Icons.sort_rounded,
-                        label: 'Sort',
-                        value: _sortLabels[_sort] ?? _sort,
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Sort results',
-                            current: _sort,
-                            options: _sortLabels,
-                            allowAny: false,
-                          );
-                          if (value != null && mounted) {
-                            setState(() => _sort = value);
-                          }
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.category_outlined,
-                        label: 'Genre',
-                        value: _genre ?? 'All genres',
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Genre',
-                            current: _genre,
-                            options: {for (final item in _genres) item: item},
-                          );
-                          if (mounted) setState(() => _genre = value);
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.sell_outlined,
-                        label: 'Tag',
-                        value: _tag ?? 'All tags',
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Tag',
-                            current: _tag,
-                            options: {for (final item in _tags) item: item},
-                          );
-                          if (mounted) setState(() => _tag = value);
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.tv_rounded,
-                        label: 'Format',
-                        value: _format == null
-                            ? 'All formats'
-                            : _pretty(_format!),
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Format',
-                            current: _format,
-                            options: _formatLabels,
-                          );
-                          if (mounted) setState(() => _format = value);
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.eco_outlined,
-                        label: 'Season',
-                        value: _season == null
-                            ? 'All seasons'
-                            : _pretty(_season!),
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Season',
-                            current: _season,
-                            options: _seasonLabels,
-                          );
-                          if (mounted) setState(() => _season = value);
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.calendar_month_outlined,
-                        label: 'Year',
-                        value: _year?.toString() ?? 'Timeless',
-                        onPressed: () async {
-                          final now = DateTime.now().year;
-                          final value = await _choose(
-                            context,
-                            title: 'Release year',
-                            current: _year?.toString(),
-                            options: {
-                              for (var year = now + 2; year >= now - 35; year--)
-                                '$year': '$year',
-                            },
-                          );
-                          if (mounted) {
-                            setState(() => _year = int.tryParse(value ?? ''));
-                          }
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.podcasts_rounded,
-                        label: 'Status',
-                        value: _status == null
-                            ? 'All statuses'
-                            : _statusLabels[_status]!,
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Release status',
-                            current: _status,
-                            options: _statusLabels,
-                          );
-                          if (mounted) setState(() => _status = value);
-                        },
-                      ),
-                      _FilterField(
-                        icon: Icons.star_outline_rounded,
-                        label: 'Minimum score',
-                        value: _minimumScore == null
-                            ? 'All scores'
-                            : '${_minimumScore! / 10}/10 or higher',
-                        onPressed: () async {
-                          final value = await _choose(
-                            context,
-                            title: 'Minimum score',
-                            current: _minimumScore?.toString(),
-                            options: const {
-                              '90': '9/10 or higher',
-                              '80': '8/10 or higher',
-                              '70': '7/10 or higher',
-                              '60': '6/10 or higher',
-                            },
-                          );
-                          if (mounted) {
-                            setState(
-                              () => _minimumScore = int.tryParse(value ?? ''),
-                            );
-                          }
-                        },
-                      ),
-                      TvFocusable(
-                        onPressed: () =>
-                            setState(() => _includeAdult = !_includeAdult),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          constraints: const BoxConstraints(minHeight: 54),
-                          margin: const EdgeInsets.only(top: 7),
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          decoration: BoxDecoration(
-                            color: AppColors.selectableSurface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                _includeAdult
-                                    ? Icons.toggle_on_rounded
-                                    : Icons.toggle_off_rounded,
-                                color: _includeAdult
-                                    ? AppColors.accentBright
-                                    : AppColors.textMuted,
-                                size: 34,
-                              ),
-                              const SizedBox(width: 12),
-                              const Expanded(
-                                child: Text(
-                                  'Include adult titles',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontWeight: FontWeight.w800),
-                                ),
-                              ),
-                            ],
-                          ),
+                      Expanded(
+                        child: Text(
+                          'Discover filters',
+                          style: Theme.of(context).textTheme.headlineSmall,
                         ),
+                      ),
+                      IconButton(
+                        focusNode: _closeFocus,
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(onPressed: _clear, child: const Text('Reset')),
-                    const SizedBox(width: 10),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(context).pop(_value),
-                      icon: const Icon(Icons.search_rounded),
-                      label: const Text('Show results'),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        TvTextInput(
+                          focusNode: _titleFocus,
+                          controller: _titleController,
+                          labelText: 'Title',
+                          hintText: 'Search by title',
+                          keyboardTitle: 'Discover title',
+                          autofocus: true,
+                        ),
+                        const SizedBox(height: 9),
+                        _FilterField(
+                          focusNode: _sortFocus,
+                          icon: Icons.sort_rounded,
+                          label: 'Sort',
+                          value: _sortLabels[_sort] ?? _sort,
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Sort results',
+                              current: _sort,
+                              options: _sortLabels,
+                              allowAny: false,
+                            );
+                            if (value != null && mounted) {
+                              setState(() => _sort = value);
+                            }
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _genreFocus,
+                          icon: Icons.category_outlined,
+                          label: 'Genre',
+                          value: _genre ?? 'All genres',
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Genre',
+                              current: _genre,
+                              options: {for (final item in _genres) item: item},
+                            );
+                            if (mounted) setState(() => _genre = value);
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _tagFocus,
+                          icon: Icons.sell_outlined,
+                          label: 'Tag',
+                          value: _tag ?? 'All tags',
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Tag',
+                              current: _tag,
+                              options: {for (final item in _tags) item: item},
+                            );
+                            if (mounted) setState(() => _tag = value);
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _formatFocus,
+                          icon: Icons.tv_rounded,
+                          label: 'Format',
+                          value: _format == null
+                              ? 'All formats'
+                              : _pretty(_format!),
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Format',
+                              current: _format,
+                              options: _formatLabels,
+                            );
+                            if (mounted) setState(() => _format = value);
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _seasonFocus,
+                          icon: Icons.eco_outlined,
+                          label: 'Season',
+                          value: _season == null
+                              ? 'All seasons'
+                              : _pretty(_season!),
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Season',
+                              current: _season,
+                              options: _seasonLabels,
+                            );
+                            if (mounted) setState(() => _season = value);
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _yearFocus,
+                          icon: Icons.calendar_month_outlined,
+                          label: 'Year',
+                          value: _year?.toString() ?? 'Timeless',
+                          onPressed: () async {
+                            final now = DateTime.now().year;
+                            final value = await _choose(
+                              context,
+                              title: 'Release year',
+                              current: _year?.toString(),
+                              options: {
+                                for (
+                                  var year = now + 2;
+                                  year >= now - 35;
+                                  year--
+                                )
+                                  '$year': '$year',
+                              },
+                            );
+                            if (mounted) {
+                              setState(() => _year = int.tryParse(value ?? ''));
+                            }
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _statusFocus,
+                          icon: Icons.podcasts_rounded,
+                          label: 'Status',
+                          value: _status == null
+                              ? 'All statuses'
+                              : _statusLabels[_status]!,
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Release status',
+                              current: _status,
+                              options: _statusLabels,
+                            );
+                            if (mounted) setState(() => _status = value);
+                          },
+                        ),
+                        _FilterField(
+                          focusNode: _scoreFocus,
+                          icon: Icons.star_outline_rounded,
+                          label: 'Minimum score',
+                          value: _minimumScore == null
+                              ? 'All scores'
+                              : '${_minimumScore! / 10}/10 or higher',
+                          onPressed: () async {
+                            final value = await _choose(
+                              context,
+                              title: 'Minimum score',
+                              current: _minimumScore?.toString(),
+                              options: const {
+                                '90': '9/10 or higher',
+                                '80': '8/10 or higher',
+                                '70': '7/10 or higher',
+                                '60': '6/10 or higher',
+                              },
+                            );
+                            if (mounted) {
+                              setState(
+                                () => _minimumScore = int.tryParse(value ?? ''),
+                              );
+                            }
+                          },
+                        ),
+                        TvFocusable(
+                          focusNode: _adultFocus,
+                          onPressed: () =>
+                              setState(() => _includeAdult = !_includeAdult),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 54),
+                            margin: const EdgeInsets.only(top: 7),
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            decoration: BoxDecoration(
+                              color: AppColors.selectableSurface,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _includeAdult
+                                      ? Icons.toggle_on_rounded
+                                      : Icons.toggle_off_rounded,
+                                  color: _includeAdult
+                                      ? AppColors.accentBright
+                                      : AppColors.textMuted,
+                                  size: 34,
+                                ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Text(
+                                    'Include adult titles',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        focusNode: _resetFocus,
+                        onPressed: _clear,
+                        child: const Text('Reset'),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton.icon(
+                        focusNode: _applyFocus,
+                        onPressed: () => Navigator.of(context).pop(_value),
+                        icon: const Icon(Icons.search_rounded),
+                        label: const Text('Show results'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -463,12 +644,14 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
 
 class _FilterField extends StatelessWidget {
   const _FilterField({
+    required this.focusNode,
     required this.icon,
     required this.label,
     required this.value,
     required this.onPressed,
   });
 
+  final FocusNode focusNode;
   final IconData icon;
   final String label;
   final String value;
@@ -478,6 +661,7 @@ class _FilterField extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(top: 7),
     child: TvFocusable(
+      focusNode: focusNode,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(12),
       child: Container(
@@ -609,12 +793,14 @@ class _ChoiceTile extends StatelessWidget {
 
 class _HeaderButton extends StatelessWidget {
   const _HeaderButton({
+    required this.focusNode,
     required this.icon,
     required this.onPressed,
     this.label,
     this.autofocus = false,
   });
 
+  final FocusNode focusNode;
   final IconData icon;
   final String? label;
   final bool autofocus;
@@ -622,6 +808,7 @@ class _HeaderButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => TvFocusable(
+    focusNode: focusNode,
     autofocus: autofocus,
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(10),
@@ -661,6 +848,7 @@ class _DiscoverError extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
+          autofocus: true,
           onPressed: onRetry,
           icon: const Icon(Icons.refresh_rounded),
           label: const Text('Retry'),

@@ -20,6 +20,7 @@ import 'package:anime_tv/features/settings/application/home_shelf_preferences_co
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
+import 'package:anime_tv/features/tracking/presentation/tracking_status_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -48,6 +49,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _heroTimer;
   int _heroIndex = 0;
   DateTime? _lastHomeActivation;
+  bool _homeRefreshInProgress = false;
 
   @override
   void initState() {
@@ -130,12 +132,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final now = DateTime.now();
     final previous = _lastHomeActivation;
     _lastHomeActivation = now;
-    _focusHero();
     if (previous == null ||
         now.difference(previous) > const Duration(milliseconds: 650)) {
+      if (_scrollController.hasClients) {
+        unawaited(
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      }
       return;
     }
     _lastHomeActivation = null;
+    unawaited(_refreshHome());
+  }
+
+  Future<void> _refreshHome() async {
+    if (_homeRefreshInProgress) return;
+    _homeRefreshInProgress = true;
     ref.invalidate(trendingAnimeProvider);
     ref.invalidate(seasonalAnimeProvider);
     ref.invalidate(trackingHomeProvider);
@@ -146,6 +162,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         duration: Duration(milliseconds: 1200),
       ),
     );
+    try {
+      await Future.wait([
+        ref.read(trendingAnimeProvider.future),
+        ref.read(seasonalAnimeProvider.future),
+        ref.read(trackingHomeProvider.future),
+        ref.read(recentPlaybackProvider.future),
+      ]);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Home refreshed.'),
+          duration: Duration(milliseconds: 1200),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Some Home shelves could not be refreshed.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      _homeRefreshInProgress = false;
+    }
   }
 
   Future<void> _removeFromLocalHistory(_ShelfItem item) async {
@@ -215,33 +256,73 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (mounted) await context.push(route);
       return;
     }
-    if (action is! TrackingListStatus || item.trackingItems.isEmpty) return;
+    if (action is! TrackingListStatus) return;
 
-    var failures = 0;
-    for (final tracked in item.trackingItems) {
-      try {
-        await ref
-            .read(trackingStatusControllerProvider.notifier)
-            .update(tracked, action);
-      } catch (_) {
-        failures++;
+    if (item.animeId == null && item.trackingItems.isNotEmpty) {
+      var failures = 0;
+      for (final tracked in item.trackingItems) {
+        try {
+          await ref
+              .read(trackingStatusControllerProvider.notifier)
+              .update(tracked, action);
+        } catch (_) {
+          failures++;
+        }
       }
-    }
-    if (!mounted) return;
-    ref.invalidate(trackingHomeProvider);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          failures == 0
-              ? '${item.title} moved to ${action.displayName}.'
-              : 'Updated ${item.trackingItems.length - failures} of '
-                    '${item.trackingItems.length} connected lists.',
+      if (!mounted) return;
+      ref.invalidate(trackingHomeProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failures == 0
+                ? '${item.title} moved to ${action.displayName}.'
+                : 'Updated ${item.trackingItems.length - failures} of '
+                      '${item.trackingItems.length} connected lists.',
+          ),
+          backgroundColor: failures == 0
+              ? AppColors.accent
+              : const Color(0xFF7D1E32),
         ),
-        backgroundColor: failures == 0
-            ? AppColors.accent
-            : const Color(0xFF7D1E32),
-      ),
-    );
+      );
+      return;
+    }
+    if (item.animeId == null) return;
+
+    try {
+      final result = await ref
+          .read(trackingStatusControllerProvider.notifier)
+          .updateCatalogStatus(
+            anilistId: item.animeId!,
+            malId: item.malMediaId,
+            status: action,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.isPartial
+                ? '${item.title} updated on ${result.updatedProviderNames}; '
+                      'one linked tracker could not be updated.'
+                : '${item.title} moved to ${action.displayName} on '
+                      '${result.updatedProviderNames}.',
+          ),
+          backgroundColor: result.isPartial
+              ? const Color(0xFF7D1E32)
+              : AppColors.accent,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is StateError
+          ? error.message.toString()
+          : 'Could not update this show. Try again.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFF7D1E32),
+        ),
+      );
+    }
   }
 
   @override
@@ -381,6 +462,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: seasonalItems,
                   preferences: preferences,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -394,6 +476,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: trendingItems,
                   preferences: preferences,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -421,6 +504,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: shelf.displayName,
                   items: airingItems,
                   preferences: preferences,
+                  onManage: _manageShelfItem,
                 ),
               ),
             );
@@ -1330,6 +1414,7 @@ class _ShelfItem {
       anime.episodes == null ? '' : '${anime.episodes} episodes',
       AppColors.accent,
       animeId: anime.id,
+      malMediaId: anime.idMal,
       coverImageUrl: anime.coverImageUrl,
       score: anime.score,
       releaseYear: anime.seasonYear,
@@ -1396,6 +1481,9 @@ class _ShelfItem {
           ? null
           : (tracked.progress / tracked.totalEpisodes!).clamp(0, 1),
       animeId: item.anilistId,
+      malMediaId: item.provider == TrackingProvider.myAnimeList
+          ? tracked.mediaId
+          : null,
       coverImageUrl: item.coverImageUrl,
       route: item.anilistId == null
           ? Uri(
@@ -1430,35 +1518,17 @@ class _HomeShowActionsDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (item.trackingItems.isNotEmpty) ...[
+            if (item.animeId != null || item.trackingItems.isNotEmpty) ...[
               Text(
-                'Update status on ${item.trackingItems.map((entry) => entry.provider.displayName).join(' and ')}',
+                item.trackingItems.isEmpty
+                    ? 'Add or update this show on your connected AniList and MAL accounts.'
+                    : 'Update status on ${item.trackingItems.map((entry) => entry.provider.displayName).join(' and ')}',
                 style: const TextStyle(color: AppColors.textMuted),
               ),
               const SizedBox(height: 14),
-              Wrap(
-                spacing: 9,
-                runSpacing: 9,
-                children: [
-                  for (final status in TrackingListStatus.values)
-                    TvFocusable(
-                      autofocus: status == current,
-                      onPressed: () => Navigator.of(context).pop(status),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: 126,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        alignment: Alignment.center,
-                        color: status == current
-                            ? AppColors.accent
-                            : AppColors.panelRaised,
-                        child: Text(
-                          status.displayName,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                    ),
-                ],
+              TrackingStatusOptions(
+                current: current,
+                onSelected: (status) => Navigator.of(context).pop(status),
               ),
             ] else
               const Text(
@@ -1470,7 +1540,7 @@ class _HomeShowActionsDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
-          autofocus: item.trackingItems.isEmpty,
+          autofocus: item.animeId == null && item.trackingItems.isEmpty,
           onPressed: () => Navigator.of(context).pop(_HomeShowAction.open),
           child: const Text('Open show'),
         ),

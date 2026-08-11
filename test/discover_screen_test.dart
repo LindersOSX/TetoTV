@@ -2,9 +2,12 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   testWidgets('discover keeps advanced filters inside a compact dialog', (
@@ -70,9 +73,102 @@ void main() {
     expect(catalog.requests.last.genre, 'Fantasy');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('D-pad traverses filters, applies them, and opens a result', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final catalog = _FakeCatalog(
+      results: const [
+        AnimeSummary(
+          id: 77,
+          title: 'Filtered Result',
+          description: '',
+          episodes: 12,
+          score: 8,
+        ),
+      ],
+    );
+    final router = GoRouter(
+      initialLocation: '/discover',
+      routes: [
+        GoRoute(path: '/discover', builder: (_, _) => const DiscoverScreen()),
+        GoRoute(
+          path: '/anime/:id',
+          builder: (_, state) =>
+              Scaffold(body: Text('Opened ${state.pathParameters['id']}')),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(catalog)],
+        child: MaterialApp.router(
+          routerConfig: router,
+          builder: (_, child) => TvShortcuts(child: child!),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.filters.title',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.filters.sort',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.filters.genre',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fantasy').last);
+    await tester.pumpAndSettle();
+
+    for (var index = 0; index < 8; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump(const Duration(milliseconds: 140));
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.filters.apply',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(catalog.requests.last.genre, 'Fantasy');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.result.first',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Opened 77'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _FakeCatalog extends AniListCatalogClient {
+  _FakeCatalog({this.results = const []});
+
+  final List<AnimeSummary> results;
   final requests = <CatalogFilters>[];
 
   @override
@@ -81,6 +177,6 @@ class _FakeCatalog extends AniListCatalogClient {
     int page = 1,
   }) async {
     requests.add(filters);
-    return const [];
+    return results;
   }
 }

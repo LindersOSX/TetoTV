@@ -7,10 +7,15 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -255,6 +260,64 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     }
   });
+
+  testWidgets('holding an unwatched search result can add it to Planning', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+      TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+    });
+    final client = _DeferredCatalogClient();
+    final repositories = <TrackingProvider, _SearchRecordingRepository>{};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          catalogClientProvider.overrideWithValue(client),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
+            return repositories.putIfAbsent(
+              provider,
+              _SearchRecordingRepository.new,
+            );
+          }),
+        ],
+        child: const MaterialApp(home: SearchScreen(initialQuery: 'new')),
+      ),
+    );
+    await tester.pump();
+    client.complete('new', [
+      const AnimeSummary(
+        id: 31,
+        idMal: 41,
+        title: 'Brand New Show',
+        description: '',
+        episodes: 12,
+        score: null,
+      ),
+    ]);
+    await tester.pump();
+
+    await tester.longPress(find.text('Brand New Show'));
+    await tester.pumpAndSettle();
+    expect(find.text('Planning'), findsOneWidget);
+
+    await tester.tap(find.text('Planning'));
+    await tester.pumpAndSettle();
+
+    expect(repositories[TrackingProvider.anilist]!.statusUpdates, [
+      (mediaId: 31, status: TrackingListStatus.planToWatch),
+    ]);
+    expect(repositories[TrackingProvider.myAnimeList]!.statusUpdates, [
+      (mediaId: 41, status: TrackingListStatus.planToWatch),
+    ]);
+  });
 }
 
 bool _focusedControl(WidgetTester tester, Finder label) {
@@ -291,5 +354,29 @@ class _DeferredCatalogClient extends AniListCatalogClient {
 
   void complete(String term, List<AnimeSummary> results) {
     _requests[term]!.complete(results);
+  }
+}
+
+class _SearchRecordingRepository implements TrackingRepository {
+  final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
+
+  @override
+  Future<int?> currentProgress(int mediaId) async => null;
+
+  @override
+  Future<List<TrackedAnime>> list(TrackingListStatus status) async => const [];
+
+  @override
+  Future<void> updateProgress({
+    required int mediaId,
+    required int completedEpisodes,
+  }) async {}
+
+  @override
+  Future<void> updateStatus({
+    required int mediaId,
+    required TrackingListStatus status,
+  }) async {
+    statusUpdates.add((mediaId: mediaId, status: status));
   }
 }

@@ -11,6 +11,11 @@ import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
+import 'package:anime_tv/features/tracking/presentation/tracking_status_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -140,6 +145,68 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       selection: TextSelection.collapsed(offset: query.length),
     );
     _submitSearch(query);
+  }
+
+  TrackingListStatus? _currentTrackingStatus(AnimeSummary anime) {
+    final tracking = ref.read(trackingHomeProvider).valueOrNull;
+    if (tracking == null) return null;
+    final items = [
+      ...tracking.watching,
+      ...tracking.planToWatch,
+      ...tracking.completed,
+    ];
+    for (final item in items) {
+      final matches = switch (item.provider) {
+        TrackingProvider.anilist =>
+          (item.anilistId ?? item.tracked.mediaId) == anime.id,
+        TrackingProvider.myAnimeList =>
+          anime.idMal != null && item.tracked.mediaId == anime.idMal,
+      };
+      if (matches) return item.tracked.status;
+    }
+    return null;
+  }
+
+  Future<void> _manageAnime(AnimeSummary anime) async {
+    final status = await showTrackingStatusPicker(
+      context,
+      title: anime.displayTitle(ref.read(titleLanguagePreferenceProvider)),
+      current: _currentTrackingStatus(anime),
+    );
+    if (!mounted || status == null) return;
+    try {
+      final result = await ref
+          .read(trackingStatusControllerProvider.notifier)
+          .updateCatalogStatus(
+            anilistId: anime.id,
+            malId: anime.idMal,
+            status: status,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.isPartial
+                ? 'Updated ${result.updatedProviderNames}; one linked tracker could not be updated.'
+                : 'Moved to ${status.displayName} on ${result.updatedProviderNames}.',
+          ),
+          backgroundColor: result.isPartial
+              ? const Color(0xFF7D1E32)
+              : AppColors.accent,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is StateError
+          ? error.message.toString()
+          : 'Could not update this show. Try again.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFF7D1E32),
+        ),
+      );
+    }
   }
 
   @override
@@ -287,6 +354,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 titlePreference: titlePreference,
                 focusNode: index == 0 ? _firstResultFocusNode : null,
                 onPressed: () => context.push('/anime/${anime.id}'),
+                onLongPress: () => unawaited(_manageAnime(anime)),
               );
             },
           );
@@ -303,6 +371,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               titlePreference: titlePreference,
               focusNode: index == 0 ? _firstResultFocusNode : null,
               onPressed: () => context.push('/anime/${anime.id}'),
+              onLongPress: () => unawaited(_manageAnime(anime)),
             );
           },
         );
@@ -316,12 +385,14 @@ class _SearchCard extends StatelessWidget {
     required this.anime,
     required this.titlePreference,
     required this.onPressed,
+    required this.onLongPress,
     this.focusNode,
   });
 
   final AnimeSummary anime;
   final TitleLanguagePreference titlePreference;
   final VoidCallback onPressed;
+  final VoidCallback onLongPress;
   final FocusNode? focusNode;
 
   @override
@@ -334,6 +405,7 @@ class _SearchCard extends StatelessWidget {
         child: TvFocusable(
           focusNode: focusNode,
           onPressed: onPressed,
+          onLongPress: onLongPress,
           child: ColoredBox(
             color: Colors.black,
             child: Column(

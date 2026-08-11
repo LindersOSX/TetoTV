@@ -1,0 +1,78 @@
+import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
+import 'package:flutter/material.dart';
+
+Future<TrackingListStatus?> showTrackingStatusPicker(
+  BuildContext context, {
+  required String title,
+  TrackingListStatus? current,
+}) => showDialog<TrackingListStatus>(
+  context: context,
+  barrierDismissible: true,
+  builder: (context) => AlertDialog(
+    backgroundColor: AppColors.panel,
+    title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 680),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Add or update this show on your connected AniList and MAL accounts.',
+            style: TextStyle(color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 14),
+          TrackingStatusOptions(
+            current: current,
+            onSelected: (status) => Navigator.of(context).pop(status),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+    ],
+  ),
+);
+
+class TrackingStatusOptions extends StatelessWidget {
+  const TrackingStatusOptions({
+    required this.current,
+    required this.onSelected,
+    super.key,
+  });
+
+  final TrackingListStatus? current;
+  final ValueChanged<TrackingListStatus> onSelected;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 9,
+    runSpacing: 9,
+    children: [
+      for (final status in TrackingListStatus.values)
+        TvFocusable(
+          autofocus:
+              status == current ||
+              (current == null && status == TrackingListStatus.planToWatch),
+          onPressed: () => onSelected(status),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: 126,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            alignment: Alignment.center,
+            color: status == current ? AppColors.accent : AppColors.panelRaised,
+            child: Text(
+              status.displayName,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+    ],
+  );
+}
