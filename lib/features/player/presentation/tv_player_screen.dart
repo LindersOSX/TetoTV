@@ -5,6 +5,7 @@ import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
@@ -27,6 +28,7 @@ import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -171,6 +173,9 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    if (!kDebugMode) {
+      ref.read(anonymousUsageReporterProvider).setStreaming(true);
+    }
     _activeSource = widget.source;
     _activeLaunch = widget.launch;
     final preferred = ref.read(settingsPreferencesProvider).preferredPlayer;
@@ -183,6 +188,14 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
     } else {
       unawaited(_loadDevicePreference());
     }
+  }
+
+  @override
+  void dispose() {
+    if (!kDebugMode) {
+      ref.read(anonymousUsageReporterProvider).setStreaming(false);
+    }
+    super.dispose();
   }
 
   Future<void> _loadDevicePreference() async {

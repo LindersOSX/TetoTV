@@ -2,8 +2,8 @@
 
 Effective date: August 10, 2026
 
-TetoTV is an independent Android application. It has no advertising SDK,
-analytics SDK, or TetoTV account system, and it does not sell personal data.
+TetoTV is an independent Android application. It has no advertising SDK or
+third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
 This disclosure describes the data handled by the app and by the optional
 TetoTV pairing/update broker.
 
@@ -69,6 +69,20 @@ and signed APK update delivery:
 
 Pairing records are held in process memory, not a user-profile database. A
 broker restart can end an active pairing session.
+
+## Anonymous live activity count
+
+When **Anonymous live count** is enabled in Settings, the app creates a random
+per-launch session token. The token is kept only in app and broker memory and
+is not a persistent device or user identifier. TetoTV reports only whether
+that app session is active or currently playing video. It does not send the
+show, episode, account, device identifier, stream provider, or URL.
+
+The broker deletes an active session when the app opts out or closes normally,
+and automatically expires it after about three minutes without a heartbeat.
+Only aggregate active and streaming counts are publicly available. The host
+may process IP addresses for short-lived rate limiting and normal operational
+access logs. Users can disable this feature at any time in Settings.
 
 ## Diagnostics and sharing
 

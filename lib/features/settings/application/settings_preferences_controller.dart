@@ -33,6 +33,7 @@ const _navigationSoundsKey = 'audio_navigation_sounds';
 const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
+const _anonymousUsageCountKey = 'privacy_anonymous_usage_count';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -198,6 +199,7 @@ class SettingsPreferences {
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.automatic,
+    this.anonymousUsageCountEnabled = true,
   });
 
   final DebridService debridProvider;
@@ -229,6 +231,7 @@ class SettingsPreferences {
   final bool clickSounds;
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
+  final bool anonymousUsageCountEnabled;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -260,6 +263,7 @@ class SettingsPreferences {
     bool? clickSounds,
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
+    bool? anonymousUsageCountEnabled,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -292,6 +296,8 @@ class SettingsPreferences {
     clickSounds: clickSounds ?? this.clickSounds,
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
+    anonymousUsageCountEnabled:
+        anonymousUsageCountEnabled ?? this.anonymousUsageCountEnabled,
   );
 }
 
@@ -375,6 +381,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_clickSoundsKey),
       _safeRead(_defaultLandingPageKey),
       _safeRead(_preferredPlayerKey),
+      _safeRead(_anonymousUsageCountKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -520,6 +527,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
           (player) => player.name == valueAt(28),
           orElse: () => PreferredPlayer.automatic,
         ),
+      );
+    }
+    if (canRestore(_anonymousUsageCountKey, 29)) {
+      restored = restored.copyWith(
+        anonymousUsageCountEnabled: valueAt(29) != 'false',
       );
     }
     state = restored;
@@ -692,6 +704,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setPreferredPlayer(PreferredPlayer value) => _update(
     state.copyWith(preferredPlayer: value),
     {_preferredPlayerKey: value.name},
+  );
+
+  Future<void> setAnonymousUsageCountEnabled(bool value) => _update(
+    state.copyWith(anonymousUsageCountEnabled: value),
+    {_anonymousUsageCountKey: value.toString()},
   );
 
   Future<void> resetCustomization() {

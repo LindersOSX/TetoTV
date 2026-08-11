@@ -1478,6 +1478,29 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
+          _PreferenceRow(
+            label: 'Community activity',
+            children: [
+              toggle(
+                label: 'Anonymous live count',
+                value: preferences.anonymousUsageCountEnabled,
+                onChanged: controller.setAnonymousUsageCountEnabled,
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 2, bottom: 4),
+            child: Text(
+              'Shares only whether this app session is active or playing. '
+              'TetoTV never sends the show, episode, account, device ID, '
+              'stream provider, or URL.',
+              style: TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 10,
+                height: 1.35,
+              ),
+            ),
+          ),
           const _PreferenceDivider(),
           const _MiniSectionLabel('CLOSED CAPTIONS'),
           _PreferenceRow(

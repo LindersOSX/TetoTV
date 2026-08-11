@@ -60,11 +60,15 @@ const maxReleaseNotesLength = 32_000;
 // object storage/CDN before raising these process-wide safeguards.
 const maxConcurrentUpdateDownloads = 4;
 const maxUpdateDownloadsPerMinute = 12;
+const appPresenceTtlMs = 3 * 60 * 1000;
+const appPresenceHeartbeatSeconds = 45;
+const maxAppPresenceSessions = 10_000;
 const pairings = new Map();
 const codes = new Map();
 const sourcePairings = new Map();
 const sourceCodes = new Map();
 const sourceReceipts = new Map();
+const appPresenceSessions = new Map();
 const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
 let cachedLatestRelease = null;
@@ -214,6 +218,10 @@ function privacyPage(response) {
      <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app.</p>
      <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
 
+     <h2>Anonymous live activity count</h2>
+     <p>When enabled in Settings, TetoTV creates a random per-launch token that is kept only in app and broker memory. It reports only whether that app session is active or currently playing video. It never reports the show, episode, account, device identifier, stream provider, or URL.</p>
+     <p>Sessions expire after about three minutes without a heartbeat and are removed when the app opts out or closes normally. Only aggregate active and streaming counts are public. The hosting provider may process IP addresses for short-lived rate limiting and ordinary access logs.</p>
+
      <h2>Diagnostics and choices</h2>
      <p>Diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
 
@@ -311,6 +319,86 @@ function cleanup() {
       if (pairing.receiptToken) sourceReceipts.delete(pairing.receiptToken);
     }
   }
+  for (const [tokenHash, session] of appPresenceSessions) {
+    if (session.expiresAt <= now) appPresenceSessions.delete(tokenHash);
+  }
+}
+
+function presenceTokenHash(value) {
+  return digest(value).toString("base64url");
+}
+
+function bearerToken(request) {
+  const authorization = String(request.headers.authorization || "");
+  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,128})$/);
+  return match?.[1] || "";
+}
+
+async function createAppPresenceSession(request, response) {
+  await drainBody(request);
+  cleanup();
+  if (appPresenceSessions.size >= maxAppPresenceSessions) {
+    return json(
+      response,
+      503,
+      { error: "presence_capacity_reached" },
+      { "Retry-After": "60" },
+    );
+  }
+  const token = randomToken(32);
+  appPresenceSessions.set(presenceTokenHash(token), {
+    state: "active",
+    expiresAt: Date.now() + appPresenceTtlMs,
+  });
+  return json(response, 201, {
+    session_token: token,
+    expires_in: Math.floor(appPresenceTtlMs / 1000),
+    heartbeat_interval: appPresenceHeartbeatSeconds,
+  });
+}
+
+async function updateAppPresenceSession(request, response) {
+  const token = bearerToken(request);
+  if (!token) return json(response, 401, { error: "invalid_session" });
+  const body = await readJson(request, { requireBody: true });
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    (body.state !== "active" && body.state !== "streaming")
+  ) {
+    throw new RequestInputError(400, "Invalid presence state.");
+  }
+  cleanup();
+  const session = appPresenceSessions.get(presenceTokenHash(token));
+  if (!session) return json(response, 401, { error: "invalid_session" });
+  session.state = body.state;
+  session.expiresAt = Date.now() + appPresenceTtlMs;
+  response.writeHead(204, { "Cache-Control": "no-store" });
+  response.end();
+}
+
+async function closeAppPresenceSession(request, response) {
+  await drainBody(request);
+  const token = bearerToken(request);
+  if (!token) return json(response, 401, { error: "invalid_session" });
+  appPresenceSessions.delete(presenceTokenHash(token));
+  response.writeHead(204, { "Cache-Control": "no-store" });
+  response.end();
+}
+
+function appPresenceSummary(response) {
+  cleanup();
+  let streaming = 0;
+  for (const session of appPresenceSessions.values()) {
+    if (session.state === "streaming") streaming += 1;
+  }
+  return json(response, 200, {
+    active: appPresenceSessions.size,
+    streaming,
+    ttl_seconds: Math.floor(appPresenceTtlMs / 1000),
+  });
 }
 
 async function drainBody(request) {
@@ -1606,11 +1694,68 @@ const server = createServer(
         },
         source_pairing: true,
         source_pairing_version: 2,
+        app_presence: true,
         app_updates: updateProxyConfigured(),
       });
     }
     if (request.method === "GET" && url.pathname === "/privacy") {
       return privacyPage(response);
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/v1/app-presence/sessions"
+    ) {
+      if (rateLimited(request, 10, "presence-create")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await createAppPresenceSession(request, response);
+    }
+    if (
+      request.method === "PUT" &&
+      url.pathname === "/v1/app-presence/sessions/current"
+    ) {
+      if (rateLimited(request, 10, "presence-heartbeat")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await updateAppPresenceSession(request, response);
+    }
+    if (
+      request.method === "DELETE" &&
+      url.pathname === "/v1/app-presence/sessions/current"
+    ) {
+      if (rateLimited(request, 10, "presence-close")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await closeAppPresenceSession(request, response);
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/v1/app-presence/summary"
+    ) {
+      if (rateLimited(request, 60, "presence-summary")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return appPresenceSummary(response);
     }
     if (
       request.method === "GET" &&
@@ -1839,6 +1984,51 @@ server.listen(port, async () => {
       const health = await healthResponse.json();
       const privacyResponse = await fetch(`http://127.0.0.1:${port}/privacy`);
       const privacyBody = await privacyResponse.text();
+      const presenceCreateResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/sessions`,
+        { method: "POST" },
+      );
+      const presenceSession = await presenceCreateResponse.json();
+      const presenceBefore = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/summary`,
+      ).then((response) => response.json());
+      const presenceHeartbeatResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${presenceSession.session_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ state: "streaming" }),
+        },
+      );
+      const presenceAfter = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/summary`,
+      ).then((response) => response.json());
+      const invalidPresenceResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${"x".repeat(43)}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ state: "active" }),
+        },
+      );
+      const presenceCloseResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${presenceSession.session_token}`,
+          },
+        },
+      );
+      const presenceClosed = await fetch(
+        `http://127.0.0.1:${port}/v1/app-presence/summary`,
+      ).then((response) => response.json());
       const updateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
       );
@@ -2275,9 +2465,23 @@ server.listen(port, async () => {
         !privacyBody.includes("TetoTV privacy disclosure") ||
         !privacyBody.includes("at most ten minutes") ||
         !privacyBody.includes("official TetoTV project page") ||
+        !privacyBody.includes("Anonymous live activity count") ||
         privacyBody.includes(githubReleaseToken) ||
         health.source_pairing !== true ||
         health.source_pairing_version !== 2 ||
+        health.app_presence !== true ||
+        presenceCreateResponse.status !== 201 ||
+        !/^[A-Za-z0-9_-]{43}$/.test(presenceSession.session_token) ||
+        presenceSession.heartbeat_interval !== 45 ||
+        presenceBefore.active !== 1 ||
+        presenceBefore.streaming !== 0 ||
+        presenceHeartbeatResponse.status !== 204 ||
+        presenceAfter.active !== 1 ||
+        presenceAfter.streaming !== 1 ||
+        invalidPresenceResponse.status !== 401 ||
+        presenceCloseResponse.status !== 204 ||
+        presenceClosed.active !== 0 ||
+        presenceClosed.streaming !== 0 ||
         health.app_updates !== true ||
         updateProxyConfigured({ token: "" }) !== false ||
         updateMetadataResponse.status !== 200 ||

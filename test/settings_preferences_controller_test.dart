@@ -31,6 +31,7 @@ void main() {
     await controller.setClickSounds(false);
     await controller.setPreferredPlayer(PreferredPlayer.vlc);
     await controller.setDefaultLandingPage(LandingPage.myList);
+    await controller.setAnonymousUsageCountEnabled(false);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
@@ -56,6 +57,7 @@ void main() {
     expect(restored.state.clickSounds, isFalse);
     expect(restored.state.preferredPlayer, PreferredPlayer.vlc);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
+    expect(restored.state.anonymousUsageCountEnabled, isFalse);
   });
 
   test('existing users retain both stream sources by default', () async {
@@ -78,6 +80,7 @@ void main() {
     expect(controller.state.showMyList, isTrue);
     expect(controller.state.showDiscover, isTrue);
     expect(controller.state.showCalendar, isTrue);
+    expect(controller.state.anonymousUsageCountEnabled, isTrue);
     expect(
       controller.state.trackerUpdateThreshold,
       TrackerUpdateThreshold.nearlyFinished,
@@ -158,7 +161,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 29, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 30, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },
