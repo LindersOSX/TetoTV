@@ -73,6 +73,12 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
 
+        <!--
+            Keep this activity and MainActivity on the default application
+            task affinity. Discord returns from its app with a NEW_TASK deep
+            link; a null/custom affinity would strand that callback outside
+            the task holding the SDK's pending authorization session.
+        -->
         <activity
             android:name="com.discord.socialsdk.AuthenticationActivity"
             android:exported="true"
@@ -121,7 +127,6 @@
             android:hardwareAccelerated="true"
             android:resizeableActivity="true"
             android:launchMode="singleTop"
-            android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">
 

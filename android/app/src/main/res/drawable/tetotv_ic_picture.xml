@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App-owned rounded equivalent of Flutter's Icons.aspect_ratio_rounded. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,9V5c0,-0.55 0.45,-1 1,-1h4M15,4h4c0.55,0 1,0.45 1,1v4M20,15v4c0,0.55 -0.45,1 -1,1h-4M9,20H5c-0.55,0 -1,-0.45 -1,-1v-4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
