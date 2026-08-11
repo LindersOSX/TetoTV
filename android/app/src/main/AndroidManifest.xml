@@ -55,6 +55,7 @@
 
     <!-- Android 11+ hides implicit intent handlers unless they are declared. -->
     <queries>
+        <package android:name="com.discord" />
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
@@ -71,6 +72,17 @@
         android:label="TetoTV"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
+
+        <activity
+            android:name="com.discord.socialsdk.AuthenticationActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="discord-1536801401710055474" />
+            </intent-filter>
+        </activity>
 
         <!--
             Media3 playback runs in its own native window so video reaches a

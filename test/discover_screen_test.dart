@@ -2,6 +2,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -198,6 +199,65 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(find.text('Opened 77'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('header and first result row return predictably to Filters', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final results = List.generate(
+      10,
+      (index) => AnimeSummary(
+        id: index + 1,
+        title: index == 1
+            ? 'A Very Long Anime Title That Must Stay Inside The Focus Ring'
+            : 'Result ${index + 1}',
+        description: '',
+        episodes: 12,
+        score: 8,
+      ),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          catalogClientProvider.overrideWithValue(
+            _FakeCatalog(results: results),
+          ),
+        ],
+        child: const MaterialApp(home: TvShortcuts(child: DiscoverScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.back');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    final title = find.text(
+      'A Very Long Anime Title That Must Stay Inside The Focus Ring',
+    );
+    expect(title, findsOneWidget);
+    final card = find.ancestor(of: title, matching: find.byType(TvFocusable));
+    final cardRect = tester.getRect(card.first);
+    final titleRect = tester.getRect(title);
+    expect(titleRect.left, greaterThanOrEqualTo(cardRect.left + 7));
+    expect(titleRect.right, lessThanOrEqualTo(cardRect.right - 7));
+    expect(titleRect.bottom, lessThanOrEqualTo(cardRect.bottom - 7));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
     expect(tester.takeException(), isNull);
   });
 }

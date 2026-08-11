@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import java.security.interfaces.ECKey
 import java.security.interfaces.RSAKey
@@ -150,6 +151,12 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++20", "-fexceptions", "-frtti")
+            }
+        }
     }
 
     signingConfigs {
@@ -186,6 +193,17 @@ android {
         }
     }
 
+    buildFeatures {
+        prefab = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     lint {
         // Flutter owns and regenerates the ignored local.properties file. Its
         // Windows path escaping is valid for Gradle but trips this lint check.
@@ -194,8 +212,38 @@ android {
 }
 
 val media3Version = "1.11.0"
+val discordSocialSdkAar = file("libs/discord_partner_sdk.aar")
+val discordSocialSdkSha256 =
+    "85a5b0c9b2b828c84d27a7d7839d834bd7dac323895a691e2a19e056543d2faa"
+
+val verifyDiscordSocialSdk by tasks.registering {
+    inputs.file(discordSocialSdkAar)
+    doLast {
+        if (!discordSocialSdkAar.isFile) {
+            throw GradleException(
+                "The reviewed Discord Social SDK AAR is missing. Restore it from " +
+                    "the pinned artifact documented in third_party/discord_social_sdk.",
+            )
+        }
+        val actual = MessageDigest.getInstance("SHA-256")
+            .digest(discordSocialSdkAar.readBytes())
+            .joinToString("") { byte -> "%02x".format(byte) }
+        if (actual != discordSocialSdkSha256) {
+            throw GradleException(
+                "The Discord Social SDK AAR failed its integrity check. " +
+                    "Do not build or distribute this artifact.",
+            )
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(verifyDiscordSocialSdk)
+}
 
 dependencies {
+    implementation(files(discordSocialSdkAar))
+    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.media:media:1.8.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")

@@ -5,6 +5,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/foundation.dart';
@@ -19,6 +20,9 @@ class TetoTvApp extends ConsumerWidget {
     final preferences = ref.watch(settingsPreferencesProvider);
     final isTelevision = ref.watch(isTelevisionProvider);
     ref.watch(trackingOutboxFlushProvider);
+    // Rich Presence is opt-in. Watching the controller only restores an
+    // already-linked session; fresh installs do not contact Discord.
+    ref.watch(discordPresenceControllerProvider);
     // Development and widget-test sessions must not inflate community counts.
     // Production/profile APKs initialize the anonymous reporter normally.
     if (!kDebugMode) {

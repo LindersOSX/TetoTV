@@ -60,19 +60,21 @@ in-place updates.
 
 1. Start from a reviewed, clean commit and explicitly stage files; never use a
    broad add that could include screenshots, keystores, or local configuration.
-2. Run Flutter formatting, analysis, unit/widget/integration tests, broker
+2. Include the AI-assisted development disclosure in the GitHub release notes
+   and confirm the in-app About/Legal disclosure is present and readable.
+3. Run Flutter formatting, analysis, unit/widget/integration tests, broker
    syntax/self-tests, Android JVM tests, release lint, and Kotlin compilation.
-3. Build universal plus ARM32, ARM64, and x86_64 APKs with the protected key.
-4. Verify package ID, version codes, signer identity, v2/v3 signatures,
+4. Build universal plus ARM32, ARM64, and x86_64 APKs with the protected key.
+5. Verify package ID, version codes, signer identity, v2/v3 signatures,
    zip/page alignment, supported ABIs, min/target SDKs, manifest permissions,
    and absence of debug flags/secrets/default source URLs.
-5. Install the universal APK on at least one phone and one TV; test first-run
+6. Install the universal APK on at least one phone and one TV; test first-run
    setup, D-pad/touch navigation, all pairing flows, source import, search,
    stream recovery, audio/subtitle selection, resume, tracking, and update
    download/install.
-6. Test a 32-bit Fire TV build, ARM64 Google TV/Chromecast build, foldable phone
+7. Test a 32-bit Fire TV build, ARM64 Google TV/Chromecast build, foldable phone
    portrait/landscape, and a 16-KiB-page Android device or emulator.
-7. Create releases as drafts, upload and verify all assets, then publish only
+8. Create releases as drafts, upload and verify all assets, then publish only
    after the universal asset and broker update path pass an end-to-end test.
 
 ## Content/source policy

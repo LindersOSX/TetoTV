@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 10, 2026
+Effective date: August 11, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
@@ -46,6 +46,14 @@ TetoTV makes network requests only for app features the user uses:
   Cinemeta may receive the anime title and year to resolve the corresponding
   IMDb series and episode identifier; and
 - image hosts receive ordinary artwork requests.
+
+When the user explicitly links Discord and enables **Discord Rich Presence**,
+TetoTV sends Discord the current anime title, episode number, playing or paused
+state, and playback timing so Discord can display that activity. Discord OAuth
+access and refresh tokens are stored in Android Keystore-backed secure storage.
+Disabling Rich Presence stops sharing playback activity; unlinking Discord also
+revokes the connection when possible and deletes the saved tokens from TetoTV.
+TetoTV never asks for or stores the user's Discord password.
 
 Those independent services can see normal connection metadata such as the
 device's IP address and user agent, and their own privacy policies and terms

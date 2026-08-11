@@ -100,6 +100,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        DiscordRichPresenceBridge.attach(this, channel)
         createMediaSession()
         channel.setMethodCallHandler { call, result ->
             try {
@@ -120,11 +121,14 @@ class MainActivity : FlutterActivity() {
                     }
                     "updateMediaSession" -> {
                         @Suppress("UNCHECKED_CAST")
-                        updateMediaSession(call.arguments as? Map<String, Any?> ?: emptyMap())
+                        val data = call.arguments as? Map<String, Any?> ?: emptyMap()
+                        updateMediaSession(data)
+                        DiscordRichPresenceBridge.updatePlayback(data)
                         result.success(null)
                     }
                     "clearMediaSession" -> {
                         clearMediaSession()
+                        DiscordRichPresenceBridge.clearPlayback()
                         result.success(null)
                     }
                     "publishWatchNext" -> {
@@ -143,7 +147,11 @@ class MainActivity : FlutterActivity() {
                         window.attributes = window.attributes.apply { preferredDisplayModeId = 0 }
                         result.success(null)
                     }
-                    else -> result.notImplemented()
+                    else -> {
+                        if (!DiscordRichPresenceBridge.handle(call, result)) {
+                            result.notImplemented()
+                        }
+                    }
                 }
             } catch (error: Throwable) {
                 result.error("ANDROID_TV_BRIDGE", error.message, null)

@@ -164,6 +164,41 @@ class MediaAction {
   final int? value;
 }
 
+class DiscordBridgeEvent {
+  const DiscordBridgeEvent(this.type, this.data);
+
+  final String type;
+  final Map<Object?, Object?> data;
+}
+
+class DiscordTokenBundle {
+  const DiscordTokenBundle({
+    required this.accessToken,
+    required this.refreshToken,
+    required this.tokenType,
+    required this.expiresAt,
+    required this.scopes,
+  });
+
+  final String accessToken;
+  final String refreshToken;
+  final int tokenType;
+  final DateTime expiresAt;
+  final String scopes;
+
+  factory DiscordTokenBundle.fromMap(Map<Object?, Object?> value) {
+    return DiscordTokenBundle(
+      accessToken: value['accessToken'] as String? ?? '',
+      refreshToken: value['refreshToken'] as String? ?? '',
+      tokenType: (value['tokenType'] as num?)?.toInt() ?? 0,
+      expiresAt: DateTime.fromMillisecondsSinceEpoch(
+        (value['expiresAtMs'] as num?)?.toInt() ?? 0,
+      ),
+      scopes: value['scopes'] as String? ?? '',
+    );
+  }
+}
+
 class AppVersionInfo {
   const AppVersionInfo({required this.name, required this.code});
 
@@ -307,10 +342,12 @@ class AndroidTvBridge {
   static final instance = AndroidTvBridge._();
   static const _channel = MethodChannel('dev.tetotv/android_tv');
   final _mediaActions = StreamController<MediaAction>.broadcast();
+  final _discordEvents = StreamController<DiscordBridgeEvent>.broadcast();
   TvDeviceProfile? _cachedProfile;
   bool? _cachedIsTelevision;
 
   Stream<MediaAction> get mediaActions => _mediaActions.stream;
+  Stream<DiscordBridgeEvent> get discordEvents => _discordEvents.stream;
 
   Future<bool> isTelevision({bool refresh = false}) async {
     if (!refresh && _cachedIsTelevision != null) {
@@ -328,12 +365,83 @@ class AndroidTvBridge {
   }
 
   Future<dynamic> _handleMethod(MethodCall call) async {
-    if (call.method != 'mediaAction') return;
     final args = (call.arguments as Map?)?.cast<Object?, Object?>();
-    if (args == null) return;
-    _mediaActions.add(
-      MediaAction(args['action'] as String? ?? '', args['value'] as int?),
+    switch (call.method) {
+      case 'mediaAction':
+        if (args == null) return;
+        _mediaActions.add(
+          MediaAction(args['action'] as String? ?? '', args['value'] as int?),
+        );
+        return;
+      case 'discordConnectionState':
+      case 'discordPresenceError':
+        _discordEvents.add(DiscordBridgeEvent(call.method, args ?? const {}));
+        return;
+      case 'discordTokenExpiring':
+        _discordEvents.add(DiscordBridgeEvent(call.method, const {}));
+        return;
+    }
+  }
+
+  Future<Map<Object?, Object?>> discordSdkInfo() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const {'available': false, 'status': 'unsupported'};
+    }
+    try {
+      return await _channel.invokeMapMethod<Object?, Object?>(
+            'discordSdkInfo',
+          ) ??
+          const {'available': false, 'status': 'unavailable'};
+    } on PlatformException {
+      return const {'available': false, 'status': 'unavailable'};
+    } on MissingPluginException {
+      return const {'available': false, 'status': 'unavailable'};
+    }
+  }
+
+  Future<DiscordTokenBundle> discordAuthenticate() async {
+    final result = await _channel.invokeMapMethod<Object?, Object?>(
+      'discordAuthenticate',
     );
+    if (result == null) {
+      throw PlatformException(
+        code: 'DISCORD_AUTH_EMPTY',
+        message: 'Discord did not return an account token.',
+      );
+    }
+    return DiscordTokenBundle.fromMap(result);
+  }
+
+  Future<DiscordTokenBundle> discordRefreshToken(String refreshToken) async {
+    final result = await _channel.invokeMapMethod<Object?, Object?>(
+      'discordRefreshToken',
+      {'refreshToken': refreshToken},
+    );
+    if (result == null) {
+      throw PlatformException(
+        code: 'DISCORD_REFRESH_EMPTY',
+        message: 'Discord did not return a refreshed token.',
+      );
+    }
+    return DiscordTokenBundle.fromMap(result);
+  }
+
+  Future<void> discordConnect(DiscordTokenBundle token) async {
+    await _channel.invokeMethod<void>('discordConnect', {
+      'accessToken': token.accessToken,
+      'tokenType': token.tokenType,
+    });
+  }
+
+  Future<bool> discordRevoke(String token) async {
+    return await _channel.invokeMethod<bool>('discordRevoke', {
+          'token': token,
+        }) ??
+        false;
+  }
+
+  Future<void> discordDisconnect() async {
+    await _channel.invokeMethod<void>('discordDisconnect');
   }
 
   Future<TvDeviceProfile> getDeviceProfile({bool refresh = false}) async {
@@ -524,6 +632,7 @@ class AndroidTvBridge {
       await _channel.invokeMethod<void>('updateMediaSession', {
         'title': title,
         'subtitle': 'Episode $episode',
+        'episode': episode,
         'positionMs': position.inMilliseconds,
         'durationMs': duration.inMilliseconds,
         'playing': playing,

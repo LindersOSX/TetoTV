@@ -29,6 +29,9 @@ const _bundledNotices = <_BundledNotice>[
   _BundledNotice([
     'Bundled add-on JavaScript runtime packages',
   ], 'assets/addon_runtime/JS_RUNTIME_NOTICES.txt'),
+  _BundledNotice([
+    'Discord Social SDK bundled components 1.10.18369',
+  ], 'third_party/discord_social_sdk/License-Notices.txt'),
 ];
 
 class _BundledNotice {

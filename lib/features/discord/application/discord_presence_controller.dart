@@ -1,0 +1,368 @@
+import 'dart:async';
+
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+abstract interface class DiscordPresencePlatform {
+  Stream<DiscordBridgeEvent> get events;
+  Future<Map<Object?, Object?>> sdkInfo();
+  Future<DiscordTokenBundle> authenticate();
+  Future<DiscordTokenBundle> refreshToken(String refreshToken);
+  Future<void> connect(DiscordTokenBundle token);
+  Future<bool> revoke(String token);
+  Future<void> disconnect();
+}
+
+class AndroidDiscordPresencePlatform implements DiscordPresencePlatform {
+  AndroidDiscordPresencePlatform(this._bridge);
+
+  final AndroidTvBridge _bridge;
+
+  @override
+  Stream<DiscordBridgeEvent> get events => _bridge.discordEvents;
+
+  @override
+  Future<Map<Object?, Object?>> sdkInfo() => _bridge.discordSdkInfo();
+
+  @override
+  Future<DiscordTokenBundle> authenticate() => _bridge.discordAuthenticate();
+
+  @override
+  Future<DiscordTokenBundle> refreshToken(String refreshToken) =>
+      _bridge.discordRefreshToken(refreshToken);
+
+  @override
+  Future<void> connect(DiscordTokenBundle token) =>
+      _bridge.discordConnect(token);
+
+  @override
+  Future<bool> revoke(String token) => _bridge.discordRevoke(token);
+
+  @override
+  Future<void> disconnect() => _bridge.discordDisconnect();
+}
+
+final discordPresencePlatformProvider = Provider<DiscordPresencePlatform>(
+  (_) => AndroidDiscordPresencePlatform(AndroidTvBridge.instance),
+);
+
+class DiscordPresenceState {
+  const DiscordPresenceState({
+    this.loaded = false,
+    this.available = false,
+    this.linked = false,
+    this.enabled = false,
+    this.busy = false,
+    this.connectionStatus = 'disconnected',
+    this.sdkVersion,
+    this.error,
+  });
+
+  final bool loaded;
+  final bool available;
+  final bool linked;
+  final bool enabled;
+  final bool busy;
+  final String connectionStatus;
+  final String? sdkVersion;
+  final String? error;
+
+  bool get connected => connectionStatus == 'ready';
+
+  DiscordPresenceState copyWith({
+    bool? loaded,
+    bool? available,
+    bool? linked,
+    bool? enabled,
+    bool? busy,
+    String? connectionStatus,
+    String? sdkVersion,
+    String? error,
+    bool clearError = false,
+  }) {
+    return DiscordPresenceState(
+      loaded: loaded ?? this.loaded,
+      available: available ?? this.available,
+      linked: linked ?? this.linked,
+      enabled: enabled ?? this.enabled,
+      busy: busy ?? this.busy,
+      connectionStatus: connectionStatus ?? this.connectionStatus,
+      sdkVersion: sdkVersion ?? this.sdkVersion,
+      error: clearError ? null : error ?? this.error,
+    );
+  }
+}
+
+final discordPresenceControllerProvider =
+    StateNotifierProvider<DiscordPresenceController, DiscordPresenceState>((
+      ref,
+    ) {
+      return DiscordPresenceController(
+        ref.watch(secureStorageProvider),
+        ref.watch(discordPresencePlatformProvider),
+      );
+    });
+
+class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
+  DiscordPresenceController(this._storage, this._platform)
+    : super(const DiscordPresenceState()) {
+    _eventSubscription = _platform.events.listen(_handleEvent);
+    unawaited(_initialize());
+  }
+
+  static const _enabledKey = 'discord_rich_presence_enabled';
+  static const _accessTokenKey = 'discord_rich_presence_access_token';
+  static const _refreshTokenKey = 'discord_rich_presence_refresh_token';
+  static const _tokenTypeKey = 'discord_rich_presence_token_type';
+  static const _expiresAtKey = 'discord_rich_presence_expires_at';
+  static const _scopesKey = 'discord_rich_presence_scopes';
+  static const _refreshWindow = Duration(hours: 24);
+
+  final FlutterSecureStorage _storage;
+  final DiscordPresencePlatform _platform;
+  late final StreamSubscription<DiscordBridgeEvent> _eventSubscription;
+  bool _refreshing = false;
+
+  Future<void> _initialize() async {
+    try {
+      final info = await _platform.sdkInfo();
+      final available = info['available'] == true;
+      final token = await _loadToken();
+      final enabled = await _storage.read(key: _enabledKey) == 'true';
+      if (!mounted) return;
+      state = state.copyWith(
+        loaded: true,
+        available: available,
+        linked: token != null,
+        enabled: enabled && token != null,
+        connectionStatus: info['status'] as String? ?? 'disconnected',
+        sdkVersion: info['version'] as String?,
+        clearError: true,
+      );
+      if (!available || token == null || !enabled) return;
+      final current = await _refreshIfNeeded(token);
+      if (!mounted) return;
+      await _connect(current);
+    } catch (error) {
+      if (!mounted) return;
+      state = state.copyWith(
+        loaded: true,
+        busy: false,
+        error: _friendly(error),
+      );
+    }
+  }
+
+  Future<void> linkAccount() async {
+    if (state.busy || !state.available) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      final token = await _platform.authenticate();
+      _validateToken(token);
+      await _storeToken(token);
+      await _storage.write(key: _enabledKey, value: 'true');
+      if (!mounted) return;
+      state = state.copyWith(linked: true, enabled: true);
+      await _connect(token);
+    } catch (error) {
+      if (!mounted) return;
+      state = state.copyWith(error: _friendly(error));
+    } finally {
+      if (mounted) state = state.copyWith(busy: false);
+    }
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    if (state.busy || !state.linked) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await _storage.write(key: _enabledKey, value: enabled.toString());
+      if (!enabled) {
+        await _platform.disconnect();
+        if (!mounted) return;
+        state = state.copyWith(
+          enabled: false,
+          connectionStatus: 'disconnected',
+        );
+        return;
+      }
+      final token = await _loadToken();
+      if (token == null) throw StateError('Discord needs to be linked again.');
+      if (!mounted) return;
+      state = state.copyWith(enabled: true);
+      await _connect(await _refreshIfNeeded(token));
+    } catch (error) {
+      if (!mounted) return;
+      state = state.copyWith(error: _friendly(error));
+    } finally {
+      if (mounted) state = state.copyWith(busy: false);
+    }
+  }
+
+  Future<void> unlinkAccount() async {
+    if (state.busy) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      final token = await _loadToken();
+      if (token != null) {
+        try {
+          await _platform.revoke(token.accessToken);
+        } catch (_) {
+          // Local unlinking must work even if Discord is temporarily offline.
+        }
+      } else {
+        await _platform.disconnect();
+      }
+    } finally {
+      await _clearToken();
+      if (mounted) {
+        state = state.copyWith(
+          linked: false,
+          enabled: false,
+          busy: false,
+          connectionStatus: 'disconnected',
+          clearError: true,
+        );
+      }
+    }
+  }
+
+  Future<void> retry() async {
+    final token = await _loadToken();
+    if (!state.available || !state.enabled || token == null) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await _connect(await _refreshIfNeeded(token, force: true));
+    } catch (error) {
+      if (mounted) state = state.copyWith(error: _friendly(error));
+    } finally {
+      if (mounted) state = state.copyWith(busy: false);
+    }
+  }
+
+  Future<void> _connect(DiscordTokenBundle token) async {
+    state = state.copyWith(connectionStatus: 'connecting', clearError: true);
+    await _platform.connect(token);
+    if (mounted) state = state.copyWith(connectionStatus: 'ready');
+  }
+
+  Future<DiscordTokenBundle> _refreshIfNeeded(
+    DiscordTokenBundle token, {
+    bool force = false,
+  }) async {
+    if (!force && token.expiresAt.isAfter(DateTime.now().add(_refreshWindow))) {
+      return token;
+    }
+    if (_refreshing) return token;
+    _refreshing = true;
+    try {
+      final refreshed = await _platform.refreshToken(token.refreshToken);
+      _validateToken(refreshed);
+      await _storeToken(refreshed);
+      return refreshed;
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  void _handleEvent(DiscordBridgeEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case 'discordConnectionState':
+        final status = event.data['status'] as String? ?? 'disconnected';
+        final error = (event.data['error'] as String?)?.trim();
+        state = state.copyWith(
+          connectionStatus: status,
+          error: error == null || error.isEmpty ? null : error,
+          clearError: error == null || error.isEmpty,
+        );
+        return;
+      case 'discordPresenceError':
+        state = state.copyWith(
+          error: event.data['error'] as String? ?? 'Discord presence failed.',
+        );
+        return;
+      case 'discordTokenExpiring':
+        unawaited(retry());
+        return;
+    }
+  }
+
+  Future<DiscordTokenBundle?> _loadToken() async {
+    final values = await Future.wait([
+      _storage.read(key: _accessTokenKey),
+      _storage.read(key: _refreshTokenKey),
+      _storage.read(key: _tokenTypeKey),
+      _storage.read(key: _expiresAtKey),
+      _storage.read(key: _scopesKey),
+    ]);
+    final access = values[0]?.trim() ?? '';
+    final refresh = values[1]?.trim() ?? '';
+    final tokenType = int.tryParse(values[2] ?? '');
+    final expiresAt = int.tryParse(values[3] ?? '');
+    if (access.isEmpty ||
+        refresh.isEmpty ||
+        tokenType == null ||
+        expiresAt == null) {
+      return null;
+    }
+    return DiscordTokenBundle(
+      accessToken: access,
+      refreshToken: refresh,
+      tokenType: tokenType,
+      expiresAt: DateTime.fromMillisecondsSinceEpoch(expiresAt),
+      scopes: values[4] ?? '',
+    );
+  }
+
+  Future<void> _storeToken(DiscordTokenBundle token) async {
+    await _storage.write(key: _accessTokenKey, value: token.accessToken);
+    await _storage.write(key: _refreshTokenKey, value: token.refreshToken);
+    await _storage.write(key: _tokenTypeKey, value: token.tokenType.toString());
+    await _storage.write(
+      key: _expiresAtKey,
+      value: token.expiresAt.millisecondsSinceEpoch.toString(),
+    );
+    await _storage.write(key: _scopesKey, value: token.scopes);
+  }
+
+  Future<void> _clearToken() async {
+    for (final key in const [
+      _enabledKey,
+      _accessTokenKey,
+      _refreshTokenKey,
+      _tokenTypeKey,
+      _expiresAtKey,
+      _scopesKey,
+    ]) {
+      await _storage.delete(key: key);
+    }
+  }
+
+  void _validateToken(DiscordTokenBundle token) {
+    if (token.accessToken.isEmpty || token.refreshToken.isEmpty) {
+      throw StateError('Discord did not return a usable account token.');
+    }
+  }
+
+  String _friendly(Object error) {
+    final value = switch (error) {
+      PlatformException(:final message?) => message,
+      _ => error.toString().replaceFirst(RegExp(r'^\w+(?:Exception)?:\s*'), ''),
+    };
+    return value.replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim().take(240);
+  }
+
+  @override
+  void dispose() {
+    unawaited(_eventSubscription.cancel());
+    super.dispose();
+  }
+}
+
+extension on String {
+  String take(int count) => length <= count ? this : substring(0, count);
+}

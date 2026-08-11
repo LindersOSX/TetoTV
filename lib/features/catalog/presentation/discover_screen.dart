@@ -62,7 +62,27 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
       return KeyEventResult.ignored;
     }
     final current = FocusManager.instance.primaryFocus;
-    if (event.logicalKey == LogicalKeyboardKey.arrowDown &&
+    final key = event.logicalKey;
+    if (current == _backFocus && key == LogicalKeyboardKey.arrowRight) {
+      (_resetFocus.context == null ? _filtersFocus : _resetFocus)
+          .requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (current == _resetFocus) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        _backFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowRight) {
+        _filtersFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+    }
+    if (current == _filtersFocus && key == LogicalKeyboardKey.arrowLeft) {
+      (_resetFocus.context == null ? _backFocus : _resetFocus).requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowDown &&
         (current == _backFocus ||
             current == _resetFocus ||
             current == _filtersFocus) &&
@@ -70,8 +90,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
       _focusAndReveal(_firstResultFocus, towardEnd: true);
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-        current == _firstResultFocus) {
+    if (key == LogicalKeyboardKey.arrowUp && current == _firstResultFocus) {
       _filtersFocus.requestFocus();
       return KeyEventResult.handled;
     }
@@ -194,6 +213,8 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                       titlePreference: titlePreference,
                       autofocus: false,
                       firstFocusNode: _firstResultFocus,
+                      onNavigateUpFromFirstRow: () =>
+                          _focusAndReveal(_filtersFocus, towardEnd: false),
                     );
                   },
                 ),

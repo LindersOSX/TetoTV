@@ -4,6 +4,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
@@ -95,6 +96,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
   final _discordFocus = FocusNode(debugLabel: 'accounts.system.discord');
+  final _discordPresenceFocus = FocusNode(
+    debugLabel: 'accounts.system.discord-presence',
+  );
+  final _discordDisconnectFocus = FocusNode(
+    debugLabel: 'accounts.system.discord-unlink',
+  );
+  final _donateFocus = FocusNode(debugLabel: 'accounts.system.donate');
   final _privacyFocus = FocusNode(debugLabel: 'accounts.system.privacy');
   final _legalFocus = FocusNode(debugLabel: 'accounts.system.legal');
   final _areaFocusNodes = {
@@ -144,6 +152,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
     _discordFocus.dispose();
+    _discordPresenceFocus.dispose();
+    _discordDisconnectFocus.dispose();
+    _donateFocus.dispose();
     _privacyFocus.dispose();
     _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
@@ -371,9 +382,27 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
     } else if (current == _discordFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
+    } else if (current == _discordPresenceFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowRight &&
+          _discordDisconnectFocus.context != null) {
+        target = _discordDisconnectFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
+    } else if (current == _discordDisconnectFocus) {
+      if (key == LogicalKeyboardKey.arrowLeft) target = _discordPresenceFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
+    } else if (current == _donateFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _discordDisconnectFocus.context != null
+            ? _discordDisconnectFocus
+            : _discordPresenceFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
     } else if (current == _privacyFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
         target = _legalFocus;
@@ -421,6 +450,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final homeShelves = ref.watch(homeShelfPreferencesProvider);
     final homeShelfOrder = ref.watch(homeShelfOrderProvider);
     final appUpdate = ref.watch(appUpdateControllerProvider);
+    final discordPresence = ref.watch(discordPresenceControllerProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
       backgroundColor: Colors.black,
@@ -950,6 +980,26 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       const SizedBox(height: 8),
                       _DiscordCommunityPanel(focusNode: _discordFocus),
+                      const SizedBox(height: 8),
+                      _DiscordPresencePanel(
+                        state: discordPresence,
+                        primaryFocusNode: _discordPresenceFocus,
+                        unlinkFocusNode: _discordDisconnectFocus,
+                        onLink: () => ref
+                            .read(discordPresenceControllerProvider.notifier)
+                            .linkAccount(),
+                        onToggle: () => ref
+                            .read(discordPresenceControllerProvider.notifier)
+                            .setEnabled(!discordPresence.enabled),
+                        onRetry: () => ref
+                            .read(discordPresenceControllerProvider.notifier)
+                            .retry(),
+                        onUnlink: () => ref
+                            .read(discordPresenceControllerProvider.notifier)
+                            .unlinkAccount(),
+                      ),
+                      const SizedBox(height: 8),
+                      _DonationPanel(focusNode: _donateFocus),
                       const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.info_rounded,
@@ -2329,6 +2379,17 @@ class _LegalNoticesPanel extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
+              SizedBox(height: 7),
+              Text(
+                'Development disclosure: TetoTV includes code created and '
+                'reviewed with AI-assisted development tools. Releases are '
+                'tested and maintained by the project owner.',
+                style: TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 10,
+                  height: 1.35,
+                ),
+              ),
             ],
           );
           final actions = Wrap(
@@ -2445,6 +2506,253 @@ class _DiscordCommunityPanel extends StatelessWidget {
                 Flexible(
                   child: Text(
                     inviteUrl,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 620) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                qr,
+                const SizedBox(height: 14),
+                Align(alignment: Alignment.centerLeft, child: copy),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              qr,
+              const SizedBox(width: 18),
+              Expanded(child: copy),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DiscordPresencePanel extends StatelessWidget {
+  const _DiscordPresencePanel({
+    required this.state,
+    required this.primaryFocusNode,
+    required this.unlinkFocusNode,
+    required this.onLink,
+    required this.onToggle,
+    required this.onRetry,
+    required this.onUnlink,
+  });
+
+  final DiscordPresenceState state;
+  final FocusNode primaryFocusNode;
+  final FocusNode unlinkFocusNode;
+  final VoidCallback onLink;
+  final VoidCallback onToggle;
+  final VoidCallback onRetry;
+  final VoidCallback onUnlink;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusLabel = !state.loaded
+        ? 'CHECKING'
+        : !state.available
+        ? 'UNAVAILABLE'
+        : !state.linked
+        ? 'NOT LINKED'
+        : state.connected
+        ? 'CONNECTED'
+        : state.enabled
+        ? state.connectionStatus.toUpperCase()
+        : 'DISABLED';
+    final primaryLabel = !state.loaded
+        ? 'Checking Discord'
+        : !state.available
+        ? 'Unavailable on this device'
+        : !state.linked
+        ? 'Connect Discord'
+        : state.enabled && !state.connected
+        ? 'Retry connection'
+        : state.enabled
+        ? 'Disable Rich Presence'
+        : 'Enable Rich Presence';
+    final primaryIcon = !state.linked
+        ? Icons.login_rounded
+        : state.enabled && state.connected
+        ? Icons.visibility_off_rounded
+        : Icons.sensors_rounded;
+    final VoidCallback? primaryAction = state.busy || !state.available
+        ? null
+        : !state.linked
+        ? onLink
+        : state.enabled && !state.connected
+        ? onRetry
+        : onToggle;
+
+    final copy = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            const Icon(
+              Icons.sports_esports_rounded,
+              color: Color(0xFFB7BCFF),
+              size: 24,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Discord Rich Presence',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            _StatusPill(connected: state.connected, label: statusLabel),
+          ],
+        ),
+        const SizedBox(height: 7),
+        const Text(
+          'Optional. When enabled, Discord can show the anime title, episode, '
+          'playing or paused state, and playback timer. TetoTV never asks for '
+          'or stores your Discord password.',
+          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+        ),
+        if (state.error case final error?) ...[
+          const SizedBox(height: 8),
+          Text(
+            error,
+            style: const TextStyle(color: Color(0xFFFF929B), fontSize: 11),
+          ),
+        ],
+      ],
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      children: [
+        _TvTextButton(
+          label: state.busy ? 'Please wait…' : primaryLabel,
+          icon: primaryIcon,
+          focusNode: primaryFocusNode,
+          onPressed: primaryAction,
+        ),
+        if (state.linked)
+          _TvTextButton(
+            label: 'Unlink Discord',
+            icon: Icons.link_off_rounded,
+            focusNode: unlinkFocusNode,
+            onPressed: state.busy ? null : onUnlink,
+          ),
+      ],
+    );
+
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 700) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                copy,
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: actions),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: copy),
+              const SizedBox(width: 18),
+              Flexible(child: actions),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DonationPanel extends StatelessWidget {
+  const _DonationPanel({required this.focusNode});
+
+  static const donationUrl = 'https://ko-fi.com/lindowsosx';
+  final FocusNode focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    final qr = Semantics(
+      label: 'QR code for the TetoTV Ko-fi donation page',
+      child: Container(
+        width: 132,
+        height: 132,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: QrImageView(
+          data: donationUrl,
+          version: QrVersions.auto,
+          padding: EdgeInsets.zero,
+          eyeStyle: const QrEyeStyle(
+            eyeShape: QrEyeShape.square,
+            color: Colors.black,
+          ),
+          dataModuleStyle: const QrDataModuleStyle(
+            dataModuleShape: QrDataModuleShape.square,
+            color: Colors.black,
+          ),
+        ),
+      ),
+    );
+    final copy = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Support TetoTV', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 5),
+        const Text(
+          'Donations are optional. Scan with your phone to open the official '
+          'TetoTV Ko-fi page, or select the link below to copy it.',
+          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        TvFocusable(
+          focusNode: focusNode,
+          borderRadius: BorderRadius.circular(10),
+          onPressed: () async {
+            await Clipboard.setData(const ClipboardData(text: donationUrl));
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ko-fi donation link copied.')),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+            color: AppColors.selectableSurface,
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.volunteer_activism_rounded,
+                  size: 18,
+                  color: AppColors.accentBright,
+                ),
+                SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    donationUrl,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontWeight: FontWeight.w800),

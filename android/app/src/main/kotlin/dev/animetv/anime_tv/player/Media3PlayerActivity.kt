@@ -51,6 +51,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import dev.animetv.anime_tv.R
+import dev.animetv.anime_tv.DiscordRichPresenceBridge
 import dev.animetv.anime_tv.security.NetworkRequestPolicy
 import dev.animetv.anime_tv.security.PublicNetworkDns
 import java.util.concurrent.TimeUnit
@@ -97,6 +98,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             Configuration.UI_MODE_TYPE_TELEVISION
 
     private var source = ""
+    private var displayTitle = "TetoTV"
     private var checkpointKey = ""
     private var firstFrameRendered = false
     private var everFirstFrameRendered = false
@@ -156,6 +158,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val checkpointRunnable = object : Runnable {
         override fun run() {
             persistCheckpoint()
+            publishDiscordPresence()
             if (!isFinishing && !isDestroyed && isForeground) {
                 handler.postDelayed(this, CHECKPOINT_INTERVAL_MS)
             }
@@ -246,6 +249,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         enterImmersiveMode()
 
         source = normalizeMediaUri(intent.getStringExtra(EXTRA_SOURCE).orEmpty())
+        displayTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
         checkpointKey = intent.getStringExtra(EXTRA_CHECKPOINT_KEY).orEmpty()
         resumeProvided = intent.getBooleanExtra(EXTRA_RESUME_PROVIDED, false)
         requestedResumeMs = intent.getLongExtra(EXTRA_RESUME_MS, 0L).coerceAtLeast(0L)
@@ -570,10 +574,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun buildMediaItem(): MediaItem {
-        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
         val builder = MediaItem.Builder()
             .setUri(Uri.parse(source))
-            .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(displayTitle).build())
 
         inferContainerMimeType(
             intent.getStringExtra(EXTRA_MIME_TYPE),
@@ -612,6 +615,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             Player.STATE_READY -> {
                 handler.removeCallbacks(firstFrameWatchdog)
                 fetchSkipSegmentsIfReady()
+                publishDiscordPresence()
                 if (isForeground && !firstFrameRendered && hasSelectedVideoTrack()) {
                     handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
                 }
@@ -625,6 +629,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (::pausedTitleView.isInitialized) {
             pausedTitleView.visibility = if (isPlaying) View.GONE else View.VISIBLE
         }
+        publishDiscordPresence()
+    }
+
+    private fun publishDiscordPresence() {
+        if (!::player.isInitialized || resultSent) return
+        DiscordRichPresenceBridge.updatePlayback(
+            title = displayTitle,
+            episode = episodeNumber,
+            playing = player.isPlaying,
+            positionMs = safePositionMs(),
+            durationMs = safeDurationMs(),
+        )
     }
 
     private fun fetchSkipSegmentsIfReady() {
@@ -1618,6 +1634,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onDestroy() {
+        DiscordRichPresenceBridge.clearPlayback()
         exitDialog?.dismiss()
         exitDialog = null
         activeTrackDialog?.dismiss()

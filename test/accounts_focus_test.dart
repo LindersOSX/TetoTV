@@ -231,6 +231,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-presence',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.donate',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.privacy',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -240,6 +252,10 @@ void main() {
       'accounts.system.legal',
     );
     expect(find.text('Third-party notices'), findsOneWidget);
+    expect(
+      find.textContaining('AI-assisted development tools'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -267,8 +283,19 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    expect(find.byType(QrImageView), findsOneWidget);
-    expect(find.text('https://discord.gg/juC6k7d4WY'), findsOneWidget);
+    expect(find.byType(QrImageView, skipOffstage: false), findsNWidgets(2));
+    expect(
+      find.text('https://discord.gg/juC6k7d4WY', skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(
+      find.text('https://ko-fi.com/lindowsosx', skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Discord Rich Presence', skipOffstage: false),
+      findsOneWidget,
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -278,6 +305,18 @@ void main() {
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.discord',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-presence',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.donate',
     );
     expect(tester.takeException(), isNull);
   });

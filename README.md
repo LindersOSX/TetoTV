@@ -1,5 +1,9 @@
 # TetoTV
 
+> **Development disclosure:** TetoTV includes code created and reviewed with
+> AI-assisted development tools. Releases are tested and maintained by the
+> project owner.
+
 A Flutter Android TV application under active product development. It
 currently includes:
 

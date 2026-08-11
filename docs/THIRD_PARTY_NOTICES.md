@@ -14,6 +14,7 @@ the following third-party components:
 | Vendored `flutter_js` 0.8.7+tetotv.1 | Dart/Android bridge for the isolated add-on JavaScript runtime | MIT License; copyright 2019 Ábner Oliveira |
 | Android JS Runtimes bridge 0.3.6 (locally reviewed) | Source-derived FFI bridge used by the in-tree Android QuickJS build | MIT License; copyright 2020 fast-development |
 | QuickJS 2026-06-04 | JavaScript engine built from pinned official source inside the Android plugin | MIT License; copyright Fabrice Bellard and Charlie Gordon |
+| Discord Social SDK 1.10.18369 | Optional, user-authorized Discord Rich Presence on Android | Discord Social SDK Terms; the open-source notices supplied with the SDK are bundled separately |
 | CryptoJS 4.2.0 | Compatibility APIs in the bundled add-on runtime | MIT License |
 | LinkeDOM 0.18.12 and its bundled dependencies | Isolated HTML parsing for installed add-ons | ISC License for LinkeDOM; bundled dependencies retain their MIT, ISC, BSD-2-Clause, and other notices |
 | Sucrase 3.35.0 and its bundled dependencies | Offline TypeScript transformation for installed add-ons | MIT License for Sucrase; bundled dependencies retain their MIT, Apache-2.0, and other notices |
@@ -35,6 +36,7 @@ Upstream projects and license sources:
 - Android JS Runtimes bridge tag 0.3.6:
   <https://github.com/fast-development/android-js-runtimes/tree/0.3.6>
 - QuickJS 2026-06-04: <https://bellard.org/quickjs/>
+- Discord Social SDK: <https://discord.com/developers/docs/social-sdk/index.html>
 - CryptoJS: <https://github.com/brix/crypto-js>
 - LinkeDOM: <https://github.com/WebReflection/linkedom>
 - Sucrase: <https://github.com/alangpierce/sucrase>
