@@ -3,32 +3,45 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('Discord callback activity preserves the mobile OAuth return contract', () {
+  test('Discord callback and launcher share the application task', () {
     final manifest = File(
       'android/app/src/main/AndroidManifest.xml',
     ).readAsStringSync();
-    final activity = RegExp(
+    final authenticationActivity = RegExp(
       r'<activity\s+[^>]*android:name="com\.discord\.socialsdk\.AuthenticationActivity"[^>]*>[\s\S]*?</activity>',
+    ).firstMatch(manifest)?.group(0);
+    final mainActivity = RegExp(
+      r'<activity\s+[^>]*android:name="\.MainActivity"[^>]*>[\s\S]*?</activity>',
     ).firstMatch(manifest)?.group(0);
 
     expect(
-      activity,
+      authenticationActivity,
       isNotNull,
       reason: 'Discord AuthenticationActivity must be declared by the app.',
     );
-    expect(activity, contains('android:exported="true"'));
-    expect(activity, contains('android:launchMode="singleTask"'));
+    expect(mainActivity, isNotNull);
+    expect(authenticationActivity, contains('android:exported="true"'));
+    expect(authenticationActivity, contains('android:launchMode="singleTask"'));
     expect(
-      activity,
+      authenticationActivity,
       isNot(contains('android:taskAffinity')),
       reason:
-          'Overriding the SDK activity affinity prevents Android from reusing '
-          'the pending singleTask instance for the OAuth callback.',
+          'Discord AuthenticationActivity must keep the application affinity '
+          'so the external OAuth callback can reuse its pending singleTask.',
+    );
+    expect(
+      mainActivity,
+      isNot(contains('android:taskAffinity')),
+      reason:
+          'The launcher and Discord callback must share the default application '
+          'task affinity. A null launcher affinity strands the pending callback '
+          'in a second task when Discord returns to the app.',
     );
 
-    final schemes = RegExp(
-      r'android:scheme="([^"]+)"',
-    ).allMatches(activity!).map((match) => match.group(1)).toList();
+    final schemes = RegExp(r'android:scheme="([^"]+)"')
+        .allMatches(authenticationActivity!)
+        .map((match) => match.group(1))
+        .toList();
     expect(schemes, const ['discord-1536801401710055474']);
   });
 }

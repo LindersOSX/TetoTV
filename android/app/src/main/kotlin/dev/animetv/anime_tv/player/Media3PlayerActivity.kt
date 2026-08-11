@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -20,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.Toast
 import android.widget.TextView
 import androidx.annotation.OptIn
@@ -57,6 +59,7 @@ import dev.animetv.anime_tv.security.PublicNetworkDns
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -83,6 +86,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var pictureModeButton: ImageButton
     private lateinit var fixVideoButton: ImageButton
     private lateinit var optionsButton: ImageButton
+    private lateinit var playPauseLabel: TextView
+    private lateinit var rewindControlContainer: View
+    private lateinit var playPauseControlContainer: View
+    private lateinit var fastForwardControlContainer: View
+    private lateinit var audioControlContainer: View
+    private lateinit var captionControlContainer: View
     private lateinit var skipSegmentButton: Button
     private lateinit var pausedTitleView: TextView
     private val handler = Handler(Looper.getMainLooper())
@@ -454,6 +463,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             }
             player = this@Media3PlayerActivity.player
         }
+        configurePlayerChromeBounds()
         audioTrackButton = playerView.findViewById<ImageButton>(R.id.tetotv_audio_tracks).apply {
             setOnClickListener {
                 showTrackPicker(C.TRACK_TYPE_AUDIO, this)
@@ -481,6 +491,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerView.findViewById<ImageButton>(R.id.tetotv_player_options).apply {
                 setOnClickListener { showPlaybackOptions(this) }
             }
+        rewindControlContainer = playerView.findViewById(R.id.tetotv_rewind_control)
+        playPauseControlContainer = playerView.findViewById(R.id.tetotv_play_pause_control)
+        fastForwardControlContainer = playerView.findViewById(R.id.tetotv_fast_forward_control)
+        audioControlContainer = playerView.findViewById(R.id.tetotv_audio_control)
+        captionControlContainer = playerView.findViewById(R.id.tetotv_caption_control)
+        playPauseLabel = playerView.findViewById<TextView>(R.id.tetotv_play_pause_label).apply {
+            text = getString(R.string.tetotv_player_play)
+        }
         skipSegmentButton =
             findViewById<Button>(R.id.tetotv_skip_segment).apply {
                 visibility = View.GONE
@@ -513,6 +531,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             setOnClickListener { seekRelative(-seekBackIncrementMs, it) }
         }
+        playerView.findViewById<TextView>(R.id.tetotv_rewind_label).text = getString(
+            R.string.tetotv_player_back_seconds,
+            seekBackIncrementMs / 1_000,
+        )
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).apply {
             contentDescription = getString(
                 R.string.tetotv_player_fast_forward_seconds,
@@ -520,6 +542,26 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             setOnClickListener { seekRelative(seekForwardIncrementMs, it) }
         }
+        playerView.findViewById<TextView>(R.id.tetotv_fast_forward_label).text = getString(
+            R.string.tetotv_player_forward_seconds,
+            seekForwardIncrementMs / 1_000,
+        )
+        bindChromeControlSurface(R.id.tetotv_rewind_control, androidx.media3.ui.R.id.exo_rew)
+        bindChromeControlSurface(
+            R.id.tetotv_play_pause_control,
+            androidx.media3.ui.R.id.exo_play_pause,
+        )
+        bindChromeControlSurface(
+            R.id.tetotv_fast_forward_control,
+            androidx.media3.ui.R.id.exo_ffwd,
+        )
+        bindChromeControlSurface(R.id.tetotv_audio_control, R.id.tetotv_audio_tracks)
+        bindChromeControlSurface(R.id.tetotv_caption_control, R.id.tetotv_caption_tracks)
+        bindChromeControlSurface(R.id.tetotv_caption_size_control, R.id.tetotv_caption_size)
+        bindChromeControlSurface(R.id.tetotv_picture_control, R.id.tetotv_picture_mode)
+        bindChromeControlSurface(R.id.tetotv_player_control, R.id.tetotv_fix_video)
+        bindChromeControlSurface(R.id.tetotv_options_control, R.id.tetotv_player_options)
+        updateTransportControlAvailability(player.availableCommands)
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
             terminalError =
@@ -611,6 +653,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        updatePlaybackIntentUi()
         when (playbackState) {
             Player.STATE_READY -> {
                 handler.removeCallbacks(firstFrameWatchdog)
@@ -626,10 +669,106 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
-        if (::pausedTitleView.isInitialized) {
-            pausedTitleView.visibility = if (isPlaying) View.GONE else View.VISIBLE
-        }
+        updatePlaybackIntentUi()
         publishDiscordPresence()
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        updatePlaybackIntentUi()
+        publishDiscordPresence()
+    }
+
+    private fun isPlaybackIntended(): Boolean =
+        player.playWhenReady && player.playbackState != Player.STATE_ENDED
+
+    private fun updatePlaybackIntentUi() {
+        if (!::player.isInitialized) return
+        val playbackIntended = isPlaybackIntended()
+        if (::pausedTitleView.isInitialized) {
+            pausedTitleView.visibility = if (playbackIntended) View.GONE else View.VISIBLE
+        }
+        if (::playPauseLabel.isInitialized) {
+            playPauseLabel.text = getString(
+                if (playbackIntended) R.string.tetotv_player_pause
+                else R.string.tetotv_player_play,
+            )
+        }
+    }
+
+    override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+        updateTransportControlAvailability(availableCommands)
+    }
+
+    /** Match the responsive insets and 1280dp width cap used by Flutter chrome. */
+    private fun configurePlayerChromeBounds() {
+        val card = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_bottom_bar) ?: return
+        val density = resources.displayMetrics.density
+        val compact = resources.configuration.screenWidthDp < 720 ||
+            resources.configuration.screenHeightDp < 480
+        fun dp(value: Int): Int = (value * density).toInt()
+
+        val horizontalInset = dp(if (compact) 12 else 28)
+        val availableWidth = resources.displayMetrics.widthPixels - (horizontalInset * 2)
+        (card.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+            params.width = min(availableWidth.coerceAtLeast(1), dp(1_280))
+            params.leftMargin = horizontalInset
+            params.rightMargin = horizontalInset
+            params.bottomMargin = dp(if (compact) 10 else 24)
+            params.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            card.layoutParams = params
+        }
+        card.setPadding(
+            dp(if (compact) 12 else 18),
+            dp(if (compact) 10 else 14),
+            dp(if (compact) 12 else 18),
+            dp(if (compact) 9 else 12),
+        )
+        playerView.findViewById<View>(R.id.tetotv_engine_label).visibility =
+            if (compact) View.GONE else View.VISIBLE
+        playerView.findViewById<View>(R.id.tetotv_footer_hint).visibility =
+            if (compact) View.GONE else View.VISIBLE
+    }
+
+    /** Let phone users tap a control label while D-pad focus stays on its icon. */
+    private fun bindChromeControlSurface(containerId: Int, controlId: Int) {
+        val container = playerView.findViewById<View>(containerId) ?: return
+        val control = playerView.findViewById<View>(controlId) ?: return
+        container.setOnClickListener { control.performClick() }
+        // The labeled pill is the visual surface, but the child icon owns
+        // accessibility and D-pad focus. Mirror that focus explicitly so the
+        // parent selector always renders the Teto focus ring on Android TV.
+        val existingFocusListener = control.onFocusChangeListener
+        control.setOnFocusChangeListener { view, hasFocus ->
+            existingFocusListener?.onFocusChange(view, hasFocus)
+            container.isActivated = hasFocus
+        }
+        container.isActivated = control.hasFocus()
+    }
+
+    private fun updateTransportControlAvailability(commands: Player.Commands) {
+        if (
+            !::rewindControlContainer.isInitialized ||
+            !::playPauseControlContainer.isInitialized ||
+            !::fastForwardControlContainer.isInitialized
+        ) return
+        setChromeControlAvailable(
+            rewindControlContainer,
+            commands.contains(Player.COMMAND_SEEK_BACK),
+        )
+        setChromeControlAvailable(
+            playPauseControlContainer,
+            commands.contains(Player.COMMAND_PLAY_PAUSE),
+        )
+        setChromeControlAvailable(
+            fastForwardControlContainer,
+            commands.contains(Player.COMMAND_SEEK_FORWARD),
+        )
+    }
+
+    private fun setChromeControlAvailable(container: View, available: Boolean) {
+        container.isEnabled = available
+        container.isClickable = available
+        container.alpha = if (available) 1f else DISABLED_CONTROL_ALPHA
     }
 
     private fun publishDiscordPresence() {
@@ -637,7 +776,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         DiscordRichPresenceBridge.updatePlayback(
             title = displayTitle,
             episode = episodeNumber,
-            playing = player.isPlaying,
+            playing = isPlaybackIntended(),
             positionMs = safePositionMs(),
             durationMs = safeDurationMs(),
         )
@@ -926,9 +1065,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 (0 until group.length).any(group::isTrackSupported)
         }
         audioTrackButton.isEnabled = hasAudio
-        audioTrackButton.alpha = if (hasAudio) 1f else DISABLED_CONTROL_ALPHA
+        audioTrackButton.alpha = 1f
+        setChromeControlAvailable(audioControlContainer, hasAudio)
         captionTrackButton.isEnabled = hasCaptions
-        captionTrackButton.alpha = if (hasCaptions) 1f else DISABLED_CONTROL_ALPHA
+        captionTrackButton.alpha = 1f
+        setChromeControlAvailable(captionControlContainer, hasCaptions)
         val captionsSelected = tracks.groups.any { group ->
             group.type == C.TRACK_TYPE_TEXT && group.isSelected
         }
@@ -982,6 +1123,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             activeTrackDialog = dialog
             dialog.setOnDismissListener {
                 if (activeTrackDialog === dialog) activeTrackDialog = null
+                consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -1036,6 +1178,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             activeTrackDialog = dialog
             dialog.setOnDismissListener {
                 if (activeTrackDialog === dialog) activeTrackDialog = null
+                consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -1106,6 +1249,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             activeTrackDialog = dialog
             dialog.setOnDismissListener {
                 if (activeTrackDialog === dialog) activeTrackDialog = null
+                consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -1160,6 +1304,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             activeTrackDialog = dialog
             dialog.setOnDismissListener {
                 if (activeTrackDialog === dialog) activeTrackDialog = null
+                consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -1342,6 +1487,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (!::playerView.isInitialized) return super.dispatchKeyEvent(event)
+        // Clear a shortcut's paired key-up even when the key-down opened a
+        // modal dialog. Otherwise the next same shortcut can be swallowed.
+        consumedNavigationKeyUp?.let { consumedKey ->
+            if (event.keyCode == consumedKey) {
+                if (event.action == KeyEvent.ACTION_UP) consumedNavigationKeyUp = null
+                return true
+            }
+        }
         // Modal dialogs own directional focus. Letting the hidden controller
         // consume their first Left/Right press made "Exit video" unreachable
         // on a number of Fire TV and Google TV remotes.
@@ -1352,15 +1505,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             return super.dispatchKeyEvent(event)
         }
 
-        consumedNavigationKeyUp?.let { consumedKey ->
-            if (event.keyCode == consumedKey) {
-                if (event.action == KeyEvent.ACTION_UP) consumedNavigationKeyUp = null
-                return true
-            }
-        }
-
         val isInitialKeyDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         if (isInitialKeyDown) {
+            if (handleChromeShortcut(event.keyCode)) {
+                // AlertDialog has its own Window and receives the key-up, so
+                // only shortcuts that stay in this Activity arm paired-key
+                // suppression. Dialog dismiss also clears any older value.
+                if (event.keyCode !in MODAL_CHROME_SHORTCUT_KEYS) {
+                    consumedNavigationKeyUp = event.keyCode
+                }
+                return true
+            }
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (playerView.isControllerFullyVisible) {
                     consumedNavigationKeyUp = event.keyCode
@@ -1400,6 +1555,25 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             armControllerAutoHide()
         }
         return handled
+    }
+
+    /** Keyboard/gamepad shortcuts shared with the Flutter MPV and VLC HUDs. */
+    private fun handleChromeShortcut(keyCode: Int): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_J -> seekRelative(-seekBackIncrementMs, playerView)
+            KeyEvent.KEYCODE_L -> seekRelative(seekForwardIncrementMs, playerView)
+            KeyEvent.KEYCODE_K -> if (isPlaybackIntended()) player.pause() else player.play()
+            KeyEvent.KEYCODE_S -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
+            KeyEvent.KEYCODE_C -> showPlayerPicker(fixVideoButton)
+            KeyEvent.KEYCODE_M,
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_BUTTON_Y,
+            -> showPlaybackOptions(optionsButton)
+            else -> return false
+        }
+        if (!playerView.isControllerFullyVisible) playerView.showController()
+        armControllerAutoHide()
+        return true
     }
 
     private fun applyPreferredAudioOverride(tracks: Tracks) {
@@ -1840,6 +2014,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             KeyEvent.KEYCODE_MEDIA_PAUSE,
             KeyEvent.KEYCODE_MEDIA_REWIND,
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        )
+        private val MODAL_CHROME_SHORTCUT_KEYS = setOf(
+            KeyEvent.KEYCODE_S,
+            KeyEvent.KEYCODE_C,
+            KeyEvent.KEYCODE_M,
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_BUTTON_Y,
         )
         private const val SMOKE_VIDEO_REQUEST_URI = "asset:///assets/videos/vlc_smoke.mp4"
         private const val SMOKE_VIDEO_URI =

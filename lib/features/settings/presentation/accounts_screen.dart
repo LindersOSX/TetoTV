@@ -32,6 +32,7 @@ class AccountsScreen extends ConsumerStatefulWidget {
 
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   _SettingsArea _activeArea = _SettingsArea.customize;
+  HomeShelf _selectedHomeShelf = HomeShelf.tracking;
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
@@ -55,6 +56,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
+  );
+  final _homeShelfSelectorFocus = FocusNode(
+    debugLabel: 'accounts.home.section',
+  );
+  final _homeShelfVisibilityFocus = FocusNode(
+    debugLabel: 'accounts.home.visibility',
+  );
+  final _homeShelfMoveUpFocus = FocusNode(debugLabel: 'accounts.home.move-up');
+  final _homeShelfMoveDownFocus = FocusNode(
+    debugLabel: 'accounts.home.move-down',
   );
   final _setupFocus = FocusNode(debugLabel: 'accounts.system.setup');
   final _calibrationFocus = FocusNode(
@@ -109,10 +120,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     for (final area in _SettingsArea.values)
       area: FocusNode(debugLabel: 'accounts.area.${area.name}'),
   };
-  final _shelfFocusNodes = {
-    for (final shelf in HomeShelf.values)
-      shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
-  };
 
   @override
   void dispose() {
@@ -128,6 +135,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
     _customizationFocus.dispose();
+    _homeShelfSelectorFocus.dispose();
+    _homeShelfVisibilityFocus.dispose();
+    _homeShelfMoveUpFocus.dispose();
+    _homeShelfMoveDownFocus.dispose();
     _setupFocus.dispose();
     _calibrationFocus.dispose();
     _diagnosticsFocus.dispose();
@@ -158,9 +169,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _privacyFocus.dispose();
     _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
-      node.dispose();
-    }
-    for (final node in _shelfFocusNodes.values) {
       node.dispose();
     }
     super.dispose();
@@ -195,12 +203,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         preferences.trackingProvider == TrackingProvider.anilist
         ? _anilistFocus
         : _malFocus;
+    final homeShelfOrder = ref.read(homeShelfOrderProvider);
+    final selectedHomeShelfIndex = homeShelfOrder.indexOf(_selectedHomeShelf);
+    final canMoveHomeShelfUp = selectedHomeShelfIndex > 0;
+    final canMoveHomeShelfDown =
+        selectedHomeShelfIndex >= 0 &&
+        selectedHomeShelfIndex < homeShelfOrder.length - 1;
     FocusNode? target;
-    final shelfNodes = [
-      for (final shelf in ref.read(homeShelfOrderProvider))
-        _shelfFocusNodes[shelf]!,
-    ];
-    final shelfIndex = current == null ? -1 : shelfNodes.indexOf(current);
     final areaNodes = [
       for (final area in _SettingsArea.values) _areaFocusNodes[area]!,
     ];
@@ -217,27 +226,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) target = _titleLanguageFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = switch (_activeArea) {
-          _SettingsArea.customize => shelfNodes.first,
+          _SettingsArea.customize => _homeShelfSelectorFocus,
           _SettingsArea.streaming => _debridProviderFocus,
           _SettingsArea.tracking => _trackingProviderFocus,
           _SettingsArea.system => _setupFocus,
         };
       }
-    } else if (shelfIndex >= 0) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = shelfIndex > 0
-            ? shelfNodes[shelfIndex - 1]
-            : _areaFocusNodes[_SettingsArea.customize];
-      }
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = shelfIndex < shelfNodes.length - 1
-            ? shelfNodes[shelfIndex + 1]
-            : _customizationFocus;
-      }
     }
 
-    if (areaIndex >= 0 || shelfIndex >= 0) {
-      // Shelf navigation was handled above.
+    if (areaIndex >= 0) {
+      // Settings-area navigation was handled above.
     } else if (current == _backFocus) {
       if (key == LogicalKeyboardKey.arrowRight) {
         target = _titleLanguageFocus;
@@ -249,6 +247,56 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _areaFocusNodes[_activeArea];
+      }
+    } else if (current == _homeShelfSelectorFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _areaFocusNodes[_SettingsArea.customize];
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _homeShelfVisibilityFocus;
+      }
+    } else if (current == _homeShelfVisibilityFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _homeShelfSelectorFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight) {
+        target = canMoveHomeShelfUp
+            ? _homeShelfMoveUpFocus
+            : canMoveHomeShelfDown
+            ? _homeShelfMoveDownFocus
+            : null;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _customizationFocus;
+      }
+    } else if (current == _homeShelfMoveUpFocus) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        target = _homeShelfVisibilityFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight) {
+        target = canMoveHomeShelfDown ? _homeShelfMoveDownFocus : null;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _homeShelfSelectorFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _customizationFocus;
+      }
+    } else if (current == _homeShelfMoveDownFocus) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        target = canMoveHomeShelfUp
+            ? _homeShelfMoveUpFocus
+            : _homeShelfVisibilityFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _homeShelfSelectorFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _customizationFocus;
+      }
+    } else if (current == _customizationFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _homeShelfVisibilityFocus;
       }
     } else if (current == _debridProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -379,27 +427,29 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft) {
         target = _automaticUpdatesFocus;
       }
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
-    } else if (current == _discordFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _discordPresenceFocus;
+      }
     } else if (current == _discordPresenceFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
       if (key == LogicalKeyboardKey.arrowRight &&
           _discordDisconnectFocus.context != null) {
         target = _discordDisconnectFocus;
       }
-      if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
     } else if (current == _discordDisconnectFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _discordPresenceFocus;
-      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
-    } else if (current == _donateFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
+    } else if (current == _discordFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _discordDisconnectFocus.context != null
             ? _discordDisconnectFocus
             : _discordPresenceFocus;
       }
+      if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
+    } else if (current == _donateFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
     } else if (current == _privacyFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
@@ -575,16 +625,46 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             'Personalize layout, Home content, controls, captions, and sounds.',
                       ),
                       const SizedBox(height: 8),
-                      _HomeShelfOrganizer(
-                        order: homeShelfOrder,
-                        enabled: homeShelves,
-                        focusNodes: _shelfFocusNodes,
-                        onToggle: (shelf) => ref
+                      _SettingsSelection<HomeShelf>(
+                        focusNode: _homeShelfSelectorFocus,
+                        label: 'Home section',
+                        value: _selectedHomeShelf,
+                        options: [
+                          for (
+                            var index = 0;
+                            index < homeShelfOrder.length;
+                            index++
+                          )
+                            _SettingsOption(
+                              value: homeShelfOrder[index],
+                              label: homeShelfOrder[index].displayName,
+                              detail:
+                                  'Position ${index + 1} - '
+                                  '${homeShelves.contains(homeShelfOrder[index]) ? 'Shown' : 'Hidden'}',
+                            ),
+                        ],
+                        onSelected: (shelf) {
+                          setState(() => _selectedHomeShelf = shelf);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _HomeShelfEditorPanel(
+                        shelf: _selectedHomeShelf,
+                        index: homeShelfOrder.indexOf(_selectedHomeShelf),
+                        total: homeShelfOrder.length,
+                        enabled: homeShelves.contains(_selectedHomeShelf),
+                        visibilityFocusNode: _homeShelfVisibilityFocus,
+                        moveUpFocusNode: _homeShelfMoveUpFocus,
+                        moveDownFocusNode: _homeShelfMoveDownFocus,
+                        onToggle: () => ref
                             .read(homeShelfPreferencesProvider.notifier)
-                            .toggle(shelf),
-                        onMove: (shelf, offset) => ref
+                            .toggle(_selectedHomeShelf),
+                        onMoveUp: () => ref
                             .read(homeShelfOrderProvider.notifier)
-                            .move(shelf, offset),
+                            .move(_selectedHomeShelf, -1),
+                        onMoveDown: () => ref
+                            .read(homeShelfOrderProvider.notifier)
+                            .move(_selectedHomeShelf, 1),
                       ),
                       const SizedBox(height: 10),
                       _CustomizationPanel(
@@ -973,13 +1053,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       const SizedBox(height: 12),
                       const _SectionHeader(
-                        icon: Icons.forum_rounded,
-                        title: 'COMMUNITY',
+                        icon: Icons.sports_esports_rounded,
+                        title: 'DISCORD RICH PRESENCE',
                         subtitle:
-                            'Join the TetoTV Discord for announcements, support, and feature requests.',
+                            'Control the optional Discord activity shown while you watch.',
                       ),
-                      const SizedBox(height: 8),
-                      _DiscordCommunityPanel(focusNode: _discordFocus),
                       const SizedBox(height: 8),
                       _DiscordPresencePanel(
                         state: discordPresence,
@@ -998,6 +1076,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             .read(discordPresenceControllerProvider.notifier)
                             .unlinkAccount(),
                       ),
+                      const SizedBox(height: 12),
+                      const _SectionHeader(
+                        icon: Icons.forum_rounded,
+                        title: 'COMMUNITY',
+                        subtitle:
+                            'Join the TetoTV Discord for announcements, support, and feature requests.',
+                      ),
+                      const SizedBox(height: 8),
+                      _DiscordCommunityPanel(focusNode: _discordFocus),
                       const SizedBox(height: 8),
                       _DonationPanel(focusNode: _donateFocus),
                       const SizedBox(height: 12),
@@ -1192,69 +1279,83 @@ class _SettingsSelection<T> extends StatelessWidget {
                   color: AppColors.accent.withValues(alpha: .7),
                 ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 14),
-                  for (final option in options) ...[
-                    TvFocusable(
-                      autofocus: option.value == value,
-                      onPressed: () => Navigator.of(context).pop(option.value),
-                      borderRadius: BorderRadius.circular(9),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 13,
-                        ),
-                        decoration: BoxDecoration(
-                          color: option.value == value
-                              ? AppColors.accent.withValues(alpha: .28)
-                              : AppColors.panelRaised,
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              option.value == value
-                                  ? Icons.radio_button_checked_rounded
-                                  : Icons.radio_button_off_rounded,
-                              color: option.value == value
-                                  ? AppColors.accentBright
-                                  : AppColors.textMuted,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .78,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 14),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: options.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final option = options[index];
+                          return TvFocusable(
+                            autofocus: option.value == value,
+                            onPressed: () =>
+                                Navigator.of(context).pop(option.value),
+                            borderRadius: BorderRadius.circular(9),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 13,
+                              ),
+                              decoration: BoxDecoration(
+                                color: option.value == value
+                                    ? AppColors.accent.withValues(alpha: .28)
+                                    : AppColors.panelRaised,
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    option.label,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w900,
-                                    ),
+                                  Icon(
+                                    option.value == value
+                                        ? Icons.radio_button_checked_rounded
+                                        : Icons.radio_button_off_rounded,
+                                    color: option.value == value
+                                        ? AppColors.accentBright
+                                        : AppColors.textMuted,
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    option.detail,
-                                    style: const TextStyle(
-                                      color: AppColors.textMuted,
-                                      fontSize: 11,
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          option.label,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          option.detail,
+                                          style: const TextStyle(
+                                            color: AppColors.textMuted,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ),
-                    if (option != options.last) const SizedBox(height: 8),
                   ],
-                ],
+                ),
               ),
             ),
           ),
@@ -2070,202 +2171,120 @@ class _AppUpdatePanel extends StatelessWidget {
   }
 }
 
-class _HomeShelfOrganizer extends StatelessWidget {
-  const _HomeShelfOrganizer({
-    required this.order,
-    required this.enabled,
-    required this.focusNodes,
-    required this.onToggle,
-    required this.onMove,
-  });
-
-  final List<HomeShelf> order;
-  final Set<HomeShelf> enabled;
-  final Map<HomeShelf, FocusNode> focusNodes;
-  final ValueChanged<HomeShelf> onToggle;
-  final void Function(HomeShelf shelf, int offset) onMove;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _MiniSectionLabel('HOME SHELVES'),
-          const SizedBox(height: 3),
-          const Text(
-            'Choose what appears on Home and move favorites toward the top.',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
-          ),
-          const SizedBox(height: 10),
-          for (var index = 0; index < order.length; index++) ...[
-            _HomeShelfRow(
-              index: index,
-              total: order.length,
-              shelf: order[index],
-              enabled: enabled.contains(order[index]),
-              focusNode: focusNodes[order[index]]!,
-              onToggle: () => onToggle(order[index]),
-              onMoveUp: () => onMove(order[index], -1),
-              onMoveDown: () => onMove(order[index], 1),
-            ),
-            if (index != order.length - 1) const SizedBox(height: 6),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _HomeShelfRow extends StatelessWidget {
-  const _HomeShelfRow({
+class _HomeShelfEditorPanel extends StatelessWidget {
+  const _HomeShelfEditorPanel({
+    required this.shelf,
     required this.index,
     required this.total,
-    required this.shelf,
     required this.enabled,
-    required this.focusNode,
+    required this.visibilityFocusNode,
+    required this.moveUpFocusNode,
+    required this.moveDownFocusNode,
     required this.onToggle,
     required this.onMoveUp,
     required this.onMoveDown,
   });
 
+  final HomeShelf shelf;
   final int index;
   final int total;
-  final HomeShelf shelf;
   final bool enabled;
-  final FocusNode focusNode;
+  final FocusNode visibilityFocusNode;
+  final FocusNode moveUpFocusNode;
+  final FocusNode moveDownFocusNode;
   final VoidCallback onToggle;
   final VoidCallback onMoveUp;
   final VoidCallback onMoveDown;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final safeIndex = index < 0 ? 0 : index;
+    final details = Row(
       children: [
-        SizedBox(
-          width: 24,
-          child: Text(
-            '${index + 1}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: AppColors.textMuted,
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-            ),
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: AppColors.accent.withValues(alpha: .14),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: const Icon(
+            Icons.view_carousel_rounded,
+            color: AppColors.accentBright,
           ),
         ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 10),
         Expanded(
-          child: TvFocusable(
-            focusNode: focusNode,
-            onPressed: onToggle,
-            focusScale: 1.01,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              height: 38,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: enabled
-                    ? AppColors.accent.withValues(alpha: .28)
-                    : AppColors.panelRaised,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: enabled
-                      ? AppColors.accentBright.withValues(alpha: .7)
-                      : Colors.white.withValues(alpha: .08),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                shelf.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Position ${safeIndex + 1} of $total on the Home screen.',
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 10,
                 ),
               ),
-              child: Row(
-                children: [
-                  Icon(
-                    enabled
-                        ? Icons.visibility_rounded
-                        : Icons.visibility_off_rounded,
-                    size: 17,
-                    color: enabled ? Colors.white : AppColors.textMuted,
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      shelf.displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: enabled ? Colors.white : AppColors.textMuted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    enabled ? 'SHOWN' : 'HIDDEN',
-                    style: TextStyle(
-                      color: enabled
-                          ? AppColors.accentBright
-                          : AppColors.textMuted,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: .7,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            ],
           ),
         ),
-        const SizedBox(width: 7),
-        _ShelfOrderButton(
-          icon: Icons.keyboard_arrow_up_rounded,
-          label: 'Move ${shelf.displayName} up',
-          onPressed: index == 0 ? null : onMoveUp,
-        ),
-        const SizedBox(width: 5),
-        _ShelfOrderButton(
-          icon: Icons.keyboard_arrow_down_rounded,
-          label: 'Move ${shelf.displayName} down',
-          onPressed: index == total - 1 ? null : onMoveDown,
-        ),
+        const SizedBox(width: 8),
+        _StatusPill(connected: enabled, label: enabled ? 'SHOWN' : 'HIDDEN'),
       ],
     );
-  }
-}
-
-class _ShelfOrderButton extends StatelessWidget {
-  const _ShelfOrderButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    if (onPressed == null) {
-      return SizedBox(
-        width: 38,
-        height: 38,
-        child: Icon(icon, color: Colors.white24, size: 19),
-      );
-    }
-    return Semantics(
-      label: label,
-      button: true,
-      child: TvFocusable(
-        onPressed: onPressed!,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: 38,
-          height: 38,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: AppColors.panelRaised,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, size: 19),
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _TvTextButton(
+          label: enabled ? 'Hide from Home' : 'Show on Home',
+          icon: enabled
+              ? Icons.visibility_off_rounded
+              : Icons.visibility_rounded,
+          focusNode: visibilityFocusNode,
+          onPressed: onToggle,
         ),
+        if (safeIndex > 0)
+          _TvTextButton(
+            label: 'Move up',
+            icon: Icons.keyboard_arrow_up_rounded,
+            focusNode: moveUpFocusNode,
+            onPressed: onMoveUp,
+          ),
+        if (safeIndex < total - 1)
+          _TvTextButton(
+            label: 'Move down',
+            icon: Icons.keyboard_arrow_down_rounded,
+            focusNode: moveDownFocusNode,
+            onPressed: onMoveDown,
+          ),
+      ],
+    );
+
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 700) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [details, const SizedBox(height: 12), actions],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: details),
+              const SizedBox(width: 18),
+              Flexible(child: actions),
+            ],
+          );
+        },
       ),
     );
   }

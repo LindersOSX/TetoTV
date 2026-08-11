@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 void main() {
-  testWidgets('D-pad reaches Home shelves and switches to streaming', (
+  testWidgets('D-pad reaches the Home section editor and switches tabs', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -37,14 +37,27 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.tracking',
+      'accounts.home.section',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.history',
+      'accounts.home.visibility',
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.home.move-down',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.first',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
@@ -62,6 +75,92 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.debrid.connect',
     );
+  });
+
+  testWidgets('Home section dropdown keeps visibility and order controls', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Home section'), findsOneWidget);
+    expect(find.text('Position 1 of 7 on the Home screen.'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.home.section',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Trending now'), findsOneWidget);
+    await tester.tap(find.text('Trending now'));
+    await tester.pumpAndSettle();
+
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.home.section',
+    );
+    expect(find.text('Position 4 of 7 on the Home screen.'), findsOneWidget);
+    await tester.tap(find.text('Move up'));
+    await tester.pumpAndSettle();
+    expect(find.text('Position 3 of 7 on the Home screen.'), findsOneWidget);
+
+    await tester.tap(find.text('Hide from Home'));
+    await tester.pumpAndSettle();
+    expect(find.text('Show on Home'), findsOneWidget);
+    expect(find.text('HIDDEN'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home reorder leaves focus on a usable control at a boundary', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Watch history'));
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.home.move-up',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Position 1 of 7 on the Home screen.'), findsOneWidget);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.home.visibility',
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('D-pad reaches the bottom AniList save action on a TV canvas', (
@@ -225,13 +324,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord',
+      'accounts.system.discord-presence',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord-presence',
+      'accounts.system.discord',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -304,13 +403,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord',
+      'accounts.system.discord-presence',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord-presence',
+      'accounts.system.discord',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
