@@ -55,6 +55,87 @@ void main() {
     },
   );
 
+  test('concurrent link requests start authentication only once', () async {
+    final platform = _FakeDiscordPlatform();
+    final authentication = Completer<DiscordTokenBundle>();
+    platform.authenticationCompleter = authentication;
+    final controller = DiscordPresenceController(storage, platform);
+    addTearDown(controller.dispose);
+    await _settle();
+
+    final firstLink = controller.linkAccount();
+    final secondLink = controller.linkAccount();
+
+    expect(controller.state.busy, isTrue);
+    expect(platform.authenticateCalls, 1);
+
+    authentication.complete(platform.token);
+    await Future.wait([firstLink, secondLink]);
+
+    expect(platform.authenticateCalls, 1);
+    expect(platform.connectCalls, 1);
+    expect(controller.state.linked, isTrue);
+    expect(controller.state.busy, isFalse);
+  });
+
+  test('failed authentication clears busy state and stores nothing', () async {
+    final platform = _FakeDiscordPlatform()
+      ..authenticationError = StateError('authorization canceled');
+    final controller = DiscordPresenceController(storage, platform);
+    addTearDown(controller.dispose);
+    await _settle();
+
+    await controller.linkAccount();
+
+    expect(platform.authenticateCalls, 1);
+    expect(platform.connectCalls, 0);
+    expect(controller.state.busy, isFalse);
+    expect(controller.state.linked, isFalse);
+    expect(controller.state.enabled, isFalse);
+    expect(controller.state.error, contains('authorization canceled'));
+    expect(await storage.read(key: 'discord_rich_presence_enabled'), isNull);
+    expect(
+      await storage.read(key: 'discord_rich_presence_access_token'),
+      isNull,
+    );
+    expect(
+      await storage.read(key: 'discord_rich_presence_refresh_token'),
+      isNull,
+    );
+  });
+
+  test(
+    'connect failure retains the linked token and retry does not reauthenticate',
+    () async {
+      final platform = _FakeDiscordPlatform()..connectFailuresRemaining = 1;
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.linkAccount();
+
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.connected, isFalse);
+      expect(controller.state.error, contains('connection failed'));
+      expect(platform.authenticateCalls, 1);
+      expect(platform.connectCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'access-token',
+      );
+
+      await controller.retry();
+
+      expect(platform.authenticateCalls, 1);
+      expect(platform.refreshCalls, 1);
+      expect(platform.connectCalls, 2);
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.busy, isFalse);
+    },
+  );
+
   test(
     'disable stops presence without unlinking and enable reconnects',
     () async {
@@ -129,6 +210,9 @@ Future<void> _settle() async {
 
 class _FakeDiscordPlatform implements DiscordPresencePlatform {
   final _events = StreamController<DiscordBridgeEvent>.broadcast();
+  Completer<DiscordTokenBundle>? authenticationCompleter;
+  Object? authenticationError;
+  int connectFailuresRemaining = 0;
   int authenticateCalls = 0;
   int refreshCalls = 0;
   int connectCalls = 0;
@@ -157,6 +241,10 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   @override
   Future<DiscordTokenBundle> authenticate() async {
     authenticateCalls++;
+    if (authenticationError case final error?) throw error;
+    if (authenticationCompleter case final completer?) {
+      return completer.future;
+    }
     return token;
   }
 
@@ -170,6 +258,10 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   Future<void> connect(DiscordTokenBundle token) async {
     connectCalls++;
     lastConnected = token;
+    if (connectFailuresRemaining > 0) {
+      connectFailuresRemaining--;
+      throw StateError('connection failed');
+    }
   }
 
   @override
