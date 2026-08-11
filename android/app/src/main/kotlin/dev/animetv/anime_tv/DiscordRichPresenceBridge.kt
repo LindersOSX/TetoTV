@@ -24,6 +24,7 @@ object DiscordRichPresenceBridge {
     private var channel: MethodChannel? = null
     private var nativeLoaded = false
     private var initialized = false
+    private var useDeviceAuthFlow = false
     private var connectionState = "disconnected"
     private var pendingAuth: MethodChannel.Result? = null
     private var pendingRefresh: MethodChannel.Result? = null
@@ -32,6 +33,10 @@ object DiscordRichPresenceBridge {
 
     fun attach(activity: Activity, channel: MethodChannel) {
         this.channel = channel
+        useDeviceAuthFlow = DiscordAuthFlowPolicy.shouldUseDeviceFlow(
+            uiMode = activity.resources.configuration.uiMode,
+            hasLeanback = activity.packageManager.hasSystemFeature("android.software.leanback"),
+        )
         // This loads the official SDK library before our JNI bridge, then gives
         // Discord the Activity it needs for its TV/device authorization UI.
         DiscordSocialSdkInit.setEngineActivity(activity)
@@ -66,7 +71,7 @@ object DiscordRichPresenceBridge {
                         result.error("DISCORD_AUTH_BUSY", "Discord account linking is already open.", null)
                     } else {
                         pendingAuth = result
-                        nativeAuthenticate()
+                        nativeAuthenticate(useDeviceAuthFlow)
                     }
                 }
                 true
@@ -310,7 +315,7 @@ object DiscordRichPresenceBridge {
 
     private external fun nativeInitialize()
     private external fun nativeSdkVersion(): String
-    private external fun nativeAuthenticate()
+    private external fun nativeAuthenticate(useDeviceFlow: Boolean)
     private external fun nativeRefreshToken(refreshToken: String)
     private external fun nativeConnect(accessToken: String, tokenType: Int)
     private external fun nativeRevoke(token: String)

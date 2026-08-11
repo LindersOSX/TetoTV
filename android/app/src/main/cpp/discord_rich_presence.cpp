@@ -127,6 +127,24 @@ void notify_auth(const char* method,
     });
 }
 
+void notify_token_result(const char* method,
+                         discordpp::ClientResult result,
+                         std::string access_token,
+                         std::string refresh_token,
+                         discordpp::AuthorizationTokenType token_type,
+                         std::int32_t expires_in,
+                         std::string scopes) {
+    const bool ok = succeeded(result);
+    notify_auth(method,
+                ok,
+                ok ? access_token : std::string{},
+                ok ? refresh_token : std::string{},
+                static_cast<int>(token_type),
+                ok ? expires_in : 0,
+                ok ? scopes : std::string{},
+                ok ? std::string{} : safe_error(result));
+}
+
 void notify_simple(const char* method, bool success, const std::string& error) {
     with_bridge([&](JNIEnv* env, jclass bridge) {
         const jmethodID callback =
@@ -296,15 +314,44 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeSdkVersion(JNIEnv* en
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*, jobject) {
-    post([] {
-        if (!g_client) return;
+Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
+                                                                        jobject,
+                                                                        jboolean use_device_flow) {
+    post([use_device_flow] {
+        if (!g_client) {
+            notify_auth("onAuthResult", false, {}, {}, 0, 0, {},
+                        "Discord is not ready. Please try again.");
+            return;
+        }
+        if (use_device_flow == JNI_TRUE) {
+            discordpp::DeviceAuthorizationArgs args;
+            args.SetClientId(kApplicationId);
+            args.SetScopes(discordpp::Client::GetDefaultPresenceScopes());
+            g_client->GetTokenFromDevice(
+                std::move(args),
+                [](discordpp::ClientResult result,
+                   std::string access_token,
+                   std::string refresh_token,
+                   discordpp::AuthorizationTokenType token_type,
+                   std::int32_t expires_in,
+                   std::string scopes) {
+                    notify_token_result("onAuthResult",
+                                        std::move(result),
+                                        std::move(access_token),
+                                        std::move(refresh_token),
+                                        token_type,
+                                        expires_in,
+                                        std::move(scopes));
+                });
+            return;
+        }
         auto verifier = g_client->CreateAuthorizationCodeVerifier();
         const std::string verifier_value = verifier.Verifier();
         discordpp::AuthorizationArgs args;
         args.SetClientId(kApplicationId);
         args.SetScopes(discordpp::Client::GetDefaultPresenceScopes());
         args.SetCodeChallenge(verifier.Challenge());
+        args.SetCustomSchemeParam("discord-" + std::to_string(kApplicationId));
         g_client->Authorize(
             std::move(args),
             [verifier_value](discordpp::ClientResult result,
@@ -343,15 +390,13 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
                        discordpp::AuthorizationTokenType token_type,
                        std::int32_t expires_in,
                        std::string scopes) {
-                        const bool ok = succeeded(token_result);
-                        notify_auth("onAuthResult",
-                                    ok,
-                                    ok ? access_token : std::string{},
-                                    ok ? refresh_token : std::string{},
-                                    static_cast<int>(token_type),
-                                    ok ? expires_in : 0,
-                                    ok ? scopes : std::string{},
-                                    ok ? std::string{} : safe_error(token_result));
+                        notify_token_result("onAuthResult",
+                                            std::move(token_result),
+                                            std::move(access_token),
+                                            std::move(refresh_token),
+                                            token_type,
+                                            expires_in,
+                                            std::move(scopes));
                     });
             });
     });
