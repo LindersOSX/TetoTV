@@ -25,6 +25,7 @@ class FranchiseScreen extends ConsumerWidget {
             Row(
               children: [
                 TvFocusable(
+                  autofocus: true,
                   onPressed: context.pop,
                   child: const Padding(
                     padding: EdgeInsets.all(10),
@@ -53,8 +54,11 @@ class FranchiseScreen extends ConsumerWidget {
                 ),
                 error: (error, _) =>
                     Center(child: Text('Could not build franchise: $error')),
-                data: (items) =>
-                    CatalogGrid(items: items, titlePreference: preference),
+                data: (items) => CatalogGrid(
+                  items: items,
+                  titlePreference: preference,
+                  autofocus: false,
+                ),
               ),
             ),
           ],

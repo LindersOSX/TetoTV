@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -8,6 +9,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('details error state starts on Back', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith(
+            (_, _) async => throw StateError('offline'),
+          ),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 1)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final detector = find.descendant(
+      of: find.byType(TvFocusable).first,
+      matching: find.byType(FocusableActionDetector),
+    );
+    expect(
+      tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus,
+      isTrue,
+    );
+    expect(find.text('Could not load anime'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('episode action layout fits a 1080p TV canvas', (tester) async {
     tester.view.physicalSize = const Size(960, 540);
     tester.view.devicePixelRatio = 1;

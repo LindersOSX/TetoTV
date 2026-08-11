@@ -957,7 +957,7 @@ class _DetailsError extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _DetailsBack(onPressed: onBack),
+          _DetailsBack(onPressed: onBack, autofocus: true),
           Expanded(
             child: Center(
               child: Column(

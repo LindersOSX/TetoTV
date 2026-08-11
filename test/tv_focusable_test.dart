@@ -291,6 +291,54 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'focusing an already visible control does not recenter the list',
+    (tester) async {
+      final first = FocusNode(debugLabel: 'visible.first');
+      final second = FocusNode(debugLabel: 'visible.second');
+      final controller = ScrollController();
+      addTearDown(first.dispose);
+      addTearDown(second.dispose);
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 300,
+              child: ListView(
+                controller: controller,
+                children: [
+                  TvFocusable(
+                    focusNode: first,
+                    autofocus: true,
+                    onPressed: () {},
+                    child: const SizedBox(height: 50),
+                  ),
+                  const SizedBox(height: 155),
+                  TvFocusable(
+                    focusNode: second,
+                    onPressed: () {},
+                    child: const SizedBox(height: 50),
+                  ),
+                  const SizedBox(height: 300),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.offset, 0);
+
+      second.requestFocus();
+      await tester.pumpAndSettle();
+
+      expect(controller.offset, 0);
+      expect(FocusManager.instance.primaryFocus, second);
+    },
+  );
+
   testWidgets('click sound toggle suppresses activation audio', (tester) async {
     final platformCalls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

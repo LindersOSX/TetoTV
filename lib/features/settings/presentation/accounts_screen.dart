@@ -389,13 +389,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       return KeyEventResult.ignored;
     }
     target.requestFocus();
+    // Settings intentionally uses a screen-local focus graph for a few
+    // cross-column transitions, so reveal that explicit target exactly once.
+    // Normal app-wide D-pad traversal is revealed by Flutter's policy.
+    final alignmentPolicy =
+        key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowLeft
+        ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+        : ScrollPositionAlignmentPolicy.keepVisibleAtEnd;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final targetContext = target?.context;
       if (mounted && targetContext != null && targetContext.mounted) {
         Scrollable.ensureVisible(
           targetContext,
-          duration: const Duration(milliseconds: 160),
-          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutCubic,
+          alignmentPolicy: alignmentPolicy,
         );
       }
     });

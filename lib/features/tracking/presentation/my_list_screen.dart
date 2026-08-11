@@ -375,6 +375,7 @@ class _MyListHeader extends StatelessWidget {
             label: 'My List',
             compact: compact,
             active: true,
+            autofocus: true,
             onPressed: () {},
           ),
           const Spacer(),
@@ -397,6 +398,7 @@ class _NavButton extends StatelessWidget {
     required this.onPressed,
     this.active = false,
     this.compact = false,
+    this.autofocus = false,
   });
 
   final IconData icon;
@@ -404,10 +406,12 @@ class _NavButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool active;
   final bool compact;
+  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
+      autofocus: autofocus,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(7),
       focusScale: 1.02,
@@ -677,7 +681,6 @@ class _TrackedShelf extends StatelessWidget {
             width: 126 * preferences.thumbnailScale,
             height: 238 * preferences.thumbnailScale,
             child: TvFocusable(
-              autofocus: index == 0,
               onPressed: () => onPressed(item),
               onLongPress: () => onManage(item),
               focusScale: 1.025,

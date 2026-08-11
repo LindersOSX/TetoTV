@@ -30,6 +30,7 @@ class CreditsScreen extends ConsumerWidget {
               Row(
                 children: [
                   TvFocusable(
+                    autofocus: true,
                     onPressed: context.pop,
                     child: const Padding(
                       padding: EdgeInsets.all(10),

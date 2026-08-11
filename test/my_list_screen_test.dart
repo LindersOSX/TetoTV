@@ -3,6 +3,8 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,7 +72,7 @@ void main() {
             TrackingListStatus.watching,
           ).overrideWith((_) async => const TrackingListResult(items: [])),
         ],
-        child: const MaterialApp(home: MyListScreen()),
+        child: const MaterialApp(home: TvShortcuts(child: MyListScreen())),
       ),
     );
     await tester.pumpAndSettle();
@@ -79,6 +81,18 @@ void main() {
       expect(find.text(status.displayName), findsWidgets);
     }
     expect(find.text('Watching is empty'), findsOneWidget);
+    final activeMyList = find.ancestor(
+      of: find.byIcon(Icons.video_library_rounded),
+      matching: find.byType(TvFocusable),
+    );
+    final detector = find.descendant(
+      of: activeMyList,
+      matching: find.byType(FocusableActionDetector),
+    );
+    expect(
+      tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus,
+      isTrue,
+    );
   });
 
   testWidgets('refresh reloads the active list and home tracking shelves', (

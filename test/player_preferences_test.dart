@@ -283,4 +283,42 @@ void main() {
       isFalse,
     );
   });
+
+  test('a held Down cannot reopen a HUD that its key-down dismissed', () {
+    expect(
+      consumeHiddenPlayerHudDownRepeat(
+        key: LogicalKeyboardKey.arrowDown,
+        isRepeat: true,
+        controlsVisible: false,
+      ),
+      isTrue,
+    );
+    expect(
+      consumeHiddenPlayerHudDownRepeat(
+        key: LogicalKeyboardKey.arrowDown,
+        isRepeat: false,
+        controlsVisible: false,
+      ),
+      isFalse,
+      reason: 'the initial key-down must still be allowed to show the HUD',
+    );
+    expect(
+      consumeHiddenPlayerHudDownRepeat(
+        key: LogicalKeyboardKey.arrowDown,
+        isRepeat: true,
+        controlsVisible: true,
+      ),
+      isFalse,
+      reason: 'visible controls keep their normal directional behavior',
+    );
+    expect(
+      consumeHiddenPlayerHudDownRepeat(
+        key: LogicalKeyboardKey.arrowRight,
+        isRepeat: true,
+        controlsVisible: false,
+      ),
+      isFalse,
+      reason: 'other directions must still reveal and navigate the HUD',
+    );
+  });
 }

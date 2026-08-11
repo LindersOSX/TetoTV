@@ -1915,6 +1915,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
 
     final key = event.logicalKey;
+    if (consumeHiddenPlayerHudDownRepeat(
+      key: key,
+      isRepeat: event is KeyRepeatEvent,
+      controlsVisible: _controlsVisible,
+    )) {
+      return KeyEventResult.handled;
+    }
     if (event is KeyDownEvent &&
         key == LogicalKeyboardKey.arrowDown &&
         _controlsVisible) {

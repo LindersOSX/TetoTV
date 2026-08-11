@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
@@ -11,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -125,6 +127,69 @@ void main() {
       'search.result.first',
     );
   });
+
+  testWidgets(
+    'production TV shortcuts move between keyboard results and open the focused show',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final client = _DeferredCatalogClient();
+      final router = GoRouter(
+        initialLocation: '/search',
+        routes: [
+          GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
+          GoRoute(
+            path: '/anime/:id',
+            builder: (_, state) => Scaffold(
+              body: Text('Opened anime ${state.pathParameters['id']}'),
+            ),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [catalogClientProvider.overrideWithValue(client)],
+          child: MaterialApp.router(
+            routerConfig: router,
+            builder: (_, child) => TvShortcuts(child: child!),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(TvTextInput));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('c'));
+      await tester.tap(find.text('o'));
+      await tester.tap(find.text('w'));
+      await tester.tap(find.text('DONE'));
+      await tester.pump();
+      client.complete('cow', [
+        _anime(11, 'Cowboy Bebop'),
+        _anime(12, 'Cowboy Bebop: The Movie'),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(_focusedControl(tester, find.text('Cowboy Bebop')), isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        _focusedControl(tester, find.text('Cowboy Bebop: The Movie')),
+        isTrue,
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Opened anime 12'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('focused long result titles stay inside the card', (
     tester,
   ) async {
@@ -190,6 +255,14 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     }
   });
+}
+
+bool _focusedControl(WidgetTester tester, Finder label) {
+  final detector = find
+      .ancestor(of: label, matching: find.byType(FocusableActionDetector))
+      .first;
+  return tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus ??
+      false;
 }
 
 AnimeSummary _anime(int id, String title) => AnimeSummary(

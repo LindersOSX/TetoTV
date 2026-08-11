@@ -7,6 +7,21 @@ import 'package:flutter/services.dart';
 const playerControlsIdleTimeout = Duration(seconds: 5);
 const playerControlsDoubleDownWindow = Duration(milliseconds: 450);
 
+/// Keeps a held D-pad Down press from reopening player controls immediately
+/// after its initial key-down dismissed them.
+///
+/// Android TV remotes emit [KeyRepeatEvent]s while a button remains held. The
+/// dismiss action moves focus back to the player surface, so without consuming
+/// the repeats the surface interprets the same physical press as a request to
+/// show the controls again.
+bool consumeHiddenPlayerHudDownRepeat({
+  required LogicalKeyboardKey key,
+  required bool isRepeat,
+  required bool controlsVisible,
+}) {
+  return isRepeat && !controlsVisible && key == LogicalKeyboardKey.arrowDown;
+}
+
 Duration playerSeekTarget({
   required Duration position,
   required Duration offset,

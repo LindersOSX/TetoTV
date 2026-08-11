@@ -37,6 +37,7 @@ class CatalogCollectionScreen extends ConsumerWidget {
             Row(
               children: [
                 TvFocusable(
+                  autofocus: true,
                   onPressed: context.pop,
                   child: const Padding(
                     padding: EdgeInsets.all(10),
@@ -64,8 +65,11 @@ class CatalogCollectionScreen extends ConsumerWidget {
                 ),
                 error: (error, _) =>
                     Center(child: Text('Could not load titles: $error')),
-                data: (List<AnimeSummary> items) =>
-                    CatalogGrid(items: items, titlePreference: preference),
+                data: (List<AnimeSummary> items) => CatalogGrid(
+                  items: items,
+                  titlePreference: preference,
+                  autofocus: false,
+                ),
               ),
             ),
           ],

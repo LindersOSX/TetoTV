@@ -1,6 +1,7 @@
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,7 +20,9 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+      const ProviderScope(
+        child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
     );
     await tester.pumpAndSettle();
 

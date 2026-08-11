@@ -32,6 +32,7 @@ class AiringCalendarScreen extends ConsumerWidget {
             Row(
               children: [
                 TvFocusable(
+                  autofocus: true,
                   onPressed: context.pop,
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),

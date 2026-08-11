@@ -137,15 +137,9 @@ class _TvFocusableState extends State<TvFocusable> {
       if (_navigationSoundsEnabled && _directionalKeyIsPressed()) {
         unawaited(SystemSound.play(SystemSoundType.click));
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        Scrollable.ensureVisible(
-          context,
-          alignment: .5,
-          duration: const Duration(milliseconds: 70),
-          curve: Curves.easeOut,
-        );
-      });
+      // DirectionalFocusTraversalPolicy reveals the selected control itself.
+      // Starting another animation here used to recenter already-visible
+      // controls and changed the geometry beneath the next D-pad event.
     }
   }
 

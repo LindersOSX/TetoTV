@@ -4,6 +4,9 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/airing_calendar_screen.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,13 +64,37 @@ void main() {
             ),
           ),
         ],
-        child: const MaterialApp(home: AiringCalendarScreen()),
+        child: const MaterialApp(
+          home: TvShortcuts(child: AiringCalendarScreen()),
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(find.text('Followed anime'), findsOneWidget);
     expect(find.text('Unrelated anime'), findsNothing);
+    final controls = find.byType(TvFocusable);
+    final backDetector = find.descendant(
+      of: controls.at(0),
+      matching: find.byType(FocusableActionDetector),
+    );
+    final refreshDetector = find.descendant(
+      of: controls.at(1),
+      matching: find.byType(FocusableActionDetector),
+    );
+    expect(
+      tester.widget<FocusableActionDetector>(backDetector).focusNode?.hasFocus,
+      isTrue,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      tester
+          .widget<FocusableActionDetector>(refreshDetector)
+          .focusNode
+          ?.hasFocus,
+      isTrue,
+    );
     expect(tester.takeException(), isNull);
   });
 }
