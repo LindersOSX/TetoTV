@@ -19,17 +19,40 @@ Future<TrackingListStatus?> currentCatalogTrackingStatus(
       tracking = await ref.read(trackingHomeProvider.future);
     } catch (_) {
       // A temporarily unavailable tracker should not prevent the status
-      // picker from offering its normal add/update choices.
-      return null;
+      // picker from checking the complete lists or offering normal choices.
+      tracking = null;
     }
   }
   final resolvedTracking = tracking;
-  if (resolvedTracking == null) return null;
-  final items = [
-    ...resolvedTracking.watching,
-    ...resolvedTracking.planToWatch,
-    ...resolvedTracking.completed,
-  ];
+  if (resolvedTracking != null) {
+    final cachedStatus = _matchingStatus(anime, [
+      ...resolvedTracking.watching,
+      ...resolvedTracking.planToWatch,
+      ...resolvedTracking.completed,
+    ]);
+    if (cachedStatus != null) return cachedStatus;
+  }
+
+  // Home shelves intentionally keep only the first 20 entries. Check the
+  // complete Planning list so every planned title exposes a real remove
+  // action, without delaying every long press behind all five tracker lists.
+  try {
+    final result = await ref.read(
+      trackingListProvider(TrackingListStatus.planToWatch).future,
+    );
+    final matched = _matchingStatus(anime, result.items);
+    if (matched != null) return matched;
+  } catch (_) {
+    // One unavailable tracker must not prevent adding the title on the other
+    // connected account.
+  }
+  return null;
+}
+
+TrackingListStatus? _matchingStatus(
+  AnimeSummary anime,
+  Iterable<HomeTrackedAnime> items,
+) {
   for (final item in items) {
     final matches = switch (item.provider) {
       TrackingProvider.anilist =>

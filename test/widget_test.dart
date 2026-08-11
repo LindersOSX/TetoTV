@@ -305,8 +305,12 @@ void main() {
 
     final shortArtwork = find.byKey(const ValueKey('home-artwork-2'));
     final longArtwork = find.byKey(const ValueKey('home-artwork-3'));
+    final heroPanel = find.byKey(const ValueKey('home-hero'));
     expect(shortArtwork, findsOneWidget);
     expect(longArtwork, findsOneWidget);
+    expect(heroPanel, findsOneWidget);
+    expect(tester.getTopLeft(heroPanel).dx, 0);
+    expect(tester.getSize(heroPanel).width, 1280);
     expect(
       tester.getSize(shortArtwork).height,
       tester.getSize(longArtwork).height,

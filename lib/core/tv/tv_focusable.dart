@@ -44,7 +44,7 @@ class _TvFocusableState extends State<TvFocusable> {
   bool _pressed = false;
   bool _navigationSoundsEnabled = true;
   bool _clickSoundsEnabled = true;
-  LogicalKeyboardKey? _remotePressKey;
+  PhysicalKeyboardKey? _remotePressPhysicalKey;
   Timer? _holdTimer;
   bool _holdEligible = false;
 
@@ -88,14 +88,24 @@ class _TvFocusableState extends State<TvFocusable> {
     // ActivateIntent. Keeping their Enter event unconsumed also lets parent
     // keyboard/dialog handlers observe physical Enter.
     if (widget.onLongPress == null) return KeyEventResult.ignored;
-    if (event.logicalKey != LogicalKeyboardKey.select &&
-        event.logicalKey != LogicalKeyboardKey.enter) {
+    final isActivationKey =
+        event.logicalKey == LogicalKeyboardKey.select ||
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter ||
+        _remotePressPhysicalKey == event.physicalKey;
+    if (!isActivationKey) {
       return KeyEventResult.ignored;
     }
     if (event is KeyDownEvent) {
+      // Chromecast/Google TV firmware can report held DPAD_CENTER packets as
+      // additional KeyDownEvents instead of KeyRepeatEvents. Do not restart
+      // the hold timer for those packets or a long press can never mature.
+      if (_remotePressPhysicalKey == event.physicalKey) {
+        return KeyEventResult.handled;
+      }
       _holdTimer?.cancel();
       _holdEligible = false;
-      _remotePressKey = event.logicalKey;
+      _remotePressPhysicalKey = event.physicalKey;
       if (widget.onLongPress != null) {
         _holdTimer = Timer(const Duration(milliseconds: 650), () {
           _holdEligible = true;
@@ -105,11 +115,11 @@ class _TvFocusableState extends State<TvFocusable> {
     }
     if (event is KeyRepeatEvent) return KeyEventResult.handled;
     if (event is KeyUpEvent) {
-      final pressedKey = _remotePressKey;
+      final pressedKey = _remotePressPhysicalKey;
       _holdTimer?.cancel();
       _holdTimer = null;
-      _remotePressKey = null;
-      if (pressedKey != event.logicalKey) {
+      _remotePressPhysicalKey = null;
+      if (pressedKey != event.physicalKey) {
         _holdEligible = false;
         return KeyEventResult.handled;
       }
@@ -128,7 +138,7 @@ class _TvFocusableState extends State<TvFocusable> {
     if (!focused) {
       _holdTimer?.cancel();
       _holdTimer = null;
-      _remotePressKey = null;
+      _remotePressPhysicalKey = null;
       _holdEligible = false;
     }
     setState(() => _focused = focused);

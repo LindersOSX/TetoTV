@@ -46,15 +46,34 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
               ).pop(const CatalogTrackingSelection.remove()),
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                width: 180,
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 alignment: Alignment.center,
                 color: const Color(0xFF4A1420),
-                child: const Text(
-                  'Remove from list',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                child: Row(
+                  children: [
+                    const Icon(Icons.remove_circle_outline_rounded, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Remove from ${current.displayName}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
                 ),
               ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Remove deletes the tracker list entry. Dropped keeps the show '
+              'in your list as something you started and stopped.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
           ],
         ],

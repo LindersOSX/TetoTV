@@ -209,6 +209,48 @@ void main() {
     expect(secondaryCalls, 0);
   });
 
+  testWidgets('duplicate Chromecast key-down packets preserve a long press', (
+    tester,
+  ) async {
+    var primaryCalls = 0;
+    var secondaryCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TvFocusable(
+            autofocus: true,
+            onPressed: () => primaryCalls++,
+            onLongPress: () => secondaryCalls++,
+            child: const SizedBox(width: 100, height: 100),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.select,
+      physicalKey: PhysicalKeyboardKey.select,
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    HardwareKeyboard.instance.handleKeyEvent(
+      const KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.select,
+        logicalKey: LogicalKeyboardKey.select,
+        timeStamp: Duration(milliseconds: 350),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.select,
+      physicalKey: PhysicalKeyboardKey.select,
+    );
+    await tester.pump();
+
+    expect(primaryCalls, 0);
+    expect(secondaryCalls, 1);
+  });
+
   testWidgets('held Select cannot activate a dialog action before release', (
     tester,
   ) async {
