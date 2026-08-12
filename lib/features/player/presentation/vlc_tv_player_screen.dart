@@ -965,7 +965,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   Future<void> _openAudioTrackPicker() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
+    final expectsMultipleAudio = releaseAdvertisesMultipleAudio(
+      _release.releaseName,
+    );
     try {
+      if (expectsMultipleAudio) {
+        _showMessage('Checking every embedded audio track…');
+      }
       final tracks = await waitForStableTrackSnapshot<Map<int, String>>(
         read: () async {
           if (!mounted || controller != _controller) return const {};
@@ -973,6 +979,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         },
         signature: vlcAudioTrackSignature,
         hasTracks: (tracks) => tracks.keys.any((id) => id >= 0),
+        // VLC can publish the default audio track before the rest of the
+        // demuxed list. A single stable sample therefore waits to the bound.
+        isComplete: (tracks) => tracks.keys.where((id) => id >= 0).length >= 2,
+        maximumWait: expectsMultipleAudio
+            ? const Duration(seconds: 5)
+            : const Duration(seconds: 2),
       );
       if (!mounted || controller != _controller) return;
       final ids = tracks.keys.where((id) => id >= 0).toList()..sort();
@@ -985,7 +997,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       _controlsTimer?.cancel();
       final selected = await showPlayerTrackPicker<int>(
         context: context,
-        title: ids.length == 1 ? 'Audio track (1 found)' : 'Audio tracks',
+        title: ids.length == 1
+            ? expectsMultipleAudio
+                  ? 'Audio track (only 1 detected)'
+                  : 'Audio track (1 found)'
+            : 'Audio tracks (${ids.length} found)',
         icon: Icons.audiotrack_rounded,
         selectedValue: current,
         options: ids
@@ -1111,6 +1127,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       subtitlePosition: _preferences.subtitlePosition,
       subtitleDelayMs: _subtitleDelayMs,
       audioDelayMs: _audioDelayMs,
+      preferredReleaseProvider: _release.provider,
+      clearPreferredReleaseProvider: _release.provider == null,
+      preferredReleaseGroup: releaseGroupKey(_release.releaseName),
+      clearPreferredReleaseGroup: releaseGroupKey(_release.releaseName) == null,
     );
     await _database.saveSeriesPreferences(mediaId, _preferences);
   }
@@ -1311,13 +1331,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           );
       if (synced) {
         ref.invalidate(trackingHomeProvider);
-        _showMessage('Episode progress saved');
-      } else {
-        _showMessage('Progress will sync when the tracker reconnects');
       }
-    } catch (_) {
-      _showMessage('Progress will sync when the tracker reconnects');
-    }
+    } catch (_) {}
   }
 
   Future<void> _offerNextEpisode() async {

@@ -30,6 +30,8 @@
     <string name="tetotv_player_skip_recap">Skip recap</string>
     <string name="tetotv_player_hide_more_controls">Hide more controls</string>
     <string name="tetotv_player_no_audio_tracks">No selectable audio tracks</string>
+    <string name="tetotv_player_checking_audio_tracks">Checking every embedded audio track…</string>
+    <string name="tetotv_player_dual_audio_single_track">This release says dual audio, but the selected video exposes only one playable audio track.</string>
     <string name="tetotv_player_no_caption_tracks">No closed-caption tracks are available</string>
     <string name="tetotv_player_track_picker_error">Track selection could not be opened</string>
     <string name="tetotv_player_play_pause">Play or pause</string>

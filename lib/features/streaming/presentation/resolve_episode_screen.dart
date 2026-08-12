@@ -141,7 +141,13 @@ int compareStreamReleases(
   Map<String, int> failureCounts = const {},
   String sortMode = 'compatibility',
   String? preferredProvider,
+  String? preferredReleaseGroup,
 }) {
+  final group = _releaseGroupRank(
+    left,
+    preferredReleaseGroup,
+  ).compareTo(_releaseGroupRank(right, preferredReleaseGroup));
+  if (group != 0) return group;
   final preferred = _providerRank(
     left,
     preferredProvider,
@@ -202,6 +208,13 @@ int compareWebStreamsByQuality(WebStreamResult left, WebStreamResult right) {
 int _providerRank(ReleaseCandidate release, String? preferredProvider) {
   if (preferredProvider == null || preferredProvider.isEmpty) return 1;
   return release.provider?.toLowerCase() == preferredProvider.toLowerCase()
+      ? 0
+      : 1;
+}
+
+int _releaseGroupRank(ReleaseCandidate release, String? preferredGroup) {
+  if (preferredGroup == null || preferredGroup.isEmpty) return 1;
+  return releaseGroupKey(release.releaseName) == preferredGroup.toLowerCase()
       ? 0
       : 1;
 }
@@ -572,6 +585,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   failureCounts: _failureCounts,
                   sortMode: 'compatibility',
                   preferredProvider: selected.provider,
+                  preferredReleaseGroup: releaseGroupKey(selected.releaseName),
                 );
               });
             context.pushReplacement(
@@ -914,6 +928,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         failureCounts: _failureCounts,
         sortMode: _sortMode.name,
         preferredProvider: _seriesPreferences.preferredReleaseProvider,
+        preferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
       ),
     );
     return filtered;
@@ -941,6 +956,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   Future<void> _rememberStreamSelection(ReleaseCandidate candidate) async {
     _seriesPreferences = _seriesPreferences.copyWith(
       preferredReleaseProvider: candidate.provider,
+      clearPreferredReleaseProvider: candidate.provider == null,
+      preferredReleaseGroup: releaseGroupKey(candidate.releaseName),
+      clearPreferredReleaseGroup:
+          releaseGroupKey(candidate.releaseName) == null,
       preferredStreamLanguage: candidate.isDubbed ? 'dub' : 'sub',
     );
     try {

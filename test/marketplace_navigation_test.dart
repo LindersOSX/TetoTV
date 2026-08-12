@@ -107,7 +107,107 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'catalog focus survives a repository refresh and reaches install actions',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final controller = _SeededMarketplaceController();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            marketplaceControllerProvider.overrideWith((_) => controller),
+            userTorrentSourcesControllerProvider.overrideWith(
+              (_) => _EmptyTorrentSourcesController(),
+            ),
+          ],
+          child: const MaterialApp(
+            home: TvShortcuts(child: MarketplaceScreen()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('Provider 1'),
+        260,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Install'), findsNWidgets(3));
+
+      final firstInstall = find.text('Install').first;
+      final firstDetector = find
+          .ancestor(
+            of: firstInstall,
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first;
+      tester
+          .widget<FocusableActionDetector>(firstDetector)
+          .focusNode!
+          .requestFocus();
+      await tester.pump();
+      expect(_focusedControl(tester, firstInstall), isTrue);
+
+      // A repository refresh can attach new Focus widgets before their lazy
+      // grid RenderObjects exist. A D-pad event in that build/layout gap must
+      // be ignored safely rather than reading FocusNode.rect and crashing.
+      controller.replaceCatalog([
+        _catalogAddon(10),
+        _catalogAddon(11),
+        _catalogAddon(12),
+      ]);
+      await tester.pump(Duration.zero, EnginePhase.build);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Provider 10'),
+        260,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      final refreshedInstall = find.text('Install').first;
+      final refreshedDetector = find
+          .ancestor(
+            of: refreshedInstall,
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first;
+      tester
+          .widget<FocusableActionDetector>(refreshedDetector)
+          .focusNode!
+          .requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(_focusedControl(tester, find.text('Install').at(1)), isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Install Provider 11?'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
+
+MarketplaceAddon _catalogAddon(int number) => MarketplaceAddon(
+  id: 'provider.$number',
+  name: 'Provider $number',
+  description: 'Navigation fixture $number',
+  author: 'TetoTV tests',
+  manifestUri: Uri.parse('https://example.com/provider-$number.json'),
+  repositoryUrl: 'https://example.com/marketplace.json',
+  language: 'javascript',
+  type: 'onlinestream-provider',
+  locale: 'en',
+);
 
 bool _focusedControl(WidgetTester tester, Finder label) {
   final detector = find
@@ -130,8 +230,13 @@ class _SeededMarketplaceController extends MarketplaceController {
           updatedAt: DateTime.utc(2026),
         ),
       ],
+      catalog: [_catalogAddon(1), _catalogAddon(2), _catalogAddon(3)],
       loading: false,
     );
+  }
+
+  void replaceCatalog(List<MarketplaceAddon> catalog) {
+    state = state.copyWith(catalog: catalog);
   }
 }
 
@@ -144,5 +249,11 @@ class _SeededTorrentSourcesController extends UserTorrentSourcesController {
       ],
       loaded: true,
     );
+  }
+}
+
+class _EmptyTorrentSourcesController extends UserTorrentSourcesController {
+  _EmptyTorrentSourcesController() : super(const FlutterSecureStorage()) {
+    state = const UserTorrentSourcesState(loaded: true);
   }
 }

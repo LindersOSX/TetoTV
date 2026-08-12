@@ -87,6 +87,15 @@ internal fun nativeSkipReachesPlaybackEnd(
     endGuardMs: Long = 1_000L,
 ): Boolean = durationMs > 0L && requestedEndMs >= durationMs - endGuardMs
 
+internal fun nativeReleaseAdvertisesMultipleAudio(releaseName: String?): Boolean {
+    val normalized = releaseName
+        .orEmpty()
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+    return Regex("\\b(?:dual|multi) audio\\b").containsMatchIn(normalized)
+}
+
 /**
  * Full-screen native Android playback isolated from Flutter's texture pipeline.
  *
@@ -136,6 +145,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var droppedFrames = 0
     private var terminalError: String? = null
     private var resultSent = false
+    private var preserveDiscordPresenceForEngineHandoff = false
     private var playbackResourcesReleased = false
     private var playerViewReleased = false
     private var playerListenersReleased = false
@@ -167,6 +177,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var dropWindowFrames = 0
     private var consecutiveChoppyWindows = 0
     private var activeTrackDialog: Dialog? = null
+    private var pendingAudioTrackPicker: Runnable? = null
     private var consumedNavigationKeyUp: Int? = null
     private var malMediaId = 0
     private var episodeNumber = 0
@@ -1170,7 +1181,67 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         )
     }
 
+    private fun supportedTrackCount(trackType: Int): Int =
+        player.currentTracks.groups
+            .filter { it.type == trackType }
+            .sumOf { group -> (0 until group.length).count(group::isTrackSupported) }
+
     private fun showTrackPicker(trackType: Int, sourceButton: View) {
+        if (trackType == C.TRACK_TYPE_AUDIO && supportedTrackCount(trackType) < 2) {
+            val advertised = nativeReleaseAdvertisesMultipleAudio(
+                intent.getStringExtra(EXTRA_FILE_NAME),
+            )
+            waitForAudioTracks(
+                sourceButton,
+                if (advertised) AUDIO_TRACK_ADVERTISED_WAIT_MS else AUDIO_TRACK_DEFAULT_WAIT_MS,
+                warnIfSingle = advertised,
+            )
+            return
+        }
+        showTrackPickerNow(trackType, sourceButton)
+    }
+
+    private fun waitForAudioTracks(
+        sourceButton: View,
+        maximumWaitMs: Long,
+        warnIfSingle: Boolean,
+    ) {
+        if (pendingAudioTrackPicker != null) return
+        handler.removeCallbacks(hideControllerRunnable)
+        Toast.makeText(
+            this,
+            R.string.tetotv_player_checking_audio_tracks,
+            Toast.LENGTH_SHORT,
+        ).show()
+        val startedAt = SystemClock.uptimeMillis()
+        val task = object : Runnable {
+            override fun run() {
+                if (resultSent || playerCoreReleased || isFinishing || isDestroyed) {
+                    pendingAudioTrackPicker = null
+                    return
+                }
+                val trackCount = supportedTrackCount(C.TRACK_TYPE_AUDIO)
+                val timedOut = SystemClock.uptimeMillis() - startedAt >= maximumWaitMs
+                if (trackCount >= 2 || timedOut) {
+                    pendingAudioTrackPicker = null
+                    if (timedOut && trackCount < 2 && warnIfSingle) {
+                        Toast.makeText(
+                            this@Media3PlayerActivity,
+                            R.string.tetotv_player_dual_audio_single_track,
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                    showTrackPickerNow(C.TRACK_TYPE_AUDIO, sourceButton)
+                } else {
+                    handler.postDelayed(this, AUDIO_TRACK_POLL_MS)
+                }
+            }
+        }
+        pendingAudioTrackPicker = task
+        handler.postDelayed(task, AUDIO_TRACK_POLL_MS)
+    }
+
+    private fun showTrackPickerNow(trackType: Int, sourceButton: View) {
         val selectableTracks = player.currentTracks.groups.any { group ->
             group.type == trackType &&
                 (0 until group.length).any(group::isTrackSupported)
@@ -1510,7 +1581,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (::player.isInitialized && !playbackResourcesReleased) {
             runCatching { player.pause() }
         }
-        val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+        val dialog = AlertDialog.Builder(this, R.style.NativePlayerExitDialogTheme)
             .setTitle("Exit video?")
             .setMessage("Your current playback position will be saved.")
             .setCancelable(false)
@@ -1538,6 +1609,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         dialog.setOnShowListener {
             val continueButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
             val exitButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            fun dp(value: Int): Int = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value.toFloat(),
+                resources.displayMetrics,
+            ).toInt()
             val horizontalPadding = TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP,
                 18f,
@@ -1551,18 +1627,45 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             dialog.findViewById<TextView>(android.R.id.message)?.apply {
                 setTextColor(Color.WHITE)
                 alpha = 0.92f
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            }
+            val alertTitleId = resources.getIdentifier("alertTitle", "id", "android")
+            if (alertTitleId != 0) {
+                dialog.findViewById<TextView>(alertTitleId)?.apply {
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                }
             }
             continueButton?.apply {
                 isAllCaps = false
                 setTextColor(Color.WHITE)
                 setBackgroundResource(R.drawable.tetotv_dialog_neutral_button)
                 setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+                minimumHeight = dp(48)
+                minHeight = dp(48)
+                setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.tetotv_ic_play,
+                    0,
+                    0,
+                    0,
+                )
+                compoundDrawablePadding = dp(8)
             }
             exitButton?.apply {
                 isAllCaps = false
                 setTextColor(Color.WHITE)
                 setBackgroundResource(R.drawable.tetotv_dialog_danger_button)
                 setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+                minimumHeight = dp(48)
+                minHeight = dp(48)
+                setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.tetotv_ic_exit,
+                    0,
+                    0,
+                    0,
+                )
+                compoundDrawablePadding = dp(8)
             }
             continueButton?.setOnKeyListener { _, keyCode, event ->
                 if (
@@ -1588,6 +1691,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     false
                 }
             }
+            dialog.window?.setLayout(
+                min(dp(520), resources.displayMetrics.widthPixels - dp(64)),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
             continueButton?.requestFocus()
         }
         dialog.show()
@@ -1941,6 +2048,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(hideControllerRunnable)
+        pendingAudioTrackPicker?.let(handler::removeCallbacks)
+        pendingAudioTrackPicker = null
     }
 
     private fun armForegroundWork() {
@@ -1964,7 +2073,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onDestroy() {
-        DiscordRichPresenceBridge.clearPlayback()
+        // Flutter starts the selected replacement engine as soon as it
+        // receives the Activity result. Do not let this older Activity's
+        // delayed onDestroy clear the replacement engine's fresh presence.
+        if (!preserveDiscordPresenceForEngineHandoff) {
+            DiscordRichPresenceBridge.clearPlayback()
+        }
         exitDialog?.dismiss()
         exitDialog = null
         activeTrackDialog?.dismiss()
@@ -2065,6 +2179,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             status
         }
         result.putExtra(RESULT_STATUS, deliveredStatus)
+        preserveDiscordPresenceForEngineHandoff =
+            deliveredStatus == STATUS_USE_MPV || deliveredStatus == STATUS_USE_VLC
         setResult(RESULT_OK, result)
         // Normal Exit must remain reachable even if a device-specific cleanup
         // step failed. Engine switches are withheld above until every old
@@ -2184,6 +2300,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
+        private const val AUDIO_TRACK_POLL_MS = 250L
+        private const val AUDIO_TRACK_DEFAULT_WAIT_MS = 2_000L
+        private const val AUDIO_TRACK_ADVERTISED_WAIT_MS = 5_000L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3
         private const val MAX_SKIP_RESPONSE_BYTES = 256L * 1024L

@@ -2,6 +2,7 @@ import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/core/layout/interface_scaling.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -248,6 +249,51 @@ void main() {
     expect(find.text('Second Trending Show'), findsWidgets);
     expect(find.text('Second description'), findsOneWidget);
     expect(find.text('First description'), findsNothing);
+  });
+
+  testWidgets('featured carousel uses cover art when a banner is missing', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const cover = 'https://example.test/fallback-cover.jpg';
+    const hero = AnimeSummary(
+      id: 71,
+      title: 'Cover-only hero',
+      description: 'Still has artwork',
+      coverImageUrl: cover,
+      episodes: null,
+      score: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith((_) async => const [hero]),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final artwork = tester.widget<NetworkArtwork>(
+      find.byKey(const ValueKey('hero-art-71')),
+    );
+    expect(artwork.url, cover);
   });
 
   testWidgets('home artwork keeps a fixed height across title lengths', (

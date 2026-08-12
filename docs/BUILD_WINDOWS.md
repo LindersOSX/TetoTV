@@ -213,10 +213,11 @@ Copy `android\key.properties.example` to `android\key.properties`, replace all
 values, and keep the real properties and keystore outside source control. Back
 up both files securely before installing the first distributed build. The
 release task intentionally fails without them, and Android cannot update an
-installed app signed by a different key. Then build one APK per ABI:
+installed app signed by a different key. Public releases use one universal ARM
+APK containing both supported application ABIs:
 
 ```powershell
-flutter build apk --release --split-per-abi
+flutter build apk --release --target-platform android-arm,android-arm64
 ```
 
 Many Fire TV models expose a 32-bit application ABI even when their CPU is
@@ -227,12 +228,10 @@ adb shell getprop ro.product.cpu.abilist
 adb shell getprop ro.build.version.sdk
 ```
 
-Use `app-armeabi-v7a-release.apk` when the ABI list contains only
-`armeabi-v7a`, `app-arm64-v8a-release.apk` for `arm64-v8a`, and the x86_64 APK
-only for an emulator. A universal `flutter build apk --release` build avoids
-ABI selection errors. Do not alternate between split and universal APKs under
-the same low version code: Flutter adds ABI-specific offsets to split version
-codes, so Android can reject a later universal build as a downgrade.
+The published `app-release.apk` contains `armeabi-v7a` and `arm64-v8a`, avoiding
+device-side ABI selection errors. Keep x86_64 builds local and debug-only for
+emulators. Separate ARM32/ARM64 release APKs can be restored later if there is
+a specific distribution need; do not publish them by default.
 
 The current Flutter toolchain has a minimum SDK of API 24. It supports Fire OS
 6 and newer, but not Fire OS 5 devices (API 22).

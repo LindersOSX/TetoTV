@@ -8,6 +8,7 @@ Future<T> waitForStableTrackSnapshot<T>({
   required Future<T> Function() read,
   required Object Function(T snapshot) signature,
   required bool Function(T snapshot) hasTracks,
+  bool Function(T snapshot)? isComplete,
   Duration pollInterval = const Duration(milliseconds: 200),
   Duration minimumWait = const Duration(milliseconds: 800),
   Duration maximumWait = const Duration(seconds: 2),
@@ -28,11 +29,22 @@ Future<T> waitForStableTrackSnapshot<T>({
       latestSignature = nextSignature;
     }
     latest = next;
-    if (elapsed >= minimumWait && hasTracks(latest) && stableSamples >= 2) {
+    final complete = isComplete?.call(latest) ?? hasTracks(latest);
+    if (elapsed >= minimumWait && complete && stableSamples >= 2) {
       break;
     }
   }
   return latest;
+}
+
+/// Release names are hints, not proof, but a dual/multi-audio label tells the
+/// picker to give a slow demuxer longer to publish its second embedded track.
+bool releaseAdvertisesMultipleAudio(String releaseName) {
+  final normalized = releaseName
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .trim();
+  return RegExp(r'\b(?:dual|multi) audio\b').hasMatch(normalized);
 }
 
 String mediaKitAudioTrackSignature(Iterable<AudioTrack> tracks) => tracks

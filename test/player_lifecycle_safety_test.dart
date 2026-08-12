@@ -48,11 +48,30 @@ void main() {
       contains('if (mediaId == null || !_seriesPreferencesReady) return'),
     );
     expect(savePreferences, isNot(contains('ref.')));
+    expect(
+      savePreferences,
+      contains('audio.language ?? audio.title'),
+      reason: 'manually selected dub labels must persist without language tags',
+    );
     expect(dispose, isNot(contains('ref.')));
     expect(
       dispose,
       contains('if (!_engineHandoffInProgress && !_playerReleasedForHandoff)'),
     );
+  });
+
+  test('manual player selection reaches Media3 without automatic redirect', () {
+    final router = _read(
+      'lib/features/player/presentation/tv_player_screen.dart',
+    );
+    final native = _read(
+      'lib/features/player/presentation/native_media3_player_screen.dart',
+    );
+
+    expect(router, contains('_manualEngineSelection = manualSelection'));
+    expect(router, contains('manualSelection: true'));
+    expect(router, contains('manuallySelected: _manualEngineSelection'));
+    expect(native, contains('!manuallySelected &&'));
   });
 
   test('MPV completion, skip, and engine handoff remain single-owner', () {
@@ -102,6 +121,8 @@ void main() {
       contains('if (!released) {\n      _handoffAttemptActive = false;'),
     );
     expect(prepare, contains('_handoffReleaseFailed = true'));
+    expect(source, isNot(contains('Episode progress saved')));
+    expect(source, isNot(contains('tracker reconnects')));
 
     final nextEpisode = _methodSlice(
       source,
@@ -188,6 +209,8 @@ void main() {
       contains('if (!released) {\n      _handoffAttemptActive = false;'),
     );
     expect(prepare, contains('_handoffReleaseFailed = true'));
+    expect(source, isNot(contains('Episode progress saved')));
+    expect(source, isNot(contains('tracker reconnects')));
 
     final handoff = _methodSlice(
       source,
@@ -281,6 +304,12 @@ void main() {
       contains('playbackResourcesReleased = playerViewReleased &&'),
     );
     expect(source, contains('STATUS_RELEASE_FAILED'));
+    expect(source, contains('if (!preserveDiscordPresenceForEngineHandoff)'));
+    _expectInOrder(finish, const [
+      'result.putExtra(RESULT_STATUS, deliveredStatus)',
+      'preserveDiscordPresenceForEngineHandoff =',
+      'setResult(RESULT_OK, result)',
+    ]);
     expect(source, contains('!playerCoreReleased && !resultSent'));
     expect(source, contains('runCatching { player.pause() }'));
     expect(source, contains('runCatching { player.play() }'));
