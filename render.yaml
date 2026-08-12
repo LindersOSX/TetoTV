@@ -18,3 +18,7 @@ services:
         sync: false
       - key: GITHUB_RELEASE_TOKEN
         sync: false
+      - key: CRASH_REPORT_BOT_URL
+        sync: false
+      - key: CRASH_REPORT_SHARED_SECRET
+        sync: false

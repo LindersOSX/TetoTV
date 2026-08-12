@@ -23,7 +23,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
-  testWidgets('setup asks before enabling live count or linking Discord', (
+  testWidgets('setup asks before enabling anonymous choices or Discord', (
     tester,
   ) async {
     final discord = await _pumpSetup(tester, const Size(1280, 720));
@@ -36,6 +36,8 @@ void main() {
     expect(find.text('Privacy and Discord'), findsOneWidget);
     expect(find.text('Keep off'), findsOneWidget);
     expect(find.text('Enable live count'), findsOneWidget);
+    expect(find.text('Do not send'), findsOneWidget);
+    expect(find.text('Allow crash reports'), findsOneWidget);
     final container = ProviderScope.containerOf(
       tester.element(find.byType(InitialSetupScreen)),
     );
@@ -43,11 +45,26 @@ void main() {
       container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
       isFalse,
     );
+    expect(
+      container
+          .read(settingsPreferencesProvider)
+          .anonymousCrashReportingEnabled,
+      isFalse,
+    );
 
     await tester.tap(find.text('Enable live count'));
     await tester.pumpAndSettle();
     expect(
       container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
+      isTrue,
+    );
+
+    await tester.tap(find.text('Allow crash reports'));
+    await tester.pumpAndSettle();
+    expect(
+      container
+          .read(settingsPreferencesProvider)
+          .anonymousCrashReportingEnabled,
       isTrue,
     );
 

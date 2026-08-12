@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -20,6 +20,26 @@ function normalizePublicOrigin(value) {
       return "";
     }
     return url.origin;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeCrashBotUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !url.pathname.startsWith("/") ||
+      url.pathname.includes("..") ||
+      url.search ||
+      url.hash
+    ) {
+      return "";
+    }
+    return url.toString();
   } catch {
     return "";
   }
@@ -63,6 +83,14 @@ const maxUpdateDownloadsPerMinute = 12;
 const appPresenceTtlMs = 3 * 60 * 1000;
 const appPresenceHeartbeatSeconds = 45;
 const maxAppPresenceSessions = 10_000;
+const crashBotUrl = normalizeCrashBotUrl(
+  process.env.CRASH_REPORT_BOT_URL ||
+    (selfTest ? "https://bot.example.com/crash-reports" : ""),
+);
+const crashSharedSecret =
+  process.env.CRASH_REPORT_SHARED_SECRET ||
+  (selfTest ? "self-test-crash-secret-that-is-long-enough" : "");
+const selfTestCrashForwards = [];
 const pairings = new Map();
 const codes = new Map();
 const sourcePairings = new Map();
@@ -226,7 +254,9 @@ function privacyPage(response) {
      <p>Sessions expire after about three minutes without a heartbeat and are removed when the app opts out or closes normally. Only aggregate active and streaming counts are public. The hosting provider may process IP addresses for short-lived rate limiting and ordinary access logs.</p>
 
      <h2>Diagnostics and choices</h2>
-     <p>Diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
+     <p><strong>Anonymous crash reporting is disabled by default.</strong> First-time setup and Settings both let the user explicitly enable or disable it. When enabled, TetoTV sends only the app version/build, crash category, Android version, CPU architecture, TV-or-phone class, time, and a bounded redacted technical error/stack trace. It does not intentionally send the show, episode, account, device or installation identifier, source/provider, URL, credential, playback history, or full diagnostics database.</p>
+     <p>A JVM crash is kept locally and sent after the next launch. On Android versions that expose historical process-exit details, native crashes and ANRs can also be recovered after restart. This broker validates and rate-limits the report, adds a random per-incident reference, and forwards it without storing the body to the TetoTV Discord bot. The bot posts it to the designated crash-report channel, where Discord retention and channel permissions apply. Disabling reporting deletes any queued unsent report. Hosting providers and Discord may process ordinary connection and request metadata under their own policies.</p>
+     <p>Other diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
 
      <h2>Security, children, and changes</h2>
      <p>Network integrations require HTTPS and user-added endpoints are constrained against private or local network targets. TetoTV is not directed to children and does not knowingly collect a child's personal information. This disclosure will be updated when material features or hosting practices change.</p>
@@ -402,6 +432,140 @@ function appPresenceSummary(response) {
     streaming,
     ttl_seconds: Math.floor(appPresenceTtlMs / 1000),
   });
+}
+
+function crashReportingConfigured() {
+  return Boolean(crashBotUrl) && crashSharedSecret.length >= 32;
+}
+
+function sanitizeCrashText(value, maximum) {
+  let output = String(value || "")
+    .replace(/https?:\/\/[^\s"']+/gi, "[URL]")
+    .replace(/magnet:\?[^\s"']+/gi, "[MAGNET]")
+    .replace(/bearer\s+[^\s,;"']+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+\b/gi, "[REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/(?:authorization|access[_ -]?token|refresh[_ -]?token|token|api[_ -]?key|client[_ -]?secret|password)\s*[:=]\s*[^\s,;"']+/gi, "[REDACTED]")
+    .replace(/\b[a-fA-F0-9]{40,}\b/g, "[REDACTED]")
+    .replace(/@(everyone|here)/gi, "$1")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim();
+  if (output.length > maximum) output = output.slice(0, maximum);
+  return output;
+}
+
+function validateCrashReport(value) {
+  const expectedKeys = [
+    "abi",
+    "android_sdk",
+    "app_version",
+    "build_number",
+    "device_class",
+    "event_id",
+    "kind",
+    "message",
+    "occurred_at",
+    "schema_version",
+    "stack",
+  ];
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join("|") !== expectedKeys.join("|") ||
+    value.schema_version !== 1 ||
+    typeof value.event_id !== "string" ||
+    !/^[A-Za-z0-9_-]{8,100}$/.test(value.event_id) ||
+    !["flutter", "platform", "native", "java", "anr"].includes(value.kind) ||
+    typeof value.message !== "string" ||
+    value.message.length < 1 ||
+    value.message.length > 500 ||
+    typeof value.stack !== "string" ||
+    value.stack.length > 4_000 ||
+    typeof value.app_version !== "string" ||
+    !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(value.app_version) ||
+    !Number.isSafeInteger(value.build_number) ||
+    value.build_number < 1 ||
+    value.build_number > 999_999_999 ||
+    !Number.isSafeInteger(value.android_sdk) ||
+    value.android_sdk < 24 ||
+    value.android_sdk > 99 ||
+    !["arm64-v8a", "armeabi-v7a", "x86_64", "x86", "unknown"].includes(value.abi) ||
+    !["tv", "phone"].includes(value.device_class)
+  ) {
+    throw new RequestInputError(400, "Invalid anonymous crash report.");
+  }
+  const occurredAt = Date.parse(value.occurred_at);
+  const now = Date.now();
+  if (
+    !Number.isFinite(occurredAt) ||
+    occurredAt < now - 30 * 24 * 60 * 60 * 1000 ||
+    occurredAt > now + 10 * 60 * 1000
+  ) {
+    throw new RequestInputError(400, "Invalid anonymous crash timestamp.");
+  }
+  return {
+    schema_version: 1,
+    incident_id: createHmac("sha256", crashSharedSecret)
+      .update(value.event_id)
+      .digest("base64url")
+      .slice(0, 20),
+    kind: value.kind,
+    message: sanitizeCrashText(value.message, 500),
+    stack: sanitizeCrashText(value.stack, 4_000),
+    occurred_at: new Date(occurredAt).toISOString(),
+    app_version: value.app_version,
+    build_number: value.build_number,
+    android_sdk: value.android_sdk,
+    abi: value.abi,
+    device_class: value.device_class,
+  };
+}
+
+async function forwardCrashReport(report) {
+  const body = JSON.stringify(report);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `sha256=${createHmac("sha256", crashSharedSecret)
+    .update(`${timestamp}.${body}`)
+    .digest("hex")}`;
+  if (selfTest) {
+    selfTestCrashForwards.push({ body, timestamp, signature });
+    const expected = `sha256=${createHmac("sha256", crashSharedSecret)
+      .update(`${timestamp}.${body}`)
+      .digest("hex")}`;
+    if (!safeEqual(signature, expected)) throw new Error("Crash HMAC mismatch.");
+    return;
+  }
+  const upstream = await fetch(crashBotUrl, {
+    method: "POST",
+    redirect: "manual",
+    signal: AbortSignal.timeout(8_000),
+    headers: {
+      "Content-Type": "application/json",
+      "X-TetoTV-Timestamp": timestamp,
+      "X-TetoTV-Signature": signature,
+    },
+    body,
+  });
+  if (upstream.status !== 202) throw new Error("Crash bot rejected report.");
+  await upstream.body?.cancel();
+}
+
+async function receiveCrashReport(request, response) {
+  if (!crashReportingConfigured()) {
+    await drainBody(request);
+    return json(
+      response,
+      503,
+      { error: "crash_reporting_unavailable" },
+      { "Retry-After": "300" },
+    );
+  }
+  const report = validateCrashReport(
+    await readJson(request, { requireBody: true }),
+  );
+  await forwardCrashReport(report);
+  return json(response, 202, { status: "accepted" });
 }
 
 async function drainBody(request) {
@@ -1698,6 +1862,7 @@ const server = createServer(
         source_pairing: true,
         source_pairing_version: 2,
         app_presence: true,
+        crash_reporting: crashReportingConfigured(),
         app_updates: updateProxyConfigured(),
       });
     }
@@ -1759,6 +1924,17 @@ const server = createServer(
         );
       }
       return appPresenceSummary(response);
+    }
+    if (request.method === "POST" && url.pathname === "/v1/crash-reports") {
+      if (rateLimited(request, 4, "anonymous-crash-report")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await receiveCrashReport(request, response);
     }
     if (
       request.method === "GET" &&
@@ -2032,6 +2208,27 @@ server.listen(port, async () => {
       const presenceClosed = await fetch(
         `http://127.0.0.1:${port}/v1/app-presence/summary`,
       ).then((response) => response.json());
+      const crashReportResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/crash-reports`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            schema_version: 1,
+            event_id: "self-test-event-123456",
+            kind: "native",
+            message: "Decoder failed at https://signed.example/private",
+            stack: "Bearer never-forward-this-token token=also-private",
+            occurred_at: new Date().toISOString(),
+            app_version: "1.11.27",
+            build_number: 340001,
+            android_sdk: 36,
+            abi: "arm64-v8a",
+            device_class: "tv",
+          }),
+        },
+      );
+      const crashReportBody = await crashReportResponse.json();
       const updateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
       );
@@ -2476,10 +2673,21 @@ server.listen(port, async () => {
         !privacyBody.includes("disabled by default") ||
         !privacyBody.includes("https://discord.gg/juC6k7d4WY") ||
         !privacyBody.includes("Anonymous live activity count") ||
+        !privacyBody.includes("Anonymous crash reporting is disabled by default") ||
+        !privacyBody.includes("designated crash-report channel") ||
         privacyBody.includes(githubReleaseToken) ||
         health.source_pairing !== true ||
         health.source_pairing_version !== 2 ||
         health.app_presence !== true ||
+        health.crash_reporting !== true ||
+        crashReportResponse.status !== 202 ||
+        crashReportBody.status !== "accepted" ||
+        selfTestCrashForwards.length !== 1 ||
+        selfTestCrashForwards[0].body.includes("signed.example") ||
+        selfTestCrashForwards[0].body.includes("never-forward-this-token") ||
+        selfTestCrashForwards[0].body.includes("also-private") ||
+        !selfTestCrashForwards[0].body.includes("[URL]") ||
+        !selfTestCrashForwards[0].signature.startsWith("sha256=") ||
         presenceCreateResponse.status !== 201 ||
         !/^[A-Za-z0-9_-]{43}$/.test(presenceSession.session_token) ||
         presenceSession.heartbeat_interval !== 45 ||

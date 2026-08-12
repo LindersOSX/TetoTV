@@ -105,12 +105,34 @@ access logs. Users can disable this feature at any time in Settings.
 
 ## Diagnostics and sharing
 
-Diagnostics stay on the device unless the user explicitly copies or shares a
-report. Reports contain app/build and playback-capability information, bounded
-performance/failure events, Android version, manufacturer/model, and provider
-identifiers. TetoTV redacts credentials, signed URLs, magnets, hashes, and
-common token formats before storage and again before export. Users should
-still review a report before sharing it.
+Anonymous crash reporting is disabled by default. First-time setup and Settings
+both let the user explicitly enable or disable it. When enabled, an unhandled
+Flutter error can be sent immediately; a JVM crash is kept locally and sent
+after the next launch because a terminated process cannot use the network. On
+Android versions that expose historical process-exit details, native crashes
+and ANRs can also be recovered on the next launch. TetoTV sends only the app
+version/build, crash category, Android
+version, CPU architecture, TV-or-phone class, time, and a bounded redacted
+technical error/stack trace. It does not intentionally include the show,
+episode, account, device or installation identifier, source/provider, URL,
+credential, playback history, or full diagnostics database.
+
+The update broker validates and rate-limits the report, adds a random
+per-incident reference, and forwards it over an authenticated server-to-server
+connection to the TetoTV Discord bot. The bot posts it to the designated crash
+report channel. Reports remain in Discord according to that channel's access
+and retention settings until a moderator deletes them. The broker does not
+store report bodies, though the hosting providers and Discord process ordinary
+connection/request metadata under their own policies. Disabling reporting
+deletes any queued unsent report and prevents later crashes from being sent.
+
+Other bounded diagnostics stay on the device unless the user explicitly copies
+or shares a report. Manually exported reports contain app/build and
+playback-capability information, bounded performance/failure events, Android
+version, manufacturer/model, and provider identifiers. TetoTV redacts
+credentials, signed URLs, magnets, hashes, and common token formats before
+storage and again before export. Users should still review a manually exported
+report before sharing it.
 
 ## Security and user choices
 

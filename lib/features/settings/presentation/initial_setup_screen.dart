@@ -276,7 +276,7 @@ class _PrivacyCommunityStep extends ConsumerWidget {
       icon: Icons.privacy_tip_outlined,
       title: 'Privacy and Discord',
       subtitle:
-          'Both choices are optional and start off. You can change either one later in Settings.',
+          'Every choice is optional and starts off. You can change it later in Settings.',
       child: Column(
         children: [
           _SetupChoiceRow(
@@ -297,6 +297,30 @@ class _PrivacyCommunityStep extends ConsumerWidget {
           const SizedBox(height: 9),
           const Text(
             'Only active/streaming state is counted. No show, episode, account, device ID, source, or URL is sent.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+          const SizedBox(height: 18),
+          _SetupChoiceRow(
+            label: 'Send anonymous crash reports to help improve TetoTV?',
+            children: [
+              _SetupChoice(
+                label: 'Do not send',
+                selected: !preferences.anonymousCrashReportingEnabled,
+                onPressed: () =>
+                    settings.setAnonymousCrashReportingEnabled(false),
+              ),
+              _SetupChoice(
+                label: 'Allow crash reports',
+                selected: preferences.anonymousCrashReportingEnabled,
+                onPressed: () =>
+                    settings.setAnonymousCrashReportingEnabled(true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          const Text(
+            'Reports include the app/build, crash type and time, Android version, CPU architecture, device class, and a redacted error trace. They never include the show, episode, account, device ID, source, or URL.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textMuted, fontSize: 10),
           ),

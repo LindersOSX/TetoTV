@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/legal/bundled_licenses.dart';
 import 'package:anime_tv/core/performance/performance_monitor.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -25,6 +26,13 @@ Future<void> main() async {
         details: details.stack?.toString(),
       ),
     );
+    unawaited(
+      recordAnonymousCrash(
+        kind: 'flutter',
+        error: details.exception,
+        stack: details.stack,
+      ),
+    );
   };
   PlatformDispatcher.instance.onError = (error, stack) {
     unawaited(
@@ -33,6 +41,9 @@ Future<void> main() async {
         message: error,
         details: stack.toString(),
       ),
+    );
+    unawaited(
+      recordAnonymousCrash(kind: 'platform', error: error, stack: stack),
     );
     return true;
   };

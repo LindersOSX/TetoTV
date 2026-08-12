@@ -34,6 +34,7 @@ const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
 const _anonymousUsageCountKey = 'privacy_anonymous_usage_count';
+const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -200,6 +201,8 @@ class SettingsPreferences {
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.automatic,
     this.anonymousUsageCountEnabled = false,
+    this.anonymousCrashReportingEnabled = false,
+    this.loaded = false,
   });
 
   final DebridService debridProvider;
@@ -232,6 +235,8 @@ class SettingsPreferences {
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
   final bool anonymousUsageCountEnabled;
+  final bool anonymousCrashReportingEnabled;
+  final bool loaded;
 
   SettingsPreferences copyWith({
     DebridService? debridProvider,
@@ -264,6 +269,8 @@ class SettingsPreferences {
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
     bool? anonymousUsageCountEnabled,
+    bool? anonymousCrashReportingEnabled,
+    bool? loaded,
   }) => SettingsPreferences(
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
@@ -298,6 +305,9 @@ class SettingsPreferences {
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
     anonymousUsageCountEnabled:
         anonymousUsageCountEnabled ?? this.anonymousUsageCountEnabled,
+    anonymousCrashReportingEnabled:
+        anonymousCrashReportingEnabled ?? this.anonymousCrashReportingEnabled,
+    loaded: loaded ?? this.loaded,
   );
 }
 
@@ -382,6 +392,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_defaultLandingPageKey),
       _safeRead(_preferredPlayerKey),
       _safeRead(_anonymousUsageCountKey),
+      _safeRead(_anonymousCrashReportingKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -534,7 +545,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         anonymousUsageCountEnabled: valueAt(29) == 'true',
       );
     }
-    state = restored;
+    if (canRestore(_anonymousCrashReportingKey, 30)) {
+      restored = restored.copyWith(
+        anonymousCrashReportingEnabled: valueAt(30) == 'true',
+      );
+    }
+    state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
   }
@@ -709,6 +725,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setAnonymousUsageCountEnabled(bool value) => _update(
     state.copyWith(anonymousUsageCountEnabled: value),
     {_anonymousUsageCountKey: value.toString()},
+  );
+
+  Future<void> setAnonymousCrashReportingEnabled(bool value) => _update(
+    state.copyWith(anonymousCrashReportingEnabled: value, loaded: true),
+    {_anonymousCrashReportingKey: value.toString()},
   );
 
   Future<void> resetCustomization() {
