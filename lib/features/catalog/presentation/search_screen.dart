@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
+
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -103,6 +105,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       }
     } catch (error, stackTrace) {
       if (mounted && generation == _searchGeneration) {
+        unawaited(
+          recordAnonymousHandledError(
+            area: AnonymousErrorArea.catalog,
+            error: error,
+            stack: stackTrace,
+          ),
+        );
         setState(() => _results = AsyncError(error, stackTrace));
       }
     }

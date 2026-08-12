@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -571,6 +572,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
     await _tryNextStream(message);
     await _recordEngineFailure(message);
+    if (_playbackError != null) {
+      unawaited(
+        recordAnonymousHandledError(
+          area: AnonymousErrorArea.playback,
+          error: StateError(message),
+          stack: StackTrace.current,
+        ),
+      );
+    }
   }
 
   Future<void> _recordEngineSuccess() async {
@@ -642,8 +652,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final guardedOperation = (() async {
       try {
         await operation;
-      } catch (error) {
+      } catch (error, stackTrace) {
         if (mounted && !_engineHandoffInProgress) {
+          unawaited(
+            recordAnonymousHandledError(
+              area: AnonymousErrorArea.playback,
+              error: error,
+              stack: stackTrace,
+            ),
+          );
           setState(() => _playbackError = error.toString());
         }
       }

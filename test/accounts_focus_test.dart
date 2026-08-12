@@ -662,7 +662,7 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    final crashToggle = find.textContaining('Anonymous crash reports');
+    final crashToggle = find.textContaining('Anonymous error reports');
     expect(crashToggle, findsOneWidget);
     await tester.ensureVisible(crashToggle);
     await tester.pumpAndSettle();

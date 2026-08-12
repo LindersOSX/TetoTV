@@ -1637,7 +1637,7 @@ class _CustomizationPanel extends StatelessWidget {
             label: 'Privacy diagnostics',
             children: [
               toggle(
-                label: 'Anonymous crash reports',
+                label: 'Anonymous error reports',
                 value: preferences.anonymousCrashReportingEnabled,
                 onChanged: controller.setAnonymousCrashReportingEnabled,
               ),
@@ -1646,9 +1646,9 @@ class _CustomizationPanel extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(top: 2, bottom: 4),
             child: Text(
-              'Off by default. Sends only the app/build, crash type and time, '
+              'Off by default. Sends only the app/build, error type and time, '
               'Android version, CPU architecture, device class, and a '
-              'redacted crash trace. No show, episode, '
+              'redacted technical trace. No show, episode, '
               'account, device ID, source, or URL is sent.',
               style: TextStyle(
                 color: AppColors.textMuted,

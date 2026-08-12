@@ -107,9 +107,10 @@ access logs. Users can disable this feature at any time in Settings.
 ## Diagnostics and sharing
 
 Anonymous crash reporting is disabled by default. First-time setup and Settings
-both let the user explicitly enable or disable it. When enabled, an unhandled
-Flutter error can be sent immediately; a JVM crash is kept locally and sent
-after the next launch because a terminated process cannot use the network. On
+both let the user explicitly enable or disable it. When enabled, an unexpected
+handled app error or unhandled Flutter error can be sent immediately; a JVM
+crash is kept locally and sent after the next launch because a terminated
+process cannot use the network. On
 Android versions that expose historical process-exit details, native crashes
 and ANRs can also be recovered on the next launch. TetoTV sends only the app
 version/build, crash category, Android

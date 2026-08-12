@@ -1969,8 +1969,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         exitDialog = null
         activeTrackDialog?.dismiss()
         activeTrackDialog = null
-        metadataClient.dispatcher.cancelAll()
-        metadataClient.connectionPool.evictAll()
+        val metadataDispatcher = metadataClient.dispatcher
+        val metadataConnectionPool = metadataClient.connectionPool
+        Media3NetworkCleanup.shared.schedule(
+            cancelCalls = metadataDispatcher::cancelAll,
+            evictConnections = metadataConnectionPool::evictAll,
+        )
         handler.removeCallbacksAndMessages(null)
         releasePlaybackResources()
         super.onDestroy()

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -273,6 +274,15 @@ class _NativeMedia3PlayerScreenState
             return;
           case 'error':
           case 'no_first_frame':
+            unawaited(
+              recordAnonymousHandledError(
+                area: AnonymousErrorArea.playback,
+                error: StateError(
+                  result.error ?? 'Native player status: ${result.status}',
+                ),
+                stack: StackTrace.current,
+              ),
+            );
             await _recordFailure(result);
             if (!mounted) return;
             if (await _switchToCompatibleStream(
@@ -305,8 +315,15 @@ class _NativeMedia3PlayerScreenState
             return;
         }
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (!mounted) return;
+      unawaited(
+        recordAnonymousHandledError(
+          area: AnonymousErrorArea.playback,
+          error: error,
+          stack: stackTrace,
+        ),
+      );
       setState(() {
         _status = 'The native player could not be opened';
         _diagnostic = error.toString();

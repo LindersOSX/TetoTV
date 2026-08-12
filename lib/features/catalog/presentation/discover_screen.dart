@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -35,8 +36,20 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     _results = _discover();
   }
 
-  Future<List<AnimeSummary>> _discover() =>
-      ref.read(catalogClientProvider).discover(_filters);
+  Future<List<AnimeSummary>> _discover() async {
+    try {
+      return await ref.read(catalogClientProvider).discover(_filters);
+    } catch (error, stackTrace) {
+      unawaited(
+        recordAnonymousHandledError(
+          area: AnonymousErrorArea.catalog,
+          error: error,
+          stack: stackTrace,
+        ),
+      );
+      rethrow;
+    }
+  }
 
   Future<void> _openFilters() async {
     final next = await showDialog<CatalogFilters>(

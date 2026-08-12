@@ -302,7 +302,8 @@ class _PrivacyCommunityStep extends ConsumerWidget {
           ),
           const SizedBox(height: 18),
           _SetupChoiceRow(
-            label: 'Send anonymous crash reports to help improve TetoTV?',
+            label:
+                'Send anonymous crash and error reports to help improve TetoTV?',
             children: [
               _SetupChoice(
                 label: 'Do not send',
@@ -311,7 +312,7 @@ class _PrivacyCommunityStep extends ConsumerWidget {
                     settings.setAnonymousCrashReportingEnabled(false),
               ),
               _SetupChoice(
-                label: 'Allow crash reports',
+                label: 'Allow error reports',
                 selected: preferences.anonymousCrashReportingEnabled,
                 onPressed: () =>
                     settings.setAnonymousCrashReportingEnabled(true),
@@ -320,7 +321,7 @@ class _PrivacyCommunityStep extends ConsumerWidget {
           ),
           const SizedBox(height: 9),
           const Text(
-            'Reports include the app/build, crash type and time, Android version, CPU architecture, device class, and a redacted error trace. They never include the show, episode, account, device ID, source, or URL.',
+            'Reports include the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include the show, episode, account, device ID, source, or URL.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textMuted, fontSize: 10),
           ),

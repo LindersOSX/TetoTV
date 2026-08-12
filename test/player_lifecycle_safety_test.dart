@@ -265,6 +265,29 @@ void main() {
       'case NativePlayerReturnNavigation.none:',
     ]);
   });
+
+  test('Media3 destroys network metadata resources off the main thread', () {
+    final source = File(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt',
+    ).readAsStringSync();
+    final onDestroyStart = source.indexOf('override fun onDestroy() {');
+    final releaseStart = source.indexOf(
+      'private fun releasePlaybackResources()',
+      onDestroyStart,
+    );
+    expect(onDestroyStart, greaterThanOrEqualTo(0));
+    expect(releaseStart, greaterThan(onDestroyStart));
+    final onDestroy = source.substring(onDestroyStart, releaseStart);
+
+    expect(onDestroy, contains('Media3NetworkCleanup.shared.schedule('));
+    expect(onDestroy, contains('metadataDispatcher::cancelAll'));
+    expect(onDestroy, contains('metadataConnectionPool::evictAll'));
+    expect(onDestroy, isNot(contains('metadataClient.dispatcher.cancelAll()')));
+    expect(
+      onDestroy,
+      isNot(contains('metadataClient.connectionPool.evictAll()')),
+    );
+  });
 }
 
 String _read(String path) =>
