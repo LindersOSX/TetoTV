@@ -352,6 +352,23 @@ void main() {
           findsOneWidget,
         );
       }
+      for (var result = 56; result <= 60; result++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        _focusedResult(tester, 'Production Result 60'),
+        isTrue,
+        reason: 'The sixtieth result must retain focus at the final row edge.',
+      );
+      for (var result = 59; result >= 55; result--) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+      }
       for (final result in [49, 43, 37, 31, 25, 19, 13, 7]) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
         await tester.pumpAndSettle();

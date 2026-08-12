@@ -404,13 +404,13 @@ void main() {
     );
 
     test('discover forwards the complete filter set to AniList', () async {
-      Map<String, dynamic>? requestBody;
+      final requestBodies = <Map<String, dynamic>>[];
       final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
         ..interceptors.add(
           InterceptorsWrapper(
             onRequest: (options, handler) {
-              requestBody = Map<String, dynamic>.from(
-                options.data as Map<String, dynamic>,
+              requestBodies.add(
+                Map<String, dynamic>.from(options.data as Map<String, dynamic>),
               );
               handler.resolve(
                 Response<Map<String, dynamic>>(
@@ -443,29 +443,37 @@ void main() {
         ),
       );
 
-      expect(requestBody?['variables'], {
-        'page': 1,
-        'search': 'Frieren',
-        'genre': 'Fantasy',
-        'tag': 'Elf',
-        'format': 'TV',
-        'status': 'RELEASING',
-        'season': 'FALL',
-        'year': 2026,
-        'minimumScore': 80,
-        'isAdult': true,
-        'sort': ['SCORE_DESC'],
-      });
+      expect(
+        requestBodies.map(
+          (body) => (body['variables'] as Map<String, dynamic>)['page'],
+        ),
+        [1, 2],
+      );
+      for (var index = 0; index < requestBodies.length; index++) {
+        expect(requestBodies[index]['variables'], {
+          'page': index + 1,
+          'search': 'Frieren',
+          'genre': 'Fantasy',
+          'tag': 'Elf',
+          'format': 'TV',
+          'status': 'RELEASING',
+          'season': 'FALL',
+          'year': 2026,
+          'minimumScore': 80,
+          'isAdult': true,
+          'sort': ['SCORE_DESC'],
+        });
+      }
     });
 
     test('discover omits unused nullable arguments', () async {
-      Map<String, dynamic>? requestBody;
+      final requestBodies = <Map<String, dynamic>>[];
       final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
         ..interceptors.add(
           InterceptorsWrapper(
             onRequest: (options, handler) {
-              requestBody = Map<String, dynamic>.from(
-                options.data as Map<String, dynamic>,
+              requestBodies.add(
+                Map<String, dynamic>.from(options.data as Map<String, dynamic>),
               );
               handler.resolve(
                 Response<Map<String, dynamic>>(
@@ -485,12 +493,136 @@ void main() {
 
       await client.discover(const CatalogFilters());
 
-      expect(requestBody?['variables'], {
-        'page': 1,
-        'isAdult': false,
-        'sort': ['POPULARITY_DESC'],
-      });
+      expect(requestBodies, hasLength(2));
+      for (var index = 0; index < requestBodies.length; index++) {
+        expect(requestBodies[index]['variables'], {
+          'page': index + 1,
+          'isAdult': false,
+          'sort': ['POPULARITY_DESC'],
+        });
+      }
     });
+
+    test(
+      'discover combines exactly two pages into 60 ordered results',
+      () async {
+        final requestedPages = <int>[];
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                final body = options.data as Map<String, dynamic>;
+                final variables = body['variables'] as Map<String, dynamic>;
+                final page = variables['page'] as int;
+                requestedPages.add(page);
+                final firstId = page == 1 ? 1 : 31;
+                handler.resolve(
+                  Response<Map<String, dynamic>>(
+                    data: {
+                      'data': {
+                        'Page': {
+                          'media': List.generate(
+                            30,
+                            (index) => _catalogMedia(firstId + index),
+                          ),
+                        },
+                      },
+                    },
+                    requestOptions: options,
+                    statusCode: 200,
+                  ),
+                );
+              },
+            ),
+          );
+        final client = AniListCatalogClient(dio: dio);
+
+        final results = await client.discover(const CatalogFilters());
+
+        expect(requestedPages, [1, 2]);
+        expect(results, hasLength(60));
+        expect(
+          results.map((anime) => anime.id),
+          List.generate(60, (i) => i + 1),
+        );
+      },
+    );
+
+    test(
+      'discover logical page two requests AniList pages three and four',
+      () async {
+        final requestedPages = <int>[];
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                final body = options.data as Map<String, dynamic>;
+                final variables = body['variables'] as Map<String, dynamic>;
+                requestedPages.add(variables['page'] as int);
+                handler.resolve(
+                  Response<Map<String, dynamic>>(
+                    data: const {
+                      'data': {
+                        'Page': {'media': <Map<String, dynamic>>[]},
+                      },
+                    },
+                    requestOptions: options,
+                    statusCode: 200,
+                  ),
+                );
+              },
+            ),
+          );
+        final client = AniListCatalogClient(dio: dio);
+
+        await client.discover(const CatalogFilters(), page: 2);
+
+        expect(requestedPages, [3, 4]);
+      },
+    );
+
+    test(
+      'discover keeps the first occurrence of duplicate anime ids',
+      () async {
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                final body = options.data as Map<String, dynamic>;
+                final variables = body['variables'] as Map<String, dynamic>;
+                final page = variables['page'] as int;
+                handler.resolve(
+                  Response<Map<String, dynamic>>(
+                    data: {
+                      'data': {
+                        'Page': {
+                          'media': page == 1
+                              ? [
+                                  _catalogMedia(1),
+                                  _catalogMedia(2, title: 'Page one copy'),
+                                ]
+                              : [
+                                  _catalogMedia(2, title: 'Page two copy'),
+                                  _catalogMedia(3),
+                                ],
+                        },
+                      },
+                    },
+                    requestOptions: options,
+                    statusCode: 200,
+                  ),
+                );
+              },
+            ),
+          );
+        final client = AniListCatalogClient(dio: dio);
+
+        final results = await client.discover(const CatalogFilters());
+
+        expect(results.map((anime) => anime.id), [1, 2, 3]);
+        expect(results[1].title, 'Page one copy');
+      },
+    );
 
     test(
       'discover retries AniList illegal combinations without sort',
@@ -508,9 +640,10 @@ void main() {
                     body['variables'] as Map<String, dynamic>,
                   ),
                 );
+                final hasSort = (body['variables'] as Map).containsKey('sort');
                 handler.resolve(
                   Response<Map<String, dynamic>>(
-                    data: requests.length == 1
+                    data: hasSort
                         ? const {
                             'errors': [
                               {
@@ -540,9 +673,19 @@ void main() {
           completion(isEmpty),
         );
 
-        expect(requests, hasLength(2));
-        expect(requests.first['sort'], ['SCORE_DESC']);
-        expect(requests.last, isNot(contains('sort')));
+        expect(requests, hasLength(4));
+        expect(
+          requests
+              .where((request) => request.containsKey('sort'))
+              .map((request) => request['page']),
+          [1, 2],
+        );
+        expect(
+          requests
+              .where((request) => !request.containsKey('sort'))
+              .map((request) => request['page']),
+          [1, 2],
+        );
         expect(requests.last['genre'], 'Fantasy');
       },
     );
@@ -617,4 +760,13 @@ Map<String, dynamic> _calendarMedia(int id) => {
   'duration': 24,
   'synonyms': <String>[],
   'nextAiringEpisode': {'episode': id + 1},
+};
+
+Map<String, dynamic> _catalogMedia(int id, {String? title}) => {
+  ..._calendarMedia(id),
+  'title': {
+    'userPreferred': title ?? 'Show $id',
+    'english': title ?? 'Show $id',
+    'romaji': title ?? 'Show $id',
+  },
 };
