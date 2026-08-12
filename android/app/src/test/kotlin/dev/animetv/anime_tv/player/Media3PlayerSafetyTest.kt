@@ -8,6 +8,18 @@ import org.junit.Test
 
 class Media3PlayerSafetyTest {
     @Test
+    fun `HLS media source factory remains available at runtime`() {
+        val factory = Class.forName(
+            "androidx.media3.exoplayer.hls.HlsMediaSource\$Factory",
+        )
+
+        assertEquals(
+            "androidx.media3.exoplayer.hls.HlsMediaSource\$Factory",
+            factory.name,
+        )
+    }
+
+    @Test
     fun `network cleanup never runs inline with Activity destruction`() {
         val queued = mutableListOf<Runnable>()
         val cleanup = Media3NetworkCleanup(Executor(queued::add))

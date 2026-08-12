@@ -262,6 +262,10 @@ dependencies {
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.media:media:1.8.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
+    // DefaultMediaSourceFactory discovers optional stream modules by their
+    // exact class names. Keep HLS on the runtime classpath for the HLS streams
+    // used by Marketplace and debrid playback, including release builds.
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")

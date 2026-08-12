@@ -52,4 +52,29 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  testWidgets(
+    'native Media3 can create its HLS source factory',
+    (tester) async {
+      final result = await AndroidTvBridge.instance.startNativePlayer(
+        // A closed local HTTPS port makes the stream fail immediately after
+        // Media3 has selected and instantiated its optional HLS module. The
+        // regression is Activity startup: a missing module crashes before a
+        // normal playback error can be returned.
+        source: Uri.parse('https://127.0.0.1:9/tetotv-hls-smoke.m3u8'),
+        title: 'TetoTV native HLS module smoke test',
+        checkpointKey:
+            'integration:media3-hls:'
+            '${DateTime.now().microsecondsSinceEpoch}',
+        releaseName: 'tetotv-hls-smoke.m3u8',
+        streamLabel: 'Media3 HLS module smoke stream',
+        resumePosition: Duration.zero,
+        startFromBeginning: true,
+      );
+
+      expect(result.status, 'error');
+      expect(result.error, isNotEmpty);
+    },
+    timeout: const Timeout(Duration(minutes: 1)),
+  );
 }
