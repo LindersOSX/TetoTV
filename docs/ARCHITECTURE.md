@@ -165,8 +165,7 @@ Release builds support the Android TV/Fire TV ABI matrix:
 - `arm64-v8a` for 64-bit Android TV, Google TV, and Shield-class devices;
 - `x86_64` for Android TV/Google TV emulators.
 
-`flutter build apk --release --split-per-abi` produces smaller per-ABI APKs.
-Use `adb shell getprop ro.product.cpu.abilist` to select one, or distribute a
-universal release APK when the target ABI is unknown. CPU marketing names are
-not sufficient: a device with a 64-bit CPU can still expose only a 32-bit app
-ABI.
+Public releases use one universal APK containing `armeabi-v7a` and
+`arm64-v8a`, so users never need to select an ABI. `x86_64` remains available
+for debug/emulator builds only. CPU marketing names are not sufficient: a
+device with a 64-bit CPU can still expose only a 32-bit app ABI.

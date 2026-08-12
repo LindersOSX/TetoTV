@@ -86,4 +86,10 @@
         <item name="android:textColorPrimary">#FFFFFFFF</item>
         <item name="android:textColorSecondary">#CCFFFFFF</item>
     </style>
+
+    <style name="NativePlayerExitDialogTheme" parent="NativePlayerTrackDialogTheme">
+        <item name="android:windowBackground">@drawable/tetotv_player_exit_dialog_background</item>
+        <item name="android:windowMinWidthMajor">0dp</item>
+        <item name="android:windowMinWidthMinor">0dp</item>
+    </style>
 </resources>

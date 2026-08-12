@@ -1,6 +1,8 @@
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -23,6 +25,34 @@ void main() {
 
     expect(preferMpvForInitialStream(web), isTrue);
     expect(preferMpvForInitialStream(debrid), isFalse);
+  });
+
+  test('manual Media3 selection is not bounced back to MPV', () {
+    const release = ReleaseCandidate(
+      infoHash: '0123456789012345678901234567890123456789',
+      magnetUri: 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789',
+      releaseName: '[Group] Show - 01 [1080p].mkv',
+      seeders: 1,
+      sourceId: 'test',
+    );
+    const software = SeriesPlaybackPreferences(decoder: 'software');
+
+    expect(
+      shouldRedirectMedia3ToMpv(
+        manuallySelected: false,
+        preferences: software,
+        release: release,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldRedirectMedia3ToMpv(
+        manuallySelected: true,
+        preferences: software,
+        release: release,
+      ),
+      isFalse,
+    );
   });
 
   test('prefers English dub audio over Japanese default audio', () {
@@ -70,6 +100,42 @@ void main() {
     },
   );
 
+  test(
+    'dual-audio releases wait past a stable single-track snapshot',
+    () async {
+      const japaneseOnly = [
+        AudioTrack('1', 'Japanese', 'jpn', isDefault: true),
+      ];
+      const dualAudio = [
+        ...japaneseOnly,
+        AudioTrack('2', 'English Dub', 'eng', codec: 'aac'),
+      ];
+      var reads = 0;
+
+      final tracks = await waitForStableTrackSnapshot<List<AudioTrack>>(
+        read: () async => ++reads < 6 ? japaneseOnly : dualAudio,
+        signature: mediaKitAudioTrackSignature,
+        hasTracks: (tracks) => tracks.isNotEmpty,
+        isComplete: (tracks) => tracks.length >= 2,
+        pollInterval: const Duration(milliseconds: 1),
+        minimumWait: const Duration(milliseconds: 3),
+        maximumWait: const Duration(milliseconds: 10),
+      );
+
+      expect(reads, greaterThanOrEqualTo(6));
+      expect(tracks.map((track) => track.id), ['1', '2']);
+    },
+  );
+
+  test('recognizes common dual and multi-audio release labels', () {
+    expect(releaseAdvertisesMultipleAudio('[Group] Show - Dual Audio'), isTrue);
+    expect(releaseAdvertisesMultipleAudio('Show.Multi-Audio.1080p'), isTrue);
+    expect(
+      releaseAdvertisesMultipleAudio('Show Japanese Audio 1080p'),
+      isFalse,
+    );
+  });
+
   test('track signatures detect metadata and VLC list changes', () {
     expect(
       mediaKitAudioTrackSignature(const [AudioTrack('1', 'Japanese', 'jpn')]),
@@ -87,14 +153,14 @@ void main() {
   });
 
   test(
-    'uses media_kit safe decoder selection for Android TV compatibility',
+    'starts automatic playback on smooth MediaCodec with adaptive fallback',
     () {
       expect(
         tetoTvVideoControllerConfiguration.enableHardwareAcceleration,
         isTrue,
       );
       expect(tetoTvVideoControllerConfiguration.vo, 'gpu');
-      expect(tetoTvVideoControllerConfiguration.hwdec, 'auto-safe');
+      expect(tetoTvVideoControllerConfiguration.hwdec, 'mediacodec');
       expect(
         tetoTvVideoControllerConfiguration
             .androidAttachSurfaceAfterVideoParameters,
@@ -110,7 +176,10 @@ void main() {
   });
 
   test('offers safe hardware, direct hardware, and software decoders', () {
-    expect(hwdecForPlaybackMode(PlaybackDecoderMode.hardwareSafe), 'auto-safe');
+    expect(
+      hwdecForPlaybackMode(PlaybackDecoderMode.hardwareSafe),
+      'mediacodec',
+    );
     expect(
       hwdecForPlaybackMode(PlaybackDecoderMode.hardwareDirect),
       'mediacodec',

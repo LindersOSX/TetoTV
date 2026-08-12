@@ -29,6 +29,7 @@ void main() {
       allowBatchStreams: false,
       streamSortMode: 'seeders',
       preferredReleaseProvider: 'User source',
+      preferredReleaseGroup: 'subsplease',
     );
 
     final restored = SeriesPlaybackPreferences.fromJson(preferences.toJson());
@@ -43,6 +44,7 @@ void main() {
     expect(restored.allowBatchStreams, isFalse);
     expect(restored.streamSortMode, 'seeders');
     expect(restored.preferredReleaseProvider, 'User source');
+    expect(restored.preferredReleaseGroup, 'subsplease');
   });
 
   test(

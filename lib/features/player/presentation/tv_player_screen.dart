@@ -39,12 +39,12 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
   enableHardwareAcceleration: true,
-  // Let media_kit/libmpv choose only a decoder path it considers safe for the
-  // current Android device. Forcing MediaCodec (including copy-back) causes
-  // green/pink frames on devices whose codec advertises profiles it cannot
-  // actually render correctly.
+  // Start on MediaCodec because Android TV devices consistently render it
+  // more smoothly than libmpv's auto-safe probing path. TetoTV's decoded-
+  // format and frame-drop watchdogs still move incompatible streams to the
+  // software decoder automatically.
   vo: 'gpu',
-  hwdec: 'auto-safe',
+  hwdec: 'mediacodec',
   androidAttachSurfaceAfterVideoParameters: true,
 );
 
@@ -56,13 +56,13 @@ String _mpvColor(Color color) =>
 typedef _PlaybackMenuResult = ({String type, Object value});
 
 String hwdecForPlaybackMode(PlaybackDecoderMode mode) => switch (mode) {
-  PlaybackDecoderMode.hardwareSafe => 'auto-safe',
+  PlaybackDecoderMode.hardwareSafe => 'mediacodec',
   PlaybackDecoderMode.hardwareDirect => 'mediacodec',
   PlaybackDecoderMode.software => 'no',
 };
 
 String playbackDecoderLabel(PlaybackDecoderMode mode) => switch (mode) {
-  PlaybackDecoderMode.hardwareSafe => 'Automatic (recommended)',
+  PlaybackDecoderMode.hardwareSafe => 'Automatic (adaptive)',
   PlaybackDecoderMode.hardwareDirect => 'Hardware direct',
   PlaybackDecoderMode.software => 'Software compatibility',
 };
@@ -171,6 +171,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   AnonymousUsageReporter? _usageReporter;
   bool _profileReady = false;
   Duration? _resumeOverride;
+  bool _manualEngineSelection = false;
 
   int get _anilistMediaId =>
       widget.anilistMediaId ?? _activeLaunch.episode.anilistMediaId;
@@ -249,6 +250,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       _activeSource = widget.source;
       _activeLaunch = widget.launch;
       _resumeOverride = null;
+      _manualEngineSelection = false;
       _profileReady =
           preferred != PreferredPlayer.automatic ||
           preferMpvForInitialStream(widget.launch.stream);
@@ -259,11 +261,12 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   void _switchEngine(
     _TvPlaybackEngine engine,
     String source,
-    ReleaseCandidate release, [
+    ReleaseCandidate release, {
     Duration? resume,
     StreamReady? selectedStream,
     List<PlaybackStreamOption>? discoveredDirectStreams,
-  ]) {
+    bool manualSelection = false,
+  }) {
     final previousStream = _activeLaunch.stream;
     final previousRelease = _activeLaunch.selectedRelease;
     final nextStream =
@@ -306,6 +309,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       _activeLaunch = launch;
       _engine = engine;
       _resumeOverride = resume;
+      _manualEngineSelection = manualSelection;
     });
   }
 
@@ -335,18 +339,19 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           _TvPlaybackEngine.vlc,
           stream.uri.toString(),
           release,
-          position,
-          stream,
-          directStreams,
+          resume: position,
+          selectedStream: stream,
+          discoveredDirectStreams: directStreams,
         ),
         onSelectEngine: (player, position, stream, release, directStreams) =>
             _switchEngine(
               _engineForPreference(player),
               stream.uri.toString(),
               release,
-              position,
-              stream,
-              directStreams,
+              resume: position,
+              selectedStream: stream,
+              discoveredDirectStreams: directStreams,
+              manualSelection: true,
             ),
       );
     }
@@ -368,18 +373,19 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           _TvPlaybackEngine.mpv,
           stream.uri.toString(),
           release,
-          position,
-          stream,
-          directStreams,
+          resume: position,
+          selectedStream: stream,
+          discoveredDirectStreams: directStreams,
         ),
         onSelectEngine: (player, position, stream, release, directStreams) =>
             _switchEngine(
               _engineForPreference(player),
               stream.uri.toString(),
               release,
-              position,
-              stream,
-              directStreams,
+              resume: position,
+              selectedStream: stream,
+              discoveredDirectStreams: directStreams,
+              manualSelection: true,
             ),
       );
     }
@@ -395,19 +401,20 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       episode: _episodeNumber,
       coverImageUrl: _coverImageUrl,
       initialPosition: _resumeOverride,
+      manuallySelected: _manualEngineSelection,
       onUseMpv: (position, stream, release) => _switchEngine(
         _TvPlaybackEngine.mpv,
         stream.uri.toString(),
         release,
-        position,
-        stream,
+        resume: position,
+        selectedStream: stream,
       ),
       onUseVlc: (position, stream, release) => _switchEngine(
         _TvPlaybackEngine.vlc,
         stream.uri.toString(),
         release,
-        position,
-        stream,
+        resume: position,
+        selectedStream: stream,
       ),
     );
   }
@@ -1062,13 +1069,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           );
       if (synced) {
         ref.invalidate(trackingHomeProvider);
-        _showTrackMessage('Episode progress saved');
-      } else {
-        _showTrackMessage('Progress will retry when the tracker reconnects');
       }
-    } catch (_) {
-      _showTrackMessage('Progress will retry when the tracker reconnects');
-    }
+    } catch (_) {}
   }
 
   Future<void> _openMedia({Duration? resume}) => _trackPlayerMutation(() async {
@@ -1682,7 +1684,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       );
       final releases = await CompositeReleaseSource(sources).search(next);
       if (releases.isEmpty) return;
+      final currentGroup = releaseGroupKey(_currentRelease.releaseName);
+      final currentProvider = _currentRelease.provider?.toLowerCase();
       releases.sort((a, b) {
+        final group = (releaseGroupKey(a.releaseName) == currentGroup ? 0 : 1)
+            .compareTo(releaseGroupKey(b.releaseName) == currentGroup ? 0 : 1);
+        if (group != 0 && currentGroup != null) return group;
+        final provider = (a.provider?.toLowerCase() == currentProvider ? 0 : 1)
+            .compareTo(b.provider?.toLowerCase() == currentProvider ? 0 : 1);
+        if (provider != 0 && currentProvider != null) return provider;
         final dub = (b.isDubbed ? 1 : 0).compareTo(a.isDubbed ? 1 : 0);
         if (dub != 0) return dub;
         return b.seeders.compareTo(a.seeders);
@@ -1701,10 +1711,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (mediaId == null || !_seriesPreferencesReady) return;
     final audio = _player.state.track.audio;
     final subtitle = _player.state.track.subtitle;
+    // Some dual-audio containers label a stream (for example, "English
+    // Dub") without setting its ISO language field. Persist the normalized
+    // title in that case so the next episode does not silently fall back to
+    // the previous Japanese preference.
+    final audioLanguage = canonicalPlayerLanguage(
+      audio.language ?? audio.title,
+    );
+    final subtitleLanguage = canonicalPlayerLanguage(
+      subtitle.language ?? subtitle.title,
+    );
     _seriesPreferences = _seriesPreferences.copyWith(
-      audioLanguage: audio.language ?? _seriesPreferences.audioLanguage,
-      subtitleLanguage:
-          subtitle.language ?? _seriesPreferences.subtitleLanguage,
+      audioLanguage: audioLanguage.isEmpty
+          ? _seriesPreferences.audioLanguage
+          : audioLanguage,
+      subtitleLanguage: subtitleLanguage.isEmpty
+          ? _seriesPreferences.subtitleLanguage
+          : subtitleLanguage,
       subtitleEnabled: subtitle.id != 'no',
       subtitlePreferenceSet: true,
       subtitleSize: _subtitleSize,
@@ -1722,6 +1745,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _ => 'contain',
       },
       highContrastSubtitles: _highContrastSubtitles,
+      preferredReleaseProvider: _currentRelease.provider,
+      clearPreferredReleaseProvider: _currentRelease.provider == null,
+      preferredReleaseGroup: releaseGroupKey(_currentRelease.releaseName),
+      clearPreferredReleaseGroup:
+          releaseGroupKey(_currentRelease.releaseName) == null,
     );
     await _database.saveSeriesPreferences(mediaId, _seriesPreferences);
   }
@@ -2388,6 +2416,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openAudioTrackPicker() async {
+    final expectsMultipleAudio = releaseAdvertisesMultipleAudio(
+      _currentRelease.releaseName,
+    );
+    if (expectsMultipleAudio) {
+      _showTrackMessage('Checking every embedded audio track…');
+    }
     final tracks = await waitForStableTrackSnapshot<List<AudioTrack>>(
       read: () async {
         if (!mounted || _engineHandoffInProgress) return const <AudioTrack>[];
@@ -2397,6 +2431,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       },
       signature: mediaKitAudioTrackSignature,
       hasTracks: (tracks) => tracks.isNotEmpty,
+      // A stable first track is not proof that demuxing is finished. Always
+      // use the short bounded window for a possible second track; release
+      // names advertising dual audio receive the longer window below.
+      isComplete: (tracks) => tracks.length >= 2,
+      maximumWait: expectsMultipleAudio
+          ? const Duration(seconds: 5)
+          : const Duration(seconds: 2),
     );
     if (!mounted || _engineHandoffInProgress) return;
     if (tracks.isEmpty) {
@@ -2407,7 +2448,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final currentId = _player.state.track.audio.id;
     final selectedId = await showPlayerTrackPicker<String>(
       context: context,
-      title: tracks.length == 1 ? 'Audio track (1 found)' : 'Audio tracks',
+      title: tracks.length == 1
+          ? expectsMultipleAudio
+                ? 'Audio track (only 1 detected)'
+                : 'Audio track (1 found)'
+          : 'Audio tracks (${tracks.length} found)',
       icon: Icons.audiotrack_rounded,
       selectedValue: currentId,
       options: tracks

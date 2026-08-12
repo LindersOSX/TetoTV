@@ -60,7 +60,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (count == null || count < 2) return;
       final items = ref.read(trendingAnimeProvider).valueOrNull!;
       final nextIndex = ((_heroIndex % count) + 1) % count;
-      final nextArtwork = items[nextIndex].bannerImageUrl;
+      final nextArtwork =
+          items[nextIndex].bannerImageUrl ?? items[nextIndex].coverImageUrl;
       if (nextArtwork != null && nextArtwork.isNotEmpty) {
         NetworkArtwork.precache(context, nextArtwork, cacheWidth: 1280);
       }
@@ -726,7 +727,11 @@ class _HeroPanel extends StatelessWidget {
                 ? const ArtworkSkeleton(key: ValueKey('hero-loading'))
                 : NetworkArtwork(
                     key: ValueKey('hero-art-${anime?.id ?? 0}'),
-                    url: anime?.bannerImageUrl,
+                    // AniList does not provide a wide banner for every title.
+                    // A cover is still preferable to an apparently missing
+                    // carousel background, and BoxFit.cover keeps it usable
+                    // in the same hero frame.
+                    url: anime?.bannerImageUrl ?? anime?.coverImageUrl,
                     cacheWidth: 1280,
                   ),
           ),

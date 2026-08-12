@@ -54,6 +54,20 @@ Future<void> runBestEffortNativePlayerExitBookkeeping(
   }
 }
 
+/// Automatic routing protects known-incompatible streams, while a viewer's
+/// explicit Player > Media3 choice must be honored instead of immediately
+/// bouncing them back to MPV.
+bool shouldRedirectMedia3ToMpv({
+  required bool manuallySelected,
+  required SeriesPlaybackPreferences preferences,
+  required ReleaseCandidate release,
+}) =>
+    !manuallySelected &&
+    (preferences.decoder == 'software' ||
+        releaseRequiresSoftwareDecoder(release) ||
+        preferences.subtitleDelayMs != 0 ||
+        preferences.audioDelayMs != 0);
+
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
 /// The actual video never enters a Flutter texture. Android Media3 owns a
@@ -74,6 +88,7 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
     this.malMediaId,
     this.episode,
     this.coverImageUrl,
+    this.manuallySelected = false,
     super.key,
   });
 
@@ -87,6 +102,7 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
   final int? episode;
   final String? coverImageUrl;
   final Duration? initialPosition;
+  final bool manuallySelected;
   final void Function(
     Duration position,
     StreamReady stream,
@@ -149,10 +165,11 @@ class _NativeMedia3PlayerScreenState
       // Media3 intentionally owns the fast hardware-decoding path. Preserve
       // the user's compatibility choice and send known Hi10P or delay-tuned
       // streams straight to MPV, which can software-decode and apply A/V delay.
-      if (_preferences.decoder == 'software' ||
-          releaseRequiresSoftwareDecoder(_release) ||
-          _preferences.subtitleDelayMs != 0 ||
-          _preferences.audioDelayMs != 0) {
+      if (shouldRedirectMedia3ToMpv(
+        manuallySelected: widget.manuallySelected,
+        preferences: _preferences,
+        release: _release,
+      )) {
         if (mounted) {
           widget.onUseMpv(_resumePosition, _currentStream, _release);
         }
@@ -388,6 +405,12 @@ class _NativeMedia3PlayerScreenState
         ? null
         : canonicalPlayerLanguage(result.subtitleLanguage);
     var nextPreferences = _preferences;
+    nextPreferences = nextPreferences.copyWith(
+      preferredReleaseProvider: _release.provider,
+      clearPreferredReleaseProvider: _release.provider == null,
+      preferredReleaseGroup: releaseGroupKey(_release.releaseName),
+      clearPreferredReleaseGroup: releaseGroupKey(_release.releaseName) == null,
+    );
     if (normalizedSize != null) {
       nextPreferences = nextPreferences.copyWith(subtitleSize: normalizedSize);
     }

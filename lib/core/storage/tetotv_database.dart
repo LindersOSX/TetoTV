@@ -86,6 +86,7 @@ class SeriesPlaybackPreferences {
     this.allowBatchStreams = true,
     this.streamSortMode = 'compatibility',
     this.preferredReleaseProvider,
+    this.preferredReleaseGroup,
   });
 
   final String audioLanguage;
@@ -107,6 +108,7 @@ class SeriesPlaybackPreferences {
   final bool allowBatchStreams;
   final String streamSortMode;
   final String? preferredReleaseProvider;
+  final String? preferredReleaseGroup;
 
   SeriesPlaybackPreferences copyWith({
     String? audioLanguage,
@@ -129,6 +131,8 @@ class SeriesPlaybackPreferences {
     String? streamSortMode,
     String? preferredReleaseProvider,
     bool clearPreferredReleaseProvider = false,
+    String? preferredReleaseGroup,
+    bool clearPreferredReleaseGroup = false,
   }) => SeriesPlaybackPreferences(
     audioLanguage: audioLanguage ?? this.audioLanguage,
     subtitleLanguage: subtitleLanguage ?? this.subtitleLanguage,
@@ -152,6 +156,9 @@ class SeriesPlaybackPreferences {
     preferredReleaseProvider: clearPreferredReleaseProvider
         ? null
         : preferredReleaseProvider ?? this.preferredReleaseProvider,
+    preferredReleaseGroup: clearPreferredReleaseGroup
+        ? null
+        : preferredReleaseGroup ?? this.preferredReleaseGroup,
   );
 
   Map<String, Object?> toJson() => {
@@ -174,6 +181,7 @@ class SeriesPlaybackPreferences {
     'allowBatchStreams': allowBatchStreams,
     'streamSortMode': streamSortMode,
     'preferredReleaseProvider': preferredReleaseProvider,
+    'preferredReleaseGroup': preferredReleaseGroup,
   };
 
   factory SeriesPlaybackPreferences.fromJson(Map<String, dynamic> json) =>
@@ -198,6 +206,7 @@ class SeriesPlaybackPreferences {
         allowBatchStreams: json['allowBatchStreams'] as bool? ?? true,
         streamSortMode: json['streamSortMode'] as String? ?? 'compatibility',
         preferredReleaseProvider: json['preferredReleaseProvider'] as String?,
+        preferredReleaseGroup: json['preferredReleaseGroup'] as String?,
       );
 }
 

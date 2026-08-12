@@ -66,8 +66,8 @@ currently includes:
 - automatic English/Dub audio-track preference with remote track switching;
 - a debrid-only player gate that rejects unresolved or direct demo URLs;
 - Android TV launcher declarations and a TV banner;
-- universal and split-per-ABI builds for `armeabi-v7a`, `arm64-v8a`, and
-  emulator `x86_64` targets across Android TV and Fire TV hardware;
+- one universal release APK containing both `armeabi-v7a` and `arm64-v8a`,
+  with `x86_64` retained only for local emulator/debug testing;
 - domain boundaries for catalog and pluggable release sources.
 
 AniList supplies the primary live discovery catalog. When AniList temporarily
@@ -100,7 +100,7 @@ flutter pub get
 flutter analyze
 flutter test
 flutter build apk --debug
-flutter build apk --release --split-per-abi
+flutter build apk --release --target-platform android-arm,android-arm64
 ```
 
 The sideloadable debug APK is written to:
@@ -157,10 +157,9 @@ different accidental signature. Back up both that ignored properties file and
 its keystore: Android will reject every future in-place update if the signing
 identity is lost or changed.
 
-Use `adb shell getprop ro.product.cpu.abilist` before choosing a split APK.
-Many Fire TV devices, including Fire TV Stick 4K Max models, expose the
-32-bit `armeabi-v7a` application ABI even when their CPU is 64-bit. Use the
-universal release APK when the target ABI is unknown.
+Public releases use the universal APK, which includes both supported ARM app
+ABIs. This avoids choosing the wrong package on Fire TV devices whose 64-bit
+CPU still exposes a 32-bit `armeabi-v7a` application runtime.
 
 ## Distribution and source policy
 

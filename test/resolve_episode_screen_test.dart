@@ -24,6 +24,46 @@ import 'package:go_router/go_router.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('similar releases prefer the same group, then provider', () {
+    const sameGroup = ReleaseCandidate(
+      infoHash: '1111111111111111111111111111111111111111',
+      magnetUri: 'magnet:?xt=urn:btih:1111111111111111111111111111111111111111',
+      releaseName: '[SubsPlease] Show - 02 [1080p].mkv',
+      seeders: 5,
+      sourceId: 'other-source',
+      provider: 'Other provider',
+    );
+    const sameProvider = ReleaseCandidate(
+      infoHash: '2222222222222222222222222222222222222222',
+      magnetUri: 'magnet:?xt=urn:btih:2222222222222222222222222222222222222222',
+      releaseName: '[Different] Show - 02 [1080p].mkv',
+      seeders: 500,
+      sourceId: 'preferred-source',
+      provider: 'Preferred provider',
+    );
+    const unrelated = ReleaseCandidate(
+      infoHash: '3333333333333333333333333333333333333333',
+      magnetUri: 'magnet:?xt=urn:btih:3333333333333333333333333333333333333333',
+      releaseName: '[Other] Show - 02 [1080p].mkv',
+      seeders: 900,
+      sourceId: 'other-source',
+      provider: 'Other provider',
+    );
+    final releases = [unrelated, sameProvider, sameGroup]
+      ..sort(
+        (left, right) => compareStreamReleases(
+          left,
+          right,
+          preferredProvider: 'Preferred provider',
+          preferredReleaseGroup: 'subsplease',
+        ),
+      );
+
+    expect(releases, [sameGroup, sameProvider, unrelated]);
+    expect(releaseGroupKey('[SubsPlease] Show - 02'), 'subsplease');
+    expect(releaseGroupKey('Show - 02'), isNull);
+  });
+
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({
       DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',

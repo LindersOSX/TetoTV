@@ -21,6 +21,13 @@ class MarketplaceScreen extends ConsumerStatefulWidget {
   ConsumerState<MarketplaceScreen> createState() => _MarketplaceScreenState();
 }
 
+class _MarketplaceFocusTarget {
+  const _MarketplaceFocusTarget(this.node, this.rect);
+
+  final FocusNode node;
+  final Rect rect;
+}
+
 class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
   final FocusNode _backFocus = FocusNode(debugLabel: 'Marketplace: Settings');
   final FocusNode _refreshFocus = FocusNode(debugLabel: 'Marketplace: Refresh');
@@ -51,22 +58,38 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     super.dispose();
   }
 
-  bool _isMountedFocusable(FocusNode node) =>
-      node.context != null && node.canRequestFocus;
+  _MarketplaceFocusTarget? _focusTarget(FocusNode node) {
+    if (!node.canRequestFocus) return null;
+    final focusContext = node.context;
+    if (focusContext == null || !focusContext.mounted) return null;
+    try {
+      final renderObject = focusContext.findRenderObject();
+      if (renderObject == null || !renderObject.attached) return null;
+      final rect = node.rect;
+      return rect.isFinite ? _MarketplaceFocusTarget(node, rect) : null;
+    } catch (_) {
+      // A lazy sliver can detach between the context, render-object, and rect
+      // checks. Treat transient geometry as unavailable; the next D-pad event
+      // rebuilds the graph after layout instead of crashing the application.
+      return null;
+    }
+  }
 
-  List<List<FocusNode>> _groupByVisualRow(Iterable<FocusNode> candidates) {
-    final nodes = candidates.where(_isMountedFocusable).toList()
+  List<List<_MarketplaceFocusTarget>> _groupByVisualRow(
+    Iterable<FocusNode> candidates,
+  ) {
+    final nodes = candidates.map(_focusTarget).nonNulls.toList()
       ..sort((a, b) {
         final vertical = a.rect.center.dy.compareTo(b.rect.center.dy);
         return vertical != 0
             ? vertical
             : a.rect.center.dx.compareTo(b.rect.center.dx);
       });
-    final rows = <List<FocusNode>>[];
+    final rows = <List<_MarketplaceFocusTarget>>[];
     for (final node in nodes) {
       if (rows.isEmpty ||
           (rows.last.first.rect.center.dy - node.rect.center.dy).abs() > 12) {
-        rows.add(<FocusNode>[node]);
+        rows.add(<_MarketplaceFocusTarget>[node]);
       } else {
         rows.last.add(node);
       }
@@ -77,15 +100,15 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     return rows;
   }
 
-  List<List<FocusNode>> _navigationRows() {
+  List<List<_MarketplaceFocusTarget>> _navigationRows() {
     final marketplace = ref.read(marketplaceControllerProvider);
     final torrentSources = ref.read(userTorrentSourcesControllerProvider);
-    final rows = <List<FocusNode>>[];
+    final rows = <List<_MarketplaceFocusTarget>>[];
 
     final header = [
       _backFocus,
       _refreshFocus,
-    ].where(_isMountedFocusable).toList();
+    ].map(_focusTarget).nonNulls.toList();
     if (header.isNotEmpty) rows.add(header);
     rows.addAll(
       _groupByVisualRow([_phoneFocus, _addManifestFocus, _addRepositoryFocus]),
@@ -97,7 +120,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
           'torrent:$url:remove',
           'Marketplace torrent source Remove',
         ),
-      ].where(_isMountedFocusable).toList();
+      ].map(_focusTarget).nonNulls.toList();
       if (row.isNotEmpty) rows.add(row);
     }
     for (final repository in marketplace.repositories) {
@@ -110,7 +133,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
           'repository:${repository.url}:remove',
           'Marketplace repository Remove',
         ),
-      ].where(_isMountedFocusable).toList();
+      ].map(_focusTarget).nonNulls.toList();
       if (row.isNotEmpty) rows.add(row);
     }
 
@@ -167,18 +190,20 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
 
     final current = FocusManager.instance.primaryFocus;
     if (current == null) return KeyEventResult.ignored;
+    final repositoryTarget = _focusTarget(_addRepositoryFocus);
+    final manifestTarget = _focusTarget(_addManifestFocus);
     if (key == LogicalKeyboardKey.arrowUp &&
         current == _addRepositoryFocus &&
-        _isMountedFocusable(_addManifestFocus) &&
-        _addRepositoryFocus.rect.center.dy - _addManifestFocus.rect.center.dy >
-            12) {
+        repositoryTarget != null &&
+        manifestTarget != null &&
+        repositoryTarget.rect.center.dy - manifestTarget.rect.center.dy > 12) {
       _focusAndReveal(_addManifestFocus, key);
       return KeyEventResult.handled;
     }
     final rows = _navigationRows();
     for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) {
       final row = rows[rowIndex];
-      final columnIndex = row.indexOf(current);
+      final columnIndex = row.indexWhere((target) => target.node == current);
       if (columnIndex < 0) continue;
 
       if (horizontal) {
@@ -188,7 +213,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
         if (nextColumn < 0 || nextColumn >= row.length) {
           return KeyEventResult.handled;
         }
-        _focusAndReveal(row[nextColumn], key);
+        _focusAndReveal(row[nextColumn].node, key);
         return KeyEventResult.handled;
       }
 
@@ -201,7 +226,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       if (nextRowIndex < 0 || nextRowIndex >= rows.length) {
         return KeyEventResult.ignored;
       }
-      final currentX = current.rect.center.dx;
+      final currentX = row[columnIndex].rect.center.dx;
       final nextRow = rows[nextRowIndex];
       // Moving down from a one-action semantic row (for example a Torrent
       // source Remove control) enters the next row at its primary action.
@@ -216,7 +241,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                   ? candidate
                   : best,
             );
-      _focusAndReveal(target, key);
+      _focusAndReveal(target.node, key);
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;

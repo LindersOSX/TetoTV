@@ -98,6 +98,33 @@ class PlayerHudResourceParityTest {
     }
 
     @Test
+    fun media3ExitAndSkipControlsMatchTheMpvInteractionStyle() {
+        val playerLayout = resource("layout/activity_media3_player.xml").readText()
+        val skip = resource("drawable/tetotv_skip_button_background.xml").readText()
+        val exitBackground =
+            resource("drawable/tetotv_player_exit_dialog_background.xml").readText()
+        val styles = resource("values/styles.xml").readText()
+        val activity = activitySource()
+
+        listOf(
+            "android:layout_height=\"44dp\"",
+            "android:drawableStart=\"@drawable/tetotv_ic_skip_next\"",
+            "android:drawablePadding=\"8dp\"",
+            "android:paddingStart=\"18dp\"",
+            "android:textSize=\"14sp\"",
+        ).forEach { assertTrue(playerLayout.contains(it)) }
+        listOf("#B30B0B0D", "#D1FF496A", "#FFFF5C78", "3dp")
+            .forEach { assertTrue(skip.contains(it)) }
+        listOf("#FA09090B", "16dp", "#4DFFFFFF")
+            .forEach { assertTrue(exitBackground.contains(it)) }
+        assertTrue(styles.contains("<style name=\"NativePlayerExitDialogTheme\""))
+        assertTrue(activity.contains("R.style.NativePlayerExitDialogTheme"))
+        assertTrue(activity.contains("min(dp(520), resources.displayMetrics.widthPixels - dp(64))"))
+        assertTrue(activity.contains("R.drawable.tetotv_ic_play"))
+        assertTrue(activity.contains("R.drawable.tetotv_ic_exit"))
+    }
+
+    @Test
     fun shortcutsCleanUpBeforeDialogsAndUsePlaybackIntent() {
         val activity = source("main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt").readText()
         val dispatch = activity.substringAfter("override fun dispatchKeyEvent")

@@ -60,4 +60,12 @@ class Media3PlayerSafetyTest {
         assertTrue(nativeSkipReachesPlaybackEnd(1_439_500L, 1_440_000L))
         assertFalse(nativeSkipReachesPlaybackEnd(1_290_000L, 1_440_000L))
     }
+
+    @Test
+    fun `dual and multi audio release labels request extended discovery`() {
+        assertTrue(nativeReleaseAdvertisesMultipleAudio("[Group] Show - Dual Audio"))
+        assertTrue(nativeReleaseAdvertisesMultipleAudio("Show.Multi-Audio.1080p"))
+        assertFalse(nativeReleaseAdvertisesMultipleAudio("Show Japanese Audio 1080p"))
+        assertFalse(nativeReleaseAdvertisesMultipleAudio(null))
+    }
 }

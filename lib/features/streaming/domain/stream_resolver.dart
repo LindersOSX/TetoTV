@@ -58,6 +58,18 @@ class ReleaseCandidate {
   final bool isHdr;
 }
 
+/// Returns a stable release-group key for conventional torrent names such as
+/// `[SubsPlease] Show - 01`. The group is the closest available equivalent to
+/// an uploader/author across episode searches, while [ReleaseCandidate.provider]
+/// identifies the repository or source that supplied the result.
+String? releaseGroupKey(String releaseName) {
+  final match = RegExp(r'^\s*\[([^\[\]]{1,64})\]').firstMatch(releaseName);
+  final group = match?.group(1)?.trim().toLowerCase();
+  if (group == null || group.isEmpty) return null;
+  final normalized = group.replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+  return normalized.isEmpty ? null : normalized;
+}
+
 /// Sub releases should start with English captions visible, while releases
 /// identified as dubbed should start clean and let the viewer opt in.
 bool subtitlesEnabledByDefault(ReleaseCandidate release) => !release.isDubbed;
