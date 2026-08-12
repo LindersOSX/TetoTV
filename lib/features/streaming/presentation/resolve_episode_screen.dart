@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -585,7 +586,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             return;
         }
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted && attempt == _resolveAttempt) {
         _failedResolveHashes.add(selected.infoHash.toLowerCase());
         if (error case final RealDebridException realDebridError) {
@@ -621,6 +622,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           );
           return;
         }
+        unawaited(
+          recordAnonymousHandledError(
+            area: AnonymousErrorArea.playback,
+            error: error,
+            stack: stackTrace,
+          ),
+        );
         final errorMessage = switch (error) {
           DebridCacheMissException() => debridCacheExhaustedMessage(
             _debridService,
@@ -751,7 +759,14 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       await ref
           .read(addonStoreProvider)
           .recordProviderSuccess(stream.providerId);
-    } catch (error) {
+    } catch (error, stackTrace) {
+      unawaited(
+        recordAnonymousHandledError(
+          area: AnonymousErrorArea.playback,
+          error: error,
+          stack: stackTrace,
+        ),
+      );
       await ref
           .read(addonStoreProvider)
           .recordProviderFailure(stream.providerId, error);

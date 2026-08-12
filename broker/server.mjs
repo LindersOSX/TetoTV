@@ -254,7 +254,7 @@ function privacyPage(response) {
      <p>Sessions expire after about three minutes without a heartbeat and are removed when the app opts out or closes normally. Only aggregate active and streaming counts are public. The hosting provider may process IP addresses for short-lived rate limiting and ordinary access logs.</p>
 
      <h2>Diagnostics and choices</h2>
-     <p><strong>Anonymous crash reporting is disabled by default.</strong> First-time setup and Settings both let the user explicitly enable or disable it. When enabled, TetoTV sends only the app version/build, crash category, Android version, CPU architecture, TV-or-phone class, time, and a bounded redacted technical error/stack trace. It does not intentionally send the show, episode, account, device or installation identifier, source/provider, URL, credential, playback history, or full diagnostics database.</p>
+     <p><strong>Anonymous crash reporting is disabled by default.</strong> First-time setup and Settings both let the user explicitly enable or disable it. When enabled, unexpected handled app errors and unhandled crashes can be reported. TetoTV sends only the app version/build, crash category, Android version, CPU architecture, TV-or-phone class, time, and a bounded redacted technical error/stack trace. It does not intentionally send the show, episode, account, device or installation identifier, source/provider, URL, credential, playback history, or full diagnostics database.</p>
      <p>A JVM crash is kept locally and sent after the next launch. On Android versions that expose historical process-exit details, native crashes and ANRs can also be recovered after restart. This broker validates and rate-limits the report, adds a random per-incident reference, and forwards it without storing the body to the TetoTV Discord bot. The bot posts it to the designated crash-report channel, where Discord retention and channel permissions apply. Disabling reporting deletes any queued unsent report. Hosting providers and Discord may process ordinary connection and request metadata under their own policies.</p>
      <p>Other diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
 
@@ -2674,6 +2674,7 @@ server.listen(port, async () => {
         !privacyBody.includes("https://discord.gg/juC6k7d4WY") ||
         !privacyBody.includes("Anonymous live activity count") ||
         !privacyBody.includes("Anonymous crash reporting is disabled by default") ||
+        !privacyBody.includes("unexpected handled app errors") ||
         !privacyBody.includes("designated crash-report channel") ||
         privacyBody.includes(githubReleaseToken) ||
         health.source_pairing !== true ||

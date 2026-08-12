@@ -55,6 +55,7 @@ Future<void> main() async {
   );
   runApp(
     ProviderScope(
+      observers: [AnonymousHandledErrorObserver()],
       overrides: [isTelevisionProvider.overrideWithValue(isTelevision)],
       child: const TetoTvApp(),
     ),

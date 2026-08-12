@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
@@ -1042,8 +1043,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (_engineHandoffInProgress) return;
       _startVideoWatchdog();
       _startPerformanceWatchdog();
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted && !_engineHandoffInProgress) {
+        unawaited(
+          recordAnonymousHandledError(
+            area: AnonymousErrorArea.playback,
+            error: error,
+            stack: stackTrace,
+          ),
+        );
         setState(() => _playbackError = error.toString());
       }
     } finally {

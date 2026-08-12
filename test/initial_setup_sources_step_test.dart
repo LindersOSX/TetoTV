@@ -37,7 +37,7 @@ void main() {
     expect(find.text('Keep off'), findsOneWidget);
     expect(find.text('Enable live count'), findsOneWidget);
     expect(find.text('Do not send'), findsOneWidget);
-    expect(find.text('Allow crash reports'), findsOneWidget);
+    expect(find.text('Allow error reports'), findsOneWidget);
     final container = ProviderScope.containerOf(
       tester.element(find.byType(InitialSetupScreen)),
     );
@@ -59,7 +59,7 @@ void main() {
       isTrue,
     );
 
-    await tester.tap(find.text('Allow crash reports'));
+    await tester.tap(find.text('Allow error reports'));
     await tester.pumpAndSettle();
     expect(
       container

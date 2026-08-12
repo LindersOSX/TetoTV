@@ -165,6 +165,8 @@ class AnonymousCrashReporter {
   Future<void> _tail = Future<void>.value();
   String? _lastSignature;
   DateTime? _lastSignatureAt;
+  final Map<String, DateTime> _handledSignatures = {};
+  final List<DateTime> _handledReportTimes = [];
 
   void setEnabled(bool value) {
     if (_disposed || value == _enabled) return;
@@ -219,6 +221,51 @@ class AnonymousCrashReporter {
         // Crash reporting must never create a second unhandled error.
       }
     });
+  }
+
+  /// Reports an unexpected error that the app caught and presented without
+  /// terminating. Expected control-flow failures are intentionally excluded,
+  /// and a small rolling quota prevents a broken endpoint or rebuild loop from
+  /// flooding the private Discord diagnostics channel.
+  Future<void> recordHandled({
+    required AnonymousErrorArea area,
+    required Object error,
+    StackTrace? stack,
+  }) {
+    if (_disposed || !_enabled || !_isUnexpectedHandledError(error)) {
+      return Future<void>.value();
+    }
+    final now = DateTime.now();
+    _pruneHandledReports(now);
+    final safeError = redactDiagnosticValue(error.toString(), maximum: 360);
+    final firstFrame = _redactStack(
+      stack?.toString() ?? '',
+      maximum: 300,
+    ).split('\n').firstOrNull;
+    final signature =
+        '${area.name}|${error.runtimeType}|$safeError|$firstFrame';
+    final previous = _handledSignatures[signature];
+    if (previous != null &&
+        now.difference(previous) < const Duration(minutes: 10)) {
+      return Future<void>.value();
+    }
+    if (_handledReportTimes.length >= 6) return Future<void>.value();
+    _handledSignatures[signature] = now;
+    _handledReportTimes.add(now);
+    return record(
+      // The existing broker schema calls non-framework Dart errors
+      // "platform". Reusing it keeps the deployed broker/bot compatible while
+      // the message clearly distinguishes a handled application failure.
+      kind: 'platform',
+      error: 'Handled ${area.label} error (${error.runtimeType}): $safeError',
+      stack: stack,
+    );
+  }
+
+  void _pruneHandledReports(DateTime now) {
+    const window = Duration(minutes: 10);
+    _handledReportTimes.removeWhere((time) => now.difference(time) >= window);
+    _handledSignatures.removeWhere((_, time) => now.difference(time) >= window);
   }
 
   Future<bool> _flushPending() async {
@@ -335,6 +382,116 @@ class AnonymousCrashReporter {
   }
 }
 
+enum AnonymousErrorArea {
+  applicationState('application state'),
+  catalog('catalog'),
+  playback('playback');
+
+  const AnonymousErrorArea(this.label);
+
+  final String label;
+}
+
+bool _isUnexpectedHandledError(Object error) {
+  if (error is DioException && error.type == DioExceptionType.cancel) {
+    return false;
+  }
+  final type = error.runtimeType.toString().toLowerCase();
+  if (type == 'debridcachemissexception' ||
+      type == 'webprovidersearchcancelled' ||
+      type == '_discordauthenticationabandoned') {
+    return false;
+  }
+  final message = error.toString().toLowerCase();
+  return !const [
+    'authorization_pending',
+    'slow_down',
+    'expired_token',
+    'access_denied',
+    'authorization was denied',
+    'authentication was cancelled',
+    'authentication was canceled',
+    'login was cancelled',
+    'login was canceled',
+    'connection attempt was cancelled',
+    'operation was cancelled',
+    'operation was canceled',
+    'request was cancelled',
+    'request was canceled',
+    'search cancelled',
+    'search canceled',
+    'not instantly cached',
+    'no results',
+  ].any(message.contains);
+}
+
+/// Captures Riverpod failures that would otherwise be converted into an error
+/// panel and never reach FlutterError/PlatformDispatcher.
+class AnonymousHandledErrorObserver extends ProviderObserver {
+  AnonymousHandledErrorObserver({
+    Future<void> Function({
+      required AnonymousErrorArea area,
+      required Object error,
+      StackTrace? stack,
+    })?
+    report,
+  }) : _report = report ?? recordAnonymousHandledError;
+
+  final Future<void> Function({
+    required AnonymousErrorArea area,
+    required Object error,
+    StackTrace? stack,
+  })
+  _report;
+  final Map<ProviderBase<Object?>, Object> _lastErrors = {};
+
+  void _capture(
+    ProviderBase<Object?> provider,
+    Object error,
+    StackTrace stack,
+  ) {
+    if (identical(_lastErrors[provider], error)) return;
+    _lastErrors[provider] = error;
+    unawaited(
+      _report(
+        area: AnonymousErrorArea.applicationState,
+        error: error,
+        stack: stack,
+      ),
+    );
+  }
+
+  @override
+  void providerDidFail(
+    ProviderBase<Object?> provider,
+    Object error,
+    StackTrace stackTrace,
+    ProviderContainer container,
+  ) => _capture(provider, error, stackTrace);
+
+  @override
+  void didUpdateProvider(
+    ProviderBase<Object?> provider,
+    Object? previousValue,
+    Object? newValue,
+    ProviderContainer container,
+  ) {
+    if (newValue case AsyncError(:final error, :final stackTrace)) {
+      _capture(provider, error, stackTrace);
+    } else {
+      _lastErrors.remove(provider);
+    }
+  }
+
+  @override
+  void didDisposeProvider(
+    ProviderBase<Object?> provider,
+    ProviderContainer container,
+  ) {
+    _lastErrors.remove(provider);
+  }
+}
+
 String _safeKind(String value) => switch (value) {
   'flutter' || 'platform' || 'native' || 'java' || 'anr' => value,
   _ => 'platform',
@@ -386,6 +543,18 @@ Future<void> recordAnonymousCrash({
 }) =>
     _activeAnonymousCrashReporter?.record(
       kind: kind,
+      error: error,
+      stack: stack,
+    ) ??
+    Future<void>.value();
+
+Future<void> recordAnonymousHandledError({
+  required AnonymousErrorArea area,
+  required Object error,
+  StackTrace? stack,
+}) =>
+    _activeAnonymousCrashReporter?.recordHandled(
+      area: area,
       error: error,
       stack: stack,
     ) ??

@@ -1,5 +1,9 @@
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -90,6 +94,142 @@ void main() {
     expect(platform.pendingReport, isNull);
     expect(platform.clearCalls, greaterThanOrEqualTo(1));
   });
+
+  test(
+    'handled errors use the consent gate and redact their details',
+    () async {
+      final client = _CrashClient();
+      final platform = _CrashPlatform();
+      final reporter = AnonymousCrashReporter(client, platform);
+
+      await reporter.recordHandled(
+        area: AnonymousErrorArea.playback,
+        error: StateError('failed at https://private.example/watch?token=abc'),
+        stack: StackTrace.fromString('Bearer private-token'),
+      );
+      expect(client.reports, isEmpty);
+
+      reporter.setEnabled(true);
+      await reporter.recordHandled(
+        area: AnonymousErrorArea.playback,
+        error: StateError('failed at https://private.example/watch?token=abc'),
+        stack: StackTrace.fromString('Bearer private-token'),
+      );
+
+      expect(client.reports, hasLength(1));
+      expect(client.reports.single.kind, 'platform');
+      expect(client.reports.single.message, contains('Handled playback error'));
+      expect(client.reports.single.message, contains('[URL]'));
+      expect(client.reports.single.message, isNot(contains('private.example')));
+      expect(client.reports.single.stack, contains('Bearer [REDACTED]'));
+    },
+  );
+
+  test(
+    'expected cancellations, cache misses, and no-results states stay quiet',
+    () async {
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, _CrashPlatform());
+      reporter.setEnabled(true);
+      final errors = <Object>[
+        DioException(
+          requestOptions: RequestOptions(path: '/cancelled'),
+          type: DioExceptionType.cancel,
+        ),
+        const DebridCacheMissException(DebridService.realDebrid),
+        StateError('No results matched these filters.'),
+        StateError('authorization_pending'),
+        StateError('access_denied'),
+      ];
+
+      for (final error in errors) {
+        await reporter.recordHandled(
+          area: AnonymousErrorArea.applicationState,
+          error: error,
+          stack: StackTrace.current,
+        );
+      }
+
+      expect(client.reports, isEmpty);
+    },
+  );
+
+  test(
+    'handled reports are deduplicated and capped per rolling window',
+    () async {
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, _CrashPlatform());
+      reporter.setEnabled(true);
+      final stack = StackTrace.fromString('frame one');
+
+      await reporter.recordHandled(
+        area: AnonymousErrorArea.catalog,
+        error: StateError('duplicate'),
+        stack: stack,
+      );
+      await reporter.recordHandled(
+        area: AnonymousErrorArea.catalog,
+        error: StateError('duplicate'),
+        stack: stack,
+      );
+      for (var index = 1; index <= 6; index++) {
+        await reporter.recordHandled(
+          area: AnonymousErrorArea.catalog,
+          error: StateError('unique $index'),
+          stack: stack,
+        );
+      }
+
+      // The first report plus five unique reports consume the six-report quota.
+      expect(client.reports, hasLength(6));
+      expect(
+        client.reports.where((report) => report.message.contains('duplicate')),
+        hasLength(1),
+      );
+      expect(client.reports.last.message, contains('unique 5'));
+    },
+  );
+
+  test(
+    'provider observer captures an AsyncError once until recovery',
+    () async {
+      final captured = <Object>[];
+      final observer = AnonymousHandledErrorObserver(
+        report: ({required area, required error, stack}) async {
+          expect(area, AnonymousErrorArea.applicationState);
+          captured.add(error);
+        },
+      );
+      final provider = Provider<int>((ref) => 1);
+      final container = ProviderContainer();
+      final error = StateError('provider failed');
+      final asyncError = AsyncError<int>(error, StackTrace.current);
+      addTearDown(container.dispose);
+
+      observer.didUpdateProvider(provider, null, asyncError, container);
+      observer.providerDidFail(
+        provider,
+        error,
+        asyncError.stackTrace,
+        container,
+      );
+      expect(captured, [error]);
+
+      observer.didUpdateProvider(
+        provider,
+        asyncError,
+        const AsyncData(1),
+        container,
+      );
+      observer.didUpdateProvider(
+        provider,
+        const AsyncData(1),
+        asyncError,
+        container,
+      );
+      expect(captured, [error, error]);
+    },
+  );
 }
 
 class _CrashClient implements AnonymousCrashReportClient {
