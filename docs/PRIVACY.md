@@ -51,7 +51,8 @@ TetoTV makes network requests only for app features the user uses:
 
 When the user explicitly links Discord and enables **Discord Rich Presence**,
 TetoTV sends Discord the current anime title, episode number, playing or paused
-state, and playback timing so Discord can display that activity. Discord OAuth
+state, playback timing, and the public show-artwork URL so Discord can display
+that activity with the show's thumbnail. Discord OAuth
 access and refresh tokens are stored in Android Keystore-backed secure storage.
 Disabling Rich Presence stops sharing playback activity; unlinking Discord also
 revokes the connection when possible and deletes the saved tokens from TetoTV.

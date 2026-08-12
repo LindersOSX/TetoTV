@@ -726,6 +726,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       position: controller.value.position,
       duration: controller.value.duration,
       playing: controller.value.isPlaying,
+      artworkUrl: widget.coverImageUrl,
       seekBackSeconds: _seekBackSeconds,
       seekForwardSeconds: _seekForwardSeconds,
     );

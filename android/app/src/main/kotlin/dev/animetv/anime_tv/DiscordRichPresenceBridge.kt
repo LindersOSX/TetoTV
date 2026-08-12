@@ -8,6 +8,7 @@ import androidx.browser.customtabs.CustomTabsClient
 import com.discord.socialsdk.DiscordSocialSdkInit
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.net.URI
 
 /**
  * Small, token-safe adapter around Discord's native Social SDK.
@@ -157,6 +158,7 @@ object DiscordRichPresenceBridge {
                         call.argument<Boolean>("playing") ?: false,
                         (call.argument<Number>("positionMs")?.toLong() ?: 0L).coerceAtLeast(0L),
                         (call.argument<Number>("durationMs")?.toLong() ?: 0L).coerceAtLeast(0L),
+                        sanitizeDiscordArtworkUrl(call.argument<String>("artworkUrl")),
                     )
                 }
                 result.success(null)
@@ -197,6 +199,7 @@ object DiscordRichPresenceBridge {
             playing = data["playing"] as? Boolean ?: false,
             positionMs = (data["positionMs"] as? Number)?.toLong() ?: 0L,
             durationMs = (data["durationMs"] as? Number)?.toLong() ?: 0L,
+            artworkUrl = data["artworkUrl"] as? String,
         )
     }
 
@@ -206,6 +209,7 @@ object DiscordRichPresenceBridge {
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,
+        artworkUrl: String? = null,
     ) {
         if (!initialized || connectionState != "ready") return
         val safeTitle = title.trim().take(120)
@@ -216,6 +220,7 @@ object DiscordRichPresenceBridge {
             playing,
             positionMs.coerceAtLeast(0L),
             durationMs.coerceAtLeast(0L),
+            sanitizeDiscordArtworkUrl(artworkUrl),
         )
     }
 
@@ -366,7 +371,28 @@ object DiscordRichPresenceBridge {
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,
+        artworkUrl: String,
     )
     private external fun nativeClearPresence()
     private external fun nativeDisconnect()
+}
+
+/** Accept only bounded public HTTPS artwork references for Discord to fetch. */
+internal fun sanitizeDiscordArtworkUrl(value: String?): String {
+    val candidate = value?.trim().orEmpty()
+    // Discord's ActivityAssets contract accepts at most 300 characters.
+    if (candidate.isEmpty() || candidate.length > 300) return ""
+    return runCatching {
+        val uri = URI(candidate)
+        if (
+            !uri.scheme.equals("https", ignoreCase = true) ||
+            uri.host.isNullOrBlank() ||
+            uri.rawUserInfo != null ||
+            uri.fragment != null
+        ) {
+            ""
+        } else {
+            candidate
+        }
+    }.getOrDefault("")
 }
