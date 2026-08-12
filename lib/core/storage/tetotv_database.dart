@@ -913,6 +913,22 @@ Future<void> saveCheckpointTransaction(
   DatabaseExecutor database,
   PlaybackCheckpoint checkpoint,
 ) async {
+  final existing = await database.query(
+    'playback_history',
+    columns: const ['updated_at'],
+    where: 'anilist_media_id = ? AND episode = ?',
+    whereArgs: [checkpoint.anilistMediaId, checkpoint.episode],
+    limit: 1,
+  );
+  final existingUpdatedAt = existing.isEmpty
+      ? null
+      : existing.first['updated_at'] as int?;
+  // Position callbacks and route disposal can enqueue overlapping writes.
+  // Never let an older, slower write overwrite the final Exit checkpoint.
+  if (existingUpdatedAt != null &&
+      existingUpdatedAt > checkpoint.updatedAt.millisecondsSinceEpoch) {
+    return;
+  }
   await database.delete(
     'continue_watching_dismissals',
     where: 'anilist_media_id = ?',

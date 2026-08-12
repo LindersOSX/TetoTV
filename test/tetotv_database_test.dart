@@ -64,12 +64,37 @@ void main() {
       await saveCheckpointTransaction(database, checkpoint);
 
       expect(database.calls, [
+        'query:playback_history:42:3',
         'delete:continue_watching_dismissals:42',
         'insert:playback_history',
       ]);
       expect(database.inserted?['anilist_media_id'], 42);
       expect(database.inserted?['episode'], 3);
       expect(database.conflictAlgorithm, ConflictAlgorithm.replace);
+    },
+  );
+
+  test(
+    'an older checkpoint cannot overwrite the final Exit position',
+    () async {
+      final newer = DateTime.utc(2026, 8, 12, 20);
+      final database = _CheckpointExecutor(
+        existingUpdatedAt: newer.millisecondsSinceEpoch,
+      );
+      final stale = PlaybackCheckpoint(
+        anilistMediaId: 42,
+        episode: 3,
+        title: 'Test Show',
+        position: const Duration(minutes: 8),
+        duration: const Duration(minutes: 24),
+        updatedAt: newer.subtract(const Duration(seconds: 1)),
+        completed: false,
+      );
+
+      await saveCheckpointTransaction(database, stale);
+
+      expect(database.calls, ['query:playback_history:42:3']);
+      expect(database.inserted, isNull);
     },
   );
 
@@ -117,9 +142,33 @@ class _RecordingDatabase implements Database {
 }
 
 class _CheckpointExecutor implements DatabaseExecutor {
+  _CheckpointExecutor({this.existingUpdatedAt});
+
+  final int? existingUpdatedAt;
   final calls = <String>[];
   Map<String, Object?>? inserted;
   ConflictAlgorithm? conflictAlgorithm;
+
+  @override
+  Future<List<Map<String, Object?>>> query(
+    String table, {
+    bool? distinct,
+    List<String>? columns,
+    String? where,
+    List<Object?>? whereArgs,
+    String? groupBy,
+    String? having,
+    String? orderBy,
+    int? limit,
+    int? offset,
+  }) async {
+    calls.add('query:$table:${whereArgs?[0]}:${whereArgs?[1]}');
+    return existingUpdatedAt == null
+        ? const []
+        : [
+            <String, Object?>{'updated_at': existingUpdatedAt},
+          ];
+  }
 
   @override
   Future<int> delete(

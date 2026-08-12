@@ -168,14 +168,23 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   _TvPlaybackEngine _engine = _TvPlaybackEngine.nativeMedia3;
   late String _activeSource;
   late PlaybackLaunch _activeLaunch;
+  AnonymousUsageReporter? _usageReporter;
   bool _profileReady = false;
   Duration? _resumeOverride;
+
+  int get _anilistMediaId =>
+      widget.anilistMediaId ?? _activeLaunch.episode.anilistMediaId;
+  int? get _malMediaId => widget.malMediaId ?? _activeLaunch.episode.malMediaId;
+  int get _episodeNumber => widget.episode ?? _activeLaunch.episode.episode;
+  String? get _coverImageUrl =>
+      widget.coverImageUrl ?? _activeLaunch.episode.coverImageUrl;
 
   @override
   void initState() {
     super.initState();
     if (!kDebugMode) {
-      ref.read(anonymousUsageReporterProvider).setStreaming(true);
+      _usageReporter = ref.read(anonymousUsageReporterProvider);
+      _usageReporter!.setStreaming(true);
     }
     _activeSource = widget.source;
     _activeLaunch = widget.launch;
@@ -193,9 +202,9 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
 
   @override
   void dispose() {
-    if (!kDebugMode) {
-      ref.read(anonymousUsageReporterProvider).setStreaming(false);
-    }
+    // Riverpod invalidates ConsumerState.ref before State.dispose is invoked.
+    // Use the dependency captured while mounted instead of reading ref here.
+    _usageReporter?.setStreaming(false);
     super.dispose();
   }
 
@@ -317,10 +326,10 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
         subtitle:
             _activeLaunch.stream.externalSubtitle?.toString() ??
             widget.subtitle,
-        anilistMediaId: widget.anilistMediaId,
-        malMediaId: widget.malMediaId,
-        episode: widget.episode,
-        coverImageUrl: widget.coverImageUrl,
+        anilistMediaId: _anilistMediaId,
+        malMediaId: _malMediaId,
+        episode: _episodeNumber,
+        coverImageUrl: _coverImageUrl,
         initialPosition: _resumeOverride,
         onUseVlc: (position, stream, release, directStreams) => _switchEngine(
           _TvPlaybackEngine.vlc,
@@ -350,10 +359,10 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
         subtitle:
             _activeLaunch.stream.externalSubtitle?.toString() ??
             widget.subtitle,
-        anilistMediaId: widget.anilistMediaId,
-        malMediaId: widget.malMediaId,
-        episode: widget.episode,
-        coverImageUrl: widget.coverImageUrl,
+        anilistMediaId: _anilistMediaId,
+        malMediaId: _malMediaId,
+        episode: _episodeNumber,
+        coverImageUrl: _coverImageUrl,
         initialPosition: _resumeOverride,
         onUseMpv: (position, stream, release, directStreams) => _switchEngine(
           _TvPlaybackEngine.mpv,
@@ -381,10 +390,10 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       launch: _activeLaunch,
       subtitle:
           _activeLaunch.stream.externalSubtitle?.toString() ?? widget.subtitle,
-      anilistMediaId: widget.anilistMediaId,
-      malMediaId: widget.malMediaId,
-      episode: widget.episode,
-      coverImageUrl: widget.coverImageUrl,
+      anilistMediaId: _anilistMediaId,
+      malMediaId: _malMediaId,
+      episode: _episodeNumber,
+      coverImageUrl: _coverImageUrl,
       initialPosition: _resumeOverride,
       onUseMpv: (position, stream, release) => _switchEngine(
         _TvPlaybackEngine.mpv,
@@ -463,6 +472,7 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
 class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
+  late final TetoTvDatabase _database;
 
   Map<String, String> get _httpHeaders => {
     'Accept': '*/*',
@@ -523,6 +533,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   SeriesPlaybackPreferences _seriesPreferences =
       const SeriesPlaybackPreferences();
+  bool _seriesPreferencesReady = false;
   Uint8List? _seekPreview;
   Duration? _seekPreviewPosition;
   Timer? _seekPreviewTimer;
@@ -552,6 +563,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   final PlayerReleaseCoordinator _handoffRelease = PlayerReleaseCoordinator();
   final Set<Future<void>> _playerMutationOperations = <Future<void>>{};
   Duration? _pendingInheritedResume;
+  bool _lastResumeSeekSucceeded = true;
 
   bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
     current: _currentStream,
@@ -568,8 +580,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _captionTextColor = Color(appearance.captionTextColor);
       _captionBackgroundColor = Color(appearance.captionBackgroundColor);
       if (widget.anilistMediaId case final mediaId?) {
-        final database = ref.read(tetoTvDatabaseProvider);
-        _seriesPreferences = await database.seriesPreferences(mediaId);
+        _seriesPreferences = await _database.seriesPreferences(mediaId);
+        _seriesPreferencesReady = true;
         _decoderMode = switch (_seriesPreferences.decoder) {
           'hardware-direct' => PlaybackDecoderMode.hardwareDirect,
           'software' => PlaybackDecoderMode.software,
@@ -590,7 +602,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         if (resume == null &&
             !widget.launch.episode.startFromBeginning &&
             widget.episode != null) {
-          final checkpoint = await database.checkpoint(
+          final checkpoint = await _database.checkpoint(
             mediaId,
             widget.episode!,
           );
@@ -615,7 +627,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (!mounted || _engineHandoffInProgress) return;
       await _openMedia(resume: resume);
       if (resume != null && mounted && !_engineHandoffInProgress) {
-        _showTrackMessage('Resumed at ${_formatPlayerDuration(resume)}');
+        _showTrackMessage(
+          _lastResumeSeekSucceeded
+              ? 'Resumed at ${_formatPlayerDuration(resume)}'
+              : 'Could not restore the saved position',
+        );
       }
     } finally {
       _playbackPersistenceReady = true;
@@ -625,6 +641,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // Final checkpoints and preferences are written during State.dispose,
+    // after Riverpod has invalidated ConsumerState.ref.
+    _database = ref.read(tetoTvDatabaseProvider);
     _source = widget.source;
     _currentRelease = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
@@ -920,20 +939,41 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             .firstWhere((value) => value > Duration.zero)
             .timeout(const Duration(seconds: 15));
       }
-      final embedded = await _embeddedChapterSkips(duration);
-      final external = widget.malMediaId == null || widget.episode == null
-          ? const <SkipSegment>[]
-          : await AniSkipClient().segments(
-              malMediaId: widget.malMediaId!,
-              episode: widget.episode!,
-              episodeDuration: duration,
-            );
+      final externalFuture = widget.malMediaId == null || widget.episode == null
+          ? Future<List<SkipSegment>>.value(const <SkipSegment>[])
+          : AniSkipClient()
+                .segments(
+                  malMediaId: widget.malMediaId!,
+                  episode: widget.episode!,
+                  episodeDuration: duration,
+                )
+                .catchError((_) => const <SkipSegment>[]);
+      final embedded = await _embeddedChapterSkipsWithRetry(duration);
+      if (mounted && embedded.isNotEmpty) {
+        setState(() => _skips = embedded);
+        _checkSkips(_player.state.position);
+      }
+      final external = await externalFuture;
       if (!mounted) return;
       setState(() => _skips = mergeSkipSegments(embedded, external));
       _checkSkips(_player.state.position);
     } catch (_) {
       // Chapter and community skip data are optional playback enhancements.
     }
+  }
+
+  Future<List<SkipSegment>> _embeddedChapterSkipsWithRetry(
+    Duration duration,
+  ) async {
+    for (var attempt = 0; attempt < 6; attempt++) {
+      if (_engineHandoffInProgress) return const [];
+      final segments = await _embeddedChapterSkips(duration);
+      if (segments.isNotEmpty) return segments;
+      if (attempt < 5) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+    }
+    return const [];
   }
 
   Future<List<SkipSegment>> _embeddedChapterSkips(Duration duration) async {
@@ -1039,7 +1079,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       await _configureNativePlayback();
       await _player.open(Media(_source, httpHeaders: _httpHeaders), play: true);
       await _applySubtitle();
-      if (resume != null) await _restoreResumePosition(resume);
+      if (resume != null) {
+        _lastResumeSeekSucceeded = await _restoreResumePosition(resume);
+      }
       if (_engineHandoffInProgress) return;
       _startVideoWatchdog();
       _startPerformanceWatchdog();
@@ -1108,7 +1150,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
-  Future<void> _restoreResumePosition(Duration resume) async {
+  Future<bool> _restoreResumePosition(Duration resume) async {
     if (_player.state.duration <= Duration.zero) {
       try {
         await _player.stream.duration
@@ -1118,12 +1160,20 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         // Some streams do not expose duration until after their first seek.
       }
     }
-    await _player.seek(resume);
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (resumeSeekNeedsRetry(resume, _player.state.position)) {
-      await _player.seek(resume);
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (_engineHandoffInProgress) return false;
+      try {
+        await _player.seek(resume);
+      } catch (_) {
+        // Network demuxers can reject seeks until their index is available.
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (!resumeSeekNeedsRetry(resume, _player.state.position)) {
+        _pendingInheritedResume = null;
+        return true;
+      }
     }
-    _pendingInheritedResume = null;
+    return false;
   }
 
   Duration _effectiveHandoffPosition() {
@@ -1233,30 +1283,31 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final mediaId = widget.anilistMediaId;
     final episode = widget.episode;
     if (mediaId == null || episode == null) return;
-    final now = DateTime.now();
+    var now = DateTime.now();
     if (!force &&
         now.difference(_lastCheckpointSave) < const Duration(seconds: 10)) {
       return;
     }
     final duration = _player.state.duration;
     if (duration <= Duration.zero) return;
+    if (!now.isAfter(_lastCheckpointSave)) {
+      now = _lastCheckpointSave.add(const Duration(milliseconds: 1));
+    }
     _lastCheckpointSave = now;
     final completed = position.inMilliseconds / duration.inMilliseconds >= .93;
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveCheckpoint(
-          PlaybackCheckpoint(
-            anilistMediaId: mediaId,
-            malMediaId: widget.malMediaId,
-            episode: episode,
-            title: widget.launch.episode.title,
-            coverImageUrl: widget.coverImageUrl,
-            position: completed ? duration : position,
-            duration: duration,
-            updatedAt: now,
-            completed: completed,
-          ),
-        );
+    await _database.saveCheckpoint(
+      PlaybackCheckpoint(
+        anilistMediaId: mediaId,
+        malMediaId: widget.malMediaId,
+        episode: episode,
+        title: widget.launch.episode.title,
+        coverImageUrl: widget.coverImageUrl,
+        position: completed ? duration : position,
+        duration: duration,
+        updatedAt: now,
+        completed: completed,
+      ),
+    );
     if (force && mounted) ref.invalidate(recentPlaybackProvider);
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
@@ -1365,13 +1416,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     Object? terminalFailure;
     try {
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
-      await ref
-          .read(tetoTvDatabaseProvider)
-          .recordStreamFailure(
-            deviceKey: profile.key,
-            infoHash: _currentRelease.infoHash,
-            reason: reason,
-          );
+      await _database.recordStreamFailure(
+        deviceKey: profile.key,
+        infoHash: _currentRelease.infoHash,
+        reason: reason,
+      );
       if (await _switchToNextDirectStream(position)) return;
       while (_alternativeIndex < widget.launch.alternatives.length) {
         final candidate = widget.launch.alternatives[_alternativeIndex++];
@@ -1487,13 +1536,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _recordEngineSuccess() async {
-    final database = ref.read(tetoTvDatabaseProvider);
     if (_currentStream.providerId case final providerId?) {
-      await database.recordProviderSuccess(providerId);
+      await _database.recordProviderSuccess(providerId);
       return;
     }
     final device = await AndroidTvBridge.instance.getDeviceProfile();
-    await database.recordPlayerSuccess(device.key, 'mpv');
+    await _database.recordPlayerSuccess(device.key, 'mpv');
   }
 
   Future<bool> _prepareForEngineHandoff(Duration position) async {
@@ -1532,6 +1580,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       await _persistPlayback(position, force: true);
     } catch (_) {
       // A failed checkpoint must not strand the user in the old engine.
+    }
+    try {
+      await _saveSeriesPreferences();
+    } catch (_) {
+      // Preferences are best effort; decoder ownership still has to end.
     }
     try {
       await _progressSubscription?.cancel();
@@ -1582,14 +1635,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Future<void> _fallbackToVlc(String reason) async {
     if (_requestedVlcFallback) return;
     _requestedVlcFallback = true;
-    final database = ref.read(tetoTvDatabaseProvider);
     if (_currentStream.providerId case final providerId?) {
-      await database.recordProviderFailure(providerId, reason);
+      await _database.recordProviderFailure(providerId, reason);
     } else {
       final device = await AndroidTvBridge.instance.getDeviceProfile();
-      await database.recordPlayerFailure(device.key, 'mpv');
+      await _database.recordPlayerFailure(device.key, 'mpv');
     }
-    await database.recordDiagnosticEvent(
+    await _database.recordDiagnosticEvent(
       category: 'player-mpv',
       message: reason,
     );
@@ -1646,7 +1698,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   Future<void> _saveSeriesPreferences() async {
     final mediaId = widget.anilistMediaId;
-    if (mediaId == null) return;
+    if (mediaId == null || !_seriesPreferencesReady) return;
     final audio = _player.state.track.audio;
     final subtitle = _player.state.track.subtitle;
     _seriesPreferences = _seriesPreferences.copyWith(
@@ -1671,9 +1723,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       },
       highContrastSubtitles: _highContrastSubtitles,
     );
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveSeriesPreferences(mediaId, _seriesPreferences);
+    await _database.saveSeriesPreferences(mediaId, _seriesPreferences);
   }
 
   Future<void> _saveDecoderPreference() async {
@@ -1686,9 +1736,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _ => 'hardware-safe',
       },
     );
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveSeriesPreferences(mediaId, _seriesPreferences);
+    await _database.saveSeriesPreferences(mediaId, _seriesPreferences);
   }
 
   Future<void> _offerNextEpisode() async {
@@ -2340,25 +2388,26 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openAudioTrackPicker() async {
-    var tracks = _player.state.tracks.audio
-        .where((track) => track.id != 'auto' && track.id != 'no')
-        .toList(growable: false);
-    for (var attempt = 0; tracks.isEmpty && attempt < 5; attempt++) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      if (!mounted) return;
-      tracks = _player.state.tracks.audio
-          .where((track) => track.id != 'auto' && track.id != 'no')
-          .toList(growable: false);
-    }
+    final tracks = await waitForStableTrackSnapshot<List<AudioTrack>>(
+      read: () async {
+        if (!mounted || _engineHandoffInProgress) return const <AudioTrack>[];
+        return _player.state.tracks.audio
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .toList(growable: false);
+      },
+      signature: mediaKitAudioTrackSignature,
+      hasTracks: (tracks) => tracks.isNotEmpty,
+    );
+    if (!mounted || _engineHandoffInProgress) return;
     if (tracks.isEmpty) {
-      _showTrackMessage('No alternate audio tracks');
+      _showTrackMessage('This file has no selectable embedded audio tracks');
       return;
     }
     _controlsTimer?.cancel();
     final currentId = _player.state.track.audio.id;
     final selectedId = await showPlayerTrackPicker<String>(
       context: context,
-      title: 'Audio track',
+      title: tracks.length == 1 ? 'Audio track (1 found)' : 'Audio tracks',
       icon: Icons.audiotrack_rounded,
       selectedValue: currentId,
       options: tracks
@@ -2366,14 +2415,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             (track) => PlayerTrackOption<String>(
               value: track.id,
               label: track.title ?? track.language ?? 'Track ${track.id}',
-              detail:
-                  playerTrackMatchesLanguage(
-                    language: track.language,
-                    title: track.title,
-                    preferredLanguage: 'eng',
-                  )
-                  ? 'English'
-                  : track.language,
+              detail: mediaKitAudioTrackDetail(track),
               icon: Icons.surround_sound_rounded,
             ),
           )
@@ -2610,8 +2652,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   void dispose() {
     if (!_engineHandoffInProgress && !_playerReleasedForHandoff) {
       unawaited(_persistPlayback(_player.state.position, force: true));
+      unawaited(_saveSeriesPreferences());
     }
-    unawaited(_saveSeriesPreferences());
     if (!_nativePlaybackStateClearedForHandoff) {
       unawaited(AndroidTvBridge.instance.clearMediaSession());
       unawaited(AndroidTvBridge.instance.clearPreferredFrameRate());

@@ -204,6 +204,8 @@ class _PlayerExitHarness extends StatelessWidget {
                     title: 'Exit smoke test',
                     debridService: DebridService.realDebrid,
                     launch: _launch,
+                    anilistMediaId: _episode.anilistMediaId,
+                    episode: _episode.episode,
                     onUseVlc: (_, _, _, _) {},
                   )
                 : VlcTvPlayerScreen(
@@ -211,6 +213,8 @@ class _PlayerExitHarness extends StatelessWidget {
                     title: 'Exit smoke test',
                     debridService: DebridService.realDebrid,
                     launch: _launch,
+                    anilistMediaId: _episode.anilistMediaId,
+                    episode: _episode.episode,
                     onUseMpv: (_, _, _, _) {},
                   ),
           ),
@@ -278,6 +282,8 @@ class _EngineHandoffHarnessState extends State<_EngineHandoffHarness> {
             title: 'Engine handoff smoke test',
             debridService: DebridService.realDebrid,
             launch: _launch,
+            anilistMediaId: _episode.anilistMediaId,
+            episode: _episode.episode,
             initialPosition: _resume,
             onUseVlc: (position, _, _, _) => _use(_SmokeEngine.vlc, position),
             onSelectEngine: (selected, position, _, _, _) {
@@ -291,6 +297,8 @@ class _EngineHandoffHarnessState extends State<_EngineHandoffHarness> {
             title: 'Engine handoff smoke test',
             debridService: DebridService.realDebrid,
             launch: _launch,
+            anilistMediaId: _episode.anilistMediaId,
+            episode: _episode.episode,
             initialPosition: _resume,
             onUseMpv: (position, _, _, _) => _use(_SmokeEngine.mpv, position),
             onSelectEngine: (selected, position, _, _, _) {

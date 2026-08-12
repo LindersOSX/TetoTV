@@ -38,6 +38,19 @@ void main() {
     expect(mergeSkipSegments([embedded], [external]), [embedded]);
   });
 
+  test('recognizes numbered OP and ED chapter labels', () {
+    final segments = skipSegmentsFromChapters(const [
+      MediaChapter(title: 'OP1', start: Duration(seconds: 30)),
+      MediaChapter(title: 'Episode', start: Duration(minutes: 2)),
+      MediaChapter(title: 'ED2', start: Duration(minutes: 21)),
+    ], const Duration(minutes: 23));
+
+    expect(segments.map((segment) => segment.kind), [
+      SkipSegmentKind.opening,
+      SkipSegmentKind.ending,
+    ]);
+  });
+
   test(
     'AniSkip uses the current v2 query and rejects wrong runtimes',
     () async {
@@ -122,4 +135,51 @@ void main() {
       expect(segments.single.kind, SkipSegmentKind.opening);
     },
   );
+
+  test('AniSkip retries one transient transport failure', () async {
+    final dio = Dio();
+    var requests = 0;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          requests++;
+          if (requests == 1) {
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionError,
+                message: 'temporary offline fixture',
+              ),
+            );
+            return;
+          }
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 200,
+              data: <String, dynamic>{
+                'found': true,
+                'results': [
+                  {
+                    'interval': {'startTime': 20, 'endTime': 110},
+                    'skipType': 'op',
+                  },
+                ],
+              },
+            ),
+          );
+        },
+      ),
+    );
+
+    final segments = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+        .segments(
+          malMediaId: 21,
+          episode: 3,
+          episodeDuration: const Duration(minutes: 24),
+        );
+
+    expect(requests, 2);
+    expect(segments.single.kind, SkipSegmentKind.opening);
+  });
 }
