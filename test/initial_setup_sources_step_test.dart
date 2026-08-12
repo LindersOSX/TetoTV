@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
@@ -19,6 +20,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   testWidgets('setup asks before enabling live count or linking Discord', (
@@ -53,6 +55,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(discord.authenticateCalls, 1);
     expect(find.text('Discord linked and enabled'), findsOneWidget);
+  });
+
+  testWidgets('TV setup opens device pairing without launching a browser', (
+    tester,
+  ) async {
+    final router = GoRouter(
+      initialLocation: '/setup',
+      routes: [
+        GoRoute(
+          path: '/setup',
+          builder: (context, state) => const InitialSetupScreen(),
+        ),
+        GoRoute(
+          path: '/pair/discord',
+          builder: (context, state) =>
+              const Scaffold(body: Center(child: Text('TV DISCORD PAIRING'))),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    final discord = await _pumpSetup(
+      tester,
+      const Size(1280, 720),
+      isTelevision: true,
+      router: router,
+    );
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Link Discord (optional)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('TV DISCORD PAIRING'), findsOneWidget);
+    expect(discord.authenticateCalls, 0);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('TV setup places Sources between Debrid and tracking', (
@@ -97,7 +136,12 @@ void main() {
   });
 }
 
-Future<_SetupDiscordPlatform> _pumpSetup(WidgetTester tester, Size size) async {
+Future<_SetupDiscordPlatform> _pumpSetup(
+  WidgetTester tester,
+  Size size, {
+  bool isTelevision = false,
+  GoRouter? router,
+}) async {
   FlutterSecureStorage.setMockInitialValues({
     userTorrentSourceManifestsStorageKey:
         '["https://one.example/manifest.json",'
@@ -135,8 +179,11 @@ Future<_SetupDiscordPlatform> _pumpSetup(WidgetTester tester, Size size) async {
         sourcePairingControllerProvider.overrideWith((_) => pairing),
         deviceSetupProvider.overrideWith((_) => deviceSetup),
         discordPresencePlatformProvider.overrideWithValue(discord),
+        isTelevisionProvider.overrideWithValue(isTelevision),
       ],
-      child: const MaterialApp(home: InitialSetupScreen()),
+      child: router == null
+          ? const MaterialApp(home: InitialSetupScreen())
+          : MaterialApp.router(routerConfig: router),
     ),
   );
   await tester.pumpAndSettle();

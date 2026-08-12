@@ -30,7 +30,7 @@ object DiscordRichPresenceBridge {
     private var connectionState = "disconnected"
     private var pendingAuth: MethodChannel.Result? = null
     private var pendingRefresh: MethodChannel.Result? = null
-    private var pendingConnect: MethodChannel.Result? = null
+    private val pendingConnect = PendingOperationSlot<MethodChannel.Result>()
     private var pendingRevoke: MethodChannel.Result? = null
 
     fun attach(activity: Activity, channel: MethodChannel) {
@@ -122,14 +122,11 @@ object DiscordRichPresenceBridge {
                 if (accessToken.isBlank()) {
                     result.error("DISCORD_ACCESS_TOKEN", "Discord needs to be linked again.", null)
                 } else {
-                    synchronized(operationLock) {
-                        if (pendingConnect != null) {
-                            result.error("DISCORD_CONNECT_BUSY", "Discord is already connecting.", null)
-                        } else {
-                            pendingConnect = result
-                            connectionState = "connecting"
-                            nativeConnect(accessToken, tokenType)
-                        }
+                    if (!pendingConnect.trySet(result)) {
+                        result.error("DISCORD_CONNECT_BUSY", "Discord is already connecting.", null)
+                    } else {
+                        connectionState = "connecting"
+                        nativeConnect(accessToken, tokenType)
                     }
                 }
                 true
@@ -171,8 +168,17 @@ object DiscordRichPresenceBridge {
                 true
             }
             "discordDisconnect" -> {
+                // Atomically clear the method-channel operation before asking
+                // native Discord to disconnect. A subsequent Retry can claim
+                // a fresh slot instead of receiving DISCORD_CONNECT_BUSY.
+                val canceledConnect = pendingConnect.take()
                 nativeDisconnect()
                 connectionState = "disconnected"
+                canceledConnect?.error(
+                    "DISCORD_CONNECT_CANCELED",
+                    "Discord connection attempt was canceled.",
+                    null,
+                )
                 result.success(null)
                 true
             }
@@ -269,11 +275,9 @@ object DiscordRichPresenceBridge {
                 "discordConnectionState",
                 mapOf("status" to status, "error" to friendly(error, allowEmpty = true)),
             )
-            val pending = synchronized(operationLock) {
-                when (status) {
-                    "ready", "error", "disconnected" -> pendingConnect.also { pendingConnect = null }
-                    else -> null
-                }
+            val pending = when (status) {
+                "ready", "error", "disconnected" -> pendingConnect.take()
+                else -> null
             }
             when (status) {
                 "ready" -> pending?.success(mapOf("status" to "ready"))

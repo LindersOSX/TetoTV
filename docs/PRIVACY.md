@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 11, 2026
+Effective date: August 12, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
@@ -56,6 +56,14 @@ access and refresh tokens are stored in Android Keystore-backed secure storage.
 Disabling Rich Presence stops sharing playback activity; unlinking Discord also
 revokes the connection when possible and deletes the saved tokens from TetoTV.
 TetoTV never asks for or stores the user's Discord password.
+
+On Android TV and Fire TV, Discord linking uses Discord's limited-input device
+authorization directly. TetoTV sends a one-time authorization request to
+Discord and polls Discord only until the link succeeds, expires, or is
+canceled. The private device code is kept only in app memory during that
+attempt; completed access and refresh tokens use the same Android
+Keystore-backed secure storage described above. The TetoTV broker is not
+involved in Discord linking.
 
 Those independent services can see normal connection metadata such as the
 device's IP address and user agent, and their own privacy policies and terms

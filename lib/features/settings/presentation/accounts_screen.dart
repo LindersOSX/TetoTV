@@ -468,6 +468,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final appUpdate = ref.watch(appUpdateControllerProvider);
     final discordPresence = ref.watch(discordPresenceControllerProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
+    final isTelevision = ref.watch(isTelevisionProvider);
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
@@ -1000,9 +1001,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         state: discordPresence,
                         primaryFocusNode: _discordPresenceFocus,
                         unlinkFocusNode: _discordDisconnectFocus,
-                        onLink: () => ref
-                            .read(discordPresenceControllerProvider.notifier)
-                            .linkAccount(),
+                        onLink: () {
+                          if (isTelevision) {
+                            context.push('/pair/discord');
+                          } else {
+                            ref
+                                .read(
+                                  discordPresenceControllerProvider.notifier,
+                                )
+                                .linkAccount();
+                          }
+                        },
                         onToggle: () => ref
                             .read(discordPresenceControllerProvider.notifier)
                             .setEnabled(!discordPresence.enabled),

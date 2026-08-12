@@ -1,5 +1,6 @@
 package dev.animetv.anime_tv
 
+import java.io.File
 import java.lang.reflect.Modifier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,5 +57,42 @@ class DiscordRichPresenceBridgeAbiTest {
             assertTrue("${callback.name} must remain static for JNI", Modifier.isStatic(callback.modifiers))
             assertEquals("${callback.name} must return void for JNI", Void.TYPE, callback.returnType)
         }
+    }
+
+    @Test
+    fun `disconnect clears pending connect before native cancellation and retry can claim it`() {
+        val relativeSource =
+            "src/main/kotlin/dev/animetv/anime_tv/DiscordRichPresenceBridge.kt"
+        val workingDirectory = System.getProperty("user.dir") ?: "."
+        val sourceFile = generateSequence(File(workingDirectory)) { it.parentFile }
+            .take(6)
+            .flatMap { directory ->
+                sequenceOf(
+                    File(directory, relativeSource),
+                    File(directory, "app/$relativeSource"),
+                    File(directory, "android/app/$relativeSource"),
+                )
+            }
+            .firstOrNull(File::isFile)
+        assertTrue("Discord bridge source must be available to the contract test", sourceFile != null)
+        val source = sourceFile!!.readText()
+
+        val connectBranch = source
+            .substringAfter("\"discordConnect\" -> {", "")
+            .substringBefore("\"discordRevoke\" -> {")
+        assertTrue(
+            "discordConnect must atomically claim the pending-operation slot",
+            connectBranch.contains("pendingConnect.trySet(result)"),
+        )
+
+        val disconnectBranch = source
+            .substringAfter("\"discordDisconnect\" -> {", "")
+            .substringBefore("else -> false")
+        val clearIndex = disconnectBranch.indexOf("pendingConnect.take()")
+        val nativeCancelIndex = disconnectBranch.indexOf("nativeDisconnect()")
+        assertTrue(
+            "discordDisconnect must release pendingConnect before native cancellation",
+            clearIndex >= 0 && nativeCancelIndex > clearIndex,
+        )
     }
 }
