@@ -113,6 +113,31 @@ class MainActivity : FlutterActivity() {
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
                     "clearAppCache" -> result.success(clearAppCache())
+                    "setAnonymousCrashReportingEnabled" -> {
+                        AnonymousCrashStore.setEnabled(
+                            this,
+                            call.argument<Boolean>("enabled") ?: false,
+                        )
+                        result.success(null)
+                    }
+                    "storePendingAnonymousCrashReport" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val report = call.arguments as? Map<String, Any?> ?: emptyMap()
+                        result.success(AnonymousCrashStore.store(this, report))
+                    }
+                    "getPendingAnonymousCrashReport" ->
+                        result.success(AnonymousCrashStore.pending(this))
+                    "acknowledgeAnonymousCrashReport" -> {
+                        AnonymousCrashStore.acknowledge(
+                            this,
+                            call.argument<String>("reportId").orEmpty(),
+                        )
+                        result.success(null)
+                    }
+                    "clearPendingAnonymousCrashReports" -> {
+                        AnonymousCrashStore.clear(this)
+                        result.success(null)
+                    }
                     "resetApplicationData" -> {
                         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                         result.success(activityManager.clearApplicationUserData())

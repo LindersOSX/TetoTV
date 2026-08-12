@@ -42,6 +42,26 @@ while `https://tetotv-updates-lindows.onrender.com` handles source pairing and
 private app updates. Keep tracker callback registrations pointed at the auth
 origin.
 
+## Anonymous crash-report relay
+
+The update-broker deployment can accept the app's optional, anonymous crash
+reports and relay them to the separately hosted Discord bot. Configure these
+server-only values on the update broker:
+
+```text
+CRASH_REPORT_BOT_URL=https://<bot-host>/crash-reports
+CRASH_REPORT_SHARED_SECRET=<at-least-32-random-bytes>
+```
+
+Configure the same shared secret on the Discord bot. It is an internal
+server-to-server credential and must never be placed in Flutter configuration,
+an APK, a repository secret visible to clients, or a public URL. The broker
+validates a fixed bounded schema, applies per-address rate limits, strips
+credentials/URLs again, and signs the exact forwarded body with HMAC-SHA256.
+It does not persist report bodies. Keep the bot endpoint HTTPS-only and verify
+`crash_reporting: true` on the update broker's `/health` before publishing an
+APK that advertises this option.
+
 Deploy behind HTTPS on a single Node instance. For horizontally scaled
 production hosting, replace the in-memory pairing and rate-limit maps with a
 shared TTL store such as Redis.

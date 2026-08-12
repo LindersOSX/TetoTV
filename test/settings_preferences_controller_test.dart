@@ -32,6 +32,7 @@ void main() {
     await controller.setPreferredPlayer(PreferredPlayer.vlc);
     await controller.setDefaultLandingPage(LandingPage.myList);
     await controller.setAnonymousUsageCountEnabled(false);
+    await controller.setAnonymousCrashReportingEnabled(true);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
@@ -58,9 +59,11 @@ void main() {
     expect(restored.state.preferredPlayer, PreferredPlayer.vlc);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
     expect(restored.state.anonymousUsageCountEnabled, isFalse);
+    expect(restored.state.anonymousCrashReportingEnabled, isTrue);
+    expect(restored.state.loaded, isTrue);
   });
 
-  test('fresh installs keep anonymous live counting off by default', () async {
+  test('fresh installs keep anonymous reporting off by default', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = SettingsPreferencesController(
       const FlutterSecureStorage(),
@@ -81,6 +84,8 @@ void main() {
     expect(controller.state.showDiscover, isTrue);
     expect(controller.state.showCalendar, isTrue);
     expect(controller.state.anonymousUsageCountEnabled, isFalse);
+    expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+    expect(controller.state.loaded, isTrue);
     expect(
       controller.state.trackerUpdateThreshold,
       TrackerUpdateThreshold.nearlyFinished,
@@ -98,6 +103,22 @@ void main() {
 
     expect(restored.state.anonymousUsageCountEnabled, isTrue);
   });
+
+  test(
+    'anonymous crash reporting persists only after explicit opt in',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+
+      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+      await controller.setAnonymousCrashReportingEnabled(true);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+
+      expect(restored.state.anonymousCrashReportingEnabled, isTrue);
+    },
+  );
 
   test('hidden navigation route cannot remain the landing page', () async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -173,7 +194,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 30, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 31, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

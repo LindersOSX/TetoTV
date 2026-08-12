@@ -551,6 +551,44 @@ class AndroidTvBridge {
     }
   }
 
+  Future<void> setAnonymousCrashReportingEnabled(bool enabled) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    await _channel.invokeMethod<void>('setAnonymousCrashReportingEnabled', {
+      'enabled': enabled,
+    });
+  }
+
+  Future<bool> storePendingAnonymousCrashReport(
+    Map<String, Object?> report,
+  ) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+    return await _channel.invokeMethod<bool>(
+          'storePendingAnonymousCrashReport',
+          report,
+        ) ??
+        false;
+  }
+
+  Future<Map<String, Object?>?> getPendingAnonymousCrashReport() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'getPendingAnonymousCrashReport',
+    );
+    return value?.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  Future<void> acknowledgeAnonymousCrashReport(String reportId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    await _channel.invokeMethod<void>('acknowledgeAnonymousCrashReport', {
+      'reportId': reportId,
+    });
+  }
+
+  Future<void> clearPendingAnonymousCrashReports() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    await _channel.invokeMethod<void>('clearPendingAnonymousCrashReports');
+  }
+
   Future<void> setPreferredFrameRate(double fps) async {
     if (fps <= 0 || defaultTargetPlatform != TargetPlatform.android) return;
     try {

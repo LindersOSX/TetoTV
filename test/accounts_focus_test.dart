@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -641,6 +642,15 @@ void main() {
     expect(find.text('Streaming'), findsOneWidget);
     expect(find.text('Appearance'), findsNothing);
     expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container
+          .read(settingsPreferencesProvider)
+          .anonymousCrashReportingEnabled,
+      isFalse,
+    );
     final scaffold = find.byType(Scaffold).first;
     expect(tester.getTopLeft(scaffold), Offset.zero);
     expect(tester.getSize(scaffold), const Size(390, 844));
@@ -652,9 +662,19 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('Streaming'));
+    final crashToggle = find.textContaining('Anonymous crash reports');
+    expect(crashToggle, findsOneWidget);
+    await tester.ensureVisible(crashToggle);
     await tester.pumpAndSettle();
-    expect(find.text('DEBRID STREAMING'), findsOneWidget);
+    await tester.tap(crashToggle);
+    await tester.pumpAndSettle();
+    expect(
+      container
+          .read(settingsPreferencesProvider)
+          .anonymousCrashReportingEnabled,
+      isTrue,
+    );
+
     expect(tester.takeException(), isNull);
   });
 

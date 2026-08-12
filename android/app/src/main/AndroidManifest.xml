@@ -72,7 +72,7 @@
 
     <application
         android:allowBackup="false"
-        android:name="${applicationName}"
+        android:name=".TetoTvApplication"
         android:banner="@drawable/tv_banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
