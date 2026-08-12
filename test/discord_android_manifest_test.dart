@@ -7,6 +7,11 @@ void main() {
     final manifest = File(
       'android/app/src/main/AndroidManifest.xml',
     ).readAsStringSync();
+    expect(
+      manifest,
+      contains('android.support.customtabs.action.CustomTabsService'),
+    );
+    expect(manifest, contains('android:scheme="https"'));
     final authenticationActivity = RegExp(
       r'<activity\s+[^>]*android:name="com\.discord\.socialsdk\.AuthenticationActivity"[^>]*>[\s\S]*?</activity>',
     ).firstMatch(manifest)?.group(0);

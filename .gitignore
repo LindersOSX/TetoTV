@@ -46,6 +46,7 @@ app.*.map.json
 /android/app/release
 /android/build/
 **/.cxx/
+**/.kotlin/
 /android/key.properties
 *.jks
 *.keystore

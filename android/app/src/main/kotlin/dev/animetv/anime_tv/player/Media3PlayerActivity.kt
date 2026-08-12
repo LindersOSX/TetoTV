@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.format.DateUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -50,6 +51,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import dev.animetv.anime_tv.R
@@ -67,6 +69,23 @@ import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
+
+internal fun safeNativeSkipTargetMs(
+    requestedMs: Long,
+    durationMs: Long,
+    endGuardMs: Long = 1_000L,
+): Long {
+    if (requestedMs <= 0L) return 0L
+    if (durationMs <= 0L) return requestedMs
+    val lastSafePosition = (durationMs - endGuardMs).coerceAtLeast(0L)
+    return requestedMs.coerceAtMost(lastSafePosition)
+}
+
+internal fun nativeSkipReachesPlaybackEnd(
+    requestedEndMs: Long,
+    durationMs: Long,
+    endGuardMs: Long = 1_000L,
+): Boolean = durationMs > 0L && requestedEndMs >= durationMs - endGuardMs
 
 /**
  * Full-screen native Android playback isolated from Flutter's texture pipeline.
@@ -94,6 +113,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var captionControlContainer: View
     private lateinit var skipSegmentButton: Button
     private lateinit var pausedTitleView: TextView
+    private lateinit var progressTimeBar: DefaultTimeBar
+    private lateinit var positionView: TextView
+    private lateinit var footerHintView: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val metadataClient = OkHttpClient.Builder()
         .dns(PublicNetworkDns())
@@ -116,6 +138,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var droppedFrames = 0
     private var terminalError: String? = null
     private var resultSent = false
+    private var playbackResourcesReleased = false
     private var resumeProvided = false
     private var requestedResumeMs = 0L
     private var requestedResumeUpdatedAtMs = 0L
@@ -153,6 +176,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val autoFocusedSkipSegments = mutableSetOf<String>()
     private val autoSkippedSegments = mutableSetOf<String>()
     private var exitDialog: AlertDialog? = null
+    private var dpadScrubbing = false
+    private var dpadScrubTargetMs = 0L
 
     private data class NativeSkipSegment(
         val startMs: Long,
@@ -177,11 +202,28 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val hideControllerRunnable = Runnable {
         if (
             ::playerView.isInitialized &&
+            !dpadScrubbing &&
             activeTrackDialog?.isShowing != true &&
             !isFinishing &&
             !isDestroyed
         ) {
             playerView.hideController()
+        }
+    }
+
+    private val dpadScrubRenderRunnable = object : Runnable {
+        override fun run() {
+            if (
+                !dpadScrubbing ||
+                resultSent ||
+                playbackResourcesReleased ||
+                !::player.isInitialized
+            ) return
+            // PlayerControlView continues publishing the real position while
+            // focus is on DefaultTimeBar. Repaint after those ticks so the
+            // visible thumb and clock stay on the pending target.
+            renderDpadScrubTarget()
+            handler.postDelayed(this, DPAD_SCRUB_RENDER_INTERVAL_MS)
         }
     }
 
@@ -251,7 +293,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() = showExitConfirmation()
+                override fun handleOnBackPressed() {
+                    if (!cancelDpadScrub()) showExitConfirmation()
+                }
             },
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -504,15 +548,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 visibility = View.GONE
                 setOnClickListener {
                     val segment = activeSkipSegment ?: return@setOnClickListener
-                    player.seekTo(segment.endMs.coerceAtMost(safeDurationMs()))
-                    activeSkipSegment = null
-                    visibility = View.GONE
-                    if (playerView.isControllerFullyVisible) {
-                        requestTransportFocus()
-                        armControllerAutoHide()
-                    } else {
-                        playerView.requestFocus()
-                    }
+                    seekPastSkipSegment(segment, announce = false)
                 }
             }
         pausedTitleView = playerView.findViewById<TextView>(R.id.tetotv_paused_title).apply {
@@ -523,6 +559,15 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getStringExtra(EXTRA_TITLE).orEmpty()
         playerView.findViewById<TextView>(R.id.tetotv_stream_label).text =
             intent.getStringExtra(EXTRA_STREAM_LABEL).orEmpty().ifBlank { "Debrid stream" }
+        progressTimeBar =
+            playerView.findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress).apply {
+                isFocusable = true
+                isFocusableInTouchMode = false
+                setOnFocusChangeListener { _, hasFocus -> isActivated = hasFocus }
+            }
+        positionView =
+            playerView.findViewById(androidx.media3.ui.R.id.exo_position)
+        footerHintView = playerView.findViewById(R.id.tetotv_footer_hint)
         updateCaptionSizeDescription()
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).apply {
             contentDescription = getString(
@@ -653,6 +698,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        if (resultSent || playbackResourcesReleased) return
         updatePlaybackIntentUi()
         when (playbackState) {
             Player.STATE_READY -> {
@@ -669,11 +715,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
+        if (resultSent || playbackResourcesReleased) return
         updatePlaybackIntentUi()
         publishDiscordPresence()
     }
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        if (resultSent || playbackResourcesReleased) return
         updatePlaybackIntentUi()
         publishDiscordPresence()
     }
@@ -909,10 +957,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun updateSkipSegmentButton() {
-        if (!::skipSegmentButton.isInitialized || !::player.isInitialized) return
+        if (
+            resultSent ||
+            playbackResourcesReleased ||
+            !::skipSegmentButton.isInitialized ||
+            !::player.isInitialized
+        ) return
         val position = safePositionMs()
         val active = skipSegments.firstOrNull {
-            position >= it.startMs && position < it.endMs - 500L
+            val key = "${it.kind}:${it.startMs}"
+            position >= it.startMs &&
+                position < it.endMs - 500L &&
+                !autoSkippedSegments.contains(key)
         }
         if (active == activeSkipSegment) return
         activeSkipSegment = active
@@ -922,14 +978,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     (active.kind == "ending" && autoSkipOutros)
             val key = "${active.kind}:${active.startMs}"
             if (autoSkip && autoSkippedSegments.add(key)) {
-                player.seekTo(active.endMs.coerceAtMost(safeDurationMs()))
-                activeSkipSegment = null
-                skipSegmentButton.visibility = View.GONE
-                Toast.makeText(
-                    this,
-                    if (active.kind == "opening") "Intro skipped" else "Outro skipped",
-                    Toast.LENGTH_SHORT,
-                ).show()
+                seekPastSkipSegment(active, announce = true)
                 return
             }
         }
@@ -1381,6 +1430,142 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         armControllerAutoHide()
     }
 
+    private fun beginDpadScrub() {
+        if (resultSent || playbackResourcesReleased || !::progressTimeBar.isInitialized) return
+        val duration = safeDurationMs()
+        if (duration <= 0L) return
+        if (!dpadScrubbing) {
+            dpadScrubbing = true
+            dpadScrubTargetMs = safePositionMs().coerceIn(0L, duration)
+        }
+        handler.removeCallbacks(hideControllerRunnable)
+        handler.removeCallbacks(dpadScrubRenderRunnable)
+        playerView.controllerShowTimeoutMs = 0
+        playerView.showController()
+        progressTimeBar.requestFocus()
+        renderDpadScrubTarget()
+        handler.postDelayed(dpadScrubRenderRunnable, DPAD_SCRUB_RENDER_INTERVAL_MS)
+    }
+
+    private fun adjustDpadScrub(direction: Int, repeatCount: Int) {
+        if (!dpadScrubbing) beginDpadScrub()
+        if (!dpadScrubbing) return
+        val stepMs = if (repeatCount >= 5) 60_000L else 30_000L
+        val duration = safeDurationMs()
+        dpadScrubTargetMs =
+            (dpadScrubTargetMs + (stepMs * direction)).coerceIn(0L, duration)
+        renderDpadScrubTarget()
+    }
+
+    private fun renderDpadScrubTarget() {
+        if (
+            !dpadScrubbing ||
+            resultSent ||
+            playbackResourcesReleased ||
+            !::player.isInitialized ||
+            !::progressTimeBar.isInitialized
+        ) return
+        val duration = safeDurationMs()
+        progressTimeBar.setDuration(duration)
+        progressTimeBar.setBufferedPosition(player.bufferedPosition.coerceAtLeast(0L))
+        progressTimeBar.setPosition(dpadScrubTargetMs)
+        if (::positionView.isInitialized) {
+            positionView.text = DateUtils.formatElapsedTime(dpadScrubTargetMs / 1_000L)
+        }
+        if (::footerHintView.isInitialized) {
+            footerHintView.setText(R.string.tetotv_player_scrub_hint)
+        }
+    }
+
+    private fun seekPastSkipSegment(segment: NativeSkipSegment, announce: Boolean) {
+        if (resultSent || playbackResourcesReleased || !::player.isInitialized) return
+        val duration = safeDurationMs()
+        val target = safeNativeSkipTargetMs(segment.endMs, duration)
+        val segmentKey = "${segment.kind}:${segment.startMs}"
+        val wasPlaying = player.playWhenReady
+        autoSkippedSegments.add(segmentKey)
+        activeSkipSegment = null
+        skipSegmentButton.visibility = View.GONE
+        if (playerView.isControllerFullyVisible) {
+            requestTransportFocus()
+            armControllerAutoHide()
+        } else {
+            playerView.requestFocus()
+        }
+        // Defer the seek until after the button callback and focus transition
+        // have returned. This prevents an EOF completion callback from racing
+        // view mutation or attempting native teardown twice.
+        handler.post {
+            if (resultSent || playbackResourcesReleased) return@post
+            val seekSucceeded = runCatching { player.seekTo(target) }.isSuccess
+            if (!seekSucceeded) {
+                autoSkippedSegments.remove(segmentKey)
+                updateSkipSegmentButton()
+                Toast.makeText(this, "Could not skip this segment", Toast.LENGTH_SHORT).show()
+            } else if (
+                !wasPlaying &&
+                segment.kind == "ending" &&
+                nativeSkipReachesPlaybackEnd(segment.endMs, duration)
+            ) {
+                finishWithResult(STATUS_COMPLETED)
+            } else if (announce) {
+                Toast.makeText(
+                    this,
+                    if (segment.kind == "opening") "Intro skipped" else "Outro skipped",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    private fun commitDpadScrub() {
+        if (!dpadScrubbing) {
+            beginDpadScrub()
+            return
+        }
+        val target = dpadScrubTargetMs
+        dpadScrubbing = false
+        handler.removeCallbacks(dpadScrubRenderRunnable)
+        playerView.controllerShowTimeoutMs = CONTROLLER_HIDE_TIMEOUT_MS.toInt()
+        if (::footerHintView.isInitialized) {
+            footerHintView.setText(R.string.tetotv_player_footer_hint)
+        }
+        requestTransportFocus()
+        armControllerAutoHide()
+        // Post the actual seek after focus/UI cleanup. Seeking to EOF may emit
+        // STATE_ENDED synchronously, which is allowed to own teardown alone.
+        handler.post {
+            if (!resultSent && !playbackResourcesReleased) {
+                runCatching { player.seekTo(target) }.onFailure {
+                    Toast.makeText(
+                        this,
+                        "Could not seek to that position",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun cancelDpadScrub(): Boolean {
+        if (!dpadScrubbing) return false
+        dpadScrubbing = false
+        handler.removeCallbacks(dpadScrubRenderRunnable)
+        playerView.controllerShowTimeoutMs = CONTROLLER_HIDE_TIMEOUT_MS.toInt()
+        if (::progressTimeBar.isInitialized && !playbackResourcesReleased) {
+            progressTimeBar.setPosition(safePositionMs())
+        }
+        if (::positionView.isInitialized && !playbackResourcesReleased) {
+            positionView.text = DateUtils.formatElapsedTime(safePositionMs() / 1_000L)
+        }
+        if (::footerHintView.isInitialized) {
+            footerHintView.setText(R.string.tetotv_player_footer_hint)
+        }
+        requestTransportFocus()
+        armControllerAutoHide()
+        return true
+    }
+
     private fun showExitConfirmation() {
         if (exitDialog?.isShowing == true || isFinishing || isDestroyed) return
         // isPlaying is false while buffering even though playWhenReady is true.
@@ -1501,6 +1686,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (exitDialog?.isShowing == true || activeTrackDialog?.isShowing == true) {
             return super.dispatchKeyEvent(event)
         }
+        if (dpadScrubbing && handleDpadScrubKey(event)) return true
         if (::skipSegmentButton.isInitialized && skipSegmentButton.hasFocus()) {
             return super.dispatchKeyEvent(event)
         }
@@ -1514,6 +1700,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 if (event.keyCode !in MODAL_CHROME_SHORTCUT_KEYS) {
                     consumedNavigationKeyUp = event.keyCode
                 }
+                return true
+            }
+            if (
+                event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+                playerView.isControllerFullyVisible
+            ) {
+                consumedNavigationKeyUp = event.keyCode
+                beginDpadScrub()
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -1555,6 +1749,36 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             armControllerAutoHide()
         }
         return handled
+    }
+
+    private fun handleDpadScrubKey(event: KeyEvent): Boolean {
+        val handledKey = when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            -> true
+            else -> false
+        }
+        if (!handledKey) return false
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> adjustDpadScrub(-1, event.repeatCount)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> adjustDpadScrub(1, event.repeatCount)
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            -> if (event.repeatCount == 0) commitDpadScrub()
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                cancelDpadScrub()
+                playerView.hideController()
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> Unit
+        }
+        return true
     }
 
     /** Keyboard/gamepad shortcuts shared with the Flutter MPV and VLC HUDs. */
@@ -1699,15 +1923,21 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
 
     private fun safePositionMs(): Long =
-        if (::player.isInitialized) player.currentPosition.coerceAtLeast(0L) else 0L
+        if (::player.isInitialized && !playbackResourcesReleased) {
+            player.currentPosition.coerceAtLeast(0L)
+        } else 0L
 
     private fun safeDurationMs(): Long {
-        if (!::player.isInitialized) return 0L
+        if (!::player.isInitialized || playbackResourcesReleased) return 0L
         return player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
     }
 
     private fun persistCheckpoint() {
-        if (checkpointKey.isBlank() || !::player.isInitialized) return
+        if (
+            checkpointKey.isBlank() ||
+            !::player.isInitialized ||
+            playbackResourcesReleased
+        ) return
         val duration = safeDurationMs()
         val position = safePositionMs()
         val completed = duration > 0L && position.toDouble() / duration >= 0.93
@@ -1735,8 +1965,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     override fun onPause() {
         isForeground = false
+        if (dpadScrubbing) cancelDpadScrub()
         pauseScheduledWork()
-        if (::player.isInitialized) {
+        if (::player.isInitialized && !playbackResourcesReleased) {
             persistCheckpoint()
             resumeAfterTransientPause = player.playWhenReady
             player.pause()
@@ -1746,7 +1977,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     override fun onStart() {
         super.onStart()
-        if (backgroundStopped && ::player.isInitialized && !resultSent) {
+        if (
+            backgroundStopped &&
+            ::player.isInitialized &&
+            !resultSent &&
+            !playbackResourcesReleased
+        ) {
             firstFrameRendered = false
             resetDropWindow()
             player.setMediaItem(buildMediaItem(), backgroundResumeMs.coerceAtLeast(0L))
@@ -1760,7 +1996,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         super.onResume()
         isForeground = true
         enterImmersiveMode()
-        if (::player.isInitialized && resumeAfterTransientPause && !resultSent) {
+        if (
+            ::player.isInitialized &&
+            resumeAfterTransientPause &&
+            !resultSent &&
+            !playbackResourcesReleased
+        ) {
             resumeAfterTransientPause = false
             player.play()
         }
@@ -1770,7 +2011,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     override fun onStop() {
         pauseScheduledWork()
         persistCheckpoint()
-        if (::player.isInitialized && !resultSent) {
+        if (::player.isInitialized && !resultSent && !playbackResourcesReleased) {
             // Release renderers, MediaCodec, network loading, and the large
             // progressive buffer while another app owns the screen. The same
             // ExoPlayer/MediaSession is prepared from this exact position in
@@ -1790,11 +2031,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(hideControllerRunnable)
+        handler.removeCallbacks(dpadScrubRenderRunnable)
     }
 
     private fun armForegroundWork() {
         pauseScheduledWork()
-        if (resultSent || !isForeground || !::player.isInitialized) return
+        if (
+            resultSent ||
+            playbackResourcesReleased ||
+            !isForeground ||
+            !::player.isInitialized
+        ) return
         handler.postDelayed(checkpointRunnable, CHECKPOINT_INTERVAL_MS)
         handler.post(skipSegmentRunnable)
         fetchSkipSegmentsIfReady()
@@ -1816,6 +2063,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         metadataClient.dispatcher.cancelAll()
         metadataClient.connectionPool.evictAll()
         handler.removeCallbacksAndMessages(null)
+        releasePlaybackResources()
+        super.onDestroy()
+    }
+
+    private fun releasePlaybackResources() {
+        if (playbackResourcesReleased) return
+        playbackResourcesReleased = true
         if (::playerView.isInitialized) {
             (playerView.videoSurfaceView as? SurfaceView)?.holder?.removeCallback(surfaceCallback)
             playerView.player = null
@@ -1826,7 +2080,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             if (::mediaSession.isInitialized) mediaSession.release()
             player.release()
         }
-        super.onDestroy()
     }
 
     private fun finishWithResult(status: String) {
@@ -1838,6 +2091,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(skipSegmentRunnable)
         handler.removeCallbacks(skipFetchRetryRunnable)
         handler.removeCallbacks(hideControllerRunnable)
+        handler.removeCallbacks(dpadScrubRenderRunnable)
         persistCheckpoint()
         val duration = safeDurationMs()
         val position = safePositionMs()
@@ -1872,6 +2126,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             putExtra(RESULT_AUDIO_CODECS, playerAudioFormat()?.codecs)
         }
         setResult(RESULT_OK, result)
+        // The caller may construct MPV or VLC as soon as this Activity result
+        // is delivered. Release MediaCodec, SurfaceView, audio, and MediaSession
+        // synchronously before finish() can resume Flutter.
+        releasePlaybackResources()
         finish()
     }
 
@@ -1985,6 +2243,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
+        private const val DPAD_SCRUB_RENDER_INTERVAL_MS = 50L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3
         private const val MAX_SKIP_RESPONSE_BYTES = 256L * 1024L

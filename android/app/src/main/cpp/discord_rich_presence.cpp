@@ -30,6 +30,7 @@ std::queue<std::function<void()>> g_commands;
 std::thread g_worker;
 std::atomic<bool> g_running{false};
 std::atomic<bool> g_ready{false};
+std::atomic<std::uint64_t> g_auth_generation{0};
 std::unique_ptr<discordpp::Client> g_client;
 
 struct Presence {
@@ -317,7 +318,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
                                                                         jobject,
                                                                         jboolean use_device_flow) {
-    post([use_device_flow] {
+    const auto auth_generation = g_auth_generation.fetch_add(1) + 1;
+    post([use_device_flow, auth_generation] {
+        if (auth_generation != g_auth_generation.load()) return;
         if (!g_client) {
             notify_auth("onAuthResult", false, {}, {}, 0, 0, {},
                         "Discord is not ready. Please try again.");
@@ -329,12 +332,13 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
             args.SetScopes(discordpp::Client::GetDefaultPresenceScopes());
             g_client->GetTokenFromDevice(
                 std::move(args),
-                [](discordpp::ClientResult result,
-                   std::string access_token,
-                   std::string refresh_token,
-                   discordpp::AuthorizationTokenType token_type,
-                   std::int32_t expires_in,
-                   std::string scopes) {
+                [auth_generation](discordpp::ClientResult result,
+                                  std::string access_token,
+                                  std::string refresh_token,
+                                  discordpp::AuthorizationTokenType token_type,
+                                  std::int32_t expires_in,
+                                  std::string scopes) {
+                    if (auth_generation != g_auth_generation.load()) return;
                     notify_token_result("onAuthResult",
                                         std::move(result),
                                         std::move(access_token),
@@ -354,9 +358,10 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
         args.SetCustomSchemeParam("discord-" + std::to_string(kApplicationId));
         g_client->Authorize(
             std::move(args),
-            [verifier_value](discordpp::ClientResult result,
-                             std::string code,
-                             std::string redirect_uri) {
+            [verifier_value, auth_generation](discordpp::ClientResult result,
+                                              std::string code,
+                                              std::string redirect_uri) {
+                if (auth_generation != g_auth_generation.load()) return;
                 if (!succeeded(result)) {
                     notify_auth("onAuthResult",
                                 false,
@@ -384,12 +389,13 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
                     code,
                     verifier_value,
                     redirect_uri,
-                    [](discordpp::ClientResult token_result,
-                       std::string access_token,
-                       std::string refresh_token,
-                       discordpp::AuthorizationTokenType token_type,
-                       std::int32_t expires_in,
-                       std::string scopes) {
+                    [auth_generation](discordpp::ClientResult token_result,
+                                      std::string access_token,
+                                      std::string refresh_token,
+                                      discordpp::AuthorizationTokenType token_type,
+                                      std::int32_t expires_in,
+                                      std::string scopes) {
+                        if (auth_generation != g_auth_generation.load()) return;
                         notify_token_result("onAuthResult",
                                             std::move(token_result),
                                             std::move(access_token),
@@ -399,6 +405,20 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeAuthenticate(JNIEnv*,
                                             std::move(scopes));
                     });
             });
+    });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeCancelAuthentication(
+    JNIEnv*, jobject, jboolean use_device_flow) {
+    g_auth_generation.fetch_add(1);
+    post([use_device_flow] {
+        if (!g_client) return;
+        if (use_device_flow == JNI_TRUE) {
+            g_client->AbortGetTokenFromDevice();
+        } else {
+            g_client->AbortAuthorize();
+        }
     });
 }
 

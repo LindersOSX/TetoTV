@@ -4,6 +4,7 @@ import android.app.Activity
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.Keep
+import androidx.browser.customtabs.CustomTabsClient
 import com.discord.socialsdk.DiscordSocialSdkInit
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -25,6 +26,7 @@ object DiscordRichPresenceBridge {
     private var nativeLoaded = false
     private var initialized = false
     private var useDeviceAuthFlow = false
+    private var canLaunchAuthorization = false
     private var connectionState = "disconnected"
     private var pendingAuth: MethodChannel.Result? = null
     private var pendingRefresh: MethodChannel.Result? = null
@@ -37,6 +39,7 @@ object DiscordRichPresenceBridge {
             uiMode = activity.resources.configuration.uiMode,
             hasLeanback = activity.packageManager.hasSystemFeature("android.software.leanback"),
         )
+        canLaunchAuthorization = CustomTabsClient.getPackageName(activity, null) != null
         // This loads the official SDK library before our JNI bridge, then gives
         // Discord the Activity it needs for its TV/device authorization UI.
         DiscordSocialSdkInit.setEngineActivity(activity)
@@ -66,14 +69,35 @@ object DiscordRichPresenceBridge {
                 true
             }
             "discordAuthenticate" -> {
-                synchronized(operationLock) {
-                    if (pendingAuth != null) {
-                        result.error("DISCORD_AUTH_BUSY", "Discord account linking is already open.", null)
-                    } else {
-                        pendingAuth = result
-                        nativeAuthenticate(useDeviceAuthFlow)
+                if (!canLaunchAuthorization) {
+                    result.error(
+                        "DISCORD_AUTH_UNAVAILABLE",
+                        "Discord linking requires a secure web browser on this device.",
+                        null,
+                    )
+                } else {
+                    synchronized(operationLock) {
+                        if (pendingAuth != null) {
+                            result.error("DISCORD_AUTH_BUSY", "Discord account linking is already open.", null)
+                        } else {
+                            pendingAuth = result
+                            nativeAuthenticate(useDeviceAuthFlow)
+                        }
                     }
                 }
+                true
+            }
+            "discordCancelAuthentication" -> {
+                val pending = synchronized(operationLock) {
+                    pendingAuth.also { pendingAuth = null }
+                }
+                nativeCancelAuthentication(useDeviceAuthFlow)
+                pending?.error(
+                    "DISCORD_AUTH_CANCELED",
+                    "Discord account linking was canceled.",
+                    null,
+                )
+                result.success(null)
                 true
             }
             "discordRefreshToken" -> {
@@ -202,14 +226,16 @@ object DiscordRichPresenceBridge {
         expiresIn: Int,
         scopes: String,
         error: String,
-    ) = mainHandler.post {
-        val pending = synchronized(operationLock) {
-            pendingAuth.also { pendingAuth = null }
-        }
-        if (success) {
-            pending?.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
-        } else {
-            pending?.error("DISCORD_AUTH_FAILED", friendly(error), null)
+    ) {
+        mainHandler.post {
+            val pending = synchronized(operationLock) {
+                pendingAuth.also { pendingAuth = null }
+            }
+            if (success) {
+                pending?.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
+            } else {
+                pending?.error("DISCORD_AUTH_FAILED", friendly(error), null)
+            }
         }
     }
 
@@ -222,75 +248,85 @@ object DiscordRichPresenceBridge {
         expiresIn: Int,
         scopes: String,
         error: String,
-    ) = mainHandler.post {
-        val pending = synchronized(operationLock) {
-            pendingRefresh.also { pendingRefresh = null }
-        }
-        if (success) {
-            pending?.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
-        } else {
-            pending?.error("DISCORD_REFRESH_FAILED", friendly(error), null)
+    ) {
+        mainHandler.post {
+            val pending = synchronized(operationLock) {
+                pendingRefresh.also { pendingRefresh = null }
+            }
+            if (success) {
+                pending?.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
+            } else {
+                pending?.error("DISCORD_REFRESH_FAILED", friendly(error), null)
+            }
         }
     }
 
     @JvmStatic
-    fun onConnectionState(status: String, error: String) = mainHandler.post {
-        connectionState = status
-        channel?.invokeMethod(
-            "discordConnectionState",
-            mapOf("status" to status, "error" to friendly(error, allowEmpty = true)),
-        )
-        val pending = synchronized(operationLock) {
+    fun onConnectionState(status: String, error: String) {
+        mainHandler.post {
+            connectionState = status
+            channel?.invokeMethod(
+                "discordConnectionState",
+                mapOf("status" to status, "error" to friendly(error, allowEmpty = true)),
+            )
+            val pending = synchronized(operationLock) {
+                when (status) {
+                    "ready", "error", "disconnected" -> pendingConnect.also { pendingConnect = null }
+                    else -> null
+                }
+            }
             when (status) {
-                "ready", "error", "disconnected" -> pendingConnect.also { pendingConnect = null }
-                else -> null
+                "ready" -> pending?.success(mapOf("status" to "ready"))
+                "error" -> pending?.error("DISCORD_CONNECT_FAILED", friendly(error), null)
+                "disconnected" -> if (pending != null) {
+                    pending.error(
+                        "DISCORD_CONNECT_FAILED",
+                        friendly(error.ifBlank { "Discord disconnected before it was ready." }),
+                        null,
+                    )
+                }
             }
         }
-        when (status) {
-            "ready" -> pending?.success(mapOf("status" to "ready"))
-            "error" -> pending?.error("DISCORD_CONNECT_FAILED", friendly(error), null)
-            "disconnected" -> if (pending != null) {
-                pending.error(
-                    "DISCORD_CONNECT_FAILED",
-                    friendly(error.ifBlank { "Discord disconnected before it was ready." }),
-                    null,
+    }
+
+    @JvmStatic
+    fun onPresenceResult(success: Boolean, error: String) {
+        mainHandler.post {
+            if (!success) {
+                channel?.invokeMethod(
+                    "discordPresenceError",
+                    mapOf("error" to friendly(error)),
                 )
             }
         }
     }
 
     @JvmStatic
-    fun onPresenceResult(success: Boolean, error: String) = mainHandler.post {
-        if (!success) {
-            channel?.invokeMethod(
-                "discordPresenceError",
-                mapOf("error" to friendly(error)),
-            )
+    fun onRevokeResult(success: Boolean, error: String) {
+        mainHandler.post {
+            nativeDisconnect()
+            connectionState = "disconnected"
+            val pending = synchronized(operationLock) {
+                pendingRevoke.also { pendingRevoke = null }
+            }
+            if (success) {
+                pending?.success(true)
+            } else {
+                // Local unlinking must remain possible while Discord is offline.
+                pending?.success(false)
+                channel?.invokeMethod(
+                    "discordPresenceError",
+                    mapOf("error" to friendly(error)),
+                )
+            }
         }
     }
 
     @JvmStatic
-    fun onRevokeResult(success: Boolean, error: String) = mainHandler.post {
-        nativeDisconnect()
-        connectionState = "disconnected"
-        val pending = synchronized(operationLock) {
-            pendingRevoke.also { pendingRevoke = null }
+    fun onTokenExpiring() {
+        mainHandler.post {
+            channel?.invokeMethod("discordTokenExpiring", null)
         }
-        if (success) {
-            pending?.success(true)
-        } else {
-            // Local unlinking must remain possible while Discord is offline.
-            pending?.success(false)
-            channel?.invokeMethod(
-                "discordPresenceError",
-                mapOf("error" to friendly(error)),
-            )
-        }
-    }
-
-    @JvmStatic
-    fun onTokenExpiring() = mainHandler.post {
-        channel?.invokeMethod("discordTokenExpiring", null)
     }
 
     private fun tokenPayload(
@@ -316,6 +352,7 @@ object DiscordRichPresenceBridge {
     private external fun nativeInitialize()
     private external fun nativeSdkVersion(): String
     private external fun nativeAuthenticate(useDeviceFlow: Boolean)
+    private external fun nativeCancelAuthentication(useDeviceFlow: Boolean)
     private external fun nativeRefreshToken(refreshToken: String)
     private external fun nativeConnect(accessToken: String, tokenType: Int)
     private external fun nativeRevoke(token: String)

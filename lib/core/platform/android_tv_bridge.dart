@@ -412,6 +412,10 @@ class AndroidTvBridge {
     return DiscordTokenBundle.fromMap(result);
   }
 
+  Future<void> discordCancelAuthentication() async {
+    await _channel.invokeMethod<void>('discordCancelAuthentication');
+  }
+
   Future<DiscordTokenBundle> discordRefreshToken(String refreshToken) async {
     final result = await _channel.invokeMapMethod<Object?, Object?>(
       'discordRefreshToken',

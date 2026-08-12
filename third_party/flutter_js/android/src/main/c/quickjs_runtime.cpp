@@ -4,9 +4,11 @@
 #include <string.h>
 #ifdef __ANDROID__
 #include <android/log.h>
+#include <pthread.h>
 #else
 #define __android_log_print(a, b, c, d)
 #endif
+#include <algorithm>
 #include <functional>
 #include <future>
 #include <chrono>
@@ -38,6 +40,8 @@ extern "C"
         JSChannel *channel;
         int64_t timeoutMillis;
         int64_t deadlineNanos;
+        size_t configuredStackBytes;
+        uint32_t executionDepth;
     };
 
     static int64_t monotonicNanos()
@@ -47,35 +51,124 @@ extern "C"
             .count();
     }
 
+    static size_t safeStackBudget(size_t configuredStackBytes)
+    {
+#ifdef __ANDROID__
+        // If an OEM libc cannot describe the current thread, fail closed. A
+        // 512 KiB QuickJS budget leaves substantial headroom on Android's
+        // small Dart workers while remaining useful for normal providers.
+        constexpr size_t fallbackStackBudgetBytes = 512 * 1024;
+        const size_t fallbackBudget =
+            configuredStackBytes == 0
+                ? fallbackStackBudgetBytes
+                : std::min(
+                      configuredStackBytes,
+                      fallbackStackBudgetBytes);
+        pthread_attr_t attributes;
+        if (pthread_getattr_np(pthread_self(), &attributes) != 0)
+        {
+            return fallbackBudget;
+        }
+
+        void *stackBase = nullptr;
+        size_t stackBytes = 0;
+        const int stackResult =
+            pthread_attr_getstack(&attributes, &stackBase, &stackBytes);
+        pthread_attr_destroy(&attributes);
+        if (stackResult != 0 || stackBase == nullptr || stackBytes == 0)
+        {
+            return fallbackBudget;
+        }
+
+        // Android's supported ABIs use downward-growing native stacks. Dart
+        // worker threads can have substantially less stack available than the
+        // main thread, so a caller-provided QuickJS limit is not necessarily a
+        // safe native limit. Keep a fixed reserve for the FFI bridge, Dart
+        // callbacks, exception construction, and native unwinding. A fixed
+        // reserve preserves enough depth for real parsers such as Sucrase;
+        // reserving a percentage made the usable QuickJS stack unpredictably
+        // small on Dart workers. Otherwise the OS guard page can be reached
+        // before QuickJS has a chance to report "stack overflow".
+        volatile uint8_t marker = 0;
+        const uintptr_t stackLow = reinterpret_cast<uintptr_t>(stackBase);
+        const uintptr_t stackHigh = stackLow + stackBytes;
+        const uintptr_t stackPointer = reinterpret_cast<uintptr_t>(&marker);
+        if (stackPointer <= stackLow || stackPointer > stackHigh)
+        {
+            return fallbackBudget;
+        }
+
+        const size_t availableStackBytes = stackPointer - stackLow;
+        constexpr size_t nativeStackReserveBytes = 256 * 1024;
+        const size_t nativeSafeBudget =
+            availableStackBytes > nativeStackReserveBytes
+                ? availableStackBytes - nativeStackReserveBytes
+                : availableStackBytes / 2;
+        if (configuredStackBytes == 0)
+        {
+            return nativeSafeBudget;
+        }
+        return std::min(configuredStackBytes, nativeSafeBudget);
+#else
+        return configuredStackBytes;
+#endif
+    }
+
     // QuickJS calls the interrupt handler only while executing bytecode. A
     // scoped deadline must therefore surround every public bridge entry point
-    // that can run JavaScript. Nested calls retain the original (earliest)
-    // deadline instead of extending untrusted execution indefinitely.
-    class ExecutionDeadline
+    // that can run JavaScript. The same outermost scope refreshes and clamps
+    // QuickJS's native-stack limit for the current Dart worker thread. Nested
+    // JS -> Dart -> JS calls retain both the original stack top and the
+    // original (earliest) deadline instead of resetting either safety guard.
+    class ExecutionScope
     {
       public:
-        explicit ExecutionDeadline(JSRuntime *runtime)
+        explicit ExecutionScope(JSRuntime *runtime)
             : opaque(static_cast<RuntimeOpaque *>(JS_GetRuntimeOpaque(runtime))),
-              previousDeadline(opaque == nullptr ? 0 : opaque->deadlineNanos)
+              outermost(opaque == nullptr || opaque->executionDepth == 0)
         {
-            if (opaque != nullptr && opaque->timeoutMillis > 0 && previousDeadline == 0)
+            if (opaque == nullptr)
+            {
+                JS_UpdateStackTop(runtime);
+                return;
+            }
+
+            opaque->executionDepth++;
+            if (!outermost)
+            {
+                return;
+            }
+
+            JS_SetMaxStackSize(
+                runtime,
+                safeStackBudget(opaque->configuredStackBytes));
+            JS_UpdateStackTop(runtime);
+            if (opaque->timeoutMillis > 0)
             {
                 opaque->deadlineNanos =
                     monotonicNanos() + opaque->timeoutMillis * 1000000;
             }
         }
 
-        ~ExecutionDeadline()
+        ~ExecutionScope()
         {
-            if (opaque != nullptr)
+            if (opaque == nullptr)
             {
-                opaque->deadlineNanos = previousDeadline;
+                return;
+            }
+            if (opaque->executionDepth > 0)
+            {
+                opaque->executionDepth--;
+            }
+            if (outermost)
+            {
+                opaque->deadlineNanos = 0;
             }
         }
 
       private:
         RuntimeOpaque *opaque;
-        int64_t previousDeadline;
+        bool outermost;
     };
 
     DLLEXPORT int doReturnOne()
@@ -244,8 +337,7 @@ extern "C"
                                         int *errors, JSValue *result, char **stringResult)
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        JS_UpdateStackTop(rt);
-        ExecutionDeadline deadline(rt);
+        ExecutionScope execution(rt);
 
         // __android_log_print(ANDROID_LOG_DEBUG, "LOG_TAG", "Before Eval: %p", result);
         result = new JSValue(JS_Eval(ctx, input, input_len, filename, eval_flags));
@@ -289,8 +381,7 @@ extern "C"
     DLLEXPORT int callJsFunction1Arg(JSContext *ctx, JSValueConst *function, JSValueConst *object, JSValueConst *result, char **stringResult)
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        JS_UpdateStackTop(rt);
-        ExecutionDeadline deadline(rt);
+        ExecutionScope execution(rt);
         JSValue globalObject = JS_GetGlobalObject(ctx);
         // JSValue function = JS_GetPropertyStr(ctx, globalObject, functionName);
 
@@ -361,7 +452,7 @@ extern "C"
             {
                 __android_log_print(ANDROID_LOG_DEBUG, "LOG_TAG", "JS_JSONStringifyDartWrapper5 %p", result);
             }
-            ExecutionDeadline deadline(JS_GetRuntime(ctx));
+            ExecutionScope execution(JS_GetRuntime(ctx));
             result = copyToHeap(JS_Call(ctx, stringifyFn, globalObject, 1, obj));
             *stringResult = (char *)JS_ToCString(ctx, *result);
             if (QUICKJS_RUNTIME_DEBUG_ENABLED == 1)
@@ -442,7 +533,13 @@ extern "C"
     DLLEXPORT JSRuntime *jsNewRuntime(JSChannel channel, int64_t timeout)
     {
         JSRuntime *rt = JS_NewRuntime();
-        RuntimeOpaque *opaque = new RuntimeOpaque({channel, timeout, 0});
+        RuntimeOpaque *opaque = new RuntimeOpaque({
+            channel,
+            timeout,
+            0,
+            1024 * 1024,
+            0,
+        });
         JS_SetRuntimeOpaque(rt, opaque);
         JS_SetHostPromiseRejectionTracker(rt, js_promise_rejection_tracker, opaque);
         JS_SetModuleLoaderFunc(rt, nullptr, js_module_loader, opaque);
@@ -496,7 +593,13 @@ extern "C"
     }
     DLLEXPORT void jsSetMaxStackSize(JSRuntime *rt, size_t stack_size)
     {
-        JS_SetMaxStackSize(rt, stack_size);
+        RuntimeOpaque *opaque =
+            static_cast<RuntimeOpaque *>(JS_GetRuntimeOpaque(rt));
+        if (opaque != nullptr)
+        {
+            opaque->configuredStackBytes = stack_size;
+        }
+        JS_SetMaxStackSize(rt, safeStackBudget(stack_size));
     }
 
     DLLEXPORT void jsFreeRuntime(JSRuntime *rt)
@@ -532,8 +635,7 @@ extern "C"
     DLLEXPORT JSValue *jsEval(JSContext *ctx, const char *input, size_t input_len, const char *filename, int32_t eval_flags)
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        JS_UpdateStackTop(rt);
-        ExecutionDeadline deadline(rt);
+        ExecutionScope execution(rt);
         JSValue *ret = new JSValue(JS_Eval(ctx, input, input_len, filename, eval_flags));
         return ret;
     }
@@ -634,7 +736,7 @@ extern "C"
     DLLEXPORT const char *jsToCString(JSContext *ctx, JSValueConst *val)
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        JS_UpdateStackTop(rt);
+        ExecutionScope execution(rt);
         const char *ret = JS_ToCString(ctx, *val);
         return ret;
     }
@@ -724,8 +826,7 @@ extern "C"
                               int32_t argc, JSValueConst *argv)
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        JS_UpdateStackTop(rt);
-        ExecutionDeadline deadline(rt);
+        ExecutionScope execution(rt);
         JSValue *ret = new JSValue(JS_Call(ctx, *func_obj, *this_obj, argc, argv));
         return ret;
     }
@@ -742,8 +843,7 @@ extern "C"
 
     DLLEXPORT int32_t jsExecutePendingJob(JSRuntime *rt)
     {
-        JS_UpdateStackTop(rt);
-        ExecutionDeadline deadline(rt);
+        ExecutionScope execution(rt);
         JSContext *ctx;
         int ret = JS_ExecutePendingJob(rt, &ctx);
         return ret;

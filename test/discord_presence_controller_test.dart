@@ -105,6 +105,110 @@ void main() {
   });
 
   test(
+    'stalled authentication times out, cancels native flow, and can retry',
+    () async {
+      final stalledAuthentication = Completer<DiscordTokenBundle>();
+      final platform = _FakeDiscordPlatform()
+        ..authenticationCompleter = stalledAuthentication;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        authenticationTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.linkAccount();
+
+      expect(platform.authenticateCalls, 1);
+      expect(platform.cancelAuthenticationCalls, 1);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.linked, isFalse);
+      expect(controller.state.error, contains('timed out'));
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        isNull,
+      );
+      expect(await storage.read(key: 'discord_rich_presence_enabled'), isNull);
+
+      final retryAuthentication = Completer<DiscordTokenBundle>();
+      platform.authenticationCompleter = retryAuthentication;
+      final retry = controller.linkAccount();
+
+      expect(platform.authenticateCalls, 2);
+      expect(controller.state.busy, isTrue);
+
+      stalledAuthentication.complete(platform.tokenWithAccess('stale-access'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.connectCalls, 0);
+      expect(controller.state.linked, isFalse);
+      expect(controller.state.busy, isTrue);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        isNull,
+      );
+      expect(await storage.read(key: 'discord_rich_presence_enabled'), isNull);
+
+      retryAuthentication.complete(platform.tokenWithAccess('new-access'));
+      await retry;
+
+      expect(platform.authenticateCalls, 2);
+      expect(platform.cancelAuthenticationCalls, 1);
+      expect(platform.connectCalls, 1);
+      expect(platform.lastConnected?.accessToken, 'new-access');
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, isNull);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'new-access',
+      );
+      expect(await storage.read(key: 'discord_rich_presence_enabled'), 'true');
+    },
+  );
+
+  test(
+    'disposing during authentication cancels native flow and ignores completion',
+    () async {
+      final authentication = Completer<DiscordTokenBundle>();
+      final platform = _FakeDiscordPlatform()
+        ..authenticationCompleter = authentication;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        authenticationTimeout: const Duration(milliseconds: 10),
+      );
+      await _settle();
+
+      final linking = controller.linkAccount();
+      expect(controller.state.busy, isTrue);
+      expect(platform.authenticateCalls, 1);
+
+      controller.dispose();
+      await linking;
+      await _settle();
+
+      expect(platform.cancelAuthenticationCalls, 1);
+
+      authentication.complete(platform.token);
+      await _settle();
+
+      expect(platform.cancelAuthenticationCalls, 1);
+      expect(platform.connectCalls, 0);
+      expect(await storage.read(key: 'discord_rich_presence_enabled'), isNull);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        isNull,
+      );
+
+      await controller.linkAccount();
+      expect(platform.authenticateCalls, 1);
+    },
+  );
+
+  test(
     'connect failure retains the linked token and retry does not reauthenticate',
     () async {
       final platform = _FakeDiscordPlatform()..connectFailuresRemaining = 1;
@@ -214,6 +318,7 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   Object? authenticationError;
   int connectFailuresRemaining = 0;
   int authenticateCalls = 0;
+  int cancelAuthenticationCalls = 0;
   int refreshCalls = 0;
   int connectCalls = 0;
   int revokeCalls = 0;
@@ -223,6 +328,14 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   DiscordTokenBundle get token => DiscordTokenBundle(
     accessToken: 'access-token',
     refreshToken: 'refresh-token',
+    tokenType: 0,
+    expiresAt: DateTime.now().add(const Duration(days: 7)),
+    scopes: 'openid sdk.social_layer_presence',
+  );
+
+  DiscordTokenBundle tokenWithAccess(String accessToken) => DiscordTokenBundle(
+    accessToken: accessToken,
+    refreshToken: 'refresh-$accessToken',
     tokenType: 0,
     expiresAt: DateTime.now().add(const Duration(days: 7)),
     scopes: 'openid sdk.social_layer_presence',
@@ -246,6 +359,11 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
       return completer.future;
     }
     return token;
+  }
+
+  @override
+  Future<void> cancelAuthentication() async {
+    cancelAuthenticationCalls++;
   }
 
   @override
