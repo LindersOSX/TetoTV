@@ -1,3 +1,5 @@
+import 'dart:isolate';
+
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -85,6 +87,38 @@ void main() {
       }
     },
     timeout: const Timeout(Duration(seconds: 10)),
+  );
+
+  testWidgets(
+    'packaged QuickJS reports recursive stack overflow without killing Dart',
+    (tester) async {
+      // Third-party providers run on Dart worker isolates. Those threads may
+      // have much less native stack available than the main thread, so the
+      // bridge must clamp QuickJS's logical stack budget to the current native
+      // stack before entering JS.
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final outcome = await Isolate.run(() {
+          final runtime = QuickJsRuntime2(
+            stackSize: 1024 * 1024,
+            timeout: 1000,
+          );
+          try {
+            final result = runtime.evaluate('''
+              function recursiveProviderCall() {
+                return recursiveProviderCall();
+              }
+              recursiveProviderCall();
+            ''');
+            return (isError: result.isError, message: result.stringResult);
+          } finally {
+            runtime.dispose();
+          }
+        });
+        expect(outcome.isError, isTrue);
+        expect(outcome.message.toLowerCase(), contains('stack overflow'));
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
   );
 
   testWidgets(

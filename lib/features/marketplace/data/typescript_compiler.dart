@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_js/quickjs/quickjs_runtime2.dart';
@@ -24,9 +23,15 @@ class AddonTypescriptCompiler {
       _compilerAsset,
       cache: true,
     ));
-    return Isolate.run(
-      () => _compileInQuickJs(compiler: compiler, source: source),
-    ).timeout(const Duration(seconds: 30));
+    // Dart worker isolates have a much smaller native stack than Flutter's
+    // main isolate on Android. Sucrase legitimately needs more than that
+    // worker stack for some real Seanime providers, so running it there can
+    // hit the OS guard page before QuickJS can report a JavaScript error.
+    // Compilation is an install/update-only operation; keep it on the main
+    // isolate where the native bridge can safely grant the larger bounded
+    // QuickJS stack below. QuickJS's two five-second execution deadlines
+    // still bound initialization and transformation independently.
+    return _compileInQuickJs(compiler: compiler, source: source);
   }
 }
 
@@ -34,7 +39,7 @@ String _compileInQuickJs({required String compiler, required String source}) {
   final runtime = QuickJsRuntime2(
     timeout: 5000,
     memoryLimit: 48 * 1024 * 1024,
-    stackSize: 1024 * 1024,
+    stackSize: 4 * 1024 * 1024,
   );
   try {
     final compilerResult = runtime.evaluate(

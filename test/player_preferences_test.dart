@@ -175,6 +175,54 @@ void main() {
     );
   });
 
+  test('skip-segment target never lands on the synchronous EOF boundary', () {
+    expect(
+      safeSkipSegmentTarget(
+        requested: const Duration(minutes: 24),
+        duration: const Duration(minutes: 24),
+      ),
+      const Duration(minutes: 23, seconds: 59),
+    );
+    expect(
+      safeSkipSegmentTarget(
+        requested: const Duration(minutes: 21, seconds: 30),
+        duration: const Duration(minutes: 24),
+      ),
+      const Duration(minutes: 21, seconds: 30),
+    );
+    expect(
+      safeSkipSegmentTarget(
+        requested: const Duration(minutes: 4),
+        duration: Duration.zero,
+      ),
+      const Duration(minutes: 4),
+    );
+  });
+
+  test('held scrub accelerates after precise initial adjustments', () {
+    expect(playerScrubStep(0), const Duration(seconds: 30));
+    expect(playerScrubStep(4), const Duration(seconds: 30));
+    expect(playerScrubStep(5), const Duration(minutes: 1));
+    expect(playerScrubStep(20), const Duration(minutes: 1));
+  });
+
+  test('terminal outro remains identifiable behind the eof guard', () {
+    expect(
+      skipSegmentReachesPlaybackEnd(
+        requestedEnd: const Duration(minutes: 24),
+        duration: const Duration(minutes: 24),
+      ),
+      isTrue,
+    );
+    expect(
+      skipSegmentReachesPlaybackEnd(
+        requestedEnd: const Duration(minutes: 21, seconds: 30),
+        duration: const Duration(minutes: 24),
+      ),
+      isFalse,
+    );
+  });
+
   test('subtitle defaults follow the selected release language', () {
     const sub = ReleaseCandidate(
       infoHash: 'sub',

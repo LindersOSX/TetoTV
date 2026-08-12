@@ -166,6 +166,10 @@ android {
                 keyPassword = keystoreProperties["keyPassword"] as String
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
+                // Keep Android 7/Fire OS compatibility through v2 while also
+                // enabling v3 integrity protection on Android 9 and newer.
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }

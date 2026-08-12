@@ -23,7 +23,7 @@
     app:show_subtitle_button="false"
     app:show_timeout="5000"
     app:surface_type="surface_view"
-    app:time_bar_scrubbing_enabled="false"
+    app:time_bar_scrubbing_enabled="true"
     app:use_controller="true" />
 
 <Button

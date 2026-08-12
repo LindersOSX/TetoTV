@@ -217,6 +217,9 @@ class _SetupDiscordPlatform implements DiscordPresencePlatform {
   }
 
   @override
+  Future<void> cancelAuthentication() async {}
+
+  @override
   Future<void> connect(DiscordTokenBundle token) async {}
 
   @override

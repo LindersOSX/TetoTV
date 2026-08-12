@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
+import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -10,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 void main() {
-  testWidgets('D-pad reaches the Home section editor and switches tabs', (
+  testWidgets('D-pad reaches Home shelves and switches to streaming', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -37,27 +38,14 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.section',
+      'accounts.shelf.tracking',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.visibility',
+      'accounts.shelf.history',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.move-down',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.first',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
@@ -77,9 +65,7 @@ void main() {
     );
   });
 
-  testWidgets('Home section dropdown keeps visibility and order controls', (
-    tester,
-  ) async {
+  testWidgets('Home shelves remain visible without a dropdown', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(1280, 720);
     tester.view.devicePixelRatio = 1;
@@ -91,39 +77,55 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Home section'), findsOneWidget);
-    expect(find.text('Position 1 of 7 on the Home screen.'), findsOneWidget);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.section',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
+    expect(find.text('Home section'), findsNothing);
+    expect(find.text('Continue watching'), findsOneWidget);
+    expect(find.text('Watch history'), findsOneWidget);
+    expect(find.text('Recently released'), findsOneWidget);
     expect(find.text('Trending now'), findsOneWidget);
-    await tester.tap(find.text('Trending now'));
-    await tester.pumpAndSettle();
-
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.section',
-    );
-    expect(find.text('Position 4 of 7 on the Home screen.'), findsOneWidget);
-    await tester.tap(find.text('Move up'));
-    await tester.pumpAndSettle();
-    expect(find.text('Position 3 of 7 on the Home screen.'), findsOneWidget);
-
-    await tester.tap(find.text('Hide from Home'));
-    await tester.pumpAndSettle();
-    expect(find.text('Show on Home'), findsOneWidget);
-    expect(find.text('HIDDEN'), findsOneWidget);
+    expect(find.text('Plan to watch'), findsOneWidget);
+    expect(find.text('Airing soon'), findsOneWidget);
+    expect(find.text('Recently completed'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Home reorder leaves focus on a usable control at a boundary', (
+  testWidgets('Home shelf rows toggle visibility and reorder in place', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: AccountsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Continue watching'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(homeShelfPreferencesProvider),
+      isNot(contains(HomeShelf.tracking)),
+    );
+    expect(find.text('HIDDEN'), findsOneWidget);
+
+    await tester.tap(find.bySemanticsLabel('Move Watch history up'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(homeShelfOrderProvider).take(2),
+      orderedEquals([HomeShelf.history, HomeShelf.tracking]),
+    );
+    expect(find.text('Home section'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('D-pad traverses all seven visible Home shelf rows in order', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -141,24 +143,19 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Watch history'));
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.move-up',
-    );
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
 
-    expect(find.text('Position 1 of 7 on the Home screen.'), findsOneWidget);
+    for (final shelf in HomeShelf.values) {
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.shelf.${shelf.name}',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.home.visibility',
+      'accounts.customization.first',
     );
     expect(tester.takeException(), isNull);
   });
@@ -514,6 +511,11 @@ void main() {
     expect(find.text('Streaming'), findsOneWidget);
     expect(find.text('Appearance'), findsNothing);
     expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    expect(
+      tester.widget<SafeArea>(find.byType(SafeArea).first).minimum,
+      EdgeInsets.zero,
+      reason: 'Settings must fill the screen instead of shrinking its canvas.',
+    );
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('Streaming'));

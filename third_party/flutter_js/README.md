@@ -311,6 +311,11 @@ We just separated the code to allow build it and in this repository we have only
 > **TetoTV fork:** this checkout does not consume the historical JitPack AAR.
 > It builds the pinned QuickJS 2026-06-04 sources in `android/src/main/c` and
 > verifies their provenance with `tool/android/verify_vendored_quickjs.ps1`.
+> Android bridge entry points also clamp the configured QuickJS stack to the
+> current native thread's remaining stack with a 256 KiB unwind reserve. This
+> is required for Dart worker isolates, whose native stacks can be much smaller
+> than Android's main thread, so recursive add-ons fail with a JavaScript stack
+> overflow instead of crossing the OS guard page and terminating the app.
 
 The library wrapper, both QuickJS and JavascriptCore, are also compiled in a separated repository: https://github.com/fast-development/android-js-runtimes
 

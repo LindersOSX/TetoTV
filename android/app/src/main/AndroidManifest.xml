@@ -56,6 +56,15 @@
     <!-- Android 11+ hides implicit intent handlers unless they are declared. -->
     <queries>
         <package android:name="com.discord" />
+        <!-- Discord's Android OAuth flow is launched in a Custom Tab. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>

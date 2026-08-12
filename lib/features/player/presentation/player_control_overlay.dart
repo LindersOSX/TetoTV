@@ -33,6 +33,37 @@ Duration playerSeekTarget({
   return candidate;
 }
 
+/// Keeps a skip-segment seek away from the exact end-of-file boundary.
+///
+/// Several TV decoders emit their terminal callback synchronously when asked
+/// to seek to the precise duration.  The skip button would then continue its
+/// own callback while completion was already tearing down the player.  Landing
+/// one second before EOF lets the ordinary playback-completion path own that
+/// transition without making outro skipping perceptibly slower.
+Duration safeSkipSegmentTarget({
+  required Duration requested,
+  required Duration duration,
+  Duration endGuard = const Duration(seconds: 1),
+}) {
+  if (requested <= Duration.zero) return Duration.zero;
+  if (duration <= Duration.zero) return requested;
+  final lastSafePosition = duration > endGuard
+      ? duration - endGuard
+      : Duration.zero;
+  if (requested >= lastSafePosition) return lastSafePosition;
+  return requested;
+}
+
+bool skipSegmentReachesPlaybackEnd({
+  required Duration requestedEnd,
+  required Duration duration,
+  Duration endGuard = const Duration(seconds: 1),
+}) => duration > Duration.zero && requestedEnd >= duration - endGuard;
+
+/// Accelerates a held D-pad scrub without making the first correction coarse.
+Duration playerScrubStep(int repeatCount) =>
+    repeatCount >= 5 ? const Duration(minutes: 1) : const Duration(seconds: 30);
+
 /// Detects an intentional double press of D-pad Down without treating a held
 /// button (which produces key-repeat events) as two presses.
 class PlayerDoubleDownDetector {

@@ -2,13 +2,12 @@ package dev.animetv.anime_tv
 
 import android.content.res.Configuration
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscordAuthFlowPolicyTest {
     @Test
-    fun televisionModeUsesDeviceFlow() {
-        assertTrue(
+    fun televisionModeUsesAndroidMobileFlow() {
+        assertFalse(
             DiscordAuthFlowPolicy.shouldUseDeviceFlow(
                 Configuration.UI_MODE_TYPE_TELEVISION,
                 hasLeanback = false,
@@ -17,8 +16,8 @@ class DiscordAuthFlowPolicyTest {
     }
 
     @Test
-    fun leanbackDeviceUsesDeviceFlowEvenWithNormalUiMode() {
-        assertTrue(
+    fun leanbackDeviceUsesAndroidMobileFlow() {
+        assertFalse(
             DiscordAuthFlowPolicy.shouldUseDeviceFlow(
                 Configuration.UI_MODE_TYPE_NORMAL,
                 hasLeanback = true,

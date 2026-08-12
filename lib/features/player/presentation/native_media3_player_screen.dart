@@ -40,6 +40,7 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
     required this.launch,
     required this.onUseMpv,
     required this.onUseVlc,
+    this.initialPosition,
     this.subtitle,
     this.anilistMediaId,
     this.malMediaId,
@@ -57,6 +58,7 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
   final int? malMediaId;
   final int? episode;
   final String? coverImageUrl;
+  final Duration? initialPosition;
   final void Function(
     Duration position,
     StreamReady stream,
@@ -267,6 +269,17 @@ class _NativeMedia3PlayerScreenState
     if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
     _preferences = await database.seriesPreferences(_mediaId);
+    if (widget.initialPosition case final handoffPosition?) {
+      // A live engine handoff is more recent than the launch-time "start from
+      // beginning" choice. Keeping that flag would make native Media3 discard
+      // the position MPV/VLC just handed us and restart at zero.
+      _startFromBeginning = false;
+      _resumePosition = handoffPosition < Duration.zero
+          ? Duration.zero
+          : handoffPosition;
+      _resumeUpdatedAt = DateTime.now();
+      return;
+    }
     if (!mounted || _startFromBeginning) return;
     final checkpoint = await database.checkpoint(_mediaId, _episodeNumber);
     if (!mounted) return;
