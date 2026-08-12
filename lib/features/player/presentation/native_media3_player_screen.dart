@@ -197,6 +197,7 @@ class _NativeMedia3PlayerScreenState
           videoFit: _preferences.videoFit,
           malMediaId: _malMediaId,
           episodeNumber: _episodeNumber,
+          artworkUrl: widget.coverImageUrl,
         );
         if (!mounted) return;
         final returnNavigation = nativePlayerReturnNavigationForStatus(

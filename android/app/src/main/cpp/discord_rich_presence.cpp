@@ -43,6 +43,7 @@ struct Presence {
     bool playing = false;
     std::int64_t position_ms = 0;
     std::int64_t duration_ms = 0;
+    std::string artwork_url;
 };
 
 std::optional<Presence> g_pending_presence;
@@ -194,8 +195,15 @@ void publish_presence(const Presence& value) {
     activity.SetDetails(value.title);
 
     discordpp::ActivityAssets assets;
-    assets.SetLargeImage(std::string{kAppIconAssetKey});
-    assets.SetLargeText(std::string{"TetoTV"});
+    if (!value.artwork_url.empty()) {
+        assets.SetLargeImage(value.artwork_url);
+        assets.SetLargeText(value.title);
+        assets.SetSmallImage(std::string{kAppIconAssetKey});
+        assets.SetSmallText(std::string{"TetoTV"});
+    } else {
+        assets.SetLargeImage(std::string{kAppIconAssetKey});
+        assets.SetLargeText(std::string{"TetoTV"});
+    }
     activity.SetAssets(std::move(assets));
 
     std::string state = value.episode > 0 ? "Episode " + std::to_string(value.episode) : "Watching";
@@ -503,13 +511,15 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdatePresence(
     jint episode,
     jboolean playing,
     jlong position_ms,
-    jlong duration_ms) {
+    jlong duration_ms,
+    jstring artwork_url) {
     Presence presence{
         from_jstring(env, title),
         static_cast<int>(episode),
         playing == JNI_TRUE,
         static_cast<std::int64_t>(position_ms),
         static_cast<std::int64_t>(duration_ms),
+        from_jstring(env, artwork_url),
     };
     post([presence = std::move(presence)] { publish_presence(presence); });
 }

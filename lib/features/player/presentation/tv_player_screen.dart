@@ -1277,6 +1277,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       position: _player.state.position,
       duration: _player.state.duration,
       playing: _player.state.playing,
+      artworkUrl: widget.coverImageUrl,
       seekBackSeconds: _seekBackSeconds,
       seekForwardSeconds: _seekForwardSeconds,
     );

@@ -127,6 +127,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private var source = ""
     private var displayTitle = "TetoTV"
+    private var artworkUrl = ""
     private var checkpointKey = ""
     private var firstFrameRendered = false
     private var everFirstFrameRendered = false
@@ -283,6 +284,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
         source = normalizeMediaUri(intent.getStringExtra(EXTRA_SOURCE).orEmpty())
         displayTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
+        artworkUrl = intent.getStringExtra(EXTRA_ARTWORK_URL).orEmpty()
         checkpointKey = intent.getStringExtra(EXTRA_CHECKPOINT_KEY).orEmpty()
         resumeProvided = intent.getBooleanExtra(EXTRA_RESUME_PROVIDED, false)
         requestedResumeMs = intent.getLongExtra(EXTRA_RESUME_MS, 0L).coerceAtLeast(0L)
@@ -855,6 +857,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playing = isPlaybackIntended(),
             positionMs = safePositionMs(),
             durationMs = safeDurationMs(),
+            artworkUrl = artworkUrl,
         )
     }
 
@@ -2110,6 +2113,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     companion object {
         const val EXTRA_SOURCE = "source"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_ARTWORK_URL = "artworkUrl"
         const val EXTRA_STREAM_LABEL = "streamLabel"
         const val EXTRA_SUBTITLE_URL = "subtitleUrl"
         const val EXTRA_SUBTITLE_MIME_TYPE = "subtitleMimeType"

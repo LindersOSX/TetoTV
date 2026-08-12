@@ -638,6 +638,7 @@ class AndroidTvBridge {
     String videoFit = 'contain',
     int? malMediaId,
     int? episodeNumber,
+    String? artworkUrl,
     Map<String, String> headers = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -679,6 +680,8 @@ class AndroidTvBridge {
             'videoFit': videoFit,
             'malMediaId': ?malMediaId,
             'episodeNumber': ?episodeNumber,
+            if (artworkUrl != null && artworkUrl.isNotEmpty)
+              'artworkUrl': artworkUrl,
             if (headers.isNotEmpty) 'headers': headers,
           });
       return value == null
@@ -699,6 +702,7 @@ class AndroidTvBridge {
     required Duration position,
     required Duration duration,
     required bool playing,
+    String? artworkUrl,
     int seekBackSeconds = 10,
     int seekForwardSeconds = 10,
   }) async {
@@ -711,6 +715,8 @@ class AndroidTvBridge {
         'positionMs': position.inMilliseconds,
         'durationMs': duration.inMilliseconds,
         'playing': playing,
+        if (artworkUrl != null && artworkUrl.isNotEmpty)
+          'artworkUrl': artworkUrl,
         'seekBackMs': seekBackSeconds * 1000,
         'seekForwardMs': seekForwardSeconds * 1000,
       });
