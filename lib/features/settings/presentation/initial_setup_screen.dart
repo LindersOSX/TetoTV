@@ -256,6 +256,7 @@ class _PrivacyCommunityStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.read(settingsPreferencesProvider.notifier);
+    final isTelevision = ref.watch(isTelevisionProvider);
     final discord = ref.watch(discordPresenceControllerProvider);
     final discordController = ref.read(
       discordPresenceControllerProvider.notifier,
@@ -309,7 +310,13 @@ class _PrivacyCommunityStep extends ConsumerWidget {
               primary: !discord.linked,
               onPressed: discord.linked
                   ? () => discordController.setEnabled(!discord.enabled)
-                  : discordController.linkAccount,
+                  : () {
+                      if (isTelevision) {
+                        context.push('/pair/discord');
+                      } else {
+                        discordController.linkAccount();
+                      }
+                    },
             ),
           const SizedBox(height: 9),
           const Text(

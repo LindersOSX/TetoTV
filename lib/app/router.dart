@@ -11,6 +11,7 @@ import 'package:anime_tv/features/catalog/presentation/airing_calendar_screen.da
 import 'package:anime_tv/features/catalog/presentation/franchise_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/credits_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_collection_screen.dart';
+import 'package:anime_tv/features/discord/presentation/discord_device_pairing_screen.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
 import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
@@ -130,6 +131,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/pair/premiumize',
       builder: (context, state) => const PremiumizePairingScreen(),
+    ),
+    GoRoute(
+      path: '/pair/discord',
+      builder: (context, state) => const DiscordDevicePairingScreen(),
     ),
     GoRoute(
       path: '/settings/accounts',

@@ -306,6 +306,133 @@ void main() {
     expect(platform.lastConnected?.accessToken, 'access-token');
     expect(controller.state.connected, isTrue);
   });
+
+  test(
+    'device flow stores a bearer token and connects without native auth',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.acceptLinkedToken(platform.deviceToken);
+
+      expect(platform.authenticateCalls, 0);
+      expect(platform.connectCalls, 1);
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.connected, isTrue);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        platform.deviceToken.accessToken,
+      );
+      expect(await storage.read(key: 'discord_rich_presence_token_type'), '1');
+    },
+  );
+
+  test(
+    'device flow rejects native token type or missing required scopes',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await expectLater(
+        controller.acceptLinkedToken(platform.token),
+        throwsA(isA<StateError>()),
+      );
+      await expectLater(
+        controller.acceptLinkedToken(
+          platform.deviceTokenWithScopes('openid identify'),
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(platform.connectCalls, 0);
+      expect(controller.state.linked, isFalse);
+      expect(await storage.read(key: 'discord_rich_presence_enabled'), isNull);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'device connect failure retains securely linked token for retry',
+    () async {
+      final platform = _FakeDiscordPlatform()..connectFailuresRemaining = 1;
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.acceptLinkedToken(platform.deviceToken);
+
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.connected, isFalse);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, contains('connection failed'));
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        platform.deviceToken.accessToken,
+      );
+    },
+  );
+
+  test(
+    'stalled device connection times out but keeps the account linked',
+    () async {
+      final stalledConnection = Completer<void>();
+      final platform = _FakeDiscordPlatform()
+        ..connectCompleter = stalledConnection;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        deviceConnectionTimeout: const Duration(milliseconds: 40),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.acceptLinkedToken(platform.deviceToken);
+
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.connectionStatus, 'disconnected');
+      expect(controller.state.error, contains('timed out'));
+      expect(controller.state.error, contains('Retry'));
+      expect(platform.disconnectCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        platform.deviceToken.accessToken,
+      );
+
+      // Canceling releases the native pending-connect slot, so the normal
+      // Settings retry path can immediately start a second connection.
+      await controller.retry();
+      expect(platform.connectCalls, 2);
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.error, isNull);
+    },
+  );
+
+  test('device and native linking cannot run concurrently', () async {
+    final platform = _FakeDiscordPlatform();
+    final controller = DiscordPresenceController(storage, platform);
+    addTearDown(controller.dispose);
+    await _settle();
+
+    final accepting = controller.acceptLinkedToken(platform.deviceToken);
+    await expectLater(
+      controller.acceptLinkedToken(platform.deviceToken),
+      throwsA(isA<StateError>()),
+    );
+    await accepting;
+
+    expect(platform.connectCalls, 1);
+  });
 }
 
 Future<void> _settle() async {
@@ -316,6 +443,7 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   final _events = StreamController<DiscordBridgeEvent>.broadcast();
   Completer<DiscordTokenBundle>? authenticationCompleter;
   Object? authenticationError;
+  Completer<void>? connectCompleter;
   int connectFailuresRemaining = 0;
   int authenticateCalls = 0;
   int cancelAuthenticationCalls = 0;
@@ -331,6 +459,22 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
     tokenType: 0,
     expiresAt: DateTime.now().add(const Duration(days: 7)),
     scopes: 'openid sdk.social_layer_presence',
+  );
+
+  DiscordTokenBundle get deviceToken => DiscordTokenBundle(
+    accessToken: 'device-access-token',
+    refreshToken: 'device-refresh-token',
+    tokenType: 1,
+    expiresAt: DateTime.now().add(const Duration(days: 7)),
+    scopes: 'openid sdk.social_layer_presence',
+  );
+
+  DiscordTokenBundle deviceTokenWithScopes(String scopes) => DiscordTokenBundle(
+    accessToken: 'device-access-token',
+    refreshToken: 'device-refresh-token',
+    tokenType: 1,
+    expiresAt: DateTime.now().add(const Duration(days: 7)),
+    scopes: scopes,
   );
 
   DiscordTokenBundle tokenWithAccess(String accessToken) => DiscordTokenBundle(
@@ -380,6 +524,7 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
       connectFailuresRemaining--;
       throw StateError('connection failed');
     }
+    if (connectCompleter case final completer?) await completer.future;
   }
 
   @override
@@ -391,5 +536,10 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   @override
   Future<void> disconnect() async {
     disconnectCalls++;
+    final pendingConnection = connectCompleter;
+    connectCompleter = null;
+    if (pendingConnection != null && !pendingConnection.isCompleted) {
+      pendingConnection.completeError(StateError('connection canceled'));
+    }
   }
 }

@@ -116,6 +116,9 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     this._platform, {
     // TV users may need to enter credentials or approve in a second app.
     this._authenticationTimeout = const Duration(minutes: 6),
+    // Device pairing has already securely stored the token before this
+    // best-effort native connection. Never leave its completion UI hanging.
+    this._deviceConnectionTimeout = const Duration(seconds: 20),
   }) : super(const DiscordPresenceState()) {
     _eventSubscription = _platform.events.listen(_handleEvent);
     unawaited(_initialize());
@@ -132,6 +135,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   final FlutterSecureStorage _storage;
   final DiscordPresencePlatform _platform;
   final Duration _authenticationTimeout;
+  final Duration _deviceConnectionTimeout;
   late final StreamSubscription<DiscordBridgeEvent> _eventSubscription;
   bool _refreshing = false;
   int _authenticationGeneration = 0;
@@ -200,6 +204,77 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
       if (_isCurrentAuthentication(generation)) {
         state = state.copyWith(busy: false);
       }
+    }
+  }
+
+  /// Accepts a token returned by Discord's limited-input device flow.
+  ///
+  /// The same secure-storage and native connection path used by mobile OAuth
+  /// is retained. Concurrent native or device linking attempts cannot race.
+  Future<void> acceptLinkedToken(DiscordTokenBundle token) async {
+    if (!mounted || state.busy || !state.available) {
+      throw StateError('Discord is already handling another request.');
+    }
+    final generation = ++_authenticationGeneration;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      _validateToken(token);
+      final scopes = token.scopes
+          .split(RegExp(r'\s+'))
+          .where((scope) => scope.isNotEmpty)
+          .toSet();
+      if (token.tokenType != 1 ||
+          !scopes.contains('openid') ||
+          !scopes.contains('sdk.social_layer_presence')) {
+        throw StateError('Discord returned an invalid device-linking token.');
+      }
+      await _storeToken(token);
+      if (!_isCurrentAuthentication(generation)) return;
+      await _storage.write(key: _enabledKey, value: 'true');
+      if (!_isCurrentAuthentication(generation)) return;
+      state = state.copyWith(linked: true, enabled: true);
+      try {
+        await _connect(token).timeout(_deviceConnectionTimeout);
+      } on TimeoutException {
+        // Future.timeout continues observing the native Future, so a late
+        // completion/error is handled. Disconnect also releases Android's
+        // pending-connect slot so Settings Retry can start a fresh attempt.
+        await _cancelTimedOutDeviceConnection();
+        if (_isCurrentAuthentication(generation)) {
+          state = state.copyWith(
+            connectionStatus: 'disconnected',
+            error:
+                'Discord is linked, but the connection timed out. Use Retry to connect Rich Presence.',
+          );
+        }
+      } catch (error) {
+        // The account is securely linked at this point. Match mobile linking:
+        // retain it and let Settings expose the normal connection retry.
+        if (_isCurrentAuthentication(generation)) {
+          state = state.copyWith(
+            connectionStatus: 'disconnected',
+            error: _friendly(error),
+          );
+        }
+      }
+    } catch (error) {
+      if (_isCurrentAuthentication(generation)) {
+        state = state.copyWith(error: _friendly(error));
+      }
+      rethrow;
+    } finally {
+      if (_isCurrentAuthentication(generation)) {
+        state = state.copyWith(busy: false);
+      }
+    }
+  }
+
+  Future<void> _cancelTimedOutDeviceConnection() async {
+    try {
+      await _platform.disconnect().timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // The account token is already secure and remains linked. Native status
+      // events can still settle a cancellation that outlives this guard.
     }
   }
 

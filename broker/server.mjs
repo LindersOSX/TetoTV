@@ -203,7 +203,7 @@ function privacyPage(response) {
     response,
     200,
     `<h1>TetoTV privacy disclosure</h1>
-     <p><small>Effective August 11, 2026</small></p>
+     <p><small>Effective August 12, 2026</small></p>
      <p>TetoTV is an independent Android application. It has no advertising or analytics SDK, no TetoTV account system, and does not sell personal data.</p>
 
      <h2>Data kept on the device</h2>
@@ -213,6 +213,7 @@ function privacyPage(response) {
      <h2>Services selected by the user</h2>
      <p>Features the user chooses can send the minimum required requests to AniList, MAL, Kitsu, a selected debrid provider, AniSkip, artwork hosts, and source repositories or extensions the user explicitly installs. Those independent services receive ordinary connection metadata and apply their own terms and privacy policies. TetoTV does not bundle or recommend a streaming-source repository.</p>
      <p>When a user explicitly links Discord and enables <strong>Discord Rich Presence</strong>, TetoTV sends Discord the current anime title, episode number, playing or paused state, and playback timing so Discord can display that activity. Discord OAuth access and refresh tokens are stored in Android Keystore-backed secure storage. Disabling Rich Presence stops sharing playback activity; unlinking Discord also revokes the connection when possible and deletes the saved tokens from TetoTV. TetoTV never asks for or stores the user's Discord password.</p>
+     <p>On Android TV and Fire TV, Discord linking uses Discord's limited-input device authorization directly. TetoTV sends a one-time authorization request to Discord and polls Discord only until the link succeeds, expires, or is canceled. The private device code is kept only in app memory during that attempt; completed access and refresh tokens use the same Android Keystore-backed secure storage described above. The TetoTV broker is not involved in Discord linking.</p>
 
      <h2>Pairing and update broker</h2>
      <p>OAuth pairing keeps one-time state, a device-code hash, PKCE data, and token material in process memory for at most ten minutes. A successful authenticated device poll deletes the complete pairing immediately.</p>
@@ -2466,10 +2467,12 @@ server.listen(port, async () => {
           ?.includes("default-src 'none'") ||
         !privacyBody.includes("TetoTV privacy disclosure") ||
         !privacyBody.includes("at most ten minutes") ||
-        !privacyBody.includes("Effective August 11, 2026") ||
+        !privacyBody.includes("Effective August 12, 2026") ||
         !privacyBody.includes("Reset TetoTV") ||
         !privacyBody.includes("Clear cache") ||
         !privacyBody.includes("Discord Rich Presence") ||
+        !privacyBody.includes("limited-input device authorization directly") ||
+        !privacyBody.includes("broker is not involved in Discord linking") ||
         !privacyBody.includes("disabled by default") ||
         !privacyBody.includes("https://discord.gg/juC6k7d4WY") ||
         !privacyBody.includes("Anonymous live activity count") ||
