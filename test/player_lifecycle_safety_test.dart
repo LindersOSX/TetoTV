@@ -243,6 +243,27 @@ void main() {
       '_startFromBeginning = false',
       '_resumePosition = handoffPosition',
     ]);
+
+    final nativeRun = _methodSlice(
+      nativeFlutterSource,
+      'Future<void> _run()',
+      'Future<void> _retryAfterFailure',
+    );
+    _expectInOrder(nativeRun, const [
+      'nativePlayerReturnNavigationForStatus(',
+      'NativePlayerReturnNavigation.home',
+      "_status = 'Closing video…'",
+      'runBestEffortNativePlayerExitBookkeeping([',
+      '() => _persistResult(result)',
+      '() => _syncResultIfThresholdReached(result)',
+      '() => _recordPlayerSuccess(result)',
+      'switch (returnNavigation)',
+      'case NativePlayerReturnNavigation.home:',
+      "GoRouter.of(context).go('/')",
+      'case NativePlayerReturnNavigation.previousRoute:',
+      'if (context.canPop()) context.pop()',
+      'case NativePlayerReturnNavigation.none:',
+    ]);
   });
 }
 

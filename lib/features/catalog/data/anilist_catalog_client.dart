@@ -244,7 +244,6 @@ class AniListCatalogClient {
       }
     ''';
     final variables = <String, dynamic>{
-      'page': page,
       'isAdult': filters.includeAdult,
       'sort': [filters.sort],
     };
@@ -262,7 +261,7 @@ class AniListCatalogClient {
     addIfPresent('year', filters.year);
     addIfPresent('minimumScore', filters.minimumScore);
     try {
-      return await _mediaPage(query, variables, useStaleOnError: false);
+      return await _discoverPages(query, variables, logicalPage: page);
     } on StateError catch (error) {
       // AniList occasionally rejects an otherwise valid filter request with
       // "Illegal operation and value combination" when a sort is combined
@@ -272,13 +271,36 @@ class AniListCatalogClient {
       if (!_isIllegalDiscoverCombination(error)) rethrow;
       final retryVariables = Map<String, dynamic>.from(variables)
         ..remove('sort');
-      final results = await _mediaPage(
+      final results = await _discoverPages(
         query,
         retryVariables,
-        useStaleOnError: false,
+        logicalPage: page,
       );
       return _sortDiscoverResults(results, filters.sort);
     }
+  }
+
+  Future<List<AnimeSummary>> _discoverPages(
+    String query,
+    Map<String, dynamic> variables, {
+    required int logicalPage,
+  }) async {
+    // Two 30-item pages produce ten rows on the standard TV grid. Keep both
+    // requests in one Future so a filter refresh can never render a partial
+    // page or combine results belonging to different filter selections.
+    final firstApiPage = logicalPage * 2 - 1;
+    final pages = await Future.wait([
+      for (final page in [firstApiPage, firstApiPage + 1])
+        _mediaPage(query, {...variables, 'page': page}, useStaleOnError: false),
+    ]);
+    final uniqueById = <int, AnimeSummary>{};
+    for (final page in pages) {
+      for (final anime in page) {
+        // A boundary duplicate keeps its page-one position and payload.
+        uniqueById.putIfAbsent(anime.id, () => anime);
+      }
+    }
+    return uniqueById.values.toList(growable: false);
   }
 
   Future<List<AiringScheduleEntry>> airingSchedule({

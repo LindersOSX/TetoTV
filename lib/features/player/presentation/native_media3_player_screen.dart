@@ -22,6 +22,37 @@ import 'package:go_router/go_router.dart';
 bool isTerminalDebridAlternativeFailure(Object error) =>
     isTerminalDebridFailoverFailure(error);
 
+enum NativePlayerReturnNavigation { home, previousRoute, none }
+
+/// Converts only terminal native-player return statuses into route actions.
+///
+/// Engine fallbacks, retries, errors, and completion remain owned by the main
+/// playback state machine; in particular, this function never asks playback
+/// to launch again.
+NativePlayerReturnNavigation nativePlayerReturnNavigationForStatus(
+  String status,
+) => switch (status) {
+  'stopped' || 'exit' => NativePlayerReturnNavigation.home,
+  'cancelled' => NativePlayerReturnNavigation.previousRoute,
+  _ => NativePlayerReturnNavigation.none,
+};
+
+/// Runs terminal-player cleanup without letting optional bookkeeping prevent
+/// the user from leaving playback. Each operation is isolated so one failed
+/// database or platform write does not suppress the remaining best-effort
+/// updates.
+Future<void> runBestEffortNativePlayerExitBookkeeping(
+  Iterable<Future<void> Function()> operations,
+) async {
+  for (final operation in operations) {
+    try {
+      await operation();
+    } catch (_) {
+      // Confirmed Exit must always retain its terminal navigation decision.
+    }
+  }
+}
+
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
 /// The actual video never enters a Flutter texture. Android Media3 owns a
@@ -168,20 +199,47 @@ class _NativeMedia3PlayerScreenState
           episodeNumber: _episodeNumber,
         );
         if (!mounted) return;
+        final returnNavigation = nativePlayerReturnNavigationForStatus(
+          result.status,
+        );
+        if (returnNavigation == NativePlayerReturnNavigation.home) {
+          // The native Activity is gone at this point, so do not leave its
+          // launch message visible while checkpoints are copied into Flutter's
+          // database. More importantly, a generic Navigator pop can close the
+          // application when playback was opened from a shallow/deep-link
+          // stack. "Exit video" always has one deterministic destination.
+          setState(() => _status = 'Closing video…');
+        }
         _startFromBeginning = false;
         _resumePosition = result.position < Duration.zero
             ? Duration.zero
             : result.position;
         _resumeUpdatedAt = DateTime.now();
-        await _persistResult(result);
-        await _syncResultIfThresholdReached(result);
-        if (result.firstFrameRendered) {
-          final profile = await AndroidTvBridge.instance.getDeviceProfile();
-          await ref
-              .read(tetoTvDatabaseProvider)
-              .recordPlayerSuccess(profile.key, 'media3');
+        if (returnNavigation == NativePlayerReturnNavigation.home) {
+          await runBestEffortNativePlayerExitBookkeeping([
+            () => _persistResult(result),
+            () => _syncResultIfThresholdReached(result),
+            () => _recordPlayerSuccess(result),
+          ]);
+        } else {
+          // Retries, fallbacks, completion, and cancellation preserve their
+          // existing strict bookkeeping/error behavior.
+          await _persistResult(result);
+          await _syncResultIfThresholdReached(result);
+          await _recordPlayerSuccess(result);
         }
         if (!mounted) return;
+
+        switch (returnNavigation) {
+          case NativePlayerReturnNavigation.home:
+            GoRouter.of(context).go('/');
+            return;
+          case NativePlayerReturnNavigation.previousRoute:
+            if (context.canPop()) context.pop();
+            return;
+          case NativePlayerReturnNavigation.none:
+            break;
+        }
 
         switch (result.status) {
           case 'completed':
@@ -241,8 +299,6 @@ class _NativeMedia3PlayerScreenState
                   'Return to the episode and reopen the stream before trying another player.';
             });
             return;
-          case 'exit':
-          case 'cancelled':
           default:
             if (context.canPop()) context.pop();
             return;
@@ -376,6 +432,14 @@ class _NativeMedia3PlayerScreenState
         duration: duration,
       );
     }
+  }
+
+  Future<void> _recordPlayerSuccess(NativePlaybackResult result) async {
+    if (!result.firstFrameRendered) return;
+    final profile = await AndroidTvBridge.instance.getDeviceProfile();
+    await ref
+        .read(tetoTvDatabaseProvider)
+        .recordPlayerSuccess(profile.key, 'media3');
   }
 
   Future<void> _syncResultIfThresholdReached(
