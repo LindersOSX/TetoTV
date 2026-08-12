@@ -45,6 +45,48 @@ void main() {
   });
 
   test(
+    'waits for a late English track before opening the audio picker',
+    () async {
+      const japaneseOnly = [
+        AudioTrack('1', 'Japanese', 'jpn', isDefault: true),
+      ];
+      const dualAudio = [
+        ...japaneseOnly,
+        AudioTrack('2', 'English Dub', 'eng', codec: 'aac'),
+      ];
+      var reads = 0;
+
+      final tracks = await waitForStableTrackSnapshot<List<AudioTrack>>(
+        read: () async => ++reads < 3 ? japaneseOnly : dualAudio,
+        signature: mediaKitAudioTrackSignature,
+        hasTracks: (tracks) => tracks.isNotEmpty,
+        pollInterval: const Duration(milliseconds: 1),
+        minimumWait: const Duration(milliseconds: 4),
+        maximumWait: const Duration(milliseconds: 12),
+      );
+
+      expect(tracks.map((track) => track.id), ['1', '2']);
+      expect(preferredDubAudioTrack(tracks)?.id, '2');
+    },
+  );
+
+  test('track signatures detect metadata and VLC list changes', () {
+    expect(
+      mediaKitAudioTrackSignature(const [AudioTrack('1', 'Japanese', 'jpn')]),
+      isNot(
+        mediaKitAudioTrackSignature(const [
+          AudioTrack('1', 'Japanese', 'jpn'),
+          AudioTrack('2', 'English', 'eng'),
+        ]),
+      ),
+    );
+    expect(
+      vlcAudioTrackSignature(const {1: 'Japanese'}),
+      isNot(vlcAudioTrackSignature(const {1: 'Japanese', 2: 'English'})),
+    );
+  });
+
+  test(
     'uses media_kit safe decoder selection for Android TV compatibility',
     () {
       expect(

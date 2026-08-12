@@ -8,6 +8,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
@@ -124,6 +125,7 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
 
 class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   VlcPlayerController? _controller;
+  late final TetoTvDatabase _database;
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
   final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
@@ -203,6 +205,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    _database = ref.read(tetoTvDatabaseProvider);
     _source = widget.source;
     _release = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
@@ -227,8 +230,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _captionBackgroundColor = appearance.captionBackgroundColor;
     final mediaId = widget.anilistMediaId;
     if (mediaId != null) {
-      final database = ref.read(tetoTvDatabaseProvider);
-      _preferences = await database.seriesPreferences(mediaId);
+      _preferences = await _database.seriesPreferences(mediaId);
       _subtitleSize = _preferences.subtitleSize == 34
           ? appearance.captionTextSize
           : _preferences.subtitleSize;
@@ -237,7 +239,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (_pendingResume == null &&
           !widget.launch.episode.startFromBeginning &&
           widget.episode != null) {
-        final checkpoint = await database.checkpoint(mediaId, widget.episode!);
+        final checkpoint = await _database.checkpoint(mediaId, widget.episode!);
         if (checkpoint != null &&
             !checkpoint.completed &&
             checkpoint.position > const Duration(seconds: 15) &&
@@ -447,8 +449,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             language: _preferences.audioLanguage,
             preferDub: true,
           );
-          if (audioId != null) await controller.setAudioTrack(audioId);
-          _audioPreferenceApplied = true;
+          if (audioId != null) {
+            await controller.setAudioTrack(audioId);
+            _audioPreferenceApplied = true;
+          }
         }
       }
       if (!_preferences.subtitleEnabled && !_subtitlePreferenceApplied) {
@@ -584,24 +588,22 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _recordEngineSuccess() async {
-    final database = ref.read(tetoTvDatabaseProvider);
     if (_currentStream.providerId case final providerId?) {
-      await database.recordProviderSuccess(providerId);
+      await _database.recordProviderSuccess(providerId);
       return;
     }
     final device = await AndroidTvBridge.instance.getDeviceProfile();
-    await database.recordPlayerSuccess(device.key, 'vlc');
+    await _database.recordPlayerSuccess(device.key, 'vlc');
   }
 
   Future<void> _recordEngineFailure(String reason) async {
-    final database = ref.read(tetoTvDatabaseProvider);
     if (_currentStream.providerId case final providerId?) {
-      await database.recordProviderFailure(providerId, reason);
+      await _database.recordProviderFailure(providerId, reason);
     } else {
       final device = await AndroidTvBridge.instance.getDeviceProfile();
-      await database.recordPlayerFailure(device.key, 'vlc');
+      await _database.recordPlayerFailure(device.key, 'vlc');
     }
-    await database.recordDiagnosticEvent(
+    await _database.recordDiagnosticEvent(
       category: 'player-vlc',
       message: reason,
     );
@@ -691,28 +693,29 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (controller == null || mediaId == null || episode == null) return;
     final duration = controller.value.duration;
     if (duration <= Duration.zero) return;
-    final now = DateTime.now();
+    var now = DateTime.now();
     if (!force &&
         now.difference(_lastCheckpointSave) < const Duration(seconds: 10)) {
       return;
     }
+    if (!now.isAfter(_lastCheckpointSave)) {
+      now = _lastCheckpointSave.add(const Duration(milliseconds: 1));
+    }
     _lastCheckpointSave = now;
     final completed = position.inMilliseconds / duration.inMilliseconds >= .93;
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveCheckpoint(
-          PlaybackCheckpoint(
-            anilistMediaId: mediaId,
-            malMediaId: widget.malMediaId,
-            episode: episode,
-            title: widget.launch.episode.title,
-            coverImageUrl: widget.coverImageUrl,
-            position: completed ? duration : position,
-            duration: duration,
-            updatedAt: now,
-            completed: completed,
-          ),
-        );
+    await _database.saveCheckpoint(
+      PlaybackCheckpoint(
+        anilistMediaId: mediaId,
+        malMediaId: widget.malMediaId,
+        episode: episode,
+        title: widget.launch.episode.title,
+        coverImageUrl: widget.coverImageUrl,
+        position: completed ? duration : position,
+        duration: duration,
+        updatedAt: now,
+        completed: completed,
+      ),
+    );
     if (force && mounted) ref.invalidate(recentPlaybackProvider);
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
@@ -963,15 +966,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     try {
-      var tracks = await controller.getAudioTracks();
-      for (var attempt = 0; tracks.isEmpty && attempt < 5; attempt++) {
-        await Future<void>.delayed(const Duration(milliseconds: 250));
-        if (!mounted) return;
-        tracks = await controller.getAudioTracks();
-      }
+      final tracks = await waitForStableTrackSnapshot<Map<int, String>>(
+        read: () async {
+          if (!mounted || controller != _controller) return const {};
+          return controller.getAudioTracks();
+        },
+        signature: vlcAudioTrackSignature,
+        hasTracks: (tracks) => tracks.keys.any((id) => id >= 0),
+      );
+      if (!mounted || controller != _controller) return;
       final ids = tracks.keys.where((id) => id >= 0).toList()..sort();
       if (ids.isEmpty) {
-        _showMessage('No alternate audio tracks');
+        _showMessage('This file has no selectable embedded audio tracks');
         return;
       }
       final current = await controller.getAudioTrack() ?? ids.first;
@@ -979,7 +985,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       _controlsTimer?.cancel();
       final selected = await showPlayerTrackPicker<int>(
         context: context,
-        title: 'Audio track',
+        title: ids.length == 1 ? 'Audio track (1 found)' : 'Audio tracks',
         icon: Icons.audiotrack_rounded,
         selectedValue: current,
         options: ids
@@ -1106,9 +1112,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       subtitleDelayMs: _subtitleDelayMs,
       audioDelayMs: _audioDelayMs,
     );
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .saveSeriesPreferences(mediaId, _preferences);
+    await _database.saveSeriesPreferences(mediaId, _preferences);
   }
 
   Future<void> _seekBy(Duration offset) async {

@@ -38,7 +38,7 @@ class MediaChapter {
 }
 
 class AniSkipClient {
-  AniSkipClient({Dio? dio})
+  AniSkipClient({Dio? dio, this.retryDelay = const Duration(milliseconds: 600)})
     : _dio =
           dio ??
           Dio(
@@ -50,6 +50,7 @@ class AniSkipClient {
           );
 
   final Dio _dio;
+  final Duration retryDelay;
 
   Future<List<SkipSegment>> segments({
     required int malMediaId,
@@ -66,7 +67,26 @@ class AniSkipClient {
       'types%5B%5D=mixed-ed&types%5B%5D=recap&'
       'episodeLength=$episodeLength',
     );
-    final response = await _dio.getUri<Map<String, dynamic>>(uri);
+    Response<Map<String, dynamic>>? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await _dio.getUri<Map<String, dynamic>>(uri);
+        break;
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        final retryable =
+            status == 429 ||
+            (status != null && status >= 500) ||
+            error.type == DioExceptionType.connectionError ||
+            error.type == DioExceptionType.connectionTimeout ||
+            error.type == DioExceptionType.receiveTimeout ||
+            error.type == DioExceptionType.sendTimeout ||
+            error.type == DioExceptionType.unknown;
+        if (!retryable || attempt == 1) rethrow;
+        await Future<void>.delayed(retryDelay);
+      }
+    }
+    if (response == null) return const [];
     final body = response.data;
     if (body == null || body['found'] != true || body['results'] is! List) {
       return const [];
@@ -175,10 +195,14 @@ SkipSegmentKind? _chapterKind(String title) {
       .toLowerCase()
       .replaceAll(RegExp(r'[_\-.]+'), ' ')
       .trim();
-  if (RegExp(r'(^|\b)(opening|op|intro)(\b|$)').hasMatch(normalized)) {
+  if (RegExp(
+    r'(^|\b)(opening|op|intro)(?:\s*\d+)?(\b|$)',
+  ).hasMatch(normalized)) {
     return SkipSegmentKind.opening;
   }
-  if (RegExp(r'(^|\b)(ending|ed|outro|credits)(\b|$)').hasMatch(normalized)) {
+  if (RegExp(
+    r'(^|\b)(ending|ed|outro|credits)(?:\s*\d+)?(\b|$)',
+  ).hasMatch(normalized)) {
     return SkipSegmentKind.ending;
   }
   if (RegExp(r'(^|\b)(recap|previously)(\b|$)').hasMatch(normalized)) {

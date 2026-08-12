@@ -3,6 +3,58 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('player disposal never reads a Riverpod ref after unmount', () {
+    final source = _read(
+      'lib/features/player/presentation/tv_player_screen.dart',
+    );
+    final router = _methodSlice(
+      source,
+      'class _TvPlayerScreenRouterState',
+      'enum _TvPlaybackEngine',
+    );
+    final routerDispose = _methodSlice(
+      router,
+      'void dispose()',
+      'Future<void> _loadDevicePreference',
+    );
+    expect(router, contains('_usageReporter = ref.read('));
+    expect(routerDispose, contains('_usageReporter?.setStreaming(false)'));
+    expect(routerDispose, isNot(contains('ref.')));
+    expect(
+      router,
+      contains('widget.malMediaId ?? _activeLaunch.episode.malMediaId'),
+    );
+    expect(router, contains('malMediaId: _malMediaId'));
+    expect(router, contains('anilistMediaId: _anilistMediaId'));
+
+    final player = _methodSlice(
+      source,
+      'class _MpvTvPlayerScreenState',
+      'class _UnifiedMpvPlayerChrome',
+    );
+    final savePreferences = _methodSlice(
+      player,
+      'Future<void> _saveSeriesPreferences',
+      'Future<void> _saveDecoderPreference',
+    );
+    final dispose = player.substring(player.lastIndexOf('void dispose()'));
+    expect(player, contains('_database = ref.read(tetoTvDatabaseProvider)'));
+    expect(
+      savePreferences,
+      contains('_database.saveSeriesPreferences(mediaId, _seriesPreferences)'),
+    );
+    expect(
+      savePreferences,
+      contains('if (mediaId == null || !_seriesPreferencesReady) return'),
+    );
+    expect(savePreferences, isNot(contains('ref.')));
+    expect(dispose, isNot(contains('ref.')));
+    expect(
+      dispose,
+      contains('if (!_engineHandoffInProgress && !_playerReleasedForHandoff)'),
+    );
+  });
+
   test('MPV completion, skip, and engine handoff remain single-owner', () {
     final source = _read(
       'lib/features/player/presentation/tv_player_screen.dart',
@@ -104,6 +156,17 @@ void main() {
     expect(source, contains('safeSkipSegmentTarget('));
     expect(source, contains("_showMessage('Could not skip this segment')"));
     expect(source, contains('_controllerReleasedForHandoff = true'));
+
+    final preferredTracks = _methodSlice(
+      source,
+      'Future<void> _applyPreferredTracks',
+      'void _scheduleTrackDiscoveryRetry',
+    );
+    _expectInOrder(preferredTracks, const [
+      'if (audioId != null)',
+      'await controller.setAudioTrack(audioId)',
+      '_audioPreferenceApplied = true',
+    ]);
 
     final prepare = _methodSlice(
       source,
