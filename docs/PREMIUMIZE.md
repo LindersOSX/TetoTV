@@ -12,10 +12,9 @@ application secret.
 
 ## Episode flow
 
-TetoTV first calls `/api/transfer/directdl` for an immediately available file
-list. When the transfer is not ready, it creates and polls a cloud transfer,
-then resolves the finished file or folder through the documented item/folder
-endpoints. It chooses the episode's matching video file and passes its HTTPS
-link to the same debrid-only player gate used by the other providers.
+TetoTV first calls `/api/cache/check`. It calls `/api/transfer/directdl` only
+for an item Premiumize reports as cached, chooses the matching episode file,
+and passes that HTTPS link to the debrid-only player gate. A cache miss never
+creates or polls a Premiumize cloud transfer.
 
 Official API documentation: <https://www.premiumize.me/api>.

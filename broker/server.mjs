@@ -203,14 +203,16 @@ function privacyPage(response) {
     response,
     200,
     `<h1>TetoTV privacy disclosure</h1>
-     <p><small>Effective August 10, 2026</small></p>
+     <p><small>Effective August 11, 2026</small></p>
      <p>TetoTV is an independent Android application. It has no advertising or analytics SDK, no TetoTV account system, and does not sell personal data.</p>
 
      <h2>Data kept on the device</h2>
      <p>Account and debrid credentials use Android Keystore-backed secure storage. Playback history, resume positions, preferences, tracker-sync entries, installed source definitions, bounded diagnostics, and device playback capabilities remain in app storage until removed in TetoTV, Android app storage is cleared, or the app is uninstalled.</p>
+     <p>TetoTV's <strong>Settings &gt; System &gt; Reset TetoTV</strong> action and Android's Clear storage action remove all TetoTV local data. The separate <strong>Clear cache</strong> action removes only temporary files and retains accounts, preferences, sources, and history.</p>
 
      <h2>Services selected by the user</h2>
      <p>Features the user chooses can send the minimum required requests to AniList, MAL, Kitsu, a selected debrid provider, AniSkip, artwork hosts, and source repositories or extensions the user explicitly installs. Those independent services receive ordinary connection metadata and apply their own terms and privacy policies. TetoTV does not bundle or recommend a streaming-source repository.</p>
+     <p>When a user explicitly links Discord and enables <strong>Discord Rich Presence</strong>, TetoTV sends Discord the current anime title, episode number, playing or paused state, and playback timing so Discord can display that activity. Discord OAuth access and refresh tokens are stored in Android Keystore-backed secure storage. Disabling Rich Presence stops sharing playback activity; unlinking Discord also revokes the connection when possible and deletes the saved tokens from TetoTV. TetoTV never asks for or stores the user's Discord password.</p>
 
      <h2>Pairing and update broker</h2>
      <p>OAuth pairing keeps one-time state, a device-code hash, PKCE data, and token material in process memory for at most ten minutes. A successful authenticated device poll deletes the complete pairing immediately.</p>
@@ -219,7 +221,7 @@ function privacyPage(response) {
      <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
 
      <h2>Anonymous live activity count</h2>
-     <p>When enabled in Settings, TetoTV creates a random per-launch token that is kept only in app and broker memory. It reports only whether that app session is active or currently playing video. It never reports the show, episode, account, device identifier, stream provider, or URL.</p>
+     <p>Anonymous live counting is disabled by default and requires an explicit choice during first-time setup or in Settings. When enabled, TetoTV creates a random per-launch token that is kept only in app and broker memory. It reports only whether that app session is active or currently playing video. It never reports the show, episode, account, device identifier, stream provider, or URL.</p>
      <p>Sessions expire after about three minutes without a heartbeat and are removed when the app opts out or closes normally. Only aggregate active and streaming counts are public. The hosting provider may process IP addresses for short-lived rate limiting and ordinary access logs.</p>
 
      <h2>Diagnostics and choices</h2>
@@ -229,7 +231,7 @@ function privacyPage(response) {
      <p>Network integrations require HTTPS and user-added endpoints are constrained against private or local network targets. TetoTV is not directed to children and does not knowingly collect a child's personal information. This disclosure will be updated when material features or hosting practices change.</p>
 
      <h2>Contact</h2>
-     <p>Privacy questions and deletion requests can be sent to the TetoTV maintainer through the <a href="https://github.com/LindersOSX/TetoTV">official TetoTV project page</a>.</p>`,
+     <p>Privacy questions, support requests, and deletion requests can be sent to the TetoTV maintainer through the public <a href="https://discord.gg/juC6k7d4WY">TetoTV Discord community</a>.</p>`,
     { title: "TetoTV privacy disclosure" },
   );
 }
@@ -2464,7 +2466,12 @@ server.listen(port, async () => {
           ?.includes("default-src 'none'") ||
         !privacyBody.includes("TetoTV privacy disclosure") ||
         !privacyBody.includes("at most ten minutes") ||
-        !privacyBody.includes("official TetoTV project page") ||
+        !privacyBody.includes("Effective August 11, 2026") ||
+        !privacyBody.includes("Reset TetoTV") ||
+        !privacyBody.includes("Clear cache") ||
+        !privacyBody.includes("Discord Rich Presence") ||
+        !privacyBody.includes("disabled by default") ||
+        !privacyBody.includes("https://discord.gg/juC6k7d4WY") ||
         !privacyBody.includes("Anonymous live activity count") ||
         privacyBody.includes(githubReleaseToken) ||
         health.source_pairing !== true ||

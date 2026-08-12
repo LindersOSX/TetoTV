@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
-    'reports cache progress then resolves the requested batch episode',
+    'resolves an instant cache hit without polling download progress',
     () async {
       final client = _FakeAllDebridClient();
       final release = ReleaseCandidate(
@@ -34,17 +34,9 @@ void main() {
           )
           .toList();
 
-      expect(states, hasLength(2));
+      expect(states, hasLength(1));
       expect(
-        states.first,
-        isA<StreamCaching>().having(
-          (state) => state.progress,
-          'progress',
-          closeTo(.5, .001),
-        ),
-      );
-      expect(
-        states.last,
+        states.single,
         isA<StreamReady>()
             .having(
               (state) => state.debridService,
@@ -53,6 +45,101 @@ void main() {
             )
             .having((state) => state.displayName, 'file', contains('02')),
       );
+      expect(client.statusCalls, 0);
+      expect(client.deletedIds, isEmpty);
+    },
+  );
+
+  test('deletes an uncached magnet immediately and never polls it', () async {
+    final client = _UncachedAllDebridClient();
+    final resolver = AllDebridStreamResolver(
+      client,
+      SingleReleaseSource(
+        const ReleaseCandidate(
+          infoHash: 'hash',
+          magnetUri: 'magnet:?xt=urn:btih:hash',
+          releaseName: 'Uncached',
+          seeders: 1,
+          sourceId: 'test',
+        ),
+      ),
+    );
+
+    await expectLater(
+      resolver
+          .resolve(
+            const EpisodeReference(
+              anilistMediaId: 1,
+              title: 'Show',
+              episode: 1,
+            ),
+          )
+          .drain<void>(),
+      throwsA(
+        isA<DebridCacheMissException>()
+            .having(
+              (error) => error.service,
+              'service',
+              DebridService.allDebrid,
+            )
+            .having(
+              (error) => error.toString(),
+              'message',
+              contains('stopped'),
+            ),
+      ),
+    );
+    expect(client.statusCalls, 0);
+    expect(client.filesCalls, 0);
+    expect(client.deletedIds, [42]);
+  });
+
+  test(
+    'an AllDebrid cleanup failure is terminal and names the dashboard',
+    () async {
+      final client = _UncachedAllDebridClient(failDelete: true);
+      final resolver = AllDebridStreamResolver(
+        client,
+        const SingleReleaseSource(
+          ReleaseCandidate(
+            infoHash: 'hash',
+            magnetUri: 'magnet:?xt=urn:btih:hash',
+            releaseName: 'Uncached',
+            seeders: 1,
+            sourceId: 'test',
+          ),
+        ),
+      );
+
+      await expectLater(
+        resolver
+            .resolve(
+              const EpisodeReference(
+                anilistMediaId: 1,
+                title: 'Show',
+                episode: 1,
+              ),
+            )
+            .drain<void>(),
+        throwsA(
+          isA<DebridCleanupFailureException>()
+              .having(
+                (error) => error.service,
+                'service',
+                DebridService.allDebrid,
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                allOf(
+                  contains('Automatic failover stopped'),
+                  contains('dashboard'),
+                ),
+              ),
+        ),
+      );
+      expect(client.deleteCalls, 1);
+      expect(client.deletedIds, isEmpty);
     },
   );
 
@@ -79,24 +166,34 @@ void main() {
 }
 
 class _FakeAllDebridClient extends AllDebridClient {
-  _FakeAllDebridClient() : super(token: 'test');
+  _FakeAllDebridClient({this.failDelete = false}) : super(token: 'test');
 
-  int _statusCalls = 0;
+  final bool failDelete;
+  int statusCalls = 0;
+  int deleteCalls = 0;
+  final List<int> deletedIds = [];
 
   @override
   Future<AllDebridMagnetUpload> uploadMagnet(String magnetUri) async =>
-      const AllDebridMagnetUpload(id: 42, ready: false);
+      const AllDebridMagnetUpload(id: 42, ready: true);
 
   @override
   Future<AllDebridMagnetStatus> magnetStatus(int id) async {
-    _statusCalls++;
+    statusCalls++;
     return AllDebridMagnetStatus(
       id: id,
-      status: _statusCalls == 1 ? 'Downloading' : 'Ready',
-      statusCode: _statusCalls == 1 ? 1 : 4,
-      downloaded: _statusCalls == 1 ? 100 : 200,
+      status: 'Ready',
+      statusCode: 4,
+      downloaded: 200,
       size: 200,
     );
+  }
+
+  @override
+  Future<void> deleteMagnet(int id) async {
+    deleteCalls++;
+    if (failDelete) throw StateError('cleanup unavailable');
+    deletedIds.add(id);
   }
 
   @override
@@ -116,4 +213,20 @@ class _FakeAllDebridClient extends AllDebridClient {
   @override
   Future<Uri> unlock(String link) async =>
       Uri.parse('https://cdn.alldebrid.test/02.mkv');
+}
+
+class _UncachedAllDebridClient extends _FakeAllDebridClient {
+  _UncachedAllDebridClient({super.failDelete});
+
+  int filesCalls = 0;
+
+  @override
+  Future<AllDebridMagnetUpload> uploadMagnet(String magnetUri) async =>
+      const AllDebridMagnetUpload(id: 42, ready: false);
+
+  @override
+  Future<List<AllDebridTorrentFile>> magnetFiles(int id) async {
+    filesCalls++;
+    return super.magnetFiles(id);
+  }
 }

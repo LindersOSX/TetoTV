@@ -18,6 +18,10 @@
 namespace {
 
 constexpr std::uint64_t kApplicationId = 1536801401710055474ULL;
+// This key must exactly match the Rich Presence asset configured for the
+// TetoTV Discord application. Android launcher resources are not uploaded to
+// Discord automatically.
+constexpr auto kAppIconAssetKey = "tetotv_app_icon";
 constexpr auto kCallbackInterval = std::chrono::milliseconds(16);
 
 JavaVM* g_vm = nullptr;
@@ -188,6 +192,11 @@ void publish_presence(const Presence& value) {
     activity.SetType(discordpp::ActivityTypes::Watching);
     activity.SetStatusDisplayType(discordpp::StatusDisplayTypes::Details);
     activity.SetDetails(value.title);
+
+    discordpp::ActivityAssets assets;
+    assets.SetLargeImage(std::string{kAppIconAssetKey});
+    assets.SetLargeText(std::string{"TetoTV"});
+    activity.SetAssets(std::move(assets));
 
     std::string state = value.episode > 0 ? "Episode " + std::to_string(value.episode) : "Watching";
     state += value.playing ? " - Playing" : " - Paused";

@@ -29,13 +29,19 @@ https://192.168.1.20/private.m3u8
     expect(variants.last.uri.host, 'video.example.com');
   });
 
-  test('variant results preserve provider headers and subtitles', () {
+  test('variant results keep same-origin headers and protect cross-origin', () {
     final variants = expandHlsResultVariants(
       {
         'url': 'https://cdn.example.com/show/master.m3u8',
         'title': 'Default / Auto',
         'quality': 'Auto',
-        'headers': {'Referer': 'https://provider.example/'},
+        'headers': {
+          'Referer': 'https://provider.example/',
+          'User-Agent': 'Fixture player',
+          'Authorization': 'Bearer master-secret',
+          'Cookie': 'session=master-secret',
+          'X-Api-Key': 'custom-master-secret',
+        },
         'subtitleUrl': 'https://cdn.example.com/subtitles/en.vtt',
       },
       master,
@@ -44,10 +50,23 @@ https://192.168.1.20/private.m3u8
 
     expect(variants.first['title'], 'Default / 2160p');
     expect(variants.first['quality'], '2160p');
-    expect(variants.first['headers'], {'Referer': 'https://provider.example/'});
+    expect(
+      variants.first['headers'],
+      containsPair('Authorization', 'Bearer master-secret'),
+    );
     expect(
       variants.first['subtitleUrl'],
       'https://cdn.example.com/subtitles/en.vtt',
     );
+
+    final crossOrigin = variants.singleWhere(
+      (variant) => Uri.parse('${variant['url']}').host == 'video.example.com',
+    );
+    final crossOriginHeaders = crossOrigin['headers'] as Map;
+    expect(crossOriginHeaders['Referer'], 'https://provider.example/');
+    expect(crossOriginHeaders['User-Agent'], 'Fixture player');
+    expect(crossOriginHeaders, isNot(contains('Authorization')));
+    expect(crossOriginHeaders, isNot(contains('Cookie')));
+    expect(crossOriginHeaders, isNot(contains('X-Api-Key')));
   });
 }

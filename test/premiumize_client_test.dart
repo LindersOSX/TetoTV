@@ -30,6 +30,12 @@ void main() {
                     },
                   ],
                 },
+                '/api/cache/check' => <String, dynamic>{
+                  'status': 'success',
+                  'response': [true],
+                  'filename': ['Show'],
+                  'filesize': ['200'],
+                },
                 '/api/transfer/create' => <String, dynamic>{
                   'status': 'success',
                   'id': 'transfer-1',
@@ -84,6 +90,7 @@ void main() {
       final client = PremiumizeClient(token: 'private-key', dio: dio);
 
       final account = await client.account();
+      final cached = await client.isCached('magnet:?xt=urn:btih:test');
       final direct = await client.directDownload('magnet:?xt=urn:btih:test');
       final created = await client.createTransfer('magnet:?xt=urn:btih:test');
       final transfers = await client.transfers();
@@ -93,6 +100,7 @@ void main() {
       expect(account.customerId, '12345');
       expect(account.isPremium, isTrue);
       expect(account.limitUsed, .25);
+      expect(cached, isTrue);
       expect(direct.single.name, 'Show/Episode 02.mkv');
       expect(created.id, 'transfer-1');
       expect(transfers.single.isReady, isTrue);

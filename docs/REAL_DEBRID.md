@@ -27,15 +27,19 @@ resolved by a supported debrid backend are rejected before MPV is created.
 3. `GET /torrents/info/{id}`;
 4. select an exact source-provided file index when supplied, or match the episode
    filename with `POST /torrents/selectFiles/{id}`;
-5. poll torrent info and emit progress;
-6. use the first selected file link after status becomes `downloaded`;
-7. `POST /unrestrict/link`;
-8. pass the returned HTTPS URL directly to the MPV player.
+5. immediately inspect the post-selection status;
+6. if it is queued/downloading/not promptly ready, delete the torrent and try
+   another release instead of waiting for a cloud download;
+7. use the selected file link only when status is already `downloaded`;
+8. `POST /unrestrict/link`;
+9. pass the returned HTTPS URL directly to the player.
 
-Cached torrents normally advance to `downloaded` quickly. Uncached torrents
-remain on the progress screen until Real-Debrid finishes or the resolver's
-timeout is reached. The removed/undocumented instant-availability endpoint is
-not used.
+Real-Debrid no longer documents a separate instant-availability preflight.
+Its supported file-selection call can briefly begin provider-side work, so
+TetoTV is accurately described as **cached-preferred**, not zero-download:
+it selects only the requested episode, checks immediately, and deletes any
+miss instead of waiting. A cleanup failure stops failover and tells the user
+to inspect the Real-Debrid dashboard. The undocumented endpoint is not used.
 
 TetoTV ships without a torrent index, source repository, or preconfigured
 Stremio add-on. A user may explicitly add a compatible HTTPS manifest in the

@@ -1,14 +1,20 @@
 import 'package:anime_tv/features/streaming/data/premiumize_models.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 
-class PremiumizeException implements Exception {
-  const PremiumizeException(this.message, {this.code});
+class PremiumizeException implements DebridProviderFailure {
+  const PremiumizeException(this.message, {this.code, this.category});
 
   final String message;
   final String? code;
+  final DebridFailureCategory? category;
+
+  @override
+  DebridFailureCategory get failureCategory =>
+      category ?? _premiumizeFailureCategory(code);
 
   bool get isAuthenticationFailure =>
-      code == 'authentication_failed' || code == 'permission_denied';
+      failureCategory == DebridFailureCategory.authorization;
 
   @override
   String toString() => message;
@@ -36,6 +42,12 @@ class PremiumizeClient {
   Future<PremiumizeAccount> account() async {
     final body = await _get('/api/account/info');
     return PremiumizeAccount.fromJson(body);
+  }
+
+  Future<bool> isCached(String source) async {
+    final body = await _post('/api/cache/check', {'items[]': source});
+    final response = body['response'];
+    return response is List && response.isNotEmpty && response.first == true;
   }
 
   Future<List<PremiumizeFile>> directDownload(String source) async {
@@ -159,14 +171,28 @@ class PremiumizeClient {
         throw const PremiumizeException(
           'That Premiumize API key is invalid or access was denied.',
           code: 'authentication_failed',
+          category: DebridFailureCategory.authorization,
+        );
+      }
+      if (error.response?.statusCode == 429) {
+        throw const PremiumizeException(
+          'Premiumize is receiving too many requests. Wait a moment and try '
+          'again.',
+          code: 'too_many_requests',
+          category: DebridFailureCategory.rateLimited,
         );
       }
       throw PremiumizeException(
         error.message ?? 'Could not reach Premiumize.',
         code: 'network_error',
+        category: DebridFailureCategory.serviceUnavailable,
       );
     } on FormatException catch (error) {
-      throw PremiumizeException(error.message, code: 'invalid_response');
+      throw PremiumizeException(
+        error.message,
+        code: 'invalid_response',
+        category: DebridFailureCategory.serviceUnavailable,
+      );
     }
   }
 }
@@ -180,4 +206,41 @@ PremiumizeException _apiError(Map<String, dynamic> body) {
     body['message']?.toString() ?? defaultMessage,
     code: code,
   );
+}
+
+DebridFailureCategory _premiumizeFailureCategory(String? rawCode) {
+  final code = rawCode?.trim().toLowerCase() ?? '';
+  if (const {
+    'authentication_failed',
+    'permission_denied',
+    'invalid_token',
+    'token_expired',
+  }.contains(code)) {
+    return DebridFailureCategory.authorization;
+  }
+  if (const {
+    'account_locked',
+    'account_not_premium',
+    'premium_required',
+    'fair_use_limit_reached',
+    'transfer_limit_reached',
+  }.contains(code)) {
+    return DebridFailureCategory.account;
+  }
+  if (const {
+    'rate_limited',
+    'rate_limit_exceeded',
+    'too_many_requests',
+  }.contains(code)) {
+    return DebridFailureCategory.rateLimited;
+  }
+  if (const {
+    'not_found',
+    'invalid_src',
+    'invalid_source',
+    'unsupported_source',
+  }.contains(code)) {
+    return DebridFailureCategory.releaseUnavailable;
+  }
+  return DebridFailureCategory.serviceUnavailable;
 }

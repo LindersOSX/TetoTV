@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 
 /// Describes whether retrying a different release can recover a failed
@@ -25,7 +26,7 @@ enum RealDebridFailureKind {
   unknown,
 }
 
-class RealDebridException implements Exception {
+class RealDebridException implements DebridProviderFailure {
   const RealDebridException(
     this.message, {
     this.code,
@@ -49,6 +50,17 @@ class RealDebridException implements Exception {
   /// Refused requests count against Real-Debrid limits, so transient, rate,
   /// account, authorization, and unknown failures must not fan out.
   bool get canTryAnotherRelease => isCandidateSpecific;
+
+  @override
+  DebridFailureCategory get failureCategory => switch (kind) {
+    RealDebridFailureKind.releaseUnavailable =>
+      DebridFailureCategory.releaseUnavailable,
+    RealDebridFailureKind.authorization => DebridFailureCategory.authorization,
+    RealDebridFailureKind.account => DebridFailureCategory.account,
+    RealDebridFailureKind.rateLimited => DebridFailureCategory.rateLimited,
+    RealDebridFailureKind.transient ||
+    RealDebridFailureKind.unknown => DebridFailureCategory.serviceUnavailable,
+  };
 
   factory RealDebridException.fromApi({required int? code, int? httpStatus}) {
     if (code != null) {
@@ -200,6 +212,18 @@ class RealDebridClient {
           contentType: Headers.formUrlEncodedContentType,
           validateStatus: (status) =>
               status != null && (status == 202 || status < 400),
+        ),
+      ),
+    );
+  }
+
+  Future<void> deleteTorrent(String id) async {
+    await _request<void>(
+      () => _dio.delete(
+        '/torrents/delete/$id',
+        options: Options(
+          validateStatus: (status) =>
+              status != null && (status == 204 || status == 404),
         ),
       ),
     );

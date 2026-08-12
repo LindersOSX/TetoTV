@@ -114,9 +114,15 @@ void main() {
     expect(media3, contains('playing = isPlaybackIntended()'));
   });
 
-  test('Media3 keeps an accessible progress touch target', () {
+  test('Media3 restores the prior read-only progress bar', () {
+    final flutterChrome = File(
+      'lib/features/player/presentation/teto_player_chrome.dart',
+    ).readAsStringSync();
     final nativeChrome = File(
       'android/app/src/main/res/layout/tetotv_player_controls.xml',
+    ).readAsStringSync();
+    final nativePlayer = File(
+      'android/app/src/main/res/layout/activity_media3_player.xml',
     ).readAsStringSync();
     final timeBar = RegExp(
       r'<androidx\.media3\.ui\.DefaultTimeBar[\s\S]*?/>',
@@ -129,6 +135,104 @@ void main() {
     expect(timeBar, contains('android:layout_marginTop="4dp"'));
     expect(timeBar, contains('app:bar_height="4dp"'));
     expect(timeBar, contains('app:touch_target_height="32dp"'));
+    expect(timeBar, contains('android:focusable="false"'));
+    expect(timeBar, contains('android:clickable="false"'));
+    expect(timeBar, contains('android:longClickable="false"'));
+    expect(timeBar, contains('android:importantForAccessibility="no"'));
+    expect(timeBar, contains('app:scrubber_disabled_size="0dp"'));
+    expect(timeBar, contains('app:scrubber_dragged_size="0dp"'));
+    expect(timeBar, contains('app:scrubber_enabled_size="0dp"'));
+    expect(nativePlayer, contains('app:time_bar_scrubbing_enabled="false"'));
+    expect(flutterChrome, isNot(contains('PlayerScrubController')));
+    expect(flutterChrome, isNot(contains('onSeek')));
+    expect(flutterChrome, isNot(contains('player-progress-scrubber')));
+  });
+
+  test('Media3 resource geometry and palette mirror the MPV master HUD', () {
+    final flutterChrome = File(
+      'lib/features/player/presentation/teto_player_chrome.dart',
+    ).readAsStringSync();
+    final nativeChrome = File(
+      'android/app/src/main/res/layout/tetotv_player_controls.xml',
+    ).readAsStringSync();
+    final nativeStyles = File(
+      'android/app/src/main/res/values/styles.xml',
+    ).readAsStringSync();
+    final card = File(
+      'android/app/src/main/res/drawable/'
+      'tetotv_player_card_background.xml',
+    ).readAsStringSync();
+    final badge = File(
+      'android/app/src/main/res/drawable/'
+      'tetotv_player_badge_background.xml',
+    ).readAsStringSync();
+    final normalControl = File(
+      'android/app/src/main/res/drawable/'
+      'tetotv_player_control_pill_background.xml',
+    ).readAsStringSync();
+    final primaryControl = File(
+      'android/app/src/main/res/drawable/'
+      'tetotv_player_control_primary_background.xml',
+    ).readAsStringSync();
+    final scrim = File(
+      'android/app/src/main/res/drawable/tetotv_player_controls_scrim.xml',
+    ).readAsStringSync();
+
+    // Lock the shared MPV/VLC source of truth first.
+    for (final token in [
+      'constraints: const BoxConstraints(maxWidth: 1280)',
+      'horizontalInset = compact ? 12.0 : 28.0',
+      'bottomInset = compact ? 10.0 : 24.0',
+      'color: const Color(0xD6080808)',
+      'height: 40',
+      'color: primary ? AppColors.accent : const Color(0x8F242429)',
+      'minHeight: compact ? 3 : 4',
+    ]) {
+      expect(flutterChrome, contains(token));
+    }
+
+    // Media3 keeps the same non-compact geometry and typography.
+    for (final token in [
+      'android:layout_marginStart="28dp"',
+      'android:layout_marginBottom="24dp"',
+      'android:paddingStart="18dp"',
+      'android:paddingTop="14dp"',
+      'android:paddingBottom="12dp"',
+      'android:textSize="24sp"',
+      'android:layout_height="40dp"',
+      'android:layout_marginTop="10dp"',
+      'app:bar_height="4dp"',
+      'app:played_color="#FFFF496A"',
+      'app:unplayed_color="#3DFFFFFF"',
+      'android:textColor="#FFB7AEB1"',
+    ]) {
+      expect(nativeChrome, contains(token));
+    }
+    expect(
+      RegExp(
+        r'<style name="TetoTVPlayerControlPill">[\s\S]*?'
+        r'<item name="android:layout_height">40dp</item>',
+      ).hasMatch(nativeStyles),
+      isTrue,
+    );
+    expect(
+      RegExp(
+        r'<style name="TetoTVPlayerControlIcon"[\s\S]*?'
+        r'<item name="android:layout_height">40dp</item>',
+      ).hasMatch(nativeStyles),
+      isTrue,
+    );
+    for (final token in ['#D6080808', '16dp', '1.4dp', '#C7E52B50']) {
+      expect(card, contains(token));
+    }
+    for (final token in ['#33E52B50', '#59E52B50']) {
+      expect(badge, contains(token));
+    }
+    expect(normalControl, contains('#8F242429'));
+    expect(normalControl, isNot(contains('#FF3A3A40')));
+    expect(primaryControl, contains('#FFE52B50'));
+    expect(scrim, contains('#00000000'));
+    expect(scrim, isNot(contains('<gradient')));
   });
 
   test('Media3 clearly disables unavailable engine track controls', () {
@@ -165,14 +269,14 @@ void main() {
     expect(
       RegExp(
         r'<style name="TetoTVPlayerControlPill">[\s\S]*?'
-        r'<item name="android:layout_height">44dp</item>',
+        r'<item name="android:layout_height">40dp</item>',
       ).hasMatch(nativeStyles),
       isTrue,
     );
     expect(
       RegExp(
         r'<style name="TetoTVPlayerControlIcon"[\s\S]*?'
-        r'<item name="android:layout_height">44dp</item>',
+        r'<item name="android:layout_height">40dp</item>',
       ).hasMatch(nativeStyles),
       isTrue,
     );

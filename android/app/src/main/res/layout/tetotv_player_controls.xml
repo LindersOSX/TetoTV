@@ -22,7 +22,7 @@
         android:shadowColor="#FF000000"
         android:shadowDx="0"
         android:shadowDy="2"
-        android:shadowRadius="8"
+        android:shadowRadius="12"
         android:textColor="@android:color/white"
         android:textSize="24sp"
         android:textStyle="bold"
@@ -42,7 +42,9 @@
         android:layout_marginEnd="28dp"
         android:layout_marginBottom="24dp"
         android:background="@drawable/tetotv_player_card_background"
+        android:elevation="10dp"
         android:layoutDirection="ltr"
+        android:outlineProvider="background"
         android:orientation="vertical"
         android:paddingStart="18dp"
         android:paddingTop="14dp"
@@ -61,11 +63,11 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:ellipsize="end"
-                android:fontFamily="sans"
+                android:fontFamily="sans-serif-black"
+                android:includeFontPadding="false"
                 android:maxLines="1"
                 android:textColor="@android:color/white"
-                android:textSize="21sp"
-                android:textStyle="bold" />
+                android:textSize="24sp" />
 
             <TextView
                 android:id="@+id/tetotv_engine_label"
@@ -316,19 +318,22 @@
             android:layout_width="match_parent"
             android:layout_height="32dp"
             android:layout_marginTop="4dp"
-            android:contentDescription="@string/tetotv_player_scrub_description"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:importantForAccessibility="yes"
+            android:clickable="false"
+            android:focusable="false"
+            android:importantForAccessibility="no"
+            android:longClickable="false"
             app:bar_height="4dp"
-            app:buffered_color="#99FFFFFF"
-            app:played_color="#FFFF425F"
-            app:scrubber_color="#FFFF425F"
-            app:scrubber_enabled_size="10dp"
+            app:buffered_color="#3DFFFFFF"
+            app:played_color="#FFFF496A"
+            app:scrubber_color="@android:color/transparent"
+            app:scrubber_disabled_size="0dp"
+            app:scrubber_dragged_size="0dp"
+            app:scrubber_enabled_size="0dp"
             app:touch_target_height="32dp"
             app:unplayed_color="#3DFFFFFF" />
 
         <LinearLayout
+            android:id="@+id/tetotv_time_footer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
@@ -347,7 +352,8 @@
                     android:id="@id/exo_position"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="sans"
+                    android:fontFamily="sans-serif"
+                    android:includeFontPadding="false"
                     android:textColor="@android:color/white"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -355,18 +361,22 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif"
+                    android:includeFontPadding="false"
                     android:paddingStart="5dp"
                     android:paddingEnd="5dp"
                     android:text="@string/tetotv_player_time_separator"
-                    android:textColor="#99FFFFFF"
-                    android:textSize="13sp" />
+                    android:textColor="@android:color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:id="@id/exo_duration"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="sans"
-                    android:textColor="#CCFFFFFF"
+                    android:fontFamily="sans-serif"
+                    android:includeFontPadding="false"
+                    android:textColor="@android:color/white"
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -381,7 +391,9 @@
                 android:gravity="end"
                 android:maxLines="1"
                 android:text="@string/tetotv_player_footer_hint"
-                android:textColor="#99FFFFFF"
+                android:fontFamily="sans-serif"
+                android:includeFontPadding="false"
+                android:textColor="#FFB7AEB1"
                 android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>

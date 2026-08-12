@@ -44,7 +44,5 @@
     <string name="tetotv_player_show_more_controls">Show more controls</string>
     <string name="tetotv_player_time_separator">/</string>
     <string name="tetotv_player_media3">Media3</string>
-    <string name="tetotv_player_footer_hint">Up to scrub  |  J/L seek  |  Menu/Y options</string>
-    <string name="tetotv_player_scrub_description">Playback progress. Press Up from the controls, use Left or Right to choose a time, Select to seek, or Back to cancel.</string>
-    <string name="tetotv_player_scrub_hint">Select to seek  |  Back to cancel</string>
+    <string name="tetotv_player_footer_hint">D-pad controls  |  J/L seek  |  Menu/Y options</string>
 </resources>

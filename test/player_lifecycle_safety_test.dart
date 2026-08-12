@@ -45,6 +45,56 @@ void main() {
       source,
       contains('if (!_engineHandoffInProgress && !_playerReleasedForHandoff)'),
     );
+    expect(
+      prepare,
+      contains('if (!released) {\n      _handoffAttemptActive = false;'),
+    );
+    expect(prepare, contains('_handoffReleaseFailed = true'));
+
+    final nextEpisode = _methodSlice(
+      source,
+      'Future<void> _playNextEpisode',
+      'Future<void> _syncProgress',
+    );
+    _expectInOrder(nextEpisode, const [
+      'await _prepareForEngineHandoff(completedPosition)',
+      'GoRouter.of(context).pushReplacement<void>(',
+      '_popPlayerRouteAfterHandoff(Navigator.of(context))',
+    ]);
+
+    final confirmExit = _methodSlice(
+      source,
+      'Future<void> _confirmExit',
+      '@override\n  void dispose',
+    );
+    _expectInOrder(confirmExit, const [
+      'await _player.pause()',
+      'exit = await showPlayerExitConfirmation(context)',
+      '_confirmingExit = false',
+      'final position = _effectiveHandoffPosition()',
+      'await _prepareForEngineHandoff(position)',
+      '_popPlayerRouteAfterHandoff(navigator)',
+    ]);
+    final returnToPicker = _methodSlice(
+      source,
+      'Future<void> _returnToStreamPicker',
+      'Future<void> _recordEngineSuccess',
+    );
+    _expectInOrder(returnToPicker, const [
+      'final position = _effectiveHandoffPosition()',
+      'await _prepareForEngineHandoff(position)',
+      '_popPlayerRouteAfterHandoff(navigator)',
+    ]);
+    final popAfterHandoff = _methodSlice(
+      source,
+      'void _popPlayerRouteAfterHandoff',
+      'Future<void> _recordEngineSuccess',
+    );
+    _expectInOrder(popAfterHandoff, const [
+      '_routePopScheduled = true',
+      'setState(() => _allowExit = true)',
+      'navigator.maybePop()',
+    ]);
   });
 
   test('VLC router and auto-next await decoder disposal', () {
@@ -67,9 +117,14 @@ void main() {
       'await _waitForControllerMutations()',
       'controller.removeListener(_onValueChanged)',
       'await controller.stop()',
-      'await controller.dispose()',
+      'await _disposeControllerAuthoritatively(controller)',
       '_controllerReleasedForHandoff = true',
     ]);
+    expect(
+      prepare,
+      contains('if (!released) {\n      _handoffAttemptActive = false;'),
+    );
+    expect(prepare, contains('_handoffReleaseFailed = true'));
 
     final handoff = _methodSlice(
       source,
@@ -88,7 +143,48 @@ void main() {
     );
     _expectInOrder(nextEpisode, const [
       'await _prepareForEngineHandoff(completedPosition)',
-      'context.pushReplacement(',
+      'GoRouter.of(context).pushReplacement<void>(',
+      '_popPlayerRouteAfterHandoff(Navigator.of(context))',
+    ]);
+    final restart = _methodSlice(
+      source,
+      'Future<void> _runRestart',
+      'Future<void> _trackControllerMutation',
+    );
+    expect(restart, contains('await _disposeControllerAuthoritatively(old)'));
+
+    final confirmExit = _methodSlice(
+      source,
+      'Future<void> _confirmExit',
+      '@override\n  void dispose',
+    );
+    _expectInOrder(confirmExit, const [
+      'await controller?.pause()',
+      'exit = await showPlayerExitConfirmation(context)',
+      '_confirmingExit = false',
+      'final position = _effectiveHandoffPosition()',
+      'await _prepareForEngineHandoff(position)',
+      '_popPlayerRouteAfterHandoff(navigator)',
+    ]);
+    final returnToPicker = _methodSlice(
+      source,
+      'Future<void> _returnToStreamPicker',
+      'Future<void> _syncProgress',
+    );
+    _expectInOrder(returnToPicker, const [
+      'final position = _effectiveHandoffPosition()',
+      'await _prepareForEngineHandoff(position)',
+      '_popPlayerRouteAfterHandoff(navigator)',
+    ]);
+    final popAfterHandoff = _methodSlice(
+      source,
+      'void _popPlayerRouteAfterHandoff',
+      'Future<void> _syncProgress',
+    );
+    _expectInOrder(popAfterHandoff, const [
+      '_routePopScheduled = true',
+      'setState(() => _allowExit = true)',
+      'navigator.maybePop()',
     ]);
   });
 
@@ -106,27 +202,33 @@ void main() {
     _expectInOrder(finish, const [
       'if (resultSent) return',
       'resultSent = true',
-      'setResult(RESULT_OK, result)',
       'releasePlaybackResources()',
+      'if (switchingEngine && !playbackResourcesReleased)',
+      'setResult(RESULT_OK, result)',
       'finish()',
     ]);
     expect(source, contains('if (playbackResourcesReleased) return'));
+    expect(
+      source,
+      contains('playerViewReleased = !::playerView.isInitialized'),
+    );
+    expect(source, contains('runCatching { player.release() }.isSuccess'));
+    expect(
+      source,
+      contains('playbackResourcesReleased = playerViewReleased &&'),
+    );
+    expect(source, contains('STATUS_RELEASE_FAILED'));
+    expect(source, contains('!playerCoreReleased && !resultSent'));
+    expect(source, contains('runCatching { player.pause() }'));
+    expect(source, contains('runCatching { player.play() }'));
+    expect(source, contains('updateSkipSegmentButtonPosition'));
     expect(source, contains('seekPastSkipSegment(active, announce = true)'));
     expect(source, contains('safeNativeSkipTargetMs(segment.endMs'));
-    expect(source, contains('if (!cancelDpadScrub()) showExitConfirmation()'));
-    expect(source, contains('dpadScrubRenderRunnable'));
-    expect(source, contains('playerView.controllerShowTimeoutMs = 0'));
-
-    final scrubKeys = _methodSlice(
-      source,
-      'private fun handleDpadScrubKey',
-      '/** Keyboard/gamepad shortcuts',
-    );
     expect(
-      scrubKeys,
-      isNot(contains('KeyEvent.KEYCODE_BACK')),
-      reason: 'Back must flow through OnBackPressedDispatcher on Android 16+',
+      source,
+      contains('override fun handleOnBackPressed() = showExitConfirmation()'),
     );
+    expect(source, isNot(contains('dpadScrub')));
 
     final nativeFlutterSource = _read(
       'lib/features/player/presentation/native_media3_player_screen.dart',

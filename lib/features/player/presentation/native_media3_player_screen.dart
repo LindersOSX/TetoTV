@@ -8,7 +8,6 @@ import 'package:anime_tv/features/player/presentation/player_control_overlay.dar
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
-import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -17,14 +16,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-/// Whether resolving another release would repeat a provider-wide failure.
-///
-/// Only release-specific Real-Debrid failures are candidate-local. Account,
-/// authorization, rate-limit, transient, and unknown provider failures cannot
-/// be repaired by selecting another torrent, so failover stops without
-/// multiplying refused requests.
+/// Backward-compatible name retained for tests and integrations that imported
+/// the original Media3 helper. All player engines now call the shared,
+/// provider-generic classifier in the streaming domain directly.
 bool isTerminalDebridAlternativeFailure(Object error) =>
-    error is RealDebridException && !error.canTryAnotherRelease;
+    isTerminalDebridFailoverFailure(error);
 
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
@@ -90,6 +86,7 @@ class _NativeMedia3PlayerScreenState
   bool _startFromBeginning = false;
   bool _syncHandled = false;
   bool _running = false;
+  bool _nativeReleaseFailed = false;
   String _status = 'Opening the native TV player…';
   String? _diagnostic;
 
@@ -234,6 +231,15 @@ class _NativeMedia3PlayerScreenState
             if (mounted) {
               widget.onUseMpv(_resumePosition, _currentStream, _release);
             }
+            return;
+          case 'release_failed':
+            setState(() {
+              _nativeReleaseFailed = true;
+              _status = 'The native player could not close safely';
+              _diagnostic =
+                  result.error ??
+                  'Return to the episode and reopen the stream before trying another player.';
+            });
             return;
           case 'exit':
           case 'cancelled':
@@ -442,7 +448,7 @@ class _NativeMedia3PlayerScreenState
       try {
         ready = await _resolveRelease(candidate);
       } catch (error) {
-        if (!isTerminalDebridAlternativeFailure(error)) {
+        if (!isTerminalDebridFailoverFailure(error)) {
           // This release failed independently. Keep walking the ranked list.
           continue;
         }
@@ -470,9 +476,21 @@ class _NativeMedia3PlayerScreenState
     final tokenService = ref.read(debridTokenServiceProvider);
     final debridService = widget.debridService;
     final episode = widget.launch.episode;
-    final token = await tokenService.accessToken(debridService);
+    String? token;
+    try {
+      token = await tokenService.accessToken(debridService);
+    } catch (_) {
+      throw DebridProviderAccessException(
+        debridService,
+        detail:
+            'Your ${debridService.displayName} connection could not be '
+            'refreshed. Reconnect it in Accounts, then try again.',
+      );
+    }
     if (!mounted) return null;
-    if (token == null || token.isEmpty) return null;
+    if (token == null || token.isEmpty) {
+      throw DebridProviderAccessException(debridService);
+    }
     final source = SingleReleaseSource(release);
     final resolver = createDebridStreamResolver(
       service: debridService,
@@ -601,46 +619,57 @@ class _NativeMedia3PlayerScreenState
                     spacing: 8,
                     runSpacing: 8,
                     alignment: WrapAlignment.center,
-                    children: [
-                      FilledButton.icon(
-                        autofocus: true,
-                        onPressed: _retryAfterFailure,
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('Retry stream'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _nextStreamAfterFailure,
-                        icon: const Icon(Icons.skip_next_rounded),
-                        label: const Text('Try another stream'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          if (context.canPop()) context.pop();
-                        },
-                        icon: const Icon(Icons.list_rounded),
-                        label: const Text('Choose stream'),
-                      ),
-                    ],
+                    children: _nativeReleaseFailed
+                        ? [
+                            FilledButton.icon(
+                              autofocus: true,
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.arrow_back_rounded),
+                              label: const Text('Back to episode'),
+                            ),
+                          ]
+                        : [
+                            FilledButton.icon(
+                              autofocus: true,
+                              onPressed: _retryAfterFailure,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('Retry stream'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _nextStreamAfterFailure,
+                              icon: const Icon(Icons.skip_next_rounded),
+                              label: const Text('Try another stream'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                if (context.canPop()) context.pop();
+                              },
+                              icon: const Icon(Icons.list_rounded),
+                              label: const Text('Choose stream'),
+                            ),
+                          ],
                   ),
                   const SizedBox(height: 10),
                 ],
-                OutlinedButton(
-                  onPressed: () => widget.onUseMpv(
-                    _resumePosition,
-                    _currentStream,
-                    _release,
+                if (!_nativeReleaseFailed) ...[
+                  OutlinedButton(
+                    onPressed: () => widget.onUseMpv(
+                      _resumePosition,
+                      _currentStream,
+                      _release,
+                    ),
+                    child: const Text('Use MPV compatibility player'),
                   ),
-                  child: const Text('Use MPV compatibility player'),
-                ),
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () => widget.onUseVlc(
-                    _resumePosition,
-                    _currentStream,
-                    _release,
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () => widget.onUseVlc(
+                      _resumePosition,
+                      _currentStream,
+                      _release,
+                    ),
+                    child: const Text('Use VLC software player'),
                   ),
-                  child: const Text('Use VLC software player'),
-                ),
+                ],
               ],
             ),
           ),

@@ -147,6 +147,94 @@ abstract interface class StreamResolver {
   Stream<StreamResolution> resolve(EpisodeReference episode);
 }
 
+/// Scope of a debrid failure for automatic candidate failover.
+///
+/// Only [releaseUnavailable] can be repaired by selecting a different
+/// torrent. Authentication, account, rate-limit, and provider-service errors
+/// apply to every candidate and must stop automatic fan-out.
+enum DebridFailureCategory {
+  releaseUnavailable,
+  authorization,
+  account,
+  rateLimited,
+  serviceUnavailable,
+}
+
+/// Implemented by provider exceptions that know whether another torrent can
+/// recover the request.
+abstract interface class DebridProviderFailure implements Exception {
+  DebridFailureCategory get failureCategory;
+}
+
+/// A missing, expired, or unrefreshable credential detected before a provider
+/// client is created. This keeps all four debrid services on the same terminal
+/// authorization path.
+class DebridProviderAccessException implements DebridProviderFailure {
+  const DebridProviderAccessException(this.service, {this.detail});
+
+  final DebridService service;
+  final String? detail;
+
+  @override
+  DebridFailureCategory get failureCategory =>
+      DebridFailureCategory.authorization;
+
+  @override
+  String toString() =>
+      detail ??
+      '${service.displayName} is not connected. Reconnect it in Accounts.';
+}
+
+/// The selected release is not available for immediate playback from the
+/// provider's cache. Resolvers use this shared failure so automatic failover
+/// and the final user message behave identically for every debrid service.
+class DebridCacheMissException implements Exception {
+  const DebridCacheMissException(this.service, {this.detail});
+
+  final DebridService service;
+  final String? detail;
+
+  @override
+  String toString() =>
+      detail ??
+      'This release is not instantly cached on ${service.displayName}. '
+          'TetoTV did not leave a cloud download running.';
+}
+
+/// Cleanup could not be confirmed after a debrid resolver created a
+/// temporary provider-side item.
+///
+/// This failure is terminal: trying another release could create more items
+/// while the first one may still be present in the user's account.
+class DebridCleanupFailureException implements Exception {
+  const DebridCleanupFailureException(this.service, {this.cause});
+
+  final DebridService service;
+  final Object? cause;
+
+  @override
+  String toString() =>
+      'TetoTV could not confirm that the temporary item was removed from '
+      '${service.displayName}. Automatic failover stopped to avoid adding '
+      'more items. Check your ${service.displayName} dashboard and remove '
+      'the item before trying again.';
+}
+
+bool isTerminalDebridCleanupFailure(Object error) =>
+    error is DebridCleanupFailureException;
+
+/// Whether retrying another torrent would only repeat a provider-wide error.
+///
+/// Cache misses and explicitly release-local provider errors remain eligible
+/// for failover. Unclassified non-provider errors retain the historic
+/// candidate-local behavior so a malformed release cannot block the list.
+bool isTerminalDebridFailoverFailure(Object error) {
+  if (isTerminalDebridCleanupFailure(error)) return true;
+  if (error is DebridCacheMissException) return false;
+  return error is DebridProviderFailure &&
+      error.failureCategory != DebridFailureCategory.releaseUnavailable;
+}
+
 class SingleReleaseSource implements ReleaseSource {
   const SingleReleaseSource(this.release);
 

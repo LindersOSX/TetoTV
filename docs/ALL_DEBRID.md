@@ -17,9 +17,12 @@ the saved key from the device.
 
 ## Episode flow
 
-For a release explicitly selected by the user, TetoTV uploads its magnet,
-polls `/v4.1/magnet/status`, obtains the ready file tree from
-`/v4/magnet/files`, chooses the matching video file, and unlocks only that
-file's link. Only the resulting HTTPS link is passed to the player.
+For a release explicitly selected by the user, TetoTV uploads its magnet and
+uses the documented `ready` response as the earliest cache signal. If it is
+not immediately ready, TetoTV deletes it and never polls for a cloud download.
+For a ready result it obtains `/v4/magnet/files`, chooses the matching episode,
+and unlocks only that file's link. Only the resulting HTTPS link reaches the
+player. Because upload is the provider's first supported cache signal, a miss
+may exist briefly before that immediate deletion.
 
 Official API documentation: <https://docs.alldebrid.com/>.

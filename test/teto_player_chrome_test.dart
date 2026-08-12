@@ -27,7 +27,6 @@ void main() {
             onRewind: () {},
             onPlayPause: () {},
             onForward: () {},
-            onSeek: (_) {},
             onAudio: () {},
             onSubtitles: () {},
             onCaptionSize: () {},
@@ -49,6 +48,16 @@ void main() {
     expect(find.text('Sources'), findsOneWidget);
     expect(find.text('Options'), findsOneWidget);
     expect(find.text('03:00  /  24:00'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.byType(Slider), findsNothing);
+    expect(
+      find.byKey(const ValueKey('player-progress-scrubber')),
+      findsNothing,
+    );
+    expect(
+      tester.getSize(find.widgetWithText(TetoPlayerControl, 'Back 10s')).height,
+      40,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -99,7 +108,6 @@ void main() {
             onRewind: () {},
             onPlayPause: () {},
             onForward: () {},
-            onSeek: (_) {},
             onAudio: () {},
             onSubtitles: () {},
             onCaptionSize: () {},
@@ -140,7 +148,6 @@ void main() {
             onRewind: () {},
             onPlayPause: () {},
             onForward: () {},
-            onSeek: (_) {},
             onAudio: () {},
             onSubtitles: () {},
             onCaptionSize: () {},
@@ -158,118 +165,5 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
 
     expect(dismissed, isTrue);
-  });
-
-  testWidgets('D-pad scrub previews, commits, and cancels without seeking', (
-    tester,
-  ) async {
-    final playFocus = FocusNode();
-    final scrubController = PlayerScrubController();
-    addTearDown(playFocus.dispose);
-    final seeks = <Duration>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TetoPlayerChrome(
-            engineKey: 'scrub',
-            title: 'Episode',
-            streamLabel: 'Stream',
-            position: const Duration(minutes: 3),
-            duration: const Duration(minutes: 24),
-            isPlaying: true,
-            playFocusNode: playFocus,
-            seekBackSeconds: 10,
-            seekForwardSeconds: 10,
-            onRewind: () {},
-            onPlayPause: () {},
-            onForward: () {},
-            onSeek: seeks.add,
-            onAudio: () {},
-            onSubtitles: () {},
-            onCaptionSize: () {},
-            onPicture: () {},
-            onFixVideo: () {},
-            onOptions: () {},
-            onDismiss: () {},
-            scrubController: scrubController,
-          ),
-        ),
-      ),
-    );
-    playFocus.requestFocus();
-    await tester.pump();
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    expect(scrubController.isActive, isTrue);
-    expect(find.text('Select to seek  |  Back to cancel'), findsOneWidget);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    expect(find.text('03:30  /  24:00'), findsOneWidget);
-    expect(seeks, isEmpty);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    expect(seeks, [const Duration(minutes: 3, seconds: 30)]);
-    expect(scrubController.isActive, isFalse);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    expect(seeks, hasLength(1));
-    expect(scrubController.isActive, isFalse);
-  });
-
-  testWidgets('touch drag previews progress and commits once on release', (
-    tester,
-  ) async {
-    final playFocus = FocusNode();
-    addTearDown(playFocus.dispose);
-    final seeks = <Duration>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TetoPlayerChrome(
-            engineKey: 'touch-scrub',
-            title: 'Episode',
-            streamLabel: 'Stream',
-            position: const Duration(minutes: 3),
-            duration: const Duration(minutes: 24),
-            isPlaying: true,
-            playFocusNode: playFocus,
-            seekBackSeconds: 10,
-            seekForwardSeconds: 10,
-            onRewind: () {},
-            onPlayPause: () {},
-            onForward: () {},
-            onSeek: seeks.add,
-            onAudio: () {},
-            onSubtitles: () {},
-            onCaptionSize: () {},
-            onPicture: () {},
-            onFixVideo: () {},
-            onOptions: () {},
-            onDismiss: () {},
-          ),
-        ),
-      ),
-    );
-
-    final progress = find.byKey(const ValueKey('player-progress-scrubber'));
-    final rect = tester.getRect(progress);
-    final gesture = await tester.startGesture(
-      Offset(rect.left + rect.width * .25, rect.center.dy),
-    );
-    await gesture.moveTo(Offset(rect.left + rect.width * .75, rect.center.dy));
-    await tester.pump();
-    expect(find.text('18:00  /  24:00'), findsOneWidget);
-    expect(seeks, isEmpty);
-
-    await gesture.up();
-    await tester.pump();
-    expect(seeks, [const Duration(minutes: 18)]);
   });
 }

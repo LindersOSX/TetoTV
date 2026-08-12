@@ -288,7 +288,7 @@ packages:
     source: hosted
     version: "7.4.4"
   flutter_vlc_player_platform_interface:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       path: flutter_vlc_player_platform_interface
       ref: "988a7e67140786fb5510c96e4cb415dbfd837944"

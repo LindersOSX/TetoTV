@@ -66,11 +66,15 @@ class WebProviderCancellation {
 }
 
 class SeanimeJavascriptProvider implements WebStreamingProvider {
-  const SeanimeJavascriptProvider(this.addon);
+  const SeanimeJavascriptProvider(
+    this.addon, {
+    this.validateResultTarget = validatePublicNetworkTarget,
+  });
 
   static Future<String>? _domRuntimeSource;
 
   final InstalledStreamingAddon addon;
+  final Future<void> Function(Uri uri) validateResultTarget;
 
   @override
   String get id => addon.manifest.id;
@@ -94,6 +98,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'id': addon.manifest.id,
         'name': addon.manifest.name,
         'payload': addon.payload,
+        'userConfig': addon.manifest.userConfigDefaults,
         'domRuntime': domRuntime,
         'title': episode.title,
         'titles': episode.alternativeTitles,
@@ -115,7 +120,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
       final known = publicHosts[uri.host];
       if (known != null) return known;
       try {
-        await validatePublicNetworkTarget(uri);
+        await validateResultTarget(uri);
         cancellation?.throwIfCancelled();
         publicHosts[uri.host] = true;
         return true;
@@ -246,6 +251,13 @@ List<Map<String, dynamic>> expandHlsResultVariants(
         'url': variant.uri.toString(),
         'quality': variant.quality,
         'title': _variantTitle(title, variant.quality),
+        // A master playlist may point directly at a different origin without
+        // an HTTP redirect. Apply the same allowlist used for cross-origin
+        // redirects so addon credentials and custom secrets never reach that
+        // variant host.
+        'headers': _sameOrigin(masterUri, variant.uri)
+            ? item['headers']
+            : sanitizeAddonHeaders(item['headers'], stripCredentials: true),
       },
   ];
 }
@@ -515,8 +527,11 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     stackSize: 512 * 1024,
   );
   var disposed = false;
+  final runtimeStartedAt = DateTime.now();
+  const runtimeNetworkWindow = Duration(seconds: 18);
   final completed = Completer<List<Map<String, dynamic>>>();
   final networkBudget = AddonRuntimeNetworkBudget();
+  final sleepTimers = <String, Timer>{};
 
   runtime.onMessage('TetoNetwork', (dynamic request) {
     unawaited(() async {
@@ -525,8 +540,18 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       try {
         await networkBudget.acquire();
         acquired = true;
+        final remaining =
+            runtimeNetworkWindow - DateTime.now().difference(runtimeStartedAt);
+        if (remaining <= Duration.zero) {
+          throw TimeoutException('Provider runtime deadline exceeded.');
+        }
+        const perRequestCeiling = Duration(seconds: 6);
+        final requestBudget = remaining < perRequestCeiling
+            ? remaining
+            : perRequestCeiling;
         final response = await _safeAddonRequest(
           request,
+          maximumOverallTimeout: requestBudget,
           cancellation: cancellation,
         );
         networkBudget.recordResponse('${response['body'] ?? ''}');
@@ -571,6 +596,29 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     }
     completed.complete(streams);
   });
+  runtime.onMessage('TetoSleep', (dynamic request) {
+    if (disposed || cancellation.isCancelled || request is! Map) return;
+    final id = '${request['id'] ?? ''}';
+    if (id.isEmpty || sleepTimers.containsKey(id)) return;
+    final remaining =
+        runtimeNetworkWindow - DateTime.now().difference(runtimeStartedAt);
+    final duration = addonSleepDuration(
+      request['milliseconds'],
+      remaining: remaining,
+    );
+    void finish() {
+      sleepTimers.remove(id);
+      if (disposed || cancellation.isCancelled) return;
+      runtime.evaluate('__tetoSleepFinish(${jsonEncode(id)});');
+      unawaited(runtime.dispatch());
+    }
+
+    if (duration <= Duration.zero) {
+      sleepTimers[id] = Timer(Duration.zero, finish);
+    } else {
+      sleepTimers[id] = Timer(duration, finish);
+    }
+  });
 
   try {
     cancellation.throwIfCancelled();
@@ -586,6 +634,13 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     final compatibility = runtime.evaluate(_seanimeCompatibilityBootstrap);
     if (compatibility.isError) throw StateError(compatibility.stringResult);
     cancellation.throwIfCancelled();
+    final preferences = runtime.evaluate(
+      'globalThis.__tetoUserPreferences = Object.freeze('
+      '${jsonEncode(input['userConfig'] ?? const <String, String>{})});',
+      sourceUrl: 'tetotv://provider-preferences.js',
+    );
+    if (preferences.isError) throw StateError(preferences.stringResult);
+    cancellation.throwIfCancelled();
     final payload = input['payload']! as String;
     final provider = runtime.evaluate(
       payload,
@@ -597,23 +652,43 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       (async function() {
         try {
           const provider = new Provider();
+          const providerCall = async callback => {
+            try {
+              return await callback();
+            } finally {
+              // `$sleep` is synchronous in Seanime's provider contract. Flush
+              // unawaited compatibility sleeps even when the provider method
+              // throws before the next fetch can observe the sleep barrier.
+              await __tetoAwaitSleeps();
+            }
+          };
           const settings = typeof provider.getSettings === 'function'
-            ? ((await provider.getSettings()) || {}) : {};
+            ? ((await providerCall(() => provider.getSettings())) || {}) : {};
           const titles = ${jsonEncode([input['title'], ...((input['titles'] as List?) ?? const [])])}
             .filter(Boolean).filter((title, index, all) =>
               all.findIndex(other => String(other).toLowerCase() === String(title).toLowerCase()) === index
             ).slice(0, 5);
           const episodeNumber = ${input['episode']};
+          // Match Seanime's documented provider contract exactly. Providers
+          // are allowed to branch on these sentinel values when catalog
+          // metadata is unavailable.
+          const releaseYear = ${input['year'] ?? 0};
           const media = {
             id: ${input['anilistId']},
-            idMal: ${input['malId'] ?? 'null'},
+            status: 'NOT_YET_RELEASED',
+            format: 'TV',
             englishTitle: titles[0] || '',
             romajiTitle: titles[1] || titles[0] || '',
             nativeTitle: titles[2] || '',
+            episodeCount: -1,
             synonyms: titles.slice(1),
-            startDate: {year: ${input['year'] ?? 'null'}, month: null, day: null},
-            seasonYear: ${input['year'] ?? 'null'},
+            isAdult: false,
           };
+          const malMediaId = ${input['malId'] ?? 'null'};
+          if (malMediaId != null) media.idMal = malMediaId;
+          if (releaseYear > 0) {
+            media.startDate = {year: releaseYear, month: null, day: null};
+          }
           const modes = settings.supportsDub ? [false, true] : [false];
           const output = [];
           const errors = [];
@@ -681,15 +756,18 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 const searchInput = {
                   query: title,
                   dub,
-                  year: ${input['year'] ?? 'null'},
+                  year: releaseYear,
                   media,
-                  opts: {dub, year: ${input['year'] ?? 'null'}, media},
+                  opts: {dub, year: releaseYear, media},
                 };
-                let rawMatches = await provider.search(searchInput);
+                let rawMatches = await providerCall(() => provider.search(searchInput));
                 let matches = listFrom(rawMatches, ['results', 'items', 'data']);
                 if (!matches.length) {
                   try {
-                    rawMatches = await provider.search(title, {dub, year: ${input['year'] ?? 'null'}, media});
+                    const legacyOptions = {dub, year: releaseYear, media};
+                    rawMatches = await providerCall(
+                      () => provider.search(title, legacyOptions)
+                    );
                     matches = listFrom(rawMatches, ['results', 'items', 'data']);
                   } catch (error) { errors.push(String(error && error.message || error)); }
                 }
@@ -708,8 +786,10 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             foundTitle = true;
             let episodes = [];
             try {
-              const rawEpisodes = await provider.findEpisodes(
-                selected.item.id || selected.item.url || selected.item.slug
+              const rawEpisodes = await providerCall(
+                () => provider.findEpisodes(
+                  selected.item.id || selected.item.url || selected.item.slug
+                )
               );
               episodes = listFrom(rawEpisodes, ['episodes', 'items', 'results']);
             } catch (error) {
@@ -730,14 +810,17 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (settings.supportsDub && dubbedServers.length) {
               servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(serverName(server)));
             }
-            // Resolve independent servers together. A dead mirror must not
-            // prevent a healthy mirror later in the provider's server list
-            // from being discovered before the provider deadline.
-            await Promise.all(servers.map(async server => {
+            // Providers commonly mutate instance headers/cookies while
+            // resolving a server. Resolve in manifest order on the one
+            // Provider instance so those stateful calls cannot race and so
+            // stream ordering remains deterministic.
+            for (const server of servers) {
               try {
                 let resolved = null;
                 try {
-                  resolved = await provider.findEpisodeServer(episode, serverValue(server));
+                  resolved = await providerCall(
+                    () => provider.findEpisodeServer(episode, serverValue(server))
+                  );
                 } catch (error) {
                   const message = String(error && error.message || error);
                   errors.push(message);
@@ -747,16 +830,18 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   // not repeated three times.
                   if (/argument|undefined|null|property|\\bid\\b|object/i.test(message)) {
                     try {
-                      resolved = await provider.findEpisodeServer(
-                        episode.id || episode.url || episode,
-                        serverValue(server),
+                      resolved = await providerCall(
+                        () => provider.findEpisodeServer(
+                          episode.id || episode.url || episode,
+                          serverValue(server),
+                        )
                       );
                     } catch (fallbackError) {
                       errors.push(String(fallbackError && fallbackError.message || fallbackError));
                     }
                   }
                 }
-                if (!resolved) return;
+                if (!resolved) continue;
                 const serverHeaders = resolved && resolved.headers && typeof resolved.headers === 'object'
                   ? resolved.headers : {};
                 let sources = listFrom(resolved, ['videoSources', 'sources', 'streams']);
@@ -791,7 +876,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   });
                 }
               } catch (error) { errors.push(String(error && error.message || error)); }
-            }));
+            }
           }
           if (!output.length) {
             const detail = errors.length ? ' Last error: ' + errors[errors.length - 1] : '';
@@ -815,6 +900,10 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     ]).timeout(const Duration(seconds: 18));
   } finally {
     disposed = true;
+    for (final timer in sleepTimers.values) {
+      timer.cancel();
+    }
+    sleepTimers.clear();
     runtime.dispose();
   }
 }
@@ -955,6 +1044,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
   Duration connectTimeout = const Duration(seconds: 6),
   Duration receiveTimeout = const Duration(seconds: 8),
   Duration? overallTimeout,
+  Duration? maximumOverallTimeout,
   int maximumResponseBytes = 2 * 1024 * 1024,
   WebProviderCancellation? cancellation,
 }) async {
@@ -968,17 +1058,51 @@ Future<Map<String, Object?>> _safeAddonRequest(
   await validatePublicNetworkTarget(currentUri);
   cancellation?.throwIfCancelled();
   final options = raw['options'] is Map ? raw['options'] as Map : const {};
+  final requestedTimeout = addonRequestTimeout(
+    options['timeout'],
+    maximum: maximumOverallTimeout ?? const Duration(seconds: 12),
+  );
+  final effectiveOverallTimeout = overallTimeout == null
+      ? requestedTimeout
+      : requestedTimeout < overallTimeout
+      ? requestedTimeout
+      : overallTimeout;
   final method = '${options['method'] ?? 'GET'}'.toUpperCase();
-  if (method != 'GET' && method != 'POST' && method != 'HEAD') {
+  if (!const {
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+    'HEAD',
+    'OPTIONS',
+  }.contains(method)) {
     throw const FormatException(
-      'Only GET, POST, and HEAD requests are permitted.',
+      'The provider request uses an unsupported HTTP method.',
     );
   }
-  var headers = sanitizeAddonHeaders(
-    options['headers'],
-    defaultUserAgent: 'TetoTV addon runtime',
+  final redirectMode = '${options['redirect'] ?? 'follow'}'.toLowerCase();
+  if (!const {'follow', 'manual', 'error'}.contains(redirectMode)) {
+    throw const FormatException('Invalid provider redirect mode.');
+  }
+  var headers = Map<String, String>.from(
+    sanitizeAddonHeaders(
+      options['headers'],
+      defaultUserAgent: 'TetoTV addon runtime',
+    ),
   );
-  var body = options['body'] == null ? null : '${options['body']}';
+  String? body;
+  final rawBody = options['body'];
+  if (rawBody != null) {
+    body = rawBody is String ? rawBody : jsonEncode(rawBody);
+    if (rawBody is! String &&
+        !headers.keys.any(
+          (key) => key.toLowerCase() == HttpHeaders.contentTypeHeader,
+        )) {
+      headers[HttpHeaders.contentTypeHeader] = 'application/json';
+    }
+  }
+  headers = Map.unmodifiable(headers);
   if (body != null && utf8.encode(body).length > 128 * 1024) {
     throw const FormatException('Provider request body is too large.');
   }
@@ -995,17 +1119,16 @@ Future<Map<String, Object?>> _safeAddonRequest(
   final removeCancellationListener = cancellation?.addListener(
     () => cancelToken.cancel(const WebProviderSearchCancelled()),
   );
-  final overallDeadline = overallTimeout == null
-      ? null
-      : Timer(
-          overallTimeout,
-          () => cancelToken.cancel('Provider request deadline exceeded.'),
-        );
+  final overallDeadline = Timer(
+    effectiveOverallTimeout,
+    () => cancelToken.cancel('Provider request deadline exceeded.'),
+  );
   Response<ResponseBody>? response;
   String responseText = '';
   var currentMethod = method;
+  var redirected = false;
   try {
-    for (var redirect = 0; redirect < 4; redirect++) {
+    for (var redirect = 0; ; redirect++) {
       cancellation?.throwIfCancelled();
       response = await dio.request<ResponseBody>(
         currentUri.toString(),
@@ -1023,7 +1146,16 @@ Future<Map<String, Object?>> _safeAddonRequest(
       );
       final status = response.statusCode ?? 0;
       final location = response.headers.value(HttpHeaders.locationHeader);
-      if (status < 300 || status >= 400 || location == null) break;
+      if (!_isAddonRedirectStatus(status) || location == null) break;
+      if (redirectMode == 'manual') break;
+      if (redirectMode == 'error') {
+        throw const HttpException(
+          'Provider request received a redirect in error mode.',
+        );
+      }
+      if (redirect >= 4) {
+        throw const HttpException('Provider request exceeded redirect limit.');
+      }
       final redirectUri = safePublicHttpsUri(
         currentUri.resolve(location).toString(),
       );
@@ -1037,35 +1169,171 @@ Future<Map<String, Object?>> _safeAddonRequest(
           stripCredentials: true,
         );
       }
-      if (status == 303 ||
+      if ((status == 303 &&
+              currentMethod != 'GET' &&
+              currentMethod != 'HEAD') ||
           ((status == 301 || status == 302) && currentMethod == 'POST')) {
         currentMethod = 'GET';
         body = null;
+        headers = Map.unmodifiable(
+          Map<String, String>.from(headers)..removeWhere(
+            (key, _) => key.toLowerCase() == HttpHeaders.contentTypeHeader,
+          ),
+        );
       }
       currentUri = redirectUri;
+      redirected = true;
       await validatePublicNetworkTarget(currentUri);
       cancellation?.throwIfCancelled();
     }
   } finally {
-    overallDeadline?.cancel();
+    overallDeadline.cancel();
     removeCancellationListener?.call();
     dio.close(force: true);
   }
-  if (response == null) throw const HttpException('No provider response.');
+  final rawResponseHeaders = sanitizeAddonResponseHeaders(response.headers.map);
+  final responseHeaders = Map<String, String>.unmodifiable({
+    for (final entry in rawResponseHeaders.entries)
+      if (entry.value.isNotEmpty) entry.key: entry.value.first,
+  });
+  final declaredLength = int.tryParse(
+    response.headers.value(HttpHeaders.contentLengthHeader) ?? '',
+  );
   return {
     'status': response.statusCode ?? 0,
     'statusText': response.statusMessage ?? '',
-    'url': response.realUri.toString(),
+    'method': currentMethod,
+    'url': currentUri.toString(),
+    'ok': (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
+    'redirected': redirected,
+    'contentType': response.headers.value(HttpHeaders.contentTypeHeader) ?? '',
+    'contentLength': declaredLength ?? utf8.encode(responseText).length,
     'body': responseText,
     // HLS expansion must reuse the post-redirect header set. In particular,
     // credentials supplied for one origin cannot follow a master-playlist
     // redirect and then leak to that other origin's variant URLs.
     'requestHeaders': headers,
-    'headers': sanitizeAddonHeaders({
-      for (final entry in response.headers.map.entries)
-        entry.key: entry.value.join(', '),
-    }),
+    'headers': responseHeaders,
+    'rawHeaders': rawResponseHeaders,
+    'cookies': _addonResponseCookies(response.headers),
   };
+}
+
+/// Seanime FetchOptions.timeout is expressed in seconds. Keep every request
+/// inside both its requested budget and TetoTV's remaining provider deadline.
+Duration addonRequestTimeout(
+  Object? raw, {
+  Duration maximum = const Duration(seconds: 12),
+}) {
+  final numeric = raw is num ? raw.toDouble() : double.tryParse('$raw');
+  final requested = numeric != null && numeric.isFinite && numeric > 0
+      ? Duration(milliseconds: (numeric * 1000).round())
+      : maximum;
+  const minimum = Duration(milliseconds: 100);
+  if (maximum <= Duration.zero) return minimum;
+  if (requested < minimum) return minimum < maximum ? minimum : maximum;
+  return requested > maximum ? maximum : requested;
+}
+
+/// Seanime's `$sleep(milliseconds)` is synchronous from a provider author's
+/// perspective, but TetoTV implements it as a host-backed promise barrier so a
+/// sleeping addon does not block cancellation or the Dart isolate. Individual
+/// waits are clamped while the aggregate provider runtime remains protected by
+/// its normal deadline.
+Duration addonSleepDuration(
+  Object? raw, {
+  required Duration remaining,
+  Duration maximum = const Duration(seconds: 1),
+}) {
+  final numeric = raw is num ? raw.toDouble() : double.tryParse('$raw');
+  if (numeric == null || !numeric.isFinite || numeric <= 0) {
+    return Duration.zero;
+  }
+  if (remaining <= Duration.zero || maximum <= Duration.zero) {
+    return Duration.zero;
+  }
+  final requested = Duration(milliseconds: numeric.ceil());
+  final bounded = requested > maximum ? maximum : requested;
+  return bounded > remaining ? remaining : bounded;
+}
+
+bool _isAddonRedirectStatus(int status) =>
+    status == 301 ||
+    status == 302 ||
+    status == 303 ||
+    status == 307 ||
+    status == 308;
+
+/// Bounds response metadata before it crosses from an untrusted server into
+/// the provider VM. Multiple values remain separate to match Seanime's
+/// `rawHeaders` contract; [FetchResponse.headers] uses the first value.
+Map<String, List<String>> sanitizeAddonResponseHeaders(
+  Object? raw, {
+  int maximumValueLength = 4096,
+}) {
+  if (raw is! Map) return const {};
+  final result = <String, List<String>>{};
+  final seen = <String>{};
+  var totalLength = 0;
+  for (final entry in raw.entries.take(48)) {
+    final key = '${entry.key}'.trim();
+    final lower = key.toLowerCase();
+    if (key.isEmpty ||
+        key.length > 80 ||
+        !RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$").hasMatch(key) ||
+        seen.contains(lower)) {
+      continue;
+    }
+    final sourceValues = entry.value is Iterable
+        ? (entry.value as Iterable)
+        : [entry.value];
+    final values = <String>[];
+    for (final rawValue in sourceValues.take(16)) {
+      final value = '$rawValue'.trim();
+      if (value.length > maximumValueLength ||
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(value)) {
+        continue;
+      }
+      totalLength += key.length + value.length;
+      if (totalLength > 32 * 1024) break;
+      values.add(value);
+    }
+    if (values.isEmpty) continue;
+    seen.add(lower);
+    result[key] = List.unmodifiable(values);
+    if (totalLength > 32 * 1024) break;
+  }
+  return Map.unmodifiable(result);
+}
+
+Map<String, String> _addonResponseCookies(Headers headers) {
+  return parseAddonResponseCookies(
+    headers.map[HttpHeaders.setCookieHeader] ?? const [],
+  );
+}
+
+/// Parses only bounded, syntactically safe cookie name/value pairs. Cookie
+/// attributes stay out of the provider-facing record, matching Seanime.
+Map<String, String> parseAddonResponseCookies(Iterable<String> values) {
+  final result = <String, String>{};
+  for (final raw in values) {
+    if (result.length >= 64) break;
+    if (raw.length > 8192) continue;
+    try {
+      final cookie = Cookie.fromSetCookieValue(raw);
+      if (cookie.name.isEmpty ||
+          cookie.name.length > 256 ||
+          !RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$").hasMatch(cookie.name) ||
+          cookie.value.length > 4096 ||
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(cookie.value)) {
+        continue;
+      }
+      result[cookie.name] = cookie.value;
+    } on FormatException {
+      // Ignore a malformed cookie without hiding the otherwise valid response.
+    }
+  }
+  return Map.unmodifiable(result);
 }
 
 Future<String> _boundedResponseText(
@@ -1093,7 +1361,11 @@ String _safeError(Object error) {
 const _networkBootstrap = r'''
   const __tetoPending = Object.create(null);
   let __tetoRequestId = 0;
-  function fetch(url, options) {
+  async function fetch(url, options) {
+    // Official Seanime providers call `$sleep(ms)` without awaiting it. Treat
+    // those calls as a barrier before the next request so rate-limit pacing is
+    // preserved without synchronously blocking QuickJS.
+    if (typeof __tetoAwaitSleeps === 'function') await __tetoAwaitSleeps();
     return new Promise((resolve, reject) => {
       const id = String(++__tetoRequestId);
       __tetoPending[id] = {resolve, reject};
@@ -1105,19 +1377,49 @@ const _networkBootstrap = r'''
       sendMessage('TetoNetwork', JSON.stringify({id, url: requestUrl, options: options || {}}));
     });
   }
+  function __tetoCreateFetchResponse(response) {
+    const headers = Object.assign({}, response.headers || {});
+    const headerValue = name => {
+      const target = String(name).toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === target) return headers[key];
+      }
+      return null;
+    };
+    // Preserve Seanime's plain header record while remaining friendly to
+    // providers written against the browser Headers API.
+    Object.defineProperty(headers, 'get', {
+      configurable: true,
+      enumerable: false,
+      value: headerValue,
+    });
+    const body = String(response.body || '');
+    let parsedJson = null;
+    try { parsedJson = body ? JSON.parse(body) : null; } catch (_) {}
+    return {
+      ok: response.ok === true || (response.status >= 200 && response.status < 300),
+      status: response.status,
+      statusText: String(response.statusText || ''),
+      method: String(response.method || 'GET'),
+      rawHeaders: Object.assign({}, response.rawHeaders || {}),
+      url: String(response.url || ''),
+      headers,
+      cookies: Object.assign({}, response.cookies || {}),
+      redirected: response.redirected === true,
+      contentType: String(response.contentType || headerValue('content-type') || ''),
+      contentLength: Number(response.contentLength || 0),
+      body,
+      // Seanime's extension FetchResponse intentionally exposes synchronous
+      // body readers. `await response.text()` still works because awaiting a
+      // non-Promise value is valid JavaScript.
+      text: () => body,
+      json: () => parsedJson,
+    };
+  }
   function __tetoNetworkFinish(id, response) {
     const pending = __tetoPending[id]; if (!pending) return;
     delete __tetoPending[id];
-    const headers = response.headers || {};
-    pending.resolve({
-      ok: response.status >= 200 && response.status < 300,
-      status: response.status,
-      statusText: response.statusText,
-      url: response.url,
-      headers: {get: name => headers[String(name).toLowerCase()] || headers[String(name)] || null},
-      text: () => Promise.resolve(response.body || ''),
-      json: () => Promise.resolve(JSON.parse(response.body || 'null')),
-    });
+    pending.resolve(__tetoCreateFetchResponse(response));
   }
   function __tetoNetworkFail(id, message) {
     const pending = __tetoPending[id]; if (!pending) return;
@@ -1161,29 +1463,146 @@ const _seanimeCompatibilityBootstrap = r'''
     }
   }
 
+  // Seanime exposes a small Node-compatible Buffer surface to providers.
+  // Some marketplace extensions keep this as their base64 fallback even when
+  // `atob` is available, so provide the same byte-indexable result and UTF-8
+  // decoding behavior without importing Node's much larger runtime.
+  if (typeof Buffer === 'undefined') {
+    globalThis.Buffer = class Buffer extends Uint8Array {
+      static from(value, encoding) {
+        if (typeof value === 'string') {
+          const normalized = String(encoding || 'utf8').toLowerCase().replace(/[-_]/g, '');
+          if (normalized === 'base64') {
+            const decoded = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
+            const bytes = new Buffer(decoded.length);
+            for (let index = 0; index < decoded.length; index++) {
+              bytes[index] = decoded.charCodeAt(index) & 255;
+            }
+            return bytes;
+          }
+          if (normalized === 'hex') {
+            const clean = value.replace(/[^0-9a-f]/gi, '');
+            const bytes = new Buffer(Math.floor(clean.length / 2));
+            for (let index = 0; index < bytes.length; index++) {
+              bytes[index] = parseInt(clean.slice(index * 2, index * 2 + 2), 16);
+            }
+            return bytes;
+          }
+          const encoded = unescape(encodeURIComponent(value));
+          const bytes = new Buffer(encoded.length);
+          for (let index = 0; index < encoded.length; index++) {
+            bytes[index] = encoded.charCodeAt(index) & 255;
+          }
+          return bytes;
+        }
+        if (value instanceof ArrayBuffer) return new Buffer(new Uint8Array(value));
+        if (ArrayBuffer.isView(value)) {
+          return new Buffer(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+        }
+        return new Buffer(value == null ? 0 : value);
+      }
+
+      static alloc(size, fill) {
+        const bytes = new Buffer(Math.max(0, Number(size) || 0));
+        if (fill != null) bytes.fill(typeof fill === 'number' ? fill : String(fill).charCodeAt(0));
+        return bytes;
+      }
+
+      equals(other) {
+        if (!other || this.length !== other.length) return false;
+        for (let index = 0; index < this.length; index++) {
+          if (this[index] !== other[index]) return false;
+        }
+        return true;
+      }
+
+      toString(encoding) {
+        const normalized = String(encoding || 'utf8').toLowerCase().replace(/[-_]/g, '');
+        if (normalized === 'base64') {
+          let binary = '';
+          for (let index = 0; index < this.length; index++) binary += String.fromCharCode(this[index]);
+          return btoa(binary);
+        }
+        if (normalized === 'hex') {
+          return Array.from(this).map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+        let escaped = '';
+        for (let index = 0; index < this.length; index++) {
+          escaped += '%' + this[index].toString(16).padStart(2, '0');
+        }
+        try { return decodeURIComponent(escaped); } catch (_) {
+          return Array.from(this).map(byte => String.fromCharCode(byte)).join('');
+        }
+      }
+    };
+    // Avoid class-field syntax because the packaged QuickJS engine supports a
+    // wider range of extension payloads than it does newer JavaScript syntax.
+    globalThis.Buffer.poolSize = 8192;
+  }
+
+  // Seanime's CryptoJS encoder contract returns byte-indexable data. The
+  // bundled CryptoJS implementation returns its native WordArray instead.
+  // Decorate that same object rather than replacing it with a plain array so
+  // existing CryptoJS AES/encoder calls retain `words`, `sigBytes`, and all
+  // WordArray methods while providers can safely use `.length` and `[index]`.
+  if (typeof CryptoJS !== 'undefined' && CryptoJS.enc && CryptoJS.enc.Base64 &&
+      !CryptoJS.enc.Base64.__tetoByteCompatible) {
+    const originalBase64Parse = CryptoJS.enc.Base64.parse;
+    CryptoJS.enc.Base64.parse = function(input) {
+      const wordArray = originalBase64Parse.call(this, String(input || ''));
+      const length = Math.max(0, Number(wordArray.sigBytes) || 0);
+      Object.defineProperty(wordArray, 'length', {
+        value: length, writable: false, configurable: true, enumerable: false,
+      });
+      for (let index = 0; index < length; index++) {
+        Object.defineProperty(wordArray, index, {
+          value: (wordArray.words[index >>> 2] >>> (24 - (index % 4) * 8)) & 255,
+          writable: false,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+      return wordArray;
+    };
+    Object.defineProperty(CryptoJS.enc.Base64, '__tetoByteCompatible', {
+      value: true, enumerable: false,
+    });
+  }
+
   if (typeof URLSearchParams === 'undefined') {
     globalThis.URLSearchParams = class URLSearchParams {
-      constructor(input) {
+      constructor(input, onChange) {
         this.pairs = [];
+        this.onChange = typeof onChange === 'function' ? onChange : function() {};
         if (typeof input === 'string') {
           String(input).replace(/^\?/, '').split('&').forEach(part => {
             if (!part) return;
             const split = part.indexOf('=');
-            this.append(
-              decodeURIComponent(split < 0 ? part : part.slice(0, split)),
-              decodeURIComponent(split < 0 ? '' : part.slice(split + 1))
-            );
+            const decode = value => decodeURIComponent(String(value).replace(/\+/g, ' '));
+            this.pairs.push([
+              decode(split < 0 ? part : part.slice(0, split)),
+              decode(split < 0 ? '' : part.slice(split + 1)),
+            ]);
           });
         } else if (Array.isArray(input)) {
-          input.forEach(entry => this.append(entry[0], entry[1]));
+          input.forEach(entry => this.pairs.push([String(entry[0]), String(entry[1])]));
         } else if (input && typeof input === 'object') {
-          Object.keys(input).forEach(key => this.append(key, input[key]));
+          Object.keys(input).forEach(key => this.pairs.push([String(key), String(input[key])]));
         }
       }
-      append(key, value) { this.pairs.push([String(key), String(value)]); }
+      changed() { this.onChange(this.toString()); }
+      append(key, value) { this.pairs.push([String(key), String(value)]); this.changed(); }
       set(key, value) {
-        this.delete(key);
-        this.append(key, value);
+        const target = String(key);
+        const next = [];
+        let replaced = false;
+        this.pairs.forEach(entry => {
+          if (entry[0] !== target) next.push(entry);
+          else if (!replaced) { next.push([target, String(value)]); replaced = true; }
+        });
+        if (!replaced) next.push([target, String(value)]);
+        this.pairs = next;
+        this.changed();
       }
       get(key) {
         const item = this.pairs.find(entry => entry[0] === String(key));
@@ -1193,11 +1612,13 @@ const _seanimeCompatibilityBootstrap = r'''
         return this.pairs.filter(entry => entry[0] === String(key)).map(entry => entry[1]);
       }
       has(key) { return this.pairs.some(entry => entry[0] === String(key)); }
-      delete(key) { this.pairs = this.pairs.filter(entry => entry[0] !== String(key)); }
+      delete(key) { this.pairs = this.pairs.filter(entry => entry[0] !== String(key)); this.changed(); }
+      sort() { this.pairs.sort((left, right) => left[0].localeCompare(right[0])); this.changed(); }
       forEach(callback) { this.pairs.forEach(entry => callback(entry[1], entry[0], this)); }
       entries() { return this.pairs[Symbol.iterator](); }
       keys() { return this.pairs.map(entry => entry[0])[Symbol.iterator](); }
       values() { return this.pairs.map(entry => entry[1])[Symbol.iterator](); }
+      [Symbol.iterator]() { return this.entries(); }
       toString() {
         return this.pairs.map(entry => encodeURIComponent(entry[0]) + '=' + encodeURIComponent(entry[1])).join('&');
       }
@@ -1208,29 +1629,65 @@ const _seanimeCompatibilityBootstrap = r'''
     globalThis.URL = class URL {
       constructor(value, base) {
         const input = String(value || '');
-        this.href = /^https?:\/\//i.test(input)
-          ? input
-          : String(base || '').replace(/\/$/, '') + '/' + input.replace(/^\//, '');
-        const match = /^(https?):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i.exec(this.href) || [];
+        let absolute = input;
+        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(absolute)) {
+          const baseMatch = /^([a-z][a-z0-9+.-]*:)\/\/([^/?#]+)([^?#]*)(?:\?[^#]*)?(?:#.*)?$/i.exec(String(base || ''));
+          if (!baseMatch) throw new TypeError('Invalid URL');
+          const origin = baseMatch[1] + '//' + baseMatch[2];
+          if (absolute.startsWith('//')) absolute = baseMatch[1] + absolute;
+          else if (absolute.startsWith('/')) absolute = origin + absolute;
+          else if (absolute.startsWith('?') || absolute.startsWith('#')) {
+            absolute = origin + (baseMatch[3] || '/') + absolute;
+          } else {
+            const directory = (baseMatch[3] || '/').replace(/[^/]*$/, '');
+            absolute = origin + directory + absolute;
+          }
+        }
+        const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i.exec(absolute);
+        if (!match) throw new TypeError('Invalid URL');
         this.protocol = match[1] ? match[1] + ':' : '';
         this.host = match[2] || '';
-        this.hostname = this.host.split(':')[0];
+        this.hostname = this.host.replace(/^\[|\]$/g, '').split(':')[0];
+        this.port = this.host.includes(':') ? this.host.split(':').pop() : '';
         this.origin = this.protocol && this.host ? this.protocol + '//' + this.host : '';
-        this.pathname = match[3] || '/';
+        const path = (match[3] || '/').split('/').reduce((parts, part) => {
+          if (part === '..') parts.pop();
+          else if (part !== '.') parts.push(part);
+          return parts;
+        }, []).join('/');
+        this.pathname = path.startsWith('/') ? path : '/' + path;
         this.search = match[4] ? '?' + match[4] : '';
         this.hash = match[5] ? '#' + match[5] : '';
-        this.searchParams = new URLSearchParams(match[4] || '');
+        this.sync = () => {
+          this.href = this.origin + this.pathname + this.search + this.hash;
+        };
+        this.searchParams = new URLSearchParams(match[4] || '', query => {
+          this.search = query ? '?' + query : '';
+          this.sync();
+        });
+        this.sync();
       }
       toString() { return this.href; }
+      toJSON() { return this.href; }
     };
   }
 
   function __tetoElements(value) {
     if (value == null) return [];
+    if (Array.isArray(value.__tetoNodes)) return value.__tetoNodes.slice();
     if (Array.isArray(value)) return value.filter(Boolean);
     if (typeof value === 'string') return Array.from(__tetoParseDocument(value).children || []);
     if (typeof value.length === 'number' && !value.nodeType) return Array.from(value).filter(Boolean);
     return [value];
+  }
+
+  function __tetoUnique(values) {
+    return values.filter((value, index, all) => value && all.indexOf(value) === index);
+  }
+
+  function __tetoMatches(node, selector) {
+    if (!node || node.nodeType !== 1 || typeof node.matches !== 'function') return false;
+    try { return node.matches(String(selector || '*')); } catch (_) { return false; }
   }
 
   function __tetoSelect(root, selector) {
@@ -1248,43 +1705,165 @@ const _seanimeCompatibilityBootstrap = r'''
       : results.filter(node => String(node.textContent || '').includes(contains));
   }
 
-  function __tetoSelection(value) {
-    const elements = __tetoElements(value);
-    function selection(selector) {
-      if (selector == null) return selection;
-      return __tetoSelection(elements.flatMap(node => __tetoSelect(node, selector)));
-    }
-    selection.length = elements.length;
-    elements.forEach((node, index) => { selection[index] = node; });
+  function __tetoSelection(value, previous) {
+    const elements = __tetoUnique(__tetoElements(value));
+    const selection = {};
+    Object.defineProperty(selection, '__tetoNodes', {value: elements, enumerable: false});
+    Object.defineProperty(selection, '__tetoPrevious', {value: previous || null, enumerable: false});
+    elements.forEach((node, index) => {
+      Object.defineProperty(selection, index, {value: node, enumerable: false});
+    });
     selection.toArray = () => elements.slice();
     selection.get = index => index == null ? elements.slice() : elements[index < 0 ? elements.length + index : index];
-    selection.eq = index => __tetoSelection(selection.get(index));
+    selection.length = () => elements.length;
+    selection.eq = index => __tetoSelection(selection.get(index), selection);
     selection.first = () => selection.eq(0);
     selection.last = () => selection.eq(-1);
     selection.each = callback => {
-      elements.forEach((node, index) => callback.call(node, index, node));
+      elements.forEach((node, index) => {
+        const item = __tetoSelection(node, selection);
+        callback.call(item, index, item);
+      });
       return selection;
     };
-    selection.map = callback => ({
-      get: () => elements.map((node, index) => callback.call(node, index, node)),
-      toArray: () => elements.map((node, index) => callback.call(node, index, node)),
+    selection.map = callback => elements.map((node, index) => {
+      const item = __tetoSelection(node, selection);
+      return callback.call(item, index, item);
     });
     selection.text = () => elements.map(node => node.textContent || '').join('');
-    selection.html = () => elements[0] ? elements[0].innerHTML || '' : '';
-    selection.attr = name => elements[0] && elements[0].getAttribute ? elements[0].getAttribute(name) : undefined;
-    selection.data = name => selection.attr('data-' + String(name).replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()));
+    selection.html = () => elements[0] ? (elements[0].innerHTML ?? null) : null;
+    selection.attr = name => {
+      if (!elements[0] || typeof elements[0].getAttribute !== 'function') return undefined;
+      const value = elements[0].getAttribute(name);
+      return value == null ? undefined : value;
+    };
+    selection.attrs = () => {
+      const result = {};
+      Array.from((elements[0] && elements[0].attributes) || []).forEach(attribute => {
+        result[attribute.name] = attribute.value;
+      });
+      return result;
+    };
+    selection.data = name => {
+      if (name != null) {
+        return selection.attr('data-' + String(name).replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()));
+      }
+      const result = {};
+      Object.keys(selection.attrs()).filter(key => key.startsWith('data-')).forEach(key => {
+        result[key] = selection.attrs()[key];
+      });
+      return result;
+    };
     selection.val = () => elements[0] ? elements[0].value : undefined;
     selection.hasClass = name => !!(elements[0] && elements[0].classList && elements[0].classList.contains(name));
-    selection.find = selector => __tetoSelection(elements.flatMap(node => __tetoSelect(node, selector)));
+    selection.find = selector => __tetoSelection(
+      elements.flatMap(node => __tetoSelect(node, selector)), selection
+    );
     selection.children = selector => {
       const children = elements.flatMap(node => Array.from(node.children || []));
-      if (!selector) return __tetoSelection(children);
-      return __tetoSelection(children.filter(node => node.matches && node.matches(selector)));
+      return __tetoSelection(
+        selector ? children.filter(node => __tetoMatches(node, selector)) : children,
+        selection,
+      );
     };
-    selection.parent = () => __tetoSelection(elements.map(node => node.parentElement));
-    selection.next = () => __tetoSelection(elements.map(node => node.nextElementSibling));
-    selection.prev = () => __tetoSelection(elements.map(node => node.previousElementSibling));
-    selection.filter = selector => __tetoSelection(elements.filter(node => node.matches && node.matches(selector)));
+    selection.contents = () => __tetoSelection(
+      elements.flatMap(node => Array.from(node.childNodes || [])), selection
+    );
+    selection.contentsFiltered = selector => String(selector || '')
+      ? selection.children(selector)
+      : selection.contents();
+    selection.parent = selector => {
+      const parents = elements.map(node => node.parentElement).filter(Boolean);
+      return __tetoSelection(
+        selector ? parents.filter(node => __tetoMatches(node, selector)) : parents,
+        selection,
+      );
+    };
+    selection.parents = selector => {
+      const parents = [];
+      elements.forEach(node => {
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (!selector || __tetoMatches(parent, selector)) parents.push(parent);
+        }
+      });
+      return __tetoSelection(parents, selection);
+    };
+    selection.parentsUntil = (selector, until) => {
+      const parents = [];
+      elements.forEach(node => {
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (__tetoMatches(parent, until || selector)) break;
+          if (!until || __tetoMatches(parent, selector)) parents.push(parent);
+        }
+      });
+      return __tetoSelection(parents, selection);
+    };
+    selection.closest = selector => {
+      const matches = [];
+      if (!selector) return __tetoSelection(matches, selection);
+      elements.forEach(node => {
+        for (let current = node; current; current = current.parentElement) {
+          if (__tetoMatches(current, selector)) { matches.push(current); break; }
+        }
+      });
+      return __tetoSelection(matches, selection);
+    };
+    selection.filter = selector => __tetoSelection(elements.filter((node, index) =>
+      typeof selector === 'function'
+        ? !!selector(index, __tetoSelection(node, selection))
+        : __tetoMatches(node, selector)
+    ), selection);
+    selection.not = selector => __tetoSelection(elements.filter((node, index) =>
+      typeof selector === 'function'
+        ? !selector(index, __tetoSelection(node, selection))
+        : !__tetoMatches(node, selector)
+    ), selection);
+    selection.is = selector => elements.some((node, index) =>
+      typeof selector === 'function'
+        ? !!selector(index, __tetoSelection(node, selection))
+        : __tetoMatches(node, selector)
+    );
+    selection.has = selector => __tetoSelection(elements.filter(node =>
+      __tetoSelect(node, selector).length > 0
+    ), selection);
+    const sibling = (direction, selector) => {
+      const values = elements.map(node => node[direction]).filter(Boolean);
+      return __tetoSelection(
+        selector ? values.filter(node => __tetoMatches(node, selector)) : values,
+        selection,
+      );
+    };
+    const siblingAll = (direction, selector, until) => {
+      const values = [];
+      elements.forEach(node => {
+        for (let current = node[direction]; current; current = current[direction]) {
+          if (until && __tetoMatches(current, until)) break;
+          if (!selector || __tetoMatches(current, selector)) values.push(current);
+        }
+      });
+      return __tetoSelection(values, selection);
+    };
+    selection.next = selector => sibling('nextElementSibling', selector);
+    selection.prev = selector => sibling('previousElementSibling', selector);
+    selection.nextAll = selector => siblingAll('nextElementSibling', selector);
+    selection.prevAll = selector => siblingAll('previousElementSibling', selector);
+    selection.nextUntil = (selector, until) => siblingAll(
+      'nextElementSibling', until ? selector : null, until || selector
+    );
+    selection.prevUntil = (selector, until) => siblingAll(
+      'previousElementSibling', until ? selector : null, until || selector
+    );
+    selection.siblings = selector => {
+      const values = elements.flatMap(node =>
+        Array.from((node.parentElement && node.parentElement.children) || [])
+          .filter(sibling => sibling !== node)
+      );
+      return __tetoSelection(
+        selector ? values.filter(node => __tetoMatches(node, selector)) : values,
+        selection,
+      );
+    };
+    selection.end = () => previous || __tetoSelection([]);
     return selection;
   }
 
@@ -1299,6 +1878,21 @@ const _seanimeCompatibilityBootstrap = r'''
     return loaded;
   }
 
+  globalThis.Doc = class Doc {
+    constructor(source) {
+      const document = __tetoParseDocument(String(source || ''));
+      return __tetoSelection(document.documentElement || document);
+    }
+  };
+
+  globalThis.__isOffline__ = false;
+  globalThis.$getUserPreference = key => {
+    const preferences = globalThis.__tetoUserPreferences || {};
+    const name = String(key || '');
+    return Object.prototype.hasOwnProperty.call(preferences, name)
+      ? preferences[name]
+      : undefined;
+  };
   async function _makeRequest(url, options) {
     const response = await fetch(url, options || {});
     const body = await response.text();
@@ -1306,7 +1900,35 @@ const _seanimeCompatibilityBootstrap = r'''
     return {status: response.status, headers: response.headers, body, data: body, text: body, url: response.url};
   }
 
-  async function $sleep() {}
+  const __tetoPendingSleeps = Object.create(null);
+  let __tetoSleepId = 0;
+  let __tetoSleepTail = Promise.resolve();
+  function $sleep(milliseconds) {
+    const numeric = Number(milliseconds);
+    if (!Number.isFinite(numeric) || numeric <= 0) return __tetoSleepTail;
+    const wait = __tetoSleepTail.then(() => new Promise(resolve => {
+      const id = String(++__tetoSleepId);
+      __tetoPendingSleeps[id] = resolve;
+      sendMessage('TetoSleep', JSON.stringify({id, milliseconds: numeric}));
+    }));
+    // Keep the shared barrier fulfilled even if a future bridge implementation
+    // chooses to reject an individual wait.
+    __tetoSleepTail = wait.catch(() => {});
+    return wait;
+  }
+  function __tetoSleepFinish(id) {
+    const resolve = __tetoPendingSleeps[id];
+    if (!resolve) return;
+    delete __tetoPendingSleeps[id];
+    resolve();
+  }
+  async function __tetoAwaitSleeps() {
+    let pending;
+    do {
+      pending = __tetoSleepTail;
+      await pending;
+    } while (pending !== __tetoSleepTail);
+  }
 
   function normalizeQuery(value) {
     return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')

@@ -1,11 +1,17 @@
 import 'package:anime_tv/features/streaming/data/torbox_models.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 
-class TorBoxException implements Exception {
-  const TorBoxException(this.message, {this.code});
+class TorBoxException implements DebridProviderFailure {
+  const TorBoxException(this.message, {this.code, this.category});
 
   final String message;
   final String? code;
+  final DebridFailureCategory? category;
+
+  @override
+  DebridFailureCategory get failureCategory =>
+      category ?? _torBoxFailureCategory(code);
 
   @override
   String toString() => message;
@@ -36,7 +42,10 @@ class TorBoxClient {
     return TorBoxAccount.fromJson(_dataMap(body));
   }
 
-  Future<int> createTorrent(String magnetUri) async {
+  Future<int> createTorrent(
+    String magnetUri, {
+    required bool addOnlyIfCached,
+  }) async {
     final body = await _request(
       () => _dio.post<Map<String, dynamic>>(
         '/torrents/createtorrent',
@@ -44,6 +53,7 @@ class TorBoxClient {
           'magnet': magnetUri,
           'seed': 1,
           'allow_zip': false,
+          'add_only_if_cached': addOnlyIfCached,
         }),
       ),
     );
@@ -54,6 +64,33 @@ class TorBoxClient {
       );
     }
     return torrentId;
+  }
+
+  Future<bool> isTorrentCached(String infoHash) async {
+    final normalized = infoHash.trim().toLowerCase();
+    if (!RegExp(r'^[a-f0-9]{40}$').hasMatch(normalized)) {
+      throw const TorBoxException(
+        'The torrent source returned an invalid torrent hash.',
+        code: 'INVALID_HASH',
+        category: DebridFailureCategory.releaseUnavailable,
+      );
+    }
+    final body = await _get(
+      '/torrents/checkcached',
+      query: {'hash': normalized, 'format': 'object', 'list_files': false},
+    );
+    final data = body['data'];
+    if (data == null) return false;
+    if (data is List) return data.isNotEmpty;
+    if (data is Map) {
+      if (data.isEmpty) return false;
+      for (final entry in data.entries) {
+        if (entry.key.toString().toLowerCase() == normalized) {
+          return entry.value != null && entry.value != false;
+        }
+      }
+    }
+    return false;
   }
 
   Future<TorBoxTorrent> torrentInfo(
@@ -69,7 +106,10 @@ class TorBoxClient {
       final Map<String, dynamic> value => value,
       final List<dynamic> values when values.isNotEmpty =>
         values.first as Map<String, dynamic>,
-      _ => throw const TorBoxException('TorBox torrent was not found.'),
+      _ => throw const TorBoxException(
+        'TorBox torrent was not found.',
+        category: DebridFailureCategory.releaseUnavailable,
+      ),
     };
     return TorBoxTorrent.fromJson(item);
   }
@@ -93,9 +133,20 @@ class TorBoxClient {
     if (value is! String || !value.startsWith('https://')) {
       throw const TorBoxException(
         'TorBox did not return a secure streaming link.',
+        category: DebridFailureCategory.releaseUnavailable,
       );
     }
     return Uri.parse(value);
+  }
+
+  Future<void> deleteTorrent(int torrentId) async {
+    await _request(
+      () => _dio.post<Map<String, dynamic>>(
+        '/torrents/controltorrent',
+        data: {'torrent_id': torrentId, 'operation': 'delete'},
+        options: Options(contentType: Headers.jsonContentType),
+      ),
+    );
   }
 
   Future<Map<String, dynamic>> _get(
@@ -135,6 +186,7 @@ class TorBoxClient {
         throw const TorBoxException(
           'That TorBox API token is invalid or API access is unavailable.',
           code: 'AUTH_ERROR',
+          category: DebridFailureCategory.authorization,
         );
       }
       throw TorBoxException(
@@ -157,3 +209,50 @@ int _asInt(Object? value) => switch (value) {
   final String text => int.tryParse(text) ?? 0,
   _ => 0,
 };
+
+DebridFailureCategory _torBoxFailureCategory(String? rawCode) {
+  final code = rawCode?.trim().toUpperCase() ?? '';
+  final status = int.tryParse(code);
+  if (status == 401 || status == 403) {
+    return DebridFailureCategory.authorization;
+  }
+  if (status == 402) return DebridFailureCategory.account;
+  if (status == 429) return DebridFailureCategory.rateLimited;
+
+  if (const {
+    'AUTH_ERROR',
+    'BAD_TOKEN',
+    'INVALID_TOKEN',
+    'TOKEN_EXPIRED',
+    'API_KEY_INVALID',
+  }.contains(code)) {
+    return DebridFailureCategory.authorization;
+  }
+  if (const {
+    'ACTIVE_LIMIT',
+    'DOWNLOAD_LIMIT_REACHED',
+    'MONTHLY_LIMIT_REACHED',
+    'NO_SPACE',
+    'ACCOUNT_DISABLED',
+    'SUBSCRIPTION_REQUIRED',
+  }.contains(code)) {
+    return DebridFailureCategory.account;
+  }
+  if (const {
+    'RATE_LIMITED',
+    'RATE_LIMIT_EXCEEDED',
+    'TOO_MANY_REQUESTS',
+  }.contains(code)) {
+    return DebridFailureCategory.rateLimited;
+  }
+  if (const {
+    'DOWNLOAD_NOT_CACHED',
+    'INVALID_HASH',
+    'INVALID_TORRENT',
+    'TORRENT_NOT_FOUND',
+    'NO_PLAYABLE_FILES',
+  }.contains(code)) {
+    return DebridFailureCategory.releaseUnavailable;
+  }
+  return DebridFailureCategory.serviceUnavailable;
+}

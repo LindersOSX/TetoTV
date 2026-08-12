@@ -75,6 +75,12 @@ class RealDebridTorrentInfo {
 
   bool get isDownloaded => status == 'downloaded';
   bool get needsFileSelection => status == 'waiting_files_selection';
+  bool get isDownloadActivity => const {
+    'queued',
+    'downloading',
+    'compressing',
+    'uploading',
+  }.contains(status);
   bool get hasFailed =>
       const {'magnet_error', 'error', 'virus', 'dead'}.contains(status);
 

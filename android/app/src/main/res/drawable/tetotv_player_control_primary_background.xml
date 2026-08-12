@@ -5,7 +5,7 @@
             <!-- Keep primary red controls distinct with a dark inner keyline. -->
             <item>
                 <shape android:shape="rectangle">
-                    <solid android:color="#66FF365C" />
+                    <solid android:color="#99FF365C" />
                     <corners android:radius="8dp" />
                 </shape>
             </item>
@@ -39,13 +39,13 @@
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="#FFB9233C" />
+            <solid android:color="#FFC52343" />
             <corners android:radius="8dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#FFE63B55" />
+            <solid android:color="#FFE52B50" />
             <corners android:radius="8dp" />
         </shape>
     </item>

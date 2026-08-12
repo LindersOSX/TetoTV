@@ -20,9 +20,10 @@ TorBox currently requires a paid plan for third-party API streaming.
 1. A source explicitly configured by the user supplies release metadata and a
    magnet.
 2. The user selects the exact Sub or Dub/Dual release.
-3. TetoTV submits the magnet to
-   `POST /v1/api/torrents/createtorrent`.
-4. It polls `GET /v1/api/torrents/mylist` with `bypass_cache=true`.
+3. TetoTV submits the magnet to `POST /v1/api/torrents/createtorrent` with
+   `add_only_if_cached=true`, so an uncached release is rejected atomically.
+4. It briefly checks `GET /v1/api/torrents/mylist` with `bypass_cache=true`
+   only to obtain the already-cached files. Any stale cache result is deleted.
 5. It preserves a source-provided file index when selecting the episode from a batch,
    with episode-name matching as a fallback.
 6. It requests the temporary CDN stream from

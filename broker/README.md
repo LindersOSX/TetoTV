@@ -144,8 +144,9 @@ A public, unauthenticated disclosure is served at `/privacy`; `/health`
 advertises its canonical HTTPS URL. The page uses the same no-store, CSP,
 referrer, framing, MIME-sniffing, permissions, and HSTS protections as the
 broker's other public HTML. Keep its human-reviewed content synchronized with
-`docs/PRIVACY.md`, and re-review the official project-page contact and hosting
-provider retention before broad public or app-store distribution.
+`docs/PRIVACY.md`, including Discord Rich Presence and local cache/reset
+choices. Re-review the public community contact and hosting-provider retention
+before broad public or app-store distribution.
 
 ## Private GitHub release updates
 

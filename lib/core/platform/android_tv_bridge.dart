@@ -518,6 +518,39 @@ class AndroidTvBridge {
     return query.isEmpty ? null : query;
   }
 
+  /// Removes only disposable application cache and downloaded update files.
+  /// Accounts, preferences, sources, history, databases, and secure storage
+  /// live outside Android's cache directories and are intentionally retained.
+  Future<int> clearAppCache() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw PlatformException(
+        code: 'APP_STORAGE_UNSUPPORTED',
+        message: 'Storage cleanup is only supported on Android.',
+      );
+    }
+    return await _channel.invokeMethod<int>('clearAppCache') ?? 0;
+  }
+
+  /// Requests Android to erase this application's complete private data.
+  /// A successful request terminates the process, so callers should not expect
+  /// the returned Future to complete on a physical device.
+  Future<void> resetApplicationData() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw PlatformException(
+        code: 'APP_STORAGE_UNSUPPORTED',
+        message: 'Reset is only supported on Android.',
+      );
+    }
+    final accepted =
+        await _channel.invokeMethod<bool>('resetApplicationData') ?? false;
+    if (!accepted) {
+      throw PlatformException(
+        code: 'APP_RESET_REJECTED',
+        message: 'Android could not start the application reset.',
+      );
+    }
+  }
+
   Future<void> setPreferredFrameRate(double fps) async {
     if (fps <= 0 || defaultTargetPlatform != TargetPlatform.android) return;
     try {

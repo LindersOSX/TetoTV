@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/all_debrid_models.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
@@ -31,36 +29,45 @@ class AllDebridStreamResolver implements StreamResolver {
       });
     final release = ranked.first;
     final upload = await _client.uploadMagnet(release.magnetUri);
-    var status = await _client.magnetStatus(upload.id);
-    final deadline = DateTime.now().add(timeout);
-
-    while (!status.isReady && DateTime.now().isBefore(deadline)) {
-      if (status.hasFailed) {
-        throw StateError('AllDebrid torrent failed: ${status.status}.');
+    var keepMagnet = false;
+    try {
+      // AllDebrid no longer exposes a separate cache endpoint. Its documented
+      // upload result is the earliest authoritative signal: ready=true is an
+      // instant cache hit. A miss is deleted immediately and never polled.
+      if (!upload.ready) {
+        throw const DebridCacheMissException(
+          DebridService.allDebrid,
+          detail:
+              'This release is not instantly cached on AllDebrid. TetoTV '
+              'stopped it immediately instead of leaving a cloud download '
+              'running.',
+        );
       }
-      yield StreamCaching(torrentId: '${upload.id}', progress: status.progress);
-      await Future<void>.delayed(pollInterval);
-      status = await _client.magnetStatus(upload.id);
-    }
-    if (!status.isReady) {
-      throw TimeoutException(
-        'AllDebrid did not finish the torrent before the timeout.',
-        timeout,
+      final files = await _client.magnetFiles(upload.id);
+      final selected = selectAllDebridEpisodeFile(
+        files,
+        episode.episode,
+        preferredFileIndex: release.preferredFileIndex,
       );
+      final uri = await _client.unlock(selected.link);
+      keepMagnet = true;
+      yield StreamReady(
+        uri: uri,
+        displayName: selected.name,
+        debridService: DebridService.allDebrid,
+      );
+    } finally {
+      if (!keepMagnet) {
+        try {
+          await _client.deleteMagnet(upload.id);
+        } catch (error) {
+          throw DebridCleanupFailureException(
+            DebridService.allDebrid,
+            cause: error,
+          );
+        }
+      }
     }
-
-    final files = await _client.magnetFiles(upload.id);
-    final selected = selectAllDebridEpisodeFile(
-      files,
-      episode.episode,
-      preferredFileIndex: release.preferredFileIndex,
-    );
-    final uri = await _client.unlock(selected.link);
-    yield StreamReady(
-      uri: uri,
-      displayName: selected.name,
-      debridService: DebridService.allDebrid,
-    );
   }
 }
 
