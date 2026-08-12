@@ -215,6 +215,18 @@ android {
     }
 }
 
+// Flutter's Gradle plugin seeds every supported ABI into non-split APKs. A
+// dependency that ships x86_64 libraries can therefore make an ARM release
+// appear x86_64-compatible even though libflutter.so and libapp.so were only
+// compiled for ARM. Restrict final release packaging to TetoTV's supported
+// public ABIs without changing debug builds used by x86_64 emulators or
+// conflicting with Flutter's split-per-ABI configuration.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.add("lib/x86_64/**")
+    }
+}
+
 val media3Version = "1.11.0"
 val discordSocialSdkAar = file("libs/discord_partner_sdk.aar")
 val discordSocialSdkSha256 =
