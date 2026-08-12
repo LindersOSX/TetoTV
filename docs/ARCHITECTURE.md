@@ -63,12 +63,12 @@ flowchart LR
     B --> C["Release source adapters"]
     C --> D["Candidate scorer"]
     D --> E["Choose connected debrid service"]
-    E --> F["Submit magnet to the selected debrid service"]
-    F --> G["Inspect and select the episode file"]
-    G --> H["Poll status and progress"]
-    H -->|Cached: completes quickly| I["Request provider HTTPS stream"]
-    H -->|Uncached: download completes| I
-    I --> J["Debrid-only player gate"]
+    E --> F["Check provider cache or earliest supported readiness signal"]
+    F -->|Ready| G["Select the requested episode file"]
+    F -->|Not ready| X["Cancel/delete temporary provider item"]
+    X --> D
+    G --> H["Request provider HTTPS stream"]
+    H --> J["Debrid-only player gate"]
     J --> R{"H.264 Hi10P or software-only release?"}
     R -->|No| K["Native Media3 1.11.0 PlayerView / SurfaceView"]
     R -->|Yes| K1["MPV/libass with software preference"]

@@ -42,7 +42,7 @@ void main() {
   });
 
   test(
-    'queues an uncached magnet, reports progress, and walks folders',
+    'rejects an uncached magnet without creating a cloud transfer',
     () async {
       final client = _QueuedPremiumizeClient();
       final resolver = PremiumizeStreamResolver(
@@ -51,25 +51,25 @@ void main() {
         pollInterval: Duration.zero,
       );
 
-      final states = await resolver.resolve(episode).toList();
+      await expectLater(
+        resolver.resolve(episode).drain<void>(),
+        throwsA(
+          isA<DebridCacheMissException>()
+              .having(
+                (error) => error.service,
+                'service',
+                DebridService.premiumize,
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('did not create'),
+              ),
+        ),
+      );
 
-      expect(client.createCalls, 1);
-      expect(
-        states.first,
-        isA<StreamCaching>().having(
-          (state) => state.progress,
-          'progress',
-          closeTo(.4, .001),
-        ),
-      );
-      expect(
-        states.last,
-        isA<StreamReady>().having(
-          (state) => state.uri.host,
-          'host',
-          'cdn.premiumize.test',
-        ),
-      );
+      expect(client.createCalls, 0);
+      expect(client.directCalls, 0);
     },
   );
 
@@ -108,6 +108,9 @@ class _CachedPremiumizeClient extends PremiumizeClient {
   _CachedPremiumizeClient() : super(token: 'test');
 
   @override
+  Future<bool> isCached(String source) async => true;
+
+  @override
   Future<List<PremiumizeFile>> directDownload(String source) async => [
     _file('Show - 01.mkv', 100),
     _file('Show - 02.mkv', 200),
@@ -118,58 +121,31 @@ class _QueuedPremiumizeClient extends PremiumizeClient {
   _QueuedPremiumizeClient() : super(token: 'test');
 
   int createCalls = 0;
-  int _listCalls = 0;
+  int directCalls = 0;
 
   @override
-  Future<List<PremiumizeFile>> directDownload(String source) async =>
-      throw const PremiumizeException('Not cached', code: 'not_found');
+  Future<bool> isCached(String source) async => false;
+
+  @override
+  Future<List<PremiumizeFile>> directDownload(String source) async {
+    directCalls++;
+    throw const PremiumizeException('Not cached', code: 'not_found');
+  }
 
   @override
   Future<PremiumizeTransferCreation> createTransfer(String source) async {
     createCalls++;
     return const PremiumizeTransferCreation(id: 'transfer-1', name: 'Show');
   }
-
-  @override
-  Future<List<PremiumizeTransfer>> transfers() async {
-    _listCalls++;
-    return [
-      PremiumizeTransfer(
-        id: 'transfer-1',
-        name: 'Show',
-        status: _listCalls == 1 ? 'running' : 'finished',
-        progress: _listCalls == 1 ? .4 : 1,
-        message: '',
-        folderId: _listCalls == 1 ? null : 'root-folder',
-      ),
-    ];
-  }
-
-  @override
-  Future<List<PremiumizeFolderEntry>> folderContents(String id) async =>
-      id == 'root-folder'
-      ? const [
-          PremiumizeFolderEntry(
-            id: 'season-folder',
-            name: 'Season 1',
-            isFolder: true,
-          ),
-        ]
-      : [
-          PremiumizeFolderEntry(
-            id: 'episode-file',
-            name: 'Show - 02.mkv',
-            isFolder: false,
-            size: 200,
-            link: Uri.parse('https://cdn.premiumize.test/02.mkv'),
-          ),
-        ];
 }
 
 class _AuthenticationFailureClient extends PremiumizeClient {
   _AuthenticationFailureClient() : super(token: 'test');
 
   int createCalls = 0;
+
+  @override
+  Future<bool> isCached(String source) async => true;
 
   @override
   Future<List<PremiumizeFile>> directDownload(String source) async =>

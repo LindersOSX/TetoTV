@@ -72,6 +72,60 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  for (final engine in _SmokeEngine.values) {
+    testWidgets(
+      '${engine.name.toUpperCase()} Exit releases playback before popping',
+      (tester) async {
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              home: _PlayerExitHarness(engine: engine),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const ValueKey('open-exit-player')));
+        await tester.pump();
+        await _pumpUntil(
+          tester,
+          () => engine == _SmokeEngine.mpv
+              ? find
+                    .byKey(const ValueKey('mpv-bottom-player-chrome'))
+                    .evaluate()
+                    .isNotEmpty
+              : find
+                    .byKey(const ValueKey('vlc-playback-advancing'))
+                    .evaluate()
+                    .isNotEmpty,
+        );
+
+        await tester.binding.handlePopRoute();
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(const ValueKey('player-exit-dialog'))
+              .evaluate()
+              .isNotEmpty,
+        );
+        await tester.tap(find.byKey(const ValueKey('player-exit-confirm')));
+        // A repeated Back while decoder release is in progress must join the
+        // same terminal action and never pop the route below the player.
+        await tester.binding.handlePopRoute();
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(const ValueKey('exit-player-home'))
+              .evaluate()
+              .isNotEmpty,
+        );
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.byKey(const ValueKey('exit-harness-root')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+  }
 }
 
 Future<void> _choosePlayer(WidgetTester tester, String label) async {
@@ -105,6 +159,71 @@ Future<void> _pumpUntil(
 }
 
 enum _SmokeEngine { mpv, vlc }
+
+class _PlayerExitHarness extends StatelessWidget {
+  const _PlayerExitHarness({required this.engine});
+
+  final _SmokeEngine engine;
+
+  static const _source = 'asset:///assets/videos/vlc_smoke.mp4';
+  static const _release = ReleaseCandidate(
+    infoHash: '0123456789012345678901234567890123456789',
+    magnetUri: 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789',
+    releaseName: 'TetoTV exit smoke stream',
+    seeders: 1,
+    sourceId: 'exit-smoke-test',
+    codec: 'H.264',
+  );
+  static const _episode = EpisodeReference(
+    anilistMediaId: 1,
+    title: 'Exit smoke test',
+    episode: 1,
+  );
+
+  PlaybackLaunch get _launch => PlaybackLaunch(
+    stream: StreamReady(
+      uri: Uri.parse(_source),
+      displayName: 'Bundled exit smoke stream',
+      debridService: DebridService.realDebrid,
+    ),
+    episode: _episode,
+    selectedRelease: _release,
+  );
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    key: const ValueKey('exit-harness-root'),
+    body: Center(
+      child: FilledButton(
+        key: const ValueKey('open-exit-player'),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => engine == _SmokeEngine.mpv
+                ? MpvTvPlayerScreen(
+                    source: _source,
+                    title: 'Exit smoke test',
+                    debridService: DebridService.realDebrid,
+                    launch: _launch,
+                    onUseVlc: (_, _, _, _) {},
+                  )
+                : VlcTvPlayerScreen(
+                    source: _source,
+                    title: 'Exit smoke test',
+                    debridService: DebridService.realDebrid,
+                    launch: _launch,
+                    onUseMpv: (_, _, _, _) {},
+                  ),
+          ),
+        ),
+        child: const Text('Open player'),
+      ),
+    ),
+    bottomNavigationBar: const SizedBox(
+      key: ValueKey('exit-player-home'),
+      height: 1,
+    ),
+  );
+}
 
 class _EngineHandoffHarness extends StatefulWidget {
   const _EngineHandoffHarness();

@@ -1,4 +1,6 @@
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -15,6 +17,7 @@ import 'package:anime_tv/features/settings/application/torbox_settings_controlle
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -102,6 +105,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.system.discord-unlink',
   );
   final _donateFocus = FocusNode(debugLabel: 'accounts.system.donate');
+  final _clearCacheFocus = FocusNode(debugLabel: 'accounts.system.clear-cache');
+  final _resetAppFocus = FocusNode(debugLabel: 'accounts.system.reset-app');
   final _privacyFocus = FocusNode(debugLabel: 'accounts.system.privacy');
   final _legalFocus = FocusNode(debugLabel: 'accounts.system.legal');
   final _areaFocusNodes = {
@@ -154,6 +159,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _discordPresenceFocus.dispose();
     _discordDisconnectFocus.dispose();
     _donateFocus.dispose();
+    _clearCacheFocus.dispose();
+    _resetAppFocus.dispose();
     _privacyFocus.dispose();
     _legalFocus.dispose();
     for (final node in _areaFocusNodes.values) {
@@ -401,9 +408,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
     } else if (current == _donateFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _clearCacheFocus;
+    } else if (current == _clearCacheFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
+      if (key == LogicalKeyboardKey.arrowRight) target = _resetAppFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
+    } else if (current == _resetAppFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
+      if (key == LogicalKeyboardKey.arrowLeft) target = _clearCacheFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
     } else if (current == _privacyFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _clearCacheFocus;
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
         target = _legalFocus;
@@ -457,6 +472,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
       body: SafeArea(
+        minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
         child: Focus(
           canRequestFocus: false,
           onKeyEvent: _handleKey,
@@ -561,6 +577,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               const SizedBox(height: 12),
               Expanded(
                 child: ListView(
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(5000),
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: EdgeInsets.only(
@@ -1007,6 +1024,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       _DiscordCommunityPanel(focusNode: _discordFocus),
                       const SizedBox(height: 8),
                       _DonationPanel(focusNode: _donateFocus),
+                      const SizedBox(height: 12),
+                      const _SectionHeader(
+                        icon: Icons.storage_rounded,
+                        title: 'STORAGE & RESET',
+                        subtitle:
+                            'Remove temporary files or return TetoTV to first-time setup.',
+                      ),
+                      const SizedBox(height: 8),
+                      _StorageResetPanel(
+                        clearCacheFocusNode: _clearCacheFocus,
+                        resetAppFocusNode: _resetAppFocus,
+                      ),
                       const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.info_rounded,
@@ -3442,6 +3471,402 @@ class _Panel extends StatelessWidget {
       child: child,
     );
   }
+}
+
+class _StorageResetPanel extends StatefulWidget {
+  const _StorageResetPanel({
+    required this.clearCacheFocusNode,
+    required this.resetAppFocusNode,
+  });
+
+  final FocusNode clearCacheFocusNode;
+  final FocusNode resetAppFocusNode;
+
+  @override
+  State<_StorageResetPanel> createState() => _StorageResetPanelState();
+}
+
+class _StorageResetPanelState extends State<_StorageResetPanel> {
+  bool _clearingCache = false;
+  bool _resetting = false;
+
+  Future<void> _clearCache() async {
+    if (_clearingCache || _resetting) return;
+    setState(() => _clearingCache = true);
+    try {
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      final bytes = await AndroidTvBridge.instance.clearAppCache();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            bytes > 0
+                ? 'Cleared ${_formatStorageBytes(bytes)} of temporary files.'
+                : 'TetoTV cache is already clear.',
+          ),
+        ),
+      );
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.message ?? 'This device could not clear the TetoTV cache.',
+          ),
+        ),
+      );
+    } on MissingPluginException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This device does not support TetoTV cache cleanup.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _clearingCache = false);
+    }
+  }
+
+  Future<void> _confirmReset() async {
+    if (_clearingCache || _resetting) return;
+    final firstConfirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => const _ResetWarningDialog(),
+    );
+    if (firstConfirmed != true || !mounted) return;
+    final finalConfirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _ResetFinalDialog(),
+    );
+    if (finalConfirmed != true || !mounted) return;
+    setState(() => _resetting = true);
+    try {
+      await AndroidTvBridge.instance.resetApplicationData();
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      setState(() => _resetting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message ?? 'This device could not reset TetoTV.'),
+        ),
+      );
+    } on MissingPluginException {
+      if (!mounted) return;
+      setState(() => _resetting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This device does not support resetting TetoTV.'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 620;
+          final clear = _StorageAction(
+            key: const ValueKey('storage-clear-cache'),
+            focusNode: widget.clearCacheFocusNode,
+            icon: Icons.cleaning_services_rounded,
+            title: _clearingCache ? 'Clearing cache…' : 'Clear cache',
+            detail:
+                'Removes temporary images, playback cache, and downloaded update leftovers. Accounts, settings, history, and sources stay saved.',
+            accent: AppColors.cyan,
+            enabled: !_clearingCache && !_resetting,
+            onPressed: _clearCache,
+          );
+          final reset = _StorageAction(
+            key: const ValueKey('storage-reset-app'),
+            focusNode: widget.resetAppFocusNode,
+            icon: Icons.delete_forever_rounded,
+            title: _resetting ? 'Resetting TetoTV…' : 'Reset TetoTV',
+            detail:
+                'Erases every account, preference, source, and watch-history item. The app closes and starts at first-time setup.',
+            accent: AppColors.accentBright,
+            enabled: !_clearingCache && !_resetting,
+            onPressed: _confirmReset,
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [clear, const SizedBox(height: 10), reset],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: clear),
+              const SizedBox(width: 10),
+              Expanded(child: reset),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StorageAction extends StatelessWidget {
+  const _StorageAction({
+    required this.focusNode,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.accent,
+    required this.enabled,
+    required this.onPressed,
+    super.key,
+  });
+
+  final FocusNode focusNode;
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Color accent;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      focusNode: focusNode,
+      onPressed: enabled ? onPressed : () {},
+      borderRadius: BorderRadius.circular(9),
+      focusScale: 1.01,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 112),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.panelRaised,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: accent.withValues(alpha: .45)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: enabled ? accent : AppColors.textMuted, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: enabled ? Colors.white : AppColors.textMuted,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    detail,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ResetWarningDialog extends StatelessWidget {
+  const _ResetWarningDialog();
+
+  @override
+  Widget build(BuildContext context) => _ResetDialogFrame(
+    key: const ValueKey('reset-warning-dialog'),
+    icon: Icons.warning_amber_rounded,
+    title: 'Reset all TetoTV data?',
+    message:
+        'This erases linked accounts, encrypted credentials, preferences, Marketplace sources, and local watch history. It cannot be undone.',
+    actions: [
+      _DialogAction(
+        key: const ValueKey('reset-warning-cancel'),
+        autofocus: true,
+        label: 'Keep my data',
+        icon: Icons.arrow_back_rounded,
+        onPressed: () => Navigator.of(context).pop(false),
+      ),
+      _DialogAction(
+        key: const ValueKey('reset-warning-continue'),
+        label: 'Continue',
+        icon: Icons.warning_rounded,
+        dangerous: true,
+        onPressed: () => Navigator.of(context).pop(true),
+      ),
+    ],
+  );
+}
+
+class _ResetFinalDialog extends StatelessWidget {
+  const _ResetFinalDialog();
+
+  @override
+  Widget build(BuildContext context) => _ResetDialogFrame(
+    key: const ValueKey('reset-final-dialog'),
+    icon: Icons.delete_forever_rounded,
+    title: 'Final confirmation',
+    message:
+        'TetoTV will close immediately. When you reopen it, first-time setup begins with no saved data.',
+    actions: [
+      _DialogAction(
+        key: const ValueKey('reset-final-cancel'),
+        autofocus: true,
+        label: 'Cancel reset',
+        icon: Icons.close_rounded,
+        onPressed: () => Navigator.of(context).pop(false),
+      ),
+      _DialogAction(
+        key: const ValueKey('reset-final-confirm'),
+        label: 'Erase everything',
+        icon: Icons.delete_forever_rounded,
+        dangerous: true,
+        onPressed: () => Navigator.of(context).pop(true),
+      ),
+    ],
+  );
+}
+
+class _ResetDialogFrame extends StatelessWidget {
+  const _ResetDialogFrame({
+    required this.icon,
+    required this.title,
+    required this.message,
+    required this.actions,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+  final List<Widget> actions;
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    backgroundColor: Colors.transparent,
+    child: Container(
+      width: 620,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: AppColors.panel,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.accentBright, width: 2),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: AppColors.accentBright, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(message, style: const TextStyle(color: AppColors.textMuted)),
+          const SizedBox(height: 20),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth < 480) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var index = 0; index < actions.length; index++) ...[
+                      if (index > 0) const SizedBox(height: 10),
+                      actions[index],
+                    ],
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  for (var index = 0; index < actions.length; index++) ...[
+                    if (index > 0) const SizedBox(width: 10),
+                    Expanded(child: actions[index]),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DialogAction extends StatelessWidget {
+  const _DialogAction({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.autofocus = false,
+    this.dangerous = false,
+    super.key,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool autofocus;
+  final bool dangerous;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    autofocus: autofocus,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(9),
+    child: Container(
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: dangerous ? AppColors.accent : AppColors.panelRaised,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 19),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+String _formatStorageBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  final kib = bytes / 1024;
+  if (kib < 1024) return '${kib.toStringAsFixed(1)} KB';
+  final mib = kib / 1024;
+  if (mib < 1024) return '${mib.toStringAsFixed(1)} MB';
+  return '${(mib / 1024).toStringAsFixed(1)} GB';
 }
 
 class _StatusPill extends StatelessWidget {

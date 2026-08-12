@@ -1,3 +1,5 @@
+import 'package:anime_tv/app/app.dart';
+import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
@@ -266,6 +268,121 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'production wrapper keeps focus visible across the middle Discover row',
+    (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(() => appRouter.go('/'));
+      final results = List.generate(
+        60,
+        (index) => AnimeSummary(
+          id: index + 1,
+          title: 'Production Result ${index + 1}',
+          description: '',
+          episodes: 12,
+          score: 8,
+        ),
+      );
+      appRouter.go('/discover');
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            catalogClientProvider.overrideWithValue(
+              _FakeCatalog(results: results),
+            ),
+          ],
+          child: const TetoTvApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'discover.filters',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_focusedResult(tester, 'Production Result 1'), isTrue);
+
+      // The production interface scaler presents a six-column Discover grid
+      // at this TV resolution, so Down enters the first card of the middle row.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_focusedResult(tester, 'Production Result 7'), isTrue);
+
+      for (var result = 8; result <= 12; result++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        _focusedResult(tester, 'Production Result 12'),
+        isTrue,
+        reason: 'Right at the row edge must retain a visible focus ring.',
+      );
+
+      for (var result = 11; result >= 7; result--) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(
+        _focusedResult(tester, 'Production Result 7'),
+        isTrue,
+        reason: 'Left at the row edge must retain a visible focus ring.',
+      );
+
+      // Keep moving through rows that are well beyond GridView's cache. Each
+      // lazy card must be built, revealed, and focused without losing the
+      // highlight that tells a TV user where the D-pad currently is.
+      for (final result in [13, 19, 25, 31, 37, 43, 49, 55]) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+        expect(
+          find.text('Production Result $result').hitTestable(),
+          findsOneWidget,
+        );
+      }
+      for (final result in [49, 43, 37, 31, 25, 19, 13, 7]) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pumpAndSettle();
+        expect(_focusedResult(tester, 'Production Result $result'), isTrue);
+        expect(
+          find.text('Production Result $result').hitTestable(),
+          findsOneWidget,
+          reason: 'Up must reveal the card at the viewport start.',
+        );
+      }
+
+      // Return to a lazy row, then hold Up without allowing intermediate
+      // reveal animations to finish. The last Up must cancel every pending
+      // grid callback so Filters keeps focus after animations settle.
+      for (var press = 0; press < 8; press++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expect(_focusedResult(tester, 'Production Result 55'), isTrue);
+      for (var press = 0; press < 10; press++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      }
+      await tester.pumpAndSettle();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'discover.filters',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('holding a Discover result can add it to Planning', (
     tester,
   ) async {
@@ -415,6 +532,17 @@ class _FakeCatalog extends AniListCatalogClient {
     if (error != null) throw error!;
     return results;
   }
+}
+
+bool _focusedResult(WidgetTester tester, String title) {
+  final detector = find
+      .ancestor(
+        of: find.text(title),
+        matching: find.byType(FocusableActionDetector),
+      )
+      .first;
+  return tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus ??
+      false;
 }
 
 class _DiscoverRecordingRepository implements TrackingRepository {

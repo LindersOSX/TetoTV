@@ -30,6 +30,34 @@ void main() {
     expect(redirected['Referer'], 'https://example.com/');
   });
 
+  test('preserves bounded multi-value response headers', () {
+    final headers = sanitizeAddonResponseHeaders({
+      'Content-Type': ['application/json', 'text/plain'],
+      'Set-Cookie': ['session=one', 'theme=dark'],
+      'Bad\r\nHeader': ['hidden'],
+      'X-Injected': ['safe\r\nhidden'],
+    });
+
+    expect(headers['Content-Type'], ['application/json', 'text/plain']);
+    expect(headers['Set-Cookie'], ['session=one', 'theme=dark']);
+    expect(headers, isNot(contains('Bad\r\nHeader')));
+    expect(headers, isNot(contains('X-Injected')));
+  });
+
+  test(
+    'parses valid response cookies after malformed and oversized values',
+    () {
+      final cookies = parseAddonResponseCookies([
+        'oversized=${List.filled(9000, 'x').join()}',
+        'bad name=hidden',
+        'session=fixture-cookie; Path=/; HttpOnly',
+        'theme=dark; Secure; SameSite=Lax',
+      ]);
+
+      expect(cookies, {'session': 'fixture-cookie', 'theme': 'dark'});
+    },
+  );
+
   test(
     'bounds addon network concurrency, request count, and responses',
     () async {
@@ -81,6 +109,50 @@ void main() {
         StateError('NO_STREAM: The provider returned no compatible stream.'),
       ),
       isFalse,
+    );
+  });
+
+  test('bounds Seanime request timeouts to the remaining runtime', () {
+    expect(addonRequestTimeout(0.05), const Duration(milliseconds: 100));
+    expect(addonRequestTimeout(2), const Duration(seconds: 2));
+    expect(
+      addonRequestTimeout(30, maximum: const Duration(seconds: 4)),
+      const Duration(seconds: 4),
+    );
+    expect(
+      addonRequestTimeout(null, maximum: const Duration(seconds: 3)),
+      const Duration(seconds: 3),
+    );
+    expect(
+      addonRequestTimeout(30, maximum: const Duration(seconds: 6)),
+      const Duration(seconds: 6),
+      reason: 'one dead host must leave time for provider fallback endpoints',
+    );
+  });
+
+  test('bounds Seanime sleep without extending the runtime deadline', () {
+    expect(
+      addonSleepDuration(200, remaining: const Duration(seconds: 5)),
+      const Duration(milliseconds: 200),
+    );
+    expect(
+      addonSleepDuration(5000, remaining: const Duration(seconds: 5)),
+      const Duration(seconds: 1),
+    );
+    expect(
+      addonSleepDuration(500, remaining: const Duration(milliseconds: 75)),
+      const Duration(milliseconds: 75),
+    );
+    expect(
+      addonSleepDuration(
+        double.infinity,
+        remaining: const Duration(seconds: 5),
+      ),
+      Duration.zero,
+    );
+    expect(
+      addonSleepDuration(-1, remaining: const Duration(seconds: 5)),
+      Duration.zero,
     );
   });
 

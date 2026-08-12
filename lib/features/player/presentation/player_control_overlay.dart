@@ -60,9 +60,37 @@ bool skipSegmentReachesPlaybackEnd({
   Duration endGuard = const Duration(seconds: 1),
 }) => duration > Duration.zero && requestedEnd >= duration - endGuard;
 
-/// Accelerates a held D-pad scrub without making the first correction coarse.
-Duration playerScrubStep(int repeatCount) =>
-    repeatCount >= 5 ? const Duration(minutes: 1) : const Duration(seconds: 30);
+/// Serializes native decoder release and permits a failed release to be
+/// retried. Native TV players can throw while a decoder is already failing;
+/// callers must never treat that failure as permission to start another
+/// engine or pop the route while the old surface may still be owned.
+class PlayerReleaseCoordinator {
+  Future<bool>? _activeRelease;
+  bool _released = false;
+
+  bool get released => _released;
+
+  Future<bool> release(Future<void> Function() releaseAction) {
+    if (_released) return Future<bool>.value(true);
+    final active = _activeRelease;
+    if (active != null) return active;
+    final operation = _runRelease(releaseAction);
+    _activeRelease = operation;
+    return operation;
+  }
+
+  Future<bool> _runRelease(Future<void> Function() releaseAction) async {
+    try {
+      await releaseAction();
+      _released = true;
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _activeRelease = null;
+    }
+  }
+}
 
 /// Detects an intentional double press of D-pad Down without treating a held
 /// button (which produces key-repeat events) as two presses.

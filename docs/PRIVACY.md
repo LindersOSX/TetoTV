@@ -22,8 +22,10 @@ TetoTV stores the following data locally:
 This data remains until it is removed in TetoTV, Android app storage is
 cleared, or the app is uninstalled. Disconnecting a service deletes that
 service's saved credentials. Removing local history does not modify AniList or
-MAL. Android's **Settings > Apps > TetoTV > Storage > Clear storage** removes
-all TetoTV local data.
+MAL. TetoTV's **Settings > System > Reset TetoTV** action and Android's
+**Settings > Apps > TetoTV > Storage > Clear storage** both remove all TetoTV
+local data. The separate **Clear cache** action removes only temporary files
+and retains accounts, preferences, sources, and history.
 
 ## Data sent to services selected by the user
 
@@ -121,8 +123,8 @@ change. The effective date will be updated for material changes.
 
 ## Contact
 
-Privacy questions and deletion requests can be sent to the TetoTV maintainer
-through the official project page: <https://github.com/LindersOSX/TetoTV>.
-Before any broad public or store release, the distributor must ensure this
-contact and a public HTTPS copy of this disclosure are accessible without an
-account.
+Privacy questions, support requests, and deletion requests can be sent to the
+TetoTV maintainer through the public TetoTV Discord community:
+<https://discord.gg/juC6k7d4WY>. Before any broad public or store release, the
+distributor must ensure this contact and a public HTTPS copy of this disclosure
+remain accessible.

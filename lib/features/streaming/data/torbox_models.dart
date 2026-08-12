@@ -60,6 +60,13 @@ class TorBoxTorrent {
 
   bool get isReady => (downloadFinished || cached) && files.isNotEmpty;
 
+  bool get isDownloadActivity {
+    final value = downloadState.toLowerCase();
+    return value.contains('downloading') ||
+        value.contains('queued') ||
+        value.contains('stalled');
+  }
+
   bool get hasFailed {
     final value = downloadState.toLowerCase();
     return value.contains('error') ||

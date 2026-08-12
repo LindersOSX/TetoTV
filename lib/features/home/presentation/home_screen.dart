@@ -550,15 +550,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
             if (preferences.showHero)
-              SliverToBoxAdapter(
-                child: _HeroPanel(
-                  anime: hero,
-                  isLoading: trendingAsync.isLoading,
-                  focusNode: _heroFocus,
-                  titlePreference: titlePreference,
-                  preferences: preferences,
-                  activeIndex: activeHeroIndex,
-                  itemCount: heroItems.length,
+              SliverPadding(
+                padding: contentHorizontalPadding,
+                sliver: SliverToBoxAdapter(
+                  child: _HeroPanel(
+                    anime: hero,
+                    isLoading: trendingAsync.isLoading,
+                    focusNode: _heroFocus,
+                    titlePreference: titlePreference,
+                    preferences: preferences,
+                    activeIndex: activeHeroIndex,
+                    itemCount: heroItems.length,
+                  ),
                 ),
               ),
             SliverToBoxAdapter(

@@ -7,6 +7,70 @@ import org.junit.Test
 
 class PlayerHudResourceParityTest {
     @Test
+    fun media3MatchesMpvChromeGeometryPaletteAndReadOnlyProgress() {
+        val layout = resource("layout/tetotv_player_controls.xml").readText()
+        val playerLayout = resource("layout/activity_media3_player.xml").readText()
+        val styles = resource("values/styles.xml").readText()
+        val nightStyles = resource("values-night/styles.xml").readText()
+        val card = resource("drawable/tetotv_player_card_background.xml").readText()
+        val badge = resource("drawable/tetotv_player_badge_background.xml").readText()
+        val normalControl =
+            resource("drawable/tetotv_player_control_pill_background.xml").readText()
+        val primaryControl =
+            resource("drawable/tetotv_player_control_primary_background.xml").readText()
+        val scrim = resource("drawable/tetotv_player_controls_scrim.xml").readText()
+
+        listOf(
+            "android:layout_marginStart=\"28dp\"",
+            "android:layout_marginBottom=\"24dp\"",
+            "android:paddingStart=\"18dp\"",
+            "android:paddingTop=\"14dp\"",
+            "android:paddingBottom=\"12dp\"",
+            "android:textSize=\"24sp\"",
+            "app:bar_height=\"4dp\"",
+            "app:played_color=\"#FFFF496A\"",
+            "app:unplayed_color=\"#3DFFFFFF\"",
+            "android:textColor=\"#FFB7AEB1\"",
+        ).forEach { assertTrue(layout.contains(it)) }
+        listOf(styles, nightStyles).forEach { styleSource ->
+            assertTrue(styleSource.contains("<item name=\"android:layout_height\">40dp</item>"))
+            assertTrue(styleSource.contains("<item name=\"android:layout_height\">26dp</item>"))
+            assertTrue(styleSource.contains("<item name=\"android:textColor\">#FFFF496A</item>"))
+            assertFalse(styleSource.contains("<item name=\"android:layout_height\">44dp</item>"))
+        }
+        listOf("#D6080808", "16dp", "1.4dp", "#C7E52B50")
+            .forEach { assertTrue(card.contains(it)) }
+        listOf("#33E52B50", "#59E52B50").forEach { assertTrue(badge.contains(it)) }
+        assertTrue(normalControl.contains("#8F242429"))
+        assertFalse(normalControl.contains("#FF3A3A40"))
+        assertTrue(primaryControl.contains("#FFE52B50"))
+        assertTrue(scrim.contains("#00000000"))
+        assertFalse(scrim.contains("<gradient"))
+
+        val timeBar = layout.substringAfter("<androidx.media3.ui.DefaultTimeBar")
+            .substringBefore("/>")
+        listOf(
+            "android:clickable=\"false\"",
+            "android:focusable=\"false\"",
+            "android:importantForAccessibility=\"no\"",
+            "android:longClickable=\"false\"",
+            "app:scrubber_disabled_size=\"0dp\"",
+            "app:scrubber_dragged_size=\"0dp\"",
+            "app:scrubber_enabled_size=\"0dp\"",
+        ).forEach { assertTrue(timeBar.contains(it)) }
+        assertTrue(playerLayout.contains("app:time_bar_scrubbing_enabled=\"false\""))
+        listOf(
+            "setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)",
+            "cornerRadius = dp(12).toFloat()",
+            "setTopMargin(dp(7))",
+            "height = dp(3)",
+            "setTopMargin(dp(15))",
+            "setTopMargin(dp(6))",
+            "setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)",
+        ).forEach { assertTrue(activitySource().contains(it)) }
+    }
+
+    @Test
     fun media3UsesOwnedIconsAndTetoFocusRing() {
         val layout = resource("layout/tetotv_player_controls.xml").readText()
         val activity = source("main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt").readText()
@@ -72,4 +136,7 @@ class PlayerHudResourceParityTest {
             .firstOrNull(File::isFile)
             ?: error("Could not locate Android source $relative from ${File(".").absolutePath}")
     }
+
+    private fun activitySource(): String =
+        source("main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt").readText()
 }

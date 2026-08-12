@@ -3,6 +3,7 @@ package dev.animetv.anime_tv
 import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.app.AlarmManager
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.ActivityNotFoundException
@@ -111,6 +112,11 @@ class MainActivity : FlutterActivity() {
                     "inspectApk" -> result.success(inspectApk(call.argument<String>("path")))
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
+                    "clearAppCache" -> result.success(clearAppCache())
+                    "resetApplicationData" -> {
+                        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                        result.success(activityManager.clearApplicationUserData())
+                    }
                     "startNativePlayer" -> {
                         @Suppress("UNCHECKED_CAST")
                         startNativePlayer(call.arguments as? Map<String, Any?> ?: emptyMap(), result)
@@ -162,6 +168,22 @@ class MainActivity : FlutterActivity() {
     private fun isTelevision(): Boolean =
         resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
             Configuration.UI_MODE_TYPE_TELEVISION
+
+    /**
+     * Remove only Android-designated cache roots. Persistent application files
+     * (databases, encrypted credentials, preferences, sources, and history)
+     * are deliberately outside these roots and must never be traversed here.
+     */
+    private fun clearAppCache(): Long {
+        val cacheRoots = buildList {
+            add(cacheDir)
+            externalCacheDirs.filterNotNull().forEach(::add)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                add(createDeviceProtectedStorageContext().cacheDir)
+            }
+        }
+        return AppStoragePolicy.clearCacheRoots(cacheRoots)
+    }
 
     @Suppress("DEPRECATION")
     private fun startNativePlayer(data: Map<String, Any?>, result: MethodChannel.Result) {

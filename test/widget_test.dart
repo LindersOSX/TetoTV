@@ -309,8 +309,10 @@ void main() {
     expect(shortArtwork, findsOneWidget);
     expect(longArtwork, findsOneWidget);
     expect(heroPanel, findsOneWidget);
-    expect(tester.getTopLeft(heroPanel).dx, 0);
-    expect(tester.getSize(heroPanel).width, 1280);
+    expect(tester.getTopLeft(find.byType(Scaffold).first), Offset.zero);
+    expect(tester.getSize(find.byType(Scaffold).first).width, 1280);
+    expect(tester.getTopLeft(heroPanel).dx, 34);
+    expect(tester.getSize(heroPanel).width, 1212);
     expect(
       tester.getSize(shortArtwork).height,
       tester.getSize(longArtwork).height,

@@ -8,8 +8,6 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
-import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart'
-    show isTerminalDebridAlternativeFailure;
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
@@ -26,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_vlc_player/flutter_vlc_player.dart';
+import 'package:flutter_vlc_player_platform_interface/flutter_vlc_player_platform_interface.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -127,7 +126,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
   final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
-  final _scrubController = PlayerScrubController();
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   Timer? _controlsTimer;
   Timer? _trackMessageTimer;
@@ -181,10 +179,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   TapDownDetails? _touchDoubleTapDetails;
   bool _reportedPlaybackSuccess = false;
   bool _engineHandoffInProgress = false;
+  bool _handoffAttemptActive = false;
+  bool _handoffReleaseFailed = false;
   bool _controllerReleasedForHandoff = false;
   bool _nativePlaybackStateClearedForHandoff = false;
+  bool _routePopScheduled = false;
+  Duration? _pendingHandoffPosition;
+  VlcPlayerController? _controllerPendingRelease;
+  final PlayerReleaseCoordinator _handoffRelease = PlayerReleaseCoordinator();
   final Set<Future<void>> _controllerMutationOperations = <Future<void>>{};
   final Set<VlcPlayerController> _releasedControllers =
+      Set<VlcPlayerController>.identity();
+  final Set<VlcPlayerController> _disposeAttemptedControllers =
       Set<VlcPlayerController>.identity();
 
   bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
@@ -619,7 +625,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         old.removeListener(_onValueChanged);
         if (old.value.isInitialized) await old.stop();
         if (old.isReadyToInitialize == true) {
-          await old.dispose();
+          await _disposeControllerAuthoritatively(old);
           _releasedControllers.add(old);
         }
       }
@@ -1099,18 +1105,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     await _drainSeekQueue();
   }
 
-  Future<void> _seekTo(Duration target) async {
-    if (_engineHandoffInProgress || _restarting) return;
-    final controller = _controller;
-    if (controller == null) return;
-    _queuedSeekTarget = playerSeekTarget(
-      position: target,
-      offset: Duration.zero,
-      duration: controller.value.duration,
-    );
-    await _drainSeekQueue();
-  }
-
   Future<void> _drainSeekQueue() async {
     final activeDrain = _seekDrainCompleter;
     if (activeDrain != null) {
@@ -1157,10 +1151,22 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
-    final token = await ref
-        .read(debridTokenServiceProvider)
-        .accessToken(widget.debridService);
-    if (token == null || token.isEmpty) return null;
+    String? token;
+    try {
+      token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(widget.debridService);
+    } catch (_) {
+      throw DebridProviderAccessException(
+        widget.debridService,
+        detail:
+            'Your ${widget.debridService.displayName} connection could not be '
+            'refreshed. Reconnect it in Accounts, then try again.',
+      );
+    }
+    if (token == null || token.isEmpty) {
+      throw DebridProviderAccessException(widget.debridService);
+    }
     final source = SingleReleaseSource(release);
     final resolver = createDebridStreamResolver(
       service: widget.debridService,
@@ -1186,7 +1192,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         try {
           ready = await _resolveRelease(candidate);
         } catch (error) {
-          if (isTerminalDebridAlternativeFailure(error)) {
+          if (isTerminalDebridFailoverFailure(error)) {
             terminalFailure = error;
             break;
           }
@@ -1255,9 +1261,20 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _returnToStreamPicker() async {
-    final position = _controller?.value.position ?? Duration.zero;
-    await _persistPlayback(position, force: true);
-    if (mounted && context.canPop()) context.pop();
+    final navigator = Navigator.of(context);
+    final position = _effectiveHandoffPosition();
+    _pendingHandoffPosition = position;
+    if (!await _prepareForEngineHandoff(position)) return;
+    _popPlayerRouteAfterHandoff(navigator);
+  }
+
+  void _popPlayerRouteAfterHandoff(NavigatorState navigator) {
+    if (!mounted || _routePopScheduled) return;
+    _routePopScheduled = true;
+    setState(() => _allowExit = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (navigator.mounted) unawaited(navigator.maybePop());
+    });
   }
 
   Future<void> _syncProgress() async {
@@ -1328,7 +1345,21 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           : controller?.value.position ?? Duration.zero;
       if (!await _prepareForEngineHandoff(completedPosition)) return;
       if (!mounted) return;
-      context.pushReplacement(route);
+      try {
+        final navigation = GoRouter.of(context).pushReplacement<void>(route);
+        unawaited(
+          navigation.then<void>(
+            (_) {},
+            onError: (Object error, StackTrace stackTrace) {
+              if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+            },
+          ),
+        );
+      } catch (_) {
+        // Playback is already released. Fall back to the normal player-route
+        // pop instead of leaving a hidden, non-interactive screen behind.
+        if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+      }
     } catch (_) {
       _showMessage('The next episode could not be prepared');
     }
@@ -1467,14 +1498,17 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<bool> _prepareForEngineHandoff(Duration position) async {
-    if (_engineHandoffInProgress) return false;
+    if (_handoffAttemptActive) return false;
+    _handoffAttemptActive = true;
+    _handoffReleaseFailed = false;
+    _pendingHandoffPosition ??= position;
     _engineHandoffInProgress = true;
-    _scrubController.cancel();
     _controlsTimer?.cancel();
     _initializationWatchdog?.cancel();
     _videoWatchdog?.cancel();
     _trackDiscoveryTimer?.cancel();
-    final controller = _controller;
+    final controller = _controllerPendingRelease ?? _controller;
+    _controllerPendingRelease ??= controller;
     if (mounted) {
       setState(() {
         _controlsVisible = false;
@@ -1482,14 +1516,19 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       });
     }
 
-    // Remove libVLC's TextureRegistry surface before another native engine is
-    // constructed, then await decoder disposal before notifying the router.
-    await WidgetsBinding.instance.endOfFrame;
-    _queuedSeekTarget = null;
-    await _waitForSeekDrain();
-    final skipSeek = _skipSeekOperation;
-    if (skipSeek != null) await skipSeek;
-    await _waitForControllerMutations();
+    try {
+      // Remove libVLC's TextureRegistry surface before another native engine
+      // is constructed, then drain mutations before notifying the router.
+      await WidgetsBinding.instance.endOfFrame;
+      _queuedSeekTarget = null;
+      await _waitForSeekDrain();
+      final skipSeek = _skipSeekOperation;
+      if (skipSeek != null) await skipSeek;
+      await _waitForControllerMutations();
+    } catch (_) {
+      // A failed in-flight command has completed. Continue to the
+      // authoritative platform-view release rather than leaving VLC alive.
+    }
     try {
       await _persistPlayback(
         position,
@@ -1499,9 +1538,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     } catch (_) {
       // Checkpoint I/O must not strand a completed decoder handoff.
     }
-    await _mediaActionSubscription?.cancel();
-    await _sourceDiscoverySubscription?.cancel();
     try {
+      await _mediaActionSubscription?.cancel();
+      await _sourceDiscoverySubscription?.cancel();
+    } catch (_) {
+      // Callbacks guard on _engineHandoffInProgress. Platform disposal remains
+      // the authoritative boundary if a Dart cancellation fails.
+    }
+    final released = await _handoffRelease.release(() async {
       if (controller != null) {
         controller.removeListener(_onValueChanged);
         if (!_releasedControllers.contains(controller)) {
@@ -1514,17 +1558,21 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             }
           }
           if (controller.isReadyToInitialize == true) {
-            await controller.dispose();
+            await _disposeControllerAuthoritatively(controller);
             _releasedControllers.add(controller);
           }
         }
       }
       _controllerReleasedForHandoff = true;
-    } catch (_) {
+      _controllerPendingRelease = null;
+    });
+    if (!released) {
+      _handoffAttemptActive = false;
+      _handoffReleaseFailed = true;
       if (mounted) {
         setState(() {
           _trackMessage =
-              'Player switch stopped safely. Press Back and reopen playback.';
+              'Could not release the player safely. Press Exit to retry.';
         });
       }
       return false;
@@ -1536,7 +1584,38 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       // Decoder ownership is already released; session cleanup is best effort.
     }
     _nativePlaybackStateClearedForHandoff = true;
+    _handoffAttemptActive = false;
     return mounted;
+  }
+
+  Future<void> _disposeControllerAuthoritatively(
+    VlcPlayerController controller,
+  ) async {
+    // The platform view id is required only for the release fallback after
+    // flutter_vlc_player marks its controller disposed before the native
+    // platform call completes.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final viewId = controller.viewId;
+    if (_disposeAttemptedControllers.add(controller)) {
+      try {
+        await controller.dispose();
+        return;
+      } catch (error, stackTrace) {
+        if (viewId == null) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+        try {
+          await VlcPlayerPlatform.instance.dispose(viewId);
+          return;
+        } catch (_) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+      }
+    }
+    if (viewId == null) {
+      throw StateError('VLC player release could not be retried safely.');
+    }
+    await VlcPlayerPlatform.instance.dispose(viewId);
   }
 
   Future<void> _handoffTo(PreferredPlayer selected) async {
@@ -1774,46 +1853,66 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _confirmExit() async {
-    if (_confirmingExit || !mounted) return;
+    if (_confirmingExit || _routePopScheduled || !mounted) return;
     if (_engineHandoffInProgress) {
-      setState(() => _allowExit = true);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && context.canPop()) context.pop();
-      });
+      if (_handoffAttemptActive || !_handoffReleaseFailed) return;
+      final navigator = Navigator.of(context);
+      final position = _pendingHandoffPosition ?? Duration.zero;
+      if (await _prepareForEngineHandoff(position)) {
+        _popPlayerRouteAfterHandoff(navigator);
+      }
       return;
     }
     _confirmingExit = true;
     final controller = _controller;
     final wasPlaying = controller?.value.isPlaying == true;
-    if (wasPlaying) await controller?.pause();
-    if (!mounted) return;
-    final exit = await showPlayerExitConfirmation(context);
-    _confirmingExit = false;
-    if (!mounted) return;
-    if (exit == true) {
-      if (controller != null) {
-        await _persistPlayback(controller.value.position, force: true);
+    bool? exit;
+    try {
+      if (wasPlaying) {
+        // Do not let a failed native pause strand Back behind the confirmation
+        // guard. The user must still be able to release and exit a bad decoder.
+        try {
+          await controller?.pause();
+        } catch (_) {}
       }
       if (!mounted) return;
-      setState(() => _allowExit = true);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && context.canPop()) context.pop();
-      });
+      exit = await showPlayerExitConfirmation(context);
+    } catch (_) {
+      // A transient route/dialog failure must not permanently consume Back.
+      exit = false;
+    } finally {
+      _confirmingExit = false;
+    }
+    if (!mounted) return;
+    if (exit == true) {
+      final navigator = Navigator.of(context);
+      final position = _effectiveHandoffPosition();
+      _pendingHandoffPosition = position;
+      if (await _prepareForEngineHandoff(position)) {
+        _popPlayerRouteAfterHandoff(navigator);
+      }
     } else if (wasPlaying) {
-      await controller?.play();
-      _showControls(focusControls: true);
+      try {
+        await controller?.play();
+      } catch (_) {
+        // Keep the HUD usable if the decoder cannot resume after cancellation.
+      }
+      if (mounted) _showControls(focusControls: true);
     }
   }
 
   @override
   void dispose() {
-    _scrubController.cancel();
-    final controller = _controller;
+    final controller = _controllerPendingRelease ?? _controller;
     if (controller != null && !_controllerReleasedForHandoff) {
       unawaited(_persistPlayback(controller.value.position, force: true));
       controller.removeListener(_onValueChanged);
       if (controller.isReadyToInitialize == true) {
-        unawaited(controller.dispose());
+        unawaited(
+          _handoffRelease.release(
+            () => _disposeControllerAuthoritatively(controller),
+          ),
+        );
       }
     }
     if (!_nativePlaybackStateClearedForHandoff) {
@@ -1839,7 +1938,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     return PopScope(
       canPop: _allowExit,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !_scrubController.cancel()) {
+        if (!didPop) {
           unawaited(_confirmExit());
         }
       },
@@ -1957,7 +2056,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                         onForward: () => unawaited(
                           _seekBy(Duration(seconds: _seekForwardSeconds)),
                         ),
-                        onSeek: (target) => unawaited(_seekTo(target)),
                         onAudio: () => unawaited(_openAudioTrackPicker()),
                         onSubtitles: () =>
                             unawaited(_openSubtitleTrackPicker()),
@@ -1969,9 +2067,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                             : null,
                         onOptions: () => unawaited(_openOptions()),
                         onDismiss: _hideControls,
-                        scrubController: _scrubController,
-                        onScrubStarted: () => _controlsTimer?.cancel(),
-                        onScrubFinished: _scheduleControlsHide,
                       ),
                     ),
                   ),
@@ -2046,7 +2141,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
-    required this.onSeek,
     required this.onAudio,
     required this.onSubtitles,
     required this.onCaptionSize,
@@ -2055,9 +2149,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
     this.onSources,
     required this.onOptions,
     required this.onDismiss,
-    required this.scrubController,
-    this.onScrubStarted,
-    this.onScrubFinished,
   });
 
   final VlcPlayerController? controller;
@@ -2070,7 +2161,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
-  final ValueChanged<Duration> onSeek;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
   final VoidCallback onCaptionSize;
@@ -2079,9 +2169,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
   final VoidCallback? onSources;
   final VoidCallback onOptions;
   final VoidCallback onDismiss;
-  final PlayerScrubController scrubController;
-  final VoidCallback? onScrubStarted;
-  final VoidCallback? onScrubFinished;
 
   @override
   Widget build(BuildContext context) {
@@ -2110,7 +2197,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
       onRewind: onRewind,
       onPlayPause: onPlayPause,
       onForward: onForward,
-      onSeek: onSeek,
       onAudio: onAudio,
       onSubtitles: onSubtitles,
       onCaptionSize: onCaptionSize,
@@ -2119,9 +2205,6 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
       onSources: onSources,
       onOptions: onOptions,
       onDismiss: onDismiss,
-      scrubController: scrubController,
-      onScrubStarted: onScrubStarted,
-      onScrubFinished: onScrubFinished,
     );
   }
 }

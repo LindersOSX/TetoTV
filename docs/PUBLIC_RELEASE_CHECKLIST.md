@@ -64,7 +64,9 @@ in-place updates.
    and confirm the in-app About/Legal disclosure is present and readable.
 3. Run Flutter formatting, analysis, unit/widget/integration tests, broker
    syntax/self-tests, Android JVM tests, release lint, and Kotlin compilation.
-4. Build universal plus ARM32, ARM64, and x86_64 APKs with the protected key.
+4. Build exactly three public APKs with the protected key: Universal, ARM32
+   (`armeabi-v7a`), and ARM64 (`arm64-v8a`). Keep x86_64 as a test-only ABI;
+   do not upload a separate x86_64 release asset.
 5. Verify package ID, version codes, signer identity, v2/v3 signatures,
    zip/page alignment, supported ABIs, min/target SDKs, manifest permissions,
    and absence of debug flags/secrets/default source URLs.
@@ -74,8 +76,9 @@ in-place updates.
    download/install.
 7. Test a 32-bit Fire TV build, ARM64 Google TV/Chromecast build, foldable phone
    portrait/landscape, and a 16-KiB-page Android device or emulator.
-8. Create releases as drafts, upload and verify all assets, then publish only
-   after the universal asset and broker update path pass an end-to-end test.
+8. After all local checks pass, publish one normal completed release with only
+   the three verified APKs. Immediately compare the hosted asset digests and
+   broker-downloaded universal APK to the local files before announcing it.
 
 ## Content/source policy
 

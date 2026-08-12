@@ -199,13 +199,6 @@ void main() {
     );
   });
 
-  test('held scrub accelerates after precise initial adjustments', () {
-    expect(playerScrubStep(0), const Duration(seconds: 30));
-    expect(playerScrubStep(4), const Duration(seconds: 30));
-    expect(playerScrubStep(5), const Duration(minutes: 1));
-    expect(playerScrubStep(20), const Duration(minutes: 1));
-  });
-
   test('terminal outro remains identifiable behind the eof guard', () {
     expect(
       skipSegmentReachesPlaybackEnd(
@@ -369,4 +362,37 @@ void main() {
       reason: 'other directions must still reveal and navigate the HUD',
     );
   });
+
+  test(
+    'native player release is joined and can retry after a failure',
+    () async {
+      final coordinator = PlayerReleaseCoordinator();
+      var attempts = 0;
+      final first = coordinator.release(() async {
+        attempts += 1;
+        await Future<void>.delayed(Duration.zero);
+        throw StateError('decoder still owns the surface');
+      });
+      final joined = coordinator.release(() async {
+        attempts += 100;
+      });
+
+      expect(await Future.wait([first, joined]), [isFalse, isFalse]);
+      expect(
+        attempts,
+        1,
+        reason: 'concurrent release must share one operation',
+      );
+      expect(coordinator.released, isFalse);
+
+      expect(
+        await coordinator.release(() async {
+          attempts += 1;
+        }),
+        isTrue,
+      );
+      expect(attempts, 2);
+      expect(coordinator.released, isTrue);
+    },
+  );
 }

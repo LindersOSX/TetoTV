@@ -68,6 +68,10 @@ void main() {
                   ],
                 },
               },
+              '/v4/magnet/delete' => {
+                'status': 'success',
+                'data': {'message': 'Magnet was successfully deleted'},
+              },
               '/v4/link/unlock' => {
                 'status': 'success',
                 'data': {'delayed': 77},
@@ -102,6 +106,7 @@ void main() {
     final status = await client.magnetStatus(upload.id);
     final files = await client.magnetFiles(upload.id);
     final link = await client.unlock(files.single.link);
+    await client.deleteMagnet(upload.id);
 
     expect(account.username, 'teto');
     expect(account.isPremium, isTrue);
@@ -111,6 +116,7 @@ void main() {
     expect(files.single.name, 'Season/Episode 02.mkv');
     expect(link.host, 'cdn.alldebrid.test');
     expect(paths, containsAll(['/v4/link/unlock', '/v4/link/delayed']));
+    expect(paths, contains('/v4/magnet/delete'));
   });
 
   test('maps an API authentication error without exposing the key', () async {

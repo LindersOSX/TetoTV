@@ -1,11 +1,17 @@
 import 'package:anime_tv/features/streaming/data/all_debrid_models.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 
-class AllDebridException implements Exception {
-  const AllDebridException(this.message, {this.code});
+class AllDebridException implements DebridProviderFailure {
+  const AllDebridException(this.message, {this.code, this.category});
 
   final String message;
   final String? code;
+  final DebridFailureCategory? category;
+
+  @override
+  DebridFailureCategory get failureCategory =>
+      category ?? _allDebridFailureCategory(code);
 
   @override
   String toString() => message;
@@ -41,7 +47,10 @@ class AllDebridClient {
     final data = await _post('/v4/magnet/upload', {'magnets[]': magnetUri});
     final magnets = data['magnets'];
     if (magnets is! List || magnets.isEmpty || magnets.first is! Map) {
-      throw const AllDebridException('AllDebrid did not accept that magnet.');
+      throw const AllDebridException(
+        'AllDebrid did not accept that magnet.',
+        category: DebridFailureCategory.releaseUnavailable,
+      );
     }
     final item = Map<String, dynamic>.from(magnets.first as Map);
     if (item['error'] is Map) {
@@ -51,6 +60,7 @@ class AllDebridClient {
     if (id <= 0) {
       throw const AllDebridException(
         'AllDebrid returned an invalid magnet ID.',
+        category: DebridFailureCategory.releaseUnavailable,
       );
     }
     return AllDebridMagnetUpload(id: id, ready: item['ready'] == true);
@@ -63,9 +73,16 @@ class AllDebridClient {
         ? magnets.first
         : magnets;
     if (raw is! Map) {
-      throw const AllDebridException('AllDebrid magnet was not found.');
+      throw const AllDebridException(
+        'AllDebrid magnet was not found.',
+        category: DebridFailureCategory.releaseUnavailable,
+      );
     }
     return AllDebridMagnetStatus.fromJson(Map<String, dynamic>.from(raw));
+  }
+
+  Future<void> deleteMagnet(int id) async {
+    await _post('/v4/magnet/delete', {'id': id});
   }
 
   Future<List<AllDebridTorrentFile>> magnetFiles(int id) async {
@@ -74,6 +91,7 @@ class AllDebridClient {
     if (magnets is! List || magnets.isEmpty || magnets.first is! Map) {
       throw const AllDebridException(
         'AllDebrid returned no files for that magnet.',
+        category: DebridFailureCategory.releaseUnavailable,
       );
     }
     final magnet = Map<String, dynamic>.from(magnets.first as Map);
@@ -98,6 +116,7 @@ class AllDebridClient {
         if (status == 3) {
           throw const AllDebridException(
             'AllDebrid could not generate the streaming link.',
+            category: DebridFailureCategory.releaseUnavailable,
           );
         }
         value = delayed['link']?.toString();
@@ -108,6 +127,7 @@ class AllDebridClient {
     if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) {
       throw const AllDebridException(
         'AllDebrid did not return a secure streaming link.',
+        category: DebridFailureCategory.releaseUnavailable,
       );
     }
     return uri;
@@ -153,11 +173,21 @@ class AllDebridClient {
         throw const AllDebridException(
           'That AllDebrid API key is invalid or blocked.',
           code: 'AUTH_ERROR',
+          category: DebridFailureCategory.authorization,
+        );
+      }
+      if (error.response?.statusCode == 429) {
+        throw const AllDebridException(
+          'AllDebrid is receiving too many requests. Wait a moment and try '
+          'again.',
+          code: 'RATE_LIMITED',
+          category: DebridFailureCategory.rateLimited,
         );
       }
       throw AllDebridException(
         error.message ?? 'Could not reach AllDebrid.',
         code: '${error.response?.statusCode ?? ''}',
+        category: DebridFailureCategory.serviceUnavailable,
       );
     }
   }
@@ -204,3 +234,47 @@ int _asInt(Object? value) => switch (value) {
   final String text => int.tryParse(text) ?? 0,
   _ => 0,
 };
+
+DebridFailureCategory _allDebridFailureCategory(String? rawCode) {
+  final code = rawCode?.trim().toUpperCase() ?? '';
+  final status = int.tryParse(code);
+  if (status == 401 || status == 403) {
+    return DebridFailureCategory.authorization;
+  }
+  if (status == 402) return DebridFailureCategory.account;
+  if (status == 429) return DebridFailureCategory.rateLimited;
+
+  if (const {
+    'AUTH_USER_BANNED',
+    'AUTH_USER_EXPIRED',
+    'MAGNET_MUST_BE_PREMIUM',
+    'MAGNET_TOO_MANY_ACTIVE',
+    'MAGNET_TOO_MANY',
+  }.contains(code)) {
+    return DebridFailureCategory.account;
+  }
+  if (code.startsWith('AUTH_')) {
+    return DebridFailureCategory.authorization;
+  }
+  if (const {
+    'RATE_LIMITED',
+    'RATE_LIMIT_EXCEEDED',
+    'TOO_MANY_REQUESTS',
+  }.contains(code)) {
+    return DebridFailureCategory.rateLimited;
+  }
+  if (const {
+        'MAGNET_INVALID_ID',
+        'MAGNET_NO_URI',
+        'MAGNET_INVALID_URI',
+        'MAGNET_SIZE_TOO_BIG',
+        'MAGNET_UPLOAD_FAILED',
+        'LINK_IS_MISSING',
+        'LINK_HOST_NOT_SUPPORTED',
+        'LINK_DOWN',
+      }.contains(code) ||
+      code.startsWith('LINK_ERROR')) {
+    return DebridFailureCategory.releaseUnavailable;
+  }
+  return DebridFailureCategory.serviceUnavailable;
+}

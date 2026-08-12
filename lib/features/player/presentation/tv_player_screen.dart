@@ -471,7 +471,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   final _playerRootFocus = FocusNode(debugLabel: 'player.root');
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
   final _skipControlFocus = FocusNode(debugLabel: 'player.skip-segment');
-  final _scrubController = PlayerScrubController();
   Timer? _controlsTimer;
   Timer? _videoWatchdog;
   Timer? _performanceWatchdog;
@@ -543,8 +542,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   bool _requestedVlcFallback = false;
   bool _reportedPlaybackSuccess = false;
   bool _engineHandoffInProgress = false;
+  bool _handoffAttemptActive = false;
+  bool _handoffReleaseFailed = false;
   bool _playerReleasedForHandoff = false;
   bool _nativePlaybackStateClearedForHandoff = false;
+  bool _routePopScheduled = false;
+  Duration? _pendingHandoffPosition;
+  final PlayerReleaseCoordinator _handoffRelease = PlayerReleaseCoordinator();
   final Set<Future<void>> _playerMutationOperations = <Future<void>>{};
   Duration? _pendingInheritedResume;
 
@@ -985,9 +989,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           : _player.state.position;
       if (!await _prepareForEngineHandoff(completedPosition)) return;
       if (!mounted) return;
-      context.pushReplacement(
-        Uri(path: '/resolve', queryParameters: query).toString(),
-      );
+      try {
+        final navigation = GoRouter.of(context).pushReplacement<void>(
+          Uri(path: '/resolve', queryParameters: query).toString(),
+        );
+        unawaited(
+          navigation.then<void>(
+            (_) {},
+            onError: (Object error, StackTrace stackTrace) {
+              if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+            },
+          ),
+        );
+      } catch (_) {
+        // Playback is already released. Fall back to the normal player-route
+        // pop instead of leaving a hidden, non-interactive screen behind.
+        if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+      }
     } catch (_) {}
   }
 
@@ -1303,10 +1321,22 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     ReleaseCandidate release,
     EpisodeReference episode,
   ) async {
-    final token = await ref
-        .read(debridTokenServiceProvider)
-        .accessToken(widget.debridService);
-    if (token == null || token.isEmpty) return null;
+    String? token;
+    try {
+      token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(widget.debridService);
+    } catch (_) {
+      throw DebridProviderAccessException(
+        widget.debridService,
+        detail:
+            'Your ${widget.debridService.displayName} connection could not be '
+            'refreshed. Reconnect it in Accounts, then try again.',
+      );
+    }
+    if (token == null || token.isEmpty) {
+      throw DebridProviderAccessException(widget.debridService);
+    }
     final source = SingleReleaseSource(release);
     final resolver = createDebridStreamResolver(
       service: widget.debridService,
@@ -1360,11 +1390,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _showTrackMessage('Switched to a compatible stream');
           return;
         } catch (error) {
-          if (isTerminalDebridAlternativeFailure(error)) {
+          if (isTerminalDebridFailoverFailure(error)) {
             terminalFailure = error;
             break;
           }
-          // Continue through candidate-specific and transient failures.
+          // Continue only through candidate-specific/cache-miss failures.
         }
       }
       if (mounted) {
@@ -1431,8 +1461,20 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _returnToStreamPicker() async {
-    await _persistPlayback(_player.state.position, force: true);
-    if (mounted && context.canPop()) context.pop();
+    final navigator = Navigator.of(context);
+    final position = _effectiveHandoffPosition();
+    _pendingHandoffPosition = position;
+    if (!await _prepareForEngineHandoff(position)) return;
+    _popPlayerRouteAfterHandoff(navigator);
+  }
+
+  void _popPlayerRouteAfterHandoff(NavigatorState navigator) {
+    if (!mounted || _routePopScheduled) return;
+    _routePopScheduled = true;
+    setState(() => _allowExit = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (navigator.mounted) unawaited(navigator.maybePop());
+    });
   }
 
   Future<void> _recordEngineSuccess() async {
@@ -1446,44 +1488,56 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<bool> _prepareForEngineHandoff(Duration position) async {
-    if (_engineHandoffInProgress) return false;
+    if (_handoffAttemptActive) return false;
+    _handoffAttemptActive = true;
+    _handoffReleaseFailed = false;
+    _pendingHandoffPosition ??= position;
     _engineHandoffInProgress = true;
-    _scrubController.cancel();
     _controlsTimer?.cancel();
     _videoWatchdog?.cancel();
     _performanceWatchdog?.cancel();
     _seekPreviewTimer?.cancel();
     if (mounted) setState(() => _controlsVisible = false);
 
-    // Remove the texture from the widget tree before stopping libmpv. Starting
-    // another native engine while mpv still owns its Surface/audio session can
-    // terminate the process on resource-constrained TV firmware.
-    await WidgetsBinding.instance.endOfFrame;
-    await _waitForPlayerMutations();
-    _videoWatchdog?.cancel();
-    _performanceWatchdog?.cancel();
-    _queuedSeekTarget = null;
-    await _waitForSeekDrain();
-    final skipSeek = _skipSeekOperation;
-    if (skipSeek != null) await skipSeek;
-    final trickplayOperations = List<Future<void>>.of(_trickplayOperations);
-    if (trickplayOperations.isNotEmpty) {
-      await Future.wait(trickplayOperations);
+    try {
+      // Remove the texture from the widget tree before stopping libmpv.
+      // Starting another native engine while mpv still owns its Surface/audio
+      // session can terminate the process on resource-constrained TV firmware.
+      await WidgetsBinding.instance.endOfFrame;
+      await _waitForPlayerMutations();
+      _videoWatchdog?.cancel();
+      _performanceWatchdog?.cancel();
+      _queuedSeekTarget = null;
+      await _waitForSeekDrain();
+      final skipSeek = _skipSeekOperation;
+      if (skipSeek != null) await skipSeek;
+      final trickplayOperations = List<Future<void>>.of(_trickplayOperations);
+      if (trickplayOperations.isNotEmpty) {
+        await Future.wait(trickplayOperations);
+      }
+    } catch (_) {
+      // A failed in-flight command has already completed. Continue to the
+      // authoritative native release instead of leaving a broken decoder up.
     }
     try {
       await _persistPlayback(position, force: true);
     } catch (_) {
       // A failed checkpoint must not strand the user in the old engine.
     }
-    await _progressSubscription?.cancel();
-    await _tracksSubscription?.cancel();
-    await _errorSubscription?.cancel();
-    await _completedSubscription?.cancel();
-    await _videoParamsSubscription?.cancel();
-    await _playingSubscription?.cancel();
-    await _mediaActionSubscription?.cancel();
-    await _sourceDiscoverySubscription?.cancel();
     try {
+      await _progressSubscription?.cancel();
+      await _tracksSubscription?.cancel();
+      await _errorSubscription?.cancel();
+      await _completedSubscription?.cancel();
+      await _videoParamsSubscription?.cancel();
+      await _playingSubscription?.cancel();
+      await _mediaActionSubscription?.cancel();
+      await _sourceDiscoverySubscription?.cancel();
+    } catch (_) {
+      // Stream callbacks guard on _engineHandoffInProgress. Native release is
+      // still the authoritative safety boundary if a Dart cancellation fails.
+    }
+    final released = await _handoffRelease.release(() async {
       try {
         await _player.stop();
       } catch (_) {
@@ -1492,11 +1546,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       }
       await _player.dispose();
       _playerReleasedForHandoff = true;
-    } catch (error) {
+    });
+    if (!released) {
+      _handoffAttemptActive = false;
+      _handoffReleaseFailed = true;
       if (mounted) {
         setState(() {
           _trackMessage =
-              'Player switch stopped safely. Press Back and reopen playback.';
+              'Could not release the player safely. Press Exit to retry.';
         });
       }
       return false;
@@ -1509,6 +1566,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       // effort and must not reopen the old engine.
     }
     _nativePlaybackStateClearedForHandoff = true;
+    _handoffAttemptActive = false;
     return mounted;
   }
 
@@ -2491,42 +2549,61 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _confirmExit() async {
-    if (_confirmingExit || !mounted) return;
+    if (_confirmingExit || _routePopScheduled || !mounted) return;
     if (_engineHandoffInProgress) {
-      setState(() => _allowExit = true);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && context.canPop()) context.pop();
-      });
+      if (_handoffAttemptActive || !_handoffReleaseFailed) return;
+      final navigator = Navigator.of(context);
+      final position = _pendingHandoffPosition ?? Duration.zero;
+      if (await _prepareForEngineHandoff(position)) {
+        _popPlayerRouteAfterHandoff(navigator);
+      }
       return;
     }
     _confirmingExit = true;
     final wasPlaying = _player.state.playing;
-    if (wasPlaying) await _player.pause();
-    if (!mounted) return;
-    final exit = await showPlayerExitConfirmation(context);
-    _confirmingExit = false;
+    bool? exit;
+    try {
+      if (wasPlaying) {
+        // A decoder that is already failing may reject pause. Exiting must
+        // remain reachable even in that state, so the dialog is independent
+        // of a successful pause acknowledgement.
+        try {
+          await _player.pause();
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      exit = await showPlayerExitConfirmation(context);
+    } catch (_) {
+      // A transient route/dialog failure must not permanently consume Back.
+      exit = false;
+    } finally {
+      _confirmingExit = false;
+    }
     if (!mounted) return;
     if (exit == true) {
-      await _persistPlayback(_player.state.position, force: true);
-      if (!mounted) return;
-      setState(() => _allowExit = true);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && context.canPop()) context.pop();
-      });
+      final navigator = Navigator.of(context);
+      final position = _effectiveHandoffPosition();
+      _pendingHandoffPosition = position;
+      if (await _prepareForEngineHandoff(position)) {
+        _popPlayerRouteAfterHandoff(navigator);
+      }
     } else if (wasPlaying) {
-      await _player.play();
-      _showControls(focusControls: true);
+      try {
+        await _player.play();
+      } catch (_) {
+        // Keep the player screen responsive if a broken decoder cannot resume.
+      }
+      if (mounted) _showControls(focusControls: true);
     }
   }
 
   @override
   void dispose() {
-    _scrubController.cancel();
     if (!_engineHandoffInProgress && !_playerReleasedForHandoff) {
       unawaited(_persistPlayback(_player.state.position, force: true));
     }
     unawaited(_saveSeriesPreferences());
-    if (!_engineHandoffInProgress && !_nativePlaybackStateClearedForHandoff) {
+    if (!_nativePlaybackStateClearedForHandoff) {
       unawaited(AndroidTvBridge.instance.clearMediaSession());
       unawaited(AndroidTvBridge.instance.clearPreferredFrameRate());
     }
@@ -2547,8 +2624,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _playerRootFocus.dispose();
     _playControlFocus.dispose();
     _skipControlFocus.dispose();
-    if (!_engineHandoffInProgress && !_playerReleasedForHandoff) {
-      _player.dispose();
+    if (!_playerReleasedForHandoff) {
+      unawaited(_handoffRelease.release(_player.dispose));
     }
     super.dispose();
   }
@@ -2558,7 +2635,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     return PopScope(
       canPop: _allowExit,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !_scrubController.cancel()) {
+        if (!didPop) {
           unawaited(_confirmExit());
         }
       },
@@ -2665,7 +2742,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                           onPlayPause: _player.playOrPause,
                           onForward: () =>
                               _seekBy(Duration(seconds: _seekForwardSeconds)),
-                          onSeek: (target) => unawaited(_seekTo(target)),
                           onAudio: _openAudioTrackPicker,
                           onSubtitles: _openSubtitleTrackPicker,
                           onCaptionSize: _openPlaybackMenu,
@@ -2676,9 +2752,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                               : null,
                           onOptions: _openPlaybackMenu,
                           onDismiss: _hideControls,
-                          scrubController: _scrubController,
-                          onScrubStarted: () => _controlsTimer?.cancel(),
-                          onScrubFinished: _scheduleControlsHide,
                         ),
                       ),
                     ),
@@ -2791,7 +2864,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
-    required this.onSeek,
     required this.onAudio,
     required this.onSubtitles,
     required this.onCaptionSize,
@@ -2800,9 +2872,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
     this.onSources,
     required this.onOptions,
     required this.onDismiss,
-    required this.scrubController,
-    this.onScrubStarted,
-    this.onScrubFinished,
   });
 
   final Player player;
@@ -2815,7 +2884,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
-  final ValueChanged<Duration> onSeek;
   final VoidCallback onAudio;
   final VoidCallback onSubtitles;
   final VoidCallback onCaptionSize;
@@ -2824,9 +2892,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
   final VoidCallback? onSources;
   final VoidCallback onOptions;
   final VoidCallback onDismiss;
-  final PlayerScrubController scrubController;
-  final VoidCallback? onScrubStarted;
-  final VoidCallback? onScrubFinished;
 
   @override
   Widget build(BuildContext context) {
@@ -2853,7 +2918,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
             onRewind: onRewind,
             onPlayPause: onPlayPause,
             onForward: onForward,
-            onSeek: onSeek,
             onAudio: onAudio,
             onSubtitles: onSubtitles,
             onCaptionSize: onCaptionSize,
@@ -2862,9 +2926,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
             onSources: onSources,
             onOptions: onOptions,
             onDismiss: onDismiss,
-            scrubController: scrubController,
-            onScrubStarted: onScrubStarted,
-            onScrubFinished: onScrubFinished,
           ),
         ),
       ),

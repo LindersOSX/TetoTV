@@ -7,7 +7,10 @@ import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
+import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
+import 'package:anime_tv/features/streaming/data/premiumize_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
+import 'package:anime_tv/features/streaming/data/torbox_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
@@ -428,6 +431,54 @@ void main() {
     expect(find.textContaining('infringing_file'), findsNothing);
   });
 
+  testWidgets(
+    'uncached Real-Debrid releases report that no download was kept',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var resolverCalls = 0;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _RankedReleaseSource(3),
+            ),
+            debridStreamResolverFactoryProvider.overrideWithValue(({
+              required service,
+              required token,
+              required source,
+            }) {
+              resolverCalls++;
+              return const _ErrorResolver(
+                DebridCacheMissException(DebridService.realDebrid),
+              );
+            }),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await _pumpUntilFound(tester, find.text('Release 3'));
+      await tester.tap(find.text('Release 3'));
+      await _pumpUntilFound(
+        tester,
+        find.textContaining('No instantly cached Real-Debrid stream was found'),
+      );
+
+      expect(resolverCalls, 3);
+      expect(find.textContaining('did not leave an uncached'), findsOneWidget);
+    },
+  );
+
   testWidgets('terminal Real-Debrid authorization failure stops failover', (
     tester,
   ) async {
@@ -473,6 +524,55 @@ void main() {
     expect(find.textContaining('infringing_file'), findsNothing);
   });
 
+  testWidgets(
+    'terminal debrid cleanup failure stops failover and names the dashboard',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var resolverCalls = 0;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _RankedReleaseSource(5),
+            ),
+            debridStreamResolverFactoryProvider.overrideWithValue(({
+              required service,
+              required token,
+              required source,
+            }) {
+              resolverCalls++;
+              return const _ErrorResolver(
+                DebridCleanupFailureException(DebridService.realDebrid),
+              );
+            }),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await _pumpUntilFound(tester, find.text('Release 5'));
+      await tester.tap(find.text('Release 5'));
+      await _pumpUntilFound(
+        tester,
+        find.textContaining('Check your Real-Debrid dashboard'),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(resolverCalls, 1);
+      expect(find.textContaining('Automatic failover stopped'), findsOneWidget);
+    },
+  );
+
   testWidgets('Real-Debrid rate limiting does not fan out across releases', (
     tester,
   ) async {
@@ -514,6 +614,96 @@ void main() {
 
     expect(resolverCalls, 1);
   });
+
+  for (final testCase
+      in <
+        ({
+          DebridService service,
+          DebridProviderFailure error,
+          String expectedMessage,
+        })
+      >[
+        (
+          service: DebridService.realDebrid,
+          error: RealDebridException.fromApi(code: 8, httpStatus: 401),
+          expectedMessage: 'Reconnect it',
+        ),
+        (
+          service: DebridService.torBox,
+          error: const TorBoxException(
+            'TorBox token expired',
+            code: 'AUTH_ERROR',
+          ),
+          expectedMessage: 'TorBox token expired',
+        ),
+        (
+          service: DebridService.premiumize,
+          error: const PremiumizeException(
+            'Premiumize token expired',
+            code: 'authentication_failed',
+          ),
+          expectedMessage: 'Premiumize token expired',
+        ),
+        (
+          service: DebridService.allDebrid,
+          error: const AllDebridException(
+            'AllDebrid token expired',
+            code: 'AUTH_BAD_APIKEY',
+          ),
+          expectedMessage: 'AllDebrid token expired',
+        ),
+      ]) {
+    testWidgets(
+      '${testCase.service.displayName} terminal provider errors stop Resolve '
+      'candidate fan-out',
+      (tester) async {
+        FlutterSecureStorage.setMockInitialValues({
+          testCase.service.tokenStorageKey: 'provider-token',
+        });
+        await tester.binding.setSurfaceSize(const Size(1920, 1080));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        var resolverCalls = 0;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              configuredReleaseSourceProvider.overrideWithValue(
+                const _RankedReleaseSource(5),
+              ),
+              debridStreamResolverFactoryProvider.overrideWithValue(({
+                required service,
+                required token,
+                required source,
+              }) {
+                expect(service, testCase.service);
+                resolverCalls++;
+                return _ErrorResolver(testCase.error);
+              }),
+            ],
+            child: const MaterialApp(
+              home: ResolveEpisodeScreen(
+                episode: EpisodeReference(
+                  anilistMediaId: 42,
+                  title: 'Example Show',
+                  episode: 1,
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await _pumpUntilFound(tester, find.text('Release 5'));
+        await tester.tap(find.text('Release 5'));
+        await _pumpUntilFound(
+          tester,
+          find.textContaining(testCase.expectedMessage),
+        );
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(resolverCalls, 1);
+      },
+    );
+  }
 
   test(
     'stream filters distinguish language, quality, codec, HDR and batches',
@@ -560,6 +750,15 @@ void main() {
       '720p',
       'Auto',
     ]);
+  });
+
+  test('cached-only exhaustion message covers every debrid service', () {
+    for (final service in DebridService.values) {
+      final message = debridCacheExhaustedMessage(service, 3);
+      expect(message, contains(service.displayName));
+      expect(message, contains('3 releases'));
+      expect(message, contains('did not leave an uncached cloud download'));
+    }
   });
 }
 

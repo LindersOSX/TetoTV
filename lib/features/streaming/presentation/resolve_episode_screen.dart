@@ -88,6 +88,13 @@ int tvPlaybackCompatibilityRank(
 bool isTvSafeRelease(ReleaseCandidate release) =>
     tvPlaybackCompatibilityRank(release) == 0;
 
+String debridCacheExhaustedMessage(DebridService service, int attempted) {
+  final releases = attempted == 1 ? 'release' : '$attempted releases';
+  return 'No instantly cached ${service.displayName} stream was found after '
+      'checking $releases. TetoTV did not leave an uncached cloud download '
+      'running.';
+}
+
 bool releaseMatchesStreamFilters(
   ReleaseCandidate release, {
   String language = 'all',
@@ -488,7 +495,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     setState(() {
       _resolving = true;
       _progress = 0;
-      _status = 'Sending the release to ${_debridService.displayName}…';
+      _status =
+          'Checking ${_debridService.displayName} for an instantly cached '
+          'release…';
       _error = null;
       _lastAttemptedRelease = selected;
     });
@@ -498,15 +507,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         token = await ref
             .read(debridTokenServiceProvider)
             .accessToken(_debridService);
-      } catch (error) {
-        if (_debridService == DebridService.realDebrid) {
-          throw const RealDebridException(
-            'Your Real-Debrid connection could not be refreshed. Reconnect it '
-            'in Accounts, then try again.',
-            kind: RealDebridFailureKind.authorization,
-          );
-        }
-        rethrow;
+      } catch (_) {
+        throw DebridProviderAccessException(
+          _debridService,
+          detail:
+              'Your ${_debridService.displayName} connection could not be '
+              'refreshed. Reconnect it in Accounts, then try again.',
+        );
       }
       if (!mounted || attempt != _resolveAttempt) return;
       if (token == null || token.isEmpty) {
@@ -515,16 +522,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               _connectedServices = {..._connectedServices}
                 ..remove(_debridService),
         );
-        if (_debridService == DebridService.realDebrid) {
-          throw const RealDebridException(
-            'Real-Debrid is not connected. Reconnect it in Accounts.',
-            kind: RealDebridFailureKind.authorization,
-          );
-        }
-        throw StateError(
-          '${_debridService.displayName} is not connected. '
-          'Open Accounts to reconnect it.',
-        );
+        throw DebridProviderAccessException(_debridService);
       }
       final resolver = ref.read(debridStreamResolverFactoryProvider)(
         service: _debridService,
@@ -606,18 +604,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   !_failedResolveHashes.contains(item.infoHash.toLowerCase()),
             )
             .firstOrNull;
-        final terminalAccountFailure =
-            error is RealDebridException && error.isTerminalAccountFailure;
-        final candidateCanRecover =
-            error is! RealDebridException || error.canTryAnotherRelease;
+        final terminalProviderFailure = isTerminalDebridFailoverFailure(error);
         final withinFailoverBudget =
             _failedResolveHashes.length < _maxAutomaticResolveCandidates &&
             (_automaticResolveDeadline == null ||
                 DateTime.now().isBefore(_automaticResolveDeadline!));
-        if (!terminalAccountFailure &&
-            candidateCanRecover &&
-            next != null &&
-            withinFailoverBudget) {
+        if (!terminalProviderFailure && next != null && withinFailoverBudget) {
           setState(() {
             _resolving = false;
             _status = 'That release failed. Trying another release…';
@@ -629,10 +621,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           );
           return;
         }
-        final errorMessage =
-            error is RealDebridException && error.canTryAnotherRelease
-            ? _exhaustedReleaseMessage(_failedResolveHashes.length)
-            : error.toString().replaceFirst('Bad state: ', '');
+        final errorMessage = switch (error) {
+          DebridCacheMissException() => debridCacheExhaustedMessage(
+            _debridService,
+            _failedResolveHashes.length,
+          ),
+          RealDebridException(canTryAnotherRelease: true) =>
+            _exhaustedReleaseMessage(_failedResolveHashes.length),
+          DebridProviderFailure(
+            failureCategory: DebridFailureCategory.releaseUnavailable,
+          ) =>
+            _exhaustedReleaseMessage(_failedResolveHashes.length),
+          _ => error.toString().replaceFirst('Bad state: ', ''),
+        };
         setState(() {
           _error = errorMessage;
           _status = 'Could not resolve this episode';

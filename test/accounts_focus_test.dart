@@ -11,6 +11,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 void main() {
+  const androidChannel = MethodChannel('dev.tetotv/android_tv');
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, null);
+  });
+
   testWidgets('D-pad reaches Home shelves and switches to streaming', (
     tester,
   ) async {
@@ -339,6 +346,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.clear-cache',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.reset-app',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.privacy',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -414,6 +433,117 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.donate',
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Storage actions fit phones and Clear cache preserves app data', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    String? method;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+          method = call.method;
+          if (call.method == 'clearAppCache') return 1536;
+          return null;
+        });
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('System'));
+    await tester.pumpAndSettle();
+    final clear = find.byKey(
+      const ValueKey('storage-clear-cache'),
+      skipOffstage: false,
+    );
+    final reset = find.byKey(
+      const ValueKey('storage-reset-app'),
+      skipOffstage: false,
+    );
+    expect(clear, findsOneWidget);
+    expect(reset, findsOneWidget);
+    expect(
+      tester.getTopLeft(reset).dy,
+      greaterThan(tester.getTopLeft(clear).dy),
+      reason: 'Storage actions stack on a narrow phone without clipping.',
+    );
+
+    await tester.scrollUntilVisible(
+      clear,
+      500,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(clear);
+    await tester.pumpAndSettle();
+    expect(method, 'clearAppCache');
+    expect(find.text('Cleared 1.5 KB of temporary files.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Reset requires two confirmations with safe cancel focus', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var resetCalls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+          if (call.method == 'resetApplicationData') {
+            resetCalls++;
+            return true;
+          }
+          return null;
+        });
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('System'));
+    await tester.pumpAndSettle();
+    final resetAction = find.byKey(
+      const ValueKey('storage-reset-app'),
+      skipOffstage: false,
+    );
+    await tester.scrollUntilVisible(
+      resetAction,
+      500,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(resetAction);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reset-warning-dialog')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reset-warning-dialog')), findsNothing);
+    expect(resetCalls, 0, reason: 'Enter activates the focused safe action.');
+    await tester.tap(resetAction);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reset-warning-continue')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reset-final-dialog')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reset-final-dialog')), findsNothing);
+    expect(resetCalls, 0, reason: 'The second dialog also defaults to cancel.');
+    await tester.tap(resetAction);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reset-warning-continue')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reset-final-confirm')));
+    await tester.pumpAndSettle();
+    expect(resetCalls, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -511,10 +641,14 @@ void main() {
     expect(find.text('Streaming'), findsOneWidget);
     expect(find.text('Appearance'), findsNothing);
     expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    final scaffold = find.byType(Scaffold).first;
+    expect(tester.getTopLeft(scaffold), Offset.zero);
+    expect(tester.getSize(scaffold), const Size(390, 844));
     expect(
       tester.widget<SafeArea>(find.byType(SafeArea).first).minimum,
-      EdgeInsets.zero,
-      reason: 'Settings must fill the screen instead of shrinking its canvas.',
+      const EdgeInsets.symmetric(horizontal: 16),
+      reason:
+          'Settings controls need a responsive side inset on narrow screens.',
     );
     expect(tester.takeException(), isNull);
 
