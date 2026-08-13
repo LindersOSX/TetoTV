@@ -57,6 +57,7 @@ flutter_launcher_icons:
   image_path: "assets/branding/tetotv_icon.png"
   adaptive_icon_background: "#030303"
   adaptive_icon_foreground: "assets/branding/tetotv_icon.png"
+  adaptive_icon_monochrome: "assets/branding/tetotv_icon.png"
   adaptive_icon_foreground_inset: 18
   min_sdk_android: 21
 
