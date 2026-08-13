@@ -213,6 +213,9 @@ class TetoPlayerChrome extends StatelessWidget {
                           onPressed: onOptions,
                           onDismiss: onDismiss,
                         ),
+                        // Keep the focused ring and glow inside the horizontal
+                        // viewport on narrow TVs and phones.
+                        const SizedBox(width: 8),
                       ],
                     ),
                   ),
@@ -344,6 +347,19 @@ class TetoPlayerControl extends StatelessWidget {
     return TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
+      onFocusChanged: (focused) {
+        if (!focused) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          Scrollable.ensureVisible(
+            context,
+            alignment: 1,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+            duration: const Duration(milliseconds: 100),
+            curve: Curves.easeOutCubic,
+          );
+        });
+      },
       onKeyEvent: onDismiss == null
           ? null
           : (_, event) {

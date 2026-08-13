@@ -35,6 +35,7 @@ void main() {
       '@+id/tetotv_caption_size',
       '@+id/tetotv_picture_mode',
       '@+id/tetotv_fix_video',
+      '@+id/tetotv_player_sources',
       '@+id/tetotv_player_options',
     ]);
 
@@ -44,10 +45,36 @@ void main() {
       '>Size<',
       '>Picture<',
       '>Player<',
+      '>Sources<',
       '>Options<',
     ]) {
       expect(nativeStrings, contains(label));
     }
+  });
+
+  test('all HUDs reveal the final controls instead of clipping focus', () {
+    final flutterChrome = File(
+      'lib/features/player/presentation/teto_player_chrome.dart',
+    ).readAsStringSync();
+    final nativeChrome = File(
+      'android/app/src/main/res/layout/tetotv_player_controls.xml',
+    ).readAsStringSync();
+    final media3 = File(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+      'Media3PlayerActivity.kt',
+    ).readAsStringSync();
+
+    expect(flutterChrome, contains('Scrollable.ensureVisible('));
+    expect(
+      flutterChrome,
+      contains('ScrollPositionAlignmentPolicy.keepVisibleAtEnd'),
+    );
+    expect(nativeChrome, contains('android:clipChildren="false"'));
+    expect(nativeChrome, contains('@+id/tetotv_sources_control'));
+    expect(nativeChrome, contains('@drawable/tetotv_ic_sources'));
+    expect(media3, contains('container.requestRectangleOnScreen('));
+    expect(media3, contains('STATUS_NEXT_STREAM'));
+    expect(media3, contains('EXTRA_HAS_DIRECT_SOURCES'));
   });
 
   test('all player engines keep five-second hide and Down dismissal', () {

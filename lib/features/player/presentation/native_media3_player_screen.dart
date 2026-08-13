@@ -6,6 +6,7 @@ import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
@@ -126,6 +127,7 @@ class _NativeMedia3PlayerScreenState
   late String _source;
   late ReleaseCandidate _release;
   late StreamReady _currentStream;
+  List<PlaybackStreamOption> _directStreamOptions = const [];
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   Duration _resumePosition = Duration.zero;
   DateTime? _resumeUpdatedAt;
@@ -135,13 +137,17 @@ class _NativeMedia3PlayerScreenState
   bool _syncHandled = false;
   bool _running = false;
   bool _nativeReleaseFailed = false;
+  int? _resolvedMalMediaId;
   String _status = 'Opening the native TV player…';
   String? _diagnostic;
 
   int get _mediaId =>
       widget.anilistMediaId ?? widget.launch.episode.anilistMediaId;
   int get _episodeNumber => widget.episode ?? widget.launch.episode.episode;
-  int? get _malMediaId => widget.malMediaId ?? widget.launch.episode.malMediaId;
+  int? get _malMediaId =>
+      _resolvedMalMediaId ??
+      widget.malMediaId ??
+      widget.launch.episode.malMediaId;
 
   @override
   void initState() {
@@ -149,6 +155,11 @@ class _NativeMedia3PlayerScreenState
     _source = widget.source;
     _release = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
+    _directStreamOptions = mergePlaybackStreamOptions([
+      PlaybackStreamOption(stream: _currentStream, release: _release),
+      ...widget.launch.directAlternatives,
+    ], const []);
+    _resolvedMalMediaId = widget.malMediaId ?? widget.launch.episode.malMediaId;
     _startFromBeginning = widget.launch.episode.startFromBeginning;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_run());
@@ -159,7 +170,9 @@ class _NativeMedia3PlayerScreenState
     if (_running || !mounted) return;
     _running = true;
     try {
+      final malMediaIdFuture = _resolveSkipMalMediaId();
       await _loadResumeAndPreferences();
+      _resolvedMalMediaId = await malMediaIdFuture;
       if (!mounted) return;
       final appearance = ref.read(settingsPreferencesProvider);
       // Media3 intentionally owns the fast hardware-decoding path. Preserve
@@ -216,6 +229,7 @@ class _NativeMedia3PlayerScreenState
           malMediaId: _malMediaId,
           episodeNumber: _episodeNumber,
           artworkUrl: widget.coverImageUrl,
+          hasDirectSources: _currentStream.isWebStream,
         );
         if (!mounted) return;
         final returnNavigation = nativePlayerReturnNavigationForStatus(
@@ -270,13 +284,8 @@ class _NativeMedia3PlayerScreenState
           case 'retry':
             continue;
           case 'next_stream':
-            if (await _switchToCompatibleStream('Requested by the player')) {
-              continue;
-            }
-            if (mounted) {
-              widget.onUseMpv(_resumePosition, _currentStream, _release);
-            }
-            return;
+            await _openDirectStreamPicker();
+            continue;
           case 'use_vlc':
           case 'fallback_vlc':
             if (mounted) {
@@ -348,6 +357,43 @@ class _NativeMedia3PlayerScreenState
     } finally {
       _running = false;
     }
+  }
+
+  Future<int?> _resolveSkipMalMediaId() async {
+    final known = _malMediaId;
+    if (known != null && known > 0) return known;
+    if (_mediaId <= 0) return null;
+    try {
+      return (await ref.read(catalogClientProvider).details(_mediaId)).idMal;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _openDirectStreamPicker() async {
+    if (!mounted) return;
+    final selected = await showPlayerStreamSourcePicker(
+      context: context,
+      initialOptions: _directStreamOptions,
+      selectedUri: _currentStream.uri,
+      onOptionsChanged: (options) {
+        if (mounted) setState(() => _directStreamOptions = options);
+      },
+    );
+    if (!mounted ||
+        selected == null ||
+        selected.stream.uri == _currentStream.uri) {
+      return;
+    }
+    _currentStream = selected.stream;
+    _release = selected.release;
+    _source = selected.stream.uri.toString();
+    _directStreamOptions = mergePlaybackStreamOptions(
+      [selected],
+      _directStreamOptions.where(
+        (candidate) => candidate.stream.uri != selected.stream.uri,
+      ),
+    );
   }
 
   Future<void> _retryAfterFailure() async {

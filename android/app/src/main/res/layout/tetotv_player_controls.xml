@@ -90,6 +90,7 @@
             android:layout_width="match_parent"
             android:layout_height="40dp"
             android:layout_marginTop="10dp"
+            android:clipChildren="false"
             android:clipToPadding="false"
             android:fillViewport="false"
             android:overScrollMode="never"
@@ -280,12 +281,37 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_fix_video"
                             android:nextFocusLeft="@id/tetotv_picture_mode"
-                            android:nextFocusRight="@id/tetotv_player_options"
+                            android:nextFocusRight="@id/tetotv_player_sources"
                             android:src="@drawable/tetotv_ic_player" />
 
                         <TextView
                             style="@style/TetoTVPlayerControlLabel"
                             android:text="@string/tetotv_player_fix_short" />
+                    </LinearLayout>
+
+                    <Space
+                        android:id="@+id/tetotv_sources_spacing"
+                        android:layout_width="8dp"
+                        android:layout_height="1dp"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:id="@+id/tetotv_sources_control"
+                        style="@style/TetoTVPlayerControlPill"
+                        android:addStatesFromChildren="true"
+                        android:visibility="gone">
+
+                        <ImageButton
+                            android:id="@+id/tetotv_player_sources"
+                            style="@style/TetoTVPlayerControlIcon"
+                            android:contentDescription="@string/tetotv_player_sources"
+                            android:nextFocusLeft="@id/tetotv_fix_video"
+                            android:nextFocusRight="@id/tetotv_player_options"
+                            android:src="@drawable/tetotv_ic_sources" />
+
+                        <TextView
+                            style="@style/TetoTVPlayerControlLabel"
+                            android:text="@string/tetotv_player_sources_short" />
                     </LinearLayout>
 
                     <Space
@@ -301,13 +327,17 @@
                             android:id="@+id/tetotv_player_options"
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_options"
-                            android:nextFocusLeft="@id/tetotv_fix_video"
+                            android:nextFocusLeft="@id/tetotv_player_sources"
                             android:src="@drawable/tetotv_ic_options" />
 
                         <TextView
                             style="@style/TetoTVPlayerControlLabel"
                             android:text="@string/tetotv_player_options_short" />
                     </LinearLayout>
+
+                    <Space
+                        android:layout_width="8dp"
+                        android:layout_height="1dp" />
                 </LinearLayout>
             </LinearLayout>
         </HorizontalScrollView>

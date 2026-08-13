@@ -639,6 +639,7 @@ class AndroidTvBridge {
     int? malMediaId,
     int? episodeNumber,
     String? artworkUrl,
+    bool hasDirectSources = false,
     Map<String, String> headers = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -680,6 +681,7 @@ class AndroidTvBridge {
             'videoFit': videoFit,
             'malMediaId': ?malMediaId,
             'episodeNumber': ?episodeNumber,
+            'hasDirectSources': hasDirectSources,
             if (artworkUrl != null && artworkUrl.isNotEmpty)
               'artworkUrl': artworkUrl,
             if (headers.isNotEmpty) 'headers': headers,

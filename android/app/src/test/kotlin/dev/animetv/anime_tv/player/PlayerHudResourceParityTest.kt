@@ -75,7 +75,7 @@ class PlayerHudResourceParityTest {
         val layout = resource("layout/tetotv_player_controls.xml").readText()
         val activity = source("main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt").readText()
         assertFalse(layout.contains("@android:drawable/ic_menu_"))
-        listOf("picture", "player", "options").forEach { name ->
+        listOf("picture", "player", "sources", "options").forEach { name ->
             assertTrue(layout.contains("@drawable/tetotv_ic_$name"))
             val vector = resource("drawable/tetotv_ic_$name.xml").readText()
             assertTrue(vector.contains("<vector"))
@@ -95,6 +95,10 @@ class PlayerHudResourceParityTest {
         }
         assertTrue(activity.contains("control.setOnFocusChangeListener"))
         assertTrue(activity.contains("container.isActivated = hasFocus"))
+        assertTrue(activity.contains("container.requestRectangleOnScreen"))
+        assertTrue(layout.contains("android:clipChildren=\"false\""))
+        assertTrue(layout.contains("@+id/tetotv_sources_control"))
+        assertTrue(activity.contains("STATUS_NEXT_STREAM"))
     }
 
     @Test

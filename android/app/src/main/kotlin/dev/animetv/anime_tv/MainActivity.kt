@@ -322,6 +322,10 @@ class MainActivity : FlutterActivity() {
                 (data["episodeNumber"] as? Number)?.toInt() ?: 0,
             )
             putExtra(
+                Media3PlayerActivity.EXTRA_HAS_DIRECT_SOURCES,
+                data["hasDirectSources"] as? Boolean ?: false,
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,
                 data["startFromBeginning"] as? Boolean ?: false,
             )
