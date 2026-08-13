@@ -4,6 +4,7 @@ import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -20,6 +21,7 @@ import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:flutter/material.dart';
@@ -104,8 +106,14 @@ bool releaseMatchesStreamFilters(
   String hdr = 'any',
   bool allowBatch = true,
 }) {
-  if (language == 'dub' && !release.isDubbed) return false;
-  if (language == 'sub' && release.isDubbed) return false;
+  if (language == 'dub' &&
+      !releaseSupportsAudioPreference(release, PlaybackAudioPreference.dub)) {
+    return false;
+  }
+  if (language == 'sub' &&
+      !releaseSupportsAudioPreference(release, PlaybackAudioPreference.sub)) {
+    return false;
+  }
   if (!allowBatch && release.isBatch) return false;
   final qualityText = '${release.quality ?? ''} ${release.releaseName}'
       .toLowerCase();
@@ -142,7 +150,15 @@ int compareStreamReleases(
   String sortMode = 'compatibility',
   String? preferredProvider,
   String? preferredReleaseGroup,
+  PlaybackAudioPreference? preferredAudio,
 }) {
+  if (preferredAudio != null) {
+    final audio = releaseAudioPreferenceRank(
+      left,
+      preferredAudio,
+    ).compareTo(releaseAudioPreferenceRank(right, preferredAudio));
+    if (audio != 0) return audio;
+  }
   final group = _releaseGroupRank(
     left,
     preferredReleaseGroup,
@@ -203,6 +219,21 @@ int compareWebStreamsByQuality(WebStreamResult left, WebStreamResult right) {
   if (quality != 0) return quality;
   final provider = left.providerName.compareTo(right.providerName);
   return provider != 0 ? provider : left.title.compareTo(right.title);
+}
+
+int compareWebStreamsByAudioAndQuality(
+  WebStreamResult left,
+  WebStreamResult right,
+  PlaybackAudioPreference preferredAudio,
+) {
+  final leftRank = preferredAudio == PlaybackAudioPreference.dub
+      ? (left.isDubbed ? 0 : 1)
+      : (left.isDubbed ? 1 : 0);
+  final rightRank = preferredAudio == PlaybackAudioPreference.dub
+      ? (right.isDubbed ? 0 : 1)
+      : (right.isDubbed ? 1 : 0);
+  final audio = leftRank.compareTo(rightRank);
+  return audio != 0 ? audio : compareWebStreamsByQuality(left, right);
 }
 
 int _providerRank(ReleaseCandidate release, String? preferredProvider) {
@@ -291,6 +322,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
       _connectedServices.contains(_debridService);
 
+  PlaybackAudioPreference get _preferredAudio =>
+      effectivePlaybackAudioPreference(
+        globalPreference: ref.read(settingsPreferencesProvider).preferredAudio,
+        seriesAudioLanguage: _seriesPreferences.audioLanguage,
+        seriesOverride: _seriesPreferences.audioPreferenceSet,
+      );
+
   @override
   void initState() {
     super.initState();
@@ -298,7 +336,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _initialize() async {
-    await ref.read(userTorrentSourcesControllerProvider.notifier).load();
+    await Future.wait([
+      ref.read(userTorrentSourcesControllerProvider.notifier).load(),
+      ref.read(settingsPreferencesProvider.notifier).load(),
+    ]);
     if (!mounted) return;
     final tokenService = ref.read(debridTokenServiceProvider);
     final preferredDebrid = ref
@@ -342,11 +383,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _deviceProfile = profile;
       _failureCounts = failures;
       _seriesPreferences = preferences;
-      _languageFilter = _enumByName(
-        _StreamLanguageFilter.values,
-        preferences.preferredStreamLanguage,
-        _StreamLanguageFilter.dub,
-      );
+      // The global choice is authoritative for automatic next-episode
+      // playback. Previously every series started with its own default and a
+      // failover candidate could silently overwrite it, causing dub/sub flips.
+      _languageFilter = _preferredAudio == PlaybackAudioPreference.dub
+          ? _StreamLanguageFilter.dub
+          : _StreamLanguageFilter.sub;
       _qualityFilter = _enumByName(
         _StreamQualityFilter.values,
         preferences.preferredQuality,
@@ -431,7 +473,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _debridSourcesTotal = progress.totalSources;
             _pendingDebridSources = progress.pendingSourceIds;
           });
-          _tryStartAutoPlay(generation: generation, allowWebFallback: false);
+          // Wait for all configured sources to finish their concurrent search
+          // before starting cache checks. This avoids spending debrid requests
+          // on the first source's result while better-ranked duplicates are
+          // still arriving from the remaining repositories.
         }
       } finally {
         debridSearchFinished = true;
@@ -573,11 +618,6 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             final alternatives = [..._releases]
               ..removeWhere((item) => item.infoHash == selected.infoHash)
               ..sort((left, right) {
-                final languageMatch =
-                    (left.isDubbed == selected.isDubbed ? 0 : 1).compareTo(
-                      right.isDubbed == selected.isDubbed ? 0 : 1,
-                    );
-                if (languageMatch != 0) return languageMatch;
                 return compareStreamReleases(
                   left,
                   right,
@@ -586,6 +626,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   sortMode: 'compatibility',
                   preferredProvider: selected.provider,
                   preferredReleaseGroup: releaseGroupKey(selected.releaseName),
+                  preferredAudio: _preferredAudio,
                 );
               });
             context.pushReplacement(
@@ -723,7 +764,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         _StreamQualityFilter.p720 => quality.contains('720'),
       };
     }).toList();
-    result.sort(compareWebStreamsByQuality);
+    result.sort(
+      (left, right) =>
+          compareWebStreamsByAudioAndQuality(left, right, _preferredAudio),
+    );
     return result;
   }
 
@@ -809,7 +853,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         _webStreams
             .where((candidate) => candidate.uri != stream.uri)
             .toList(growable: false)
-          ..sort(compareWebStreamsByQuality);
+          ..sort(
+            (left, right) => compareWebStreamsByAudioAndQuality(
+              left,
+              right,
+              _preferredAudio,
+            ),
+          );
     final playerUri = Uri(
       path: '/player',
       queryParameters: {
@@ -929,12 +979,24 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         sortMode: _sortMode.name,
         preferredProvider: _seriesPreferences.preferredReleaseProvider,
         preferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
+        preferredAudio: _preferredAudio,
       ),
     );
     return filtered;
   }
 
   Future<void> _rememberPickerPreferences() async {
+    if (_languageFilter != _StreamLanguageFilter.all) {
+      unawaited(
+        ref
+            .read(settingsPreferencesProvider.notifier)
+            .setPreferredAudio(
+              _languageFilter == _StreamLanguageFilter.dub
+                  ? PlaybackAudioPreference.dub
+                  : PlaybackAudioPreference.sub,
+            ),
+      );
+    }
     _seriesPreferences = _seriesPreferences.copyWith(
       preferredStreamLanguage: _languageFilter.name,
       preferredQuality: _qualityFilter.name,
@@ -960,7 +1022,6 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       preferredReleaseGroup: releaseGroupKey(candidate.releaseName),
       clearPreferredReleaseGroup:
           releaseGroupKey(candidate.releaseName) == null,
-      preferredStreamLanguage: candidate.isDubbed ? 'dub' : 'sub',
     );
     try {
       await TetoTvDatabase.instance.saveSeriesPreferences(
@@ -1034,7 +1095,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
 
   Widget _body(BuildContext context) {
     if (_loadingAccount) {
-      return const CircularProgressIndicator(color: AppColors.cyan);
+      return CircularProgressIndicator(
+        color: context.appPalette.secondaryAccent,
+      );
     }
     if (_loadingReleases && _releases.isEmpty && _webStreams.isEmpty) {
       return SizedBox(
@@ -1042,7 +1105,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(color: AppColors.cyan),
+            CircularProgressIndicator(
+              color: context.appPalette.secondaryAccent,
+            ),
             const SizedBox(height: 22),
             Text(_status, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 8),
@@ -1061,10 +1126,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.cloud_download_rounded,
               size: 68,
-              color: AppColors.cyan,
+              color: context.appPalette.secondaryAccent,
             ),
             const SizedBox(height: 20),
             Text(_status, style: Theme.of(context).textTheme.headlineSmall),
@@ -1072,8 +1137,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             LinearProgressIndicator(
               value: _progress <= 0 ? null : _progress,
               minHeight: 6,
-              backgroundColor: Colors.white.withValues(alpha: .12),
-              color: AppColors.accentBright,
+              backgroundColor: context.appPalette.primaryText.withValues(
+                alpha: .12,
+              ),
+              color: context.appPalette.accentBright,
             ),
             const SizedBox(height: 12),
             Text(
@@ -1172,6 +1239,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Widget _manualPanel(BuildContext context) {
+    final palette = context.appPalette;
     return SingleChildScrollView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: EdgeInsets.only(
@@ -1182,9 +1250,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         width: 780,
         padding: const EdgeInsets.all(30),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: palette.surface,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+          border: Border.all(color: palette.primaryText.withValues(alpha: .08)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1359,6 +1427,7 @@ class _StreamPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final activeAdvancedFilters = [
       qualityFilter != _StreamQualityFilter.any,
       codecFilter != _StreamCodecFilter.any,
@@ -1412,7 +1481,7 @@ class _StreamPicker extends StatelessWidget {
                     Container(
                       width: 1,
                       height: 32,
-                      color: Colors.white.withValues(alpha: .12),
+                      color: palette.primaryText.withValues(alpha: .12),
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -1463,18 +1532,20 @@ class _StreamPicker extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               decoration: BoxDecoration(
-                color: AppColors.cyan.withValues(alpha: .08),
+                color: palette.secondaryAccent.withValues(alpha: .08),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.cyan.withValues(alpha: .2)),
+                border: Border.all(
+                  color: palette.secondaryAccent.withValues(alpha: .2),
+                ),
               ),
               child: Row(
                 children: [
-                  const SizedBox(
+                  SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: AppColors.cyan,
+                      color: palette.secondaryAccent,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1483,7 +1554,9 @@ class _StreamPicker extends StatelessWidget {
                       '$searchStatus • Available results can be selected now.',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white70),
+                      style: TextStyle(
+                        color: palette.primaryText.withValues(alpha: .7),
+                      ),
                     ),
                   ),
                 ],
@@ -1496,9 +1569,11 @@ class _StreamPicker extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF111111),
+                color: palette.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withValues(alpha: .08)),
+                border: Border.all(
+                  color: palette.primaryText.withValues(alpha: .08),
+                ),
               ),
               child: Wrap(
                 spacing: 8,
@@ -1565,7 +1640,7 @@ class _StreamPicker extends StatelessWidget {
                 color: const Color(0xFF2A1117),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: AppColors.accentBright.withValues(alpha: .65),
+                  color: palette.accentBright.withValues(alpha: .65),
                 ),
               ),
               child: Row(
@@ -1601,9 +1676,11 @@ class _StreamPicker extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF181818),
+                color: palette.surfaceRaised,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                border: Border.all(
+                  color: palette.primaryText.withValues(alpha: .12),
+                ),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1623,7 +1700,9 @@ class _StreamPicker extends StatelessWidget {
                           .join('\n'),
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Color(0xFFD5D5D5)),
+                      style: TextStyle(
+                        color: palette.primaryText.withValues(alpha: .84),
+                      ),
                     ),
                   ),
                 ],
@@ -1735,12 +1814,12 @@ class _StreamSectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AppColors.accentBright),
+          Icon(icon, size: 18, color: context.appPalette.accentBright),
           const SizedBox(width: 8),
           Text(
             title,
-            style: const TextStyle(
-              color: Colors.white70,
+            style: TextStyle(
+              color: context.appPalette.primaryText.withValues(alpha: .7),
               fontSize: 13,
               fontWeight: FontWeight.w900,
               letterSpacing: 1.1,
@@ -1760,6 +1839,7 @@ class _WebStreamCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(18),
@@ -1768,9 +1848,11 @@ class _WebStreamCard extends StatelessWidget {
         height: 104,
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+          border: Border.all(
+            color: context.appPalette.primaryText.withValues(alpha: .08),
+          ),
         ),
         child: Row(
           children: [
@@ -1778,7 +1860,7 @@ class _WebStreamCard extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: AppColors.accent.withValues(alpha: .18),
+                color: palette.accent.withValues(alpha: .18),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(Icons.play_circle_outline_rounded),
@@ -1806,7 +1888,10 @@ class _WebStreamCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: palette.primaryText.withValues(alpha: .7),
+            ),
           ],
         ),
       ),
@@ -1827,6 +1912,7 @@ class _ReleaseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(18),
@@ -1834,14 +1920,14 @@ class _ReleaseCard extends StatelessWidget {
       child: Container(
         height: 126,
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 17),
-        color: AppColors.panel,
+        color: palette.surface,
         child: Row(
           children: [
             Container(
               width: 92,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.accent, AppColors.cyan],
+                gradient: LinearGradient(
+                  colors: [palette.accent, palette.secondaryAccent],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -1850,8 +1936,8 @@ class _ReleaseCard extends StatelessWidget {
               child: Center(
                 child: Text(
                   release.quality?.toUpperCase() ?? 'AUTO',
-                  style: const TextStyle(
-                    color: AppColors.ink,
+                  style: TextStyle(
+                    color: contrastForeground(palette.accent),
                     fontSize: 19,
                     fontWeight: FontWeight.w900,
                   ),
@@ -1886,7 +1972,7 @@ class _ReleaseCard extends StatelessWidget {
                         label: release.isDubbed ? 'DUB / DUAL' : 'SUB',
                         color: release.isDubbed
                             ? const Color(0xFFFFB86C)
-                            : AppColors.cyan,
+                            : palette.secondaryAccent,
                       ),
                       if (isTvSafeRelease(release))
                         const _MetaPill(
@@ -1894,9 +1980,9 @@ class _ReleaseCard extends StatelessWidget {
                           color: Color(0xFF67D49B),
                         ),
                       if (release.hasSubtitles && release.isDubbed)
-                        const _MetaPill(
+                        _MetaPill(
                           label: 'SUBTITLES',
-                          color: AppColors.cyan,
+                          color: palette.secondaryAccent,
                         ),
                       if (release.codec case final codec?)
                         _MetaPill(label: codec),
@@ -1927,8 +2013,8 @@ class _ReleaseCard extends StatelessWidget {
                     release.provider ?? 'User source',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
+                    style: TextStyle(
+                      color: palette.mutedText,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1936,9 +2022,9 @@ class _ReleaseCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 18),
-            const Icon(
+            Icon(
               Icons.play_circle_fill_rounded,
-              color: AppColors.accentBright,
+              color: palette.accentBright,
               size: 34,
             ),
           ],
@@ -1961,6 +2047,7 @@ class _FilterButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(999),
@@ -1968,13 +2055,15 @@ class _FilterButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? AppColors.accentBright : AppColors.panel,
+          color: selected ? palette.accentBright : palette.surface,
           borderRadius: BorderRadius.circular(999),
         ),
         child: Text(
           label,
           style: Theme.of(context).textTheme.labelLarge?.copyWith(
-            color: selected ? AppColors.ink : AppColors.textPrimary,
+            color: selected
+                ? contrastForeground(palette.accentBright)
+                : palette.primaryText,
           ),
         ),
       ),
@@ -1992,8 +2081,8 @@ class _FilterLabel extends StatelessWidget {
     padding: const EdgeInsets.only(left: 7, right: 1),
     child: Text(
       label,
-      style: const TextStyle(
-        color: AppColors.textMuted,
+      style: TextStyle(
+        color: context.appPalette.mutedText,
         fontSize: 10,
         fontWeight: FontWeight.w900,
         letterSpacing: 1,
@@ -2021,7 +2110,7 @@ class _CompactAction extends StatelessWidget {
       focusScale: 1.03,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         child: Row(
           children: [
             Icon(icon, size: 18),
@@ -2035,23 +2124,24 @@ class _CompactAction extends StatelessWidget {
 }
 
 class _MetaPill extends StatelessWidget {
-  const _MetaPill({required this.label, this.color = AppColors.textMuted});
+  const _MetaPill({required this.label, this.color});
 
   final String label;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = color ?? context.appPalette.mutedText;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: .13),
+        color: resolvedColor.withValues(alpha: .13),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         label,
         style: TextStyle(
-          color: color,
+          color: resolvedColor,
           fontSize: 10,
           fontWeight: FontWeight.w800,
           letterSpacing: .5,
@@ -2103,7 +2193,7 @@ class _Message extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 68, color: AppColors.textMuted),
+        Icon(icon, size: 68, color: context.appPalette.mutedText),
         const SizedBox(height: 16),
         Text(title, style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
@@ -2133,9 +2223,9 @@ class _BackButton extends StatelessWidget {
       autofocus: true,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
-      child: const ColoredBox(
-        color: AppColors.panel,
-        child: Padding(
+      child: ColoredBox(
+        color: context.appPalette.surface,
+        child: const Padding(
           padding: EdgeInsets.all(10),
           child: Icon(Icons.arrow_back_rounded, size: 20),
         ),
@@ -2157,22 +2247,23 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final foreground = contrastForeground(context.appPalette.primaryText);
     return TvFocusable(
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        color: AppColors.textPrimary,
+        color: context.appPalette.primaryText,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: AppColors.ink, size: 19),
+            Icon(icon, color: foreground, size: 19),
             const SizedBox(width: 8),
             Text(
               label,
               style: Theme.of(
                 context,
-              ).textTheme.labelLarge?.copyWith(color: AppColors.ink),
+              ).textTheme.labelLarge?.copyWith(color: foreground),
             ),
           ],
         ),

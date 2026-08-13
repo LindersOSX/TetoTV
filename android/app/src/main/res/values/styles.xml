@@ -49,7 +49,11 @@
         <item name="android:layout_height">40dp</item>
         <item name="android:background">@android:color/transparent</item>
         <item name="android:focusable">true</item>
-        <item name="android:padding">9dp</item>
+        <!-- TetoPlayerControl: 12dp leading inset, 18dp glyph, 6dp gap. -->
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingTop">11dp</item>
+        <item name="android:paddingEnd">6dp</item>
+        <item name="android:paddingBottom">11dp</item>
         <item name="android:scaleType">fitCenter</item>
         <item name="android:tint">@android:color/white</item>
     </style>
@@ -59,6 +63,8 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:fontFamily">sans-serif-black</item>
         <item name="android:includeFontPadding">false</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
         <item name="android:textColor">@android:color/white</item>
         <item name="android:textSize">11sp</item>
         <item name="android:textStyle">bold</item>
@@ -66,7 +72,7 @@
 
     <style name="TetoTVPlayerBadge" parent="@android:style/TextAppearance.Material.Body1">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">26dp</item>
+        <item name="android:layout_height">wrap_content</item>
         <item name="android:background">@drawable/tetotv_player_badge_background</item>
         <item name="android:gravity">center</item>
         <item name="android:paddingStart">11dp</item>

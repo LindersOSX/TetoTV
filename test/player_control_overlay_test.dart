@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -52,6 +53,68 @@ void main() {
     expect(picker, findsNothing);
   });
 
+  test('caption sizes and labels stay aligned with Media3', () {
+    expect(playerCaptionSizeValues, const [28.0, 34.0, 42.0, 50.0]);
+    expect(nearestPlayerCaptionSize(36), 34);
+    expect(nearestPlayerCaptionSize(40), 42);
+    expect(playerCaptionSizeLabel(28), 'Small');
+    expect(playerCaptionSizeLabel(34), 'Medium');
+    expect(playerCaptionSizeLabel(42), 'Large');
+    expect(playerCaptionSizeLabel(50), 'Extra large');
+  });
+
+  testWidgets('caption Size opens its direct themed D-pad picker', (
+    tester,
+  ) async {
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFF08131D),
+      surface: const Color(0xFF193247),
+      accent: const Color(0xFF38A870),
+      primaryText: const Color(0xFFF3E8D4),
+      mutedText: const Color(0xFF91A6B8),
+    );
+    double? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.darkFor(palette),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () async {
+                selected = await showPlayerCaptionSizePicker(
+                  context: context,
+                  current: 36,
+                );
+              },
+              child: const Text('Size'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Size'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose caption size'), findsOneWidget);
+    for (final label in ['Small', 'Medium', 'Large', 'Extra large']) {
+      expect(find.text(label), findsOneWidget);
+    }
+    final panel = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('player-track-picker-panel')),
+    );
+    final decoration = panel.decoration as BoxDecoration;
+    expect(decoration.color, palette.surface.withValues(alpha: .98));
+    expect(decoration.border!.top.color, palette.accent.withValues(alpha: .75));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(selected, 42);
+    expect(find.byKey(const ValueKey('player-track-picker')), findsNothing);
+  });
+
   testWidgets('exit dialog exposes both remote actions with explicit focus', (
     tester,
   ) async {
@@ -94,6 +157,63 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(shouldExit, isTrue);
+  });
+
+  testWidgets('exit dialog follows a custom Theme Studio palette', (
+    tester,
+  ) async {
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFF07131F),
+      surface: const Color(0xFF1A3044),
+      accent: const Color(0xFF35A76C),
+      primaryText: const Color(0xFFF1E5D3),
+      mutedText: const Color(0xFF93A7B8),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.darkFor(palette),
+        home: const Scaffold(body: PlayerExitDialog()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final panel = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('player-exit-panel')),
+    );
+    final panelDecoration = panel.decoration as BoxDecoration;
+    expect(
+      panelDecoration.color,
+      palette.surface.withValues(alpha: const Color(0xFA09090B).a),
+    );
+    expect(
+      panelDecoration.border!.top.color,
+      palette.accent.withValues(alpha: .3),
+    );
+    final continueSurface = tester.widget<Container>(
+      find.byKey(const ValueKey('player-exit-continue-surface')),
+    );
+    expect(
+      (continueSurface.decoration! as BoxDecoration).color,
+      palette.selectableSurface.withValues(alpha: const Color(0xA629292E).a),
+    );
+    final confirmSurface = tester.widget<Container>(
+      find.byKey(const ValueKey('player-exit-confirm-surface')),
+    );
+    expect((confirmSurface.decoration! as BoxDecoration).color, palette.accent);
+    expect(
+      tester.widget<Text>(find.text('Exit video?')).style?.color,
+      palette.primaryText,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.text('Your current playback position will be saved.'),
+          )
+          .style
+          ?.color,
+      palette.mutedText.withValues(alpha: const Color(0xFFF0EAEC).a),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('exit dialog stacks without overflow on a narrow phone', (

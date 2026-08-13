@@ -32,4 +32,31 @@ class AnonymousCrashStoreTest {
         assertFalse(output.contains("a".repeat(40)))
         assertTrue(output.length <= 140)
     }
+
+    @Test
+    fun `native descriptions redact local paths but preserve stack class names`() {
+        val output = AnonymousCrashStore.sanitize(
+            "content://com.android.providers.media.documents/document/video%3Aprivate-show.mkv\n" +
+                "file:///storage/emulated/0/Private%20Episode.mkv\n" +
+                "teto+private:document-id-episode-42\n" +
+                "/storage/emulated/0/Private Show Episode 7.mkv\n" +
+                "C:\\Users\\Viewer\\Videos\\Private Episode 8.mkv\n" +
+                "at dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy" +
+                "(Media3PlayerActivity.kt:169)",
+            1_000,
+        )
+
+        assertTrue(output.contains("[URI]"))
+        assertTrue(output.contains("[PATH]"))
+        assertFalse(output.contains("private-show"))
+        assertFalse(output.contains("document-id-episode-42"))
+        assertFalse(output.contains("Private Show Episode 7.mkv"))
+        assertFalse(output.contains("Private Episode 8.mkv"))
+        assertTrue(
+            output.contains(
+                "dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy" +
+                    "(Media3PlayerActivity.kt:169)",
+            ),
+        )
+    }
 }

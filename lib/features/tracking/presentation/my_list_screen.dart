@@ -4,11 +4,13 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -64,11 +66,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'Refresh complete. Showing available connected tracker data.',
           ),
-          backgroundColor: AppColors.accent,
+          backgroundColor: context.appPalette.accent,
         ),
       );
     } catch (error) {
@@ -140,7 +142,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                 : '${item.tracked.displayTitle(titlePreference)} moved to '
                       '${selected.status!.displayName}.',
           ),
-          backgroundColor: AppColors.accent,
+          backgroundColor: context.appPalette.accent,
         ),
       );
     } catch (error) {
@@ -162,14 +164,21 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final sort = ref.watch(myListSortProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
+    final accounts = ref.watch(trackingAccountsControllerProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _MyListHeader(preferences: preferences),
+            if (accounts.profiles.isNotEmpty) ...[
+              _TrackingProfileStrip(profiles: accounts.profiles),
+              const SizedBox(height: 12),
+            ],
             LayoutBuilder(
               builder: (context, constraints) {
                 final tabs = Row(
@@ -242,9 +251,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                 children: [
                   Positioned.fill(
                     child: list.when(
-                      loading: () => const Center(
+                      loading: () => Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.accentBright,
+                          color: context.appPalette.accentBright,
                         ),
                       ),
                       error: (error, _) => _ListMessage(
@@ -308,12 +317,12 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                     ),
                   ),
                   if (_updating)
-                    const Positioned.fill(
+                    Positioned.fill(
                       child: ColoredBox(
                         color: Color(0x99000000),
                         child: Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.accentBright,
+                            color: context.appPalette.accentBright,
                           ),
                         ),
                       ),
@@ -321,17 +330,195 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                 ],
               ),
             ),
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(bottom: 18),
               child: Text(
                 'Select to view episodes. Hold OK or press Menu for quick '
                 'watchlist actions.',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
+                  fontSize: 12,
+                ),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _TrackingProfileStrip extends StatelessWidget {
+  const _TrackingProfileStrip({required this.profiles});
+
+  final Map<TrackingProvider, TrackingAccountProfile> profiles;
+
+  @override
+  Widget build(BuildContext context) {
+    final ordered = [
+      for (final provider in TrackingProvider.values) ?profiles[provider],
+    ];
+    return Semantics(
+      container: true,
+      label: 'Connected anime tracker profiles',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = ordered.length == 1
+              ? constraints.maxWidth.clamp(0, 560).toDouble()
+              : ((constraints.maxWidth - 10) / 2).clamp(280, 560).toDouble();
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (var index = 0; index < ordered.length; index++) ...[
+                  SizedBox(
+                    width: width,
+                    child: _TrackingProfileCard(profile: ordered[index]),
+                  ),
+                  if (index != ordered.length - 1) const SizedBox(width: 10),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TrackingProfileCard extends StatelessWidget {
+  const _TrackingProfileCard({required this.profile});
+
+  final TrackingAccountProfile profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final stats = <Widget>[
+      if (profile.animeCount case final count?)
+        _ProfileStat(
+          icon: Icons.video_collection_rounded,
+          label: '$count titles',
+        ),
+      if (profile.episodesWatched case final episodes?)
+        _ProfileStat(
+          icon: Icons.play_circle_rounded,
+          label: '$episodes episodes',
+        ),
+      if (profile.minutesWatched case final minutes?)
+        _ProfileStat(
+          icon: Icons.schedule_rounded,
+          label: minutes >= 60
+              ? '${(minutes / 60).toStringAsFixed(minutes >= 600 ? 0 : 1)}h watched'
+              : '${minutes}m watched',
+        ),
+      if (profile.meanScore case final score?)
+        _ProfileStat(
+          icon: Icons.star_rounded,
+          label:
+              'Mean ${score.toStringAsFixed(1)}'
+              '/${profile.provider == TrackingProvider.anilist ? 100 : 10}',
+        ),
+    ];
+    return Container(
+      key: ValueKey('my-list-profile-${profile.provider.slug}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.appPalette.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: .09)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: context.appPalette.accentBright.withValues(alpha: .65),
+                width: 2,
+              ),
+            ),
+            child: NetworkArtwork(
+              url: profile.avatarUrl,
+              cacheWidth: 108,
+              icon: Icons.person_rounded,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        profile.username,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: context.appPalette.accent.withValues(alpha: .18),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        profile.provider.displayName,
+                        style: TextStyle(
+                          color: context.appPalette.accentBright,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (stats.isNotEmpty) ...[
+                  const SizedBox(height: 7),
+                  Wrap(spacing: 11, runSpacing: 5, children: stats),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileStat extends StatelessWidget {
+  const _ProfileStat({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: context.appPalette.mutedText),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: context.appPalette.mutedText,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -450,10 +637,14 @@ class _NavButton extends StatelessWidget {
           vertical: 8,
         ),
         decoration: BoxDecoration(
-          color: active ? const Color(0x22E52B50) : Colors.transparent,
+          color: active
+              ? context.appPalette.accent.withValues(alpha: .13)
+              : Colors.transparent,
           border: Border(
             bottom: BorderSide(
-              color: active ? AppColors.accentBright : Colors.transparent,
+              color: active
+                  ? context.appPalette.accentBright
+                  : Colors.transparent,
               width: 2,
             ),
           ),
@@ -463,7 +654,9 @@ class _NavButton extends StatelessWidget {
             Icon(
               icon,
               size: 18,
-              color: active ? AppColors.accentBright : AppColors.textPrimary,
+              color: active
+                  ? context.appPalette.accentBright
+                  : context.appPalette.primaryText,
             ),
             if (!compact) ...[
               const SizedBox(width: 6),
@@ -496,7 +689,9 @@ class _StatusTab extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? AppColors.accent : AppColors.panel,
+          color: selected
+              ? context.appPalette.accent
+              : context.appPalette.surface,
           borderRadius: BorderRadius.circular(99),
         ),
         child: Text(
@@ -532,7 +727,7 @@ class _SortButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: Colors.white.withValues(alpha: .12)),
         ),
@@ -575,7 +770,7 @@ class _RefreshButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: Colors.white.withValues(alpha: .12)),
         ),
@@ -583,11 +778,11 @@ class _RefreshButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (refreshing)
-              const SizedBox.square(
+              SizedBox.square(
                 dimension: 17,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
               )
             else
@@ -622,9 +817,11 @@ class _SortDialog extends StatelessWidget {
         width: 520,
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .7),
+          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -645,8 +842,8 @@ class _SortDialog extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: sort == current
-                        ? AppColors.accent
-                        : AppColors.panelRaised,
+                        ? context.appPalette.accent
+                        : context.appPalette.surfaceRaised,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -749,8 +946,8 @@ class _TrackedShelf extends StatelessWidget {
                               color: const Color(0xE6000000),
                               child: Text(
                                 item.provider.displayName,
-                                style: const TextStyle(
-                                  color: AppColors.accentBright,
+                                style: TextStyle(
+                                  color: context.appPalette.accentBright,
                                   fontSize: 9,
                                   fontWeight: FontWeight.w900,
                                 ),
@@ -783,8 +980,8 @@ class _TrackedShelf extends StatelessWidget {
                             ? 'Episode ${item.tracked.progress}'
                             : 'Episode ${item.tracked.progress} / '
                                   '${item.tracked.totalEpisodes}',
-                        style: const TextStyle(
-                          color: AppColors.textMuted,
+                        style: TextStyle(
+                          color: context.appPalette.mutedText,
                           fontSize: 9,
                         ),
                       ),
@@ -819,9 +1016,11 @@ class _StatusDialog extends StatelessWidget {
         width: 760,
         padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .55)),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .55),
+          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -872,10 +1071,13 @@ class _StatusDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Remove deletes the tracker list entry. Dropped keeps the show '
               'in your list as something you started and stopped.',
-              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 12,
+              ),
             ),
           ],
         ),
@@ -914,7 +1116,9 @@ class _DialogChoice extends StatelessWidget {
         width: 128,
         padding: const EdgeInsets.symmetric(vertical: 12),
         alignment: Alignment.center,
-        color: current ? AppColors.accent : AppColors.panelRaised,
+        color: current
+            ? context.appPalette.accent
+            : context.appPalette.surfaceRaised,
         child: Text(
           status.displayName,
           style: const TextStyle(
@@ -938,7 +1142,7 @@ class _OpenButton extends StatelessWidget {
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        color: AppColors.accent,
+        color: context.appPalette.accent,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
         child: const Text(
           'View episodes',
@@ -1040,7 +1244,7 @@ class _ListMessage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 58, color: AppColors.accentBright),
+          Icon(icon, size: 58, color: context.appPalette.accentBright),
           const SizedBox(height: 14),
           Text(title, style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 7),

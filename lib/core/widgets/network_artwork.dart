@@ -51,17 +51,18 @@ class ArtworkSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Semantics(
       label: 'Loading artwork',
       child: SizedBox.expand(
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: AppColors.panelRaised,
+            color: palette.surfaceRaised,
             gradient: LinearGradient(
               colors: [
-                AppColors.panelRaised,
+                palette.surfaceRaised,
                 Colors.white.withValues(alpha: .055),
-                AppColors.panelRaised,
+                palette.surfaceRaised,
               ],
               stops: const [0, .52, 1],
               begin: Alignment.topLeft,
@@ -88,10 +89,11 @@ class _Fallback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return ColoredBox(
-      color: AppColors.panelRaised,
+      color: palette.surfaceRaised,
       child: SizedBox.expand(
-        child: Center(child: Icon(icon, color: AppColors.textMuted, size: 42)),
+        child: Center(child: Icon(icon, color: palette.mutedText, size: 42)),
       ),
     );
   }

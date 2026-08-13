@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -12,6 +13,7 @@ import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
@@ -22,6 +24,7 @@ import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
@@ -36,6 +39,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+// media_kit_video has no public Android surface-detach API. The concrete
+// controller is needed to drain its wid listener before Player.dispose marks
+// the native player disposed.
+// ignore: implementation_imports
+import 'package:media_kit_video/src/video_controller/android_video_controller/android_video_controller.dart';
 
 const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
   enableHardwareAcceleration: true,
@@ -315,10 +323,13 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     if (!_profileReady) {
-      return const ColoredBox(
-        color: Colors.black,
-        child: Center(child: CircularProgressIndicator(color: AppColors.cyan)),
+      return ColoredBox(
+        color: palette.playerBackground(),
+        child: Center(
+          child: CircularProgressIndicator(color: palette.secondaryAccent),
+        ),
       );
     }
     if (_engine == _TvPlaybackEngine.mpv) {
@@ -547,6 +558,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   SeriesPlaybackPreferences _seriesPreferences =
       const SeriesPlaybackPreferences();
   bool _seriesPreferencesReady = false;
+  PlaybackAudioPreference _audioPreference = PlaybackAudioPreference.dub;
   Uint8List? _seekPreview;
   Duration? _seekPreviewPosition;
   Timer? _seekPreviewTimer;
@@ -588,6 +600,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     Duration? resume = widget.initialPosition;
     try {
       final appearance = ref.read(settingsPreferencesProvider);
+      _audioPreference = appearance.preferredAudio;
       _seekBackSeconds = appearance.seekBackSeconds;
       _seekForwardSeconds = appearance.seekForwardSeconds;
       _captionTextColor = Color(appearance.captionTextColor);
@@ -595,6 +608,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (widget.anilistMediaId case final mediaId?) {
         _seriesPreferences = await _database.seriesPreferences(mediaId);
         _seriesPreferencesReady = true;
+        if (_seriesPreferences.audioPreferenceSet) {
+          _audioPreference =
+              playbackAudioPreferenceForLanguage(
+                _seriesPreferences.audioLanguage,
+              ) ??
+              _audioPreference;
+        }
         _decoderMode = switch (_seriesPreferences.decoder) {
           'hardware-direct' => PlaybackDecoderMode.hardwareDirect,
           'software' => PlaybackDecoderMode.software,
@@ -634,7 +654,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       }
       if (!_seriesPreferences.subtitlePreferenceSet) {
         _seriesPreferences = _seriesPreferences.copyWith(
-          subtitleEnabled: subtitlesEnabledByDefault(_currentRelease),
+          subtitleEnabled: subtitlesEnabledForAudioPreference(
+            _currentRelease,
+            _audioPreference,
+          ),
         );
       }
       if (!mounted || _engineHandoffInProgress) return;
@@ -684,7 +707,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _durationSubscription = _player.stream.duration.listen(
       _scheduleSkipSegmentLoad,
     );
-    _tracksSubscription = _player.stream.tracks.listen(_selectPreferredTracks);
+    _tracksSubscription = _player.stream.tracks.listen(_onTracksChanged);
     _errorSubscription = _player.stream.error.listen((message) {
       if (isLikelyVideoDecodeFailure(message) &&
           !_softwareFallbackUsed &&
@@ -740,60 +763,67 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     });
   }
 
-  Future<void> _preferDubAudio(Tracks tracks) async {
-    if (_preferredAudioSelected) return;
-    final language = _seriesPreferences.audioLanguage.toLowerCase();
+  bool get _canApplyTrackSelection =>
+      mounted && !_engineHandoffInProgress && !_playerReleasedForHandoff;
+
+  void _onTracksChanged(Tracks tracks) {
+    unawaited(_runTrackedTrackSelection(tracks));
+  }
+
+  Future<void> _runTrackedTrackSelection(Tracks tracks) async {
+    try {
+      await _trackPlayerMutation(() => _selectPreferredTracks(tracks));
+    } catch (error, stackTrace) {
+      if (_canApplyTrackSelection) {
+        debugPrint('MPV track selection failed: $error\n$stackTrace');
+      }
+    }
+  }
+
+  Future<void> _applyPreferredAudio(Tracks tracks) async {
+    if (_preferredAudioSelected || !_canApplyTrackSelection) return;
     final device = await AndroidTvBridge.instance.getDeviceProfile();
-    final languageMatches =
-        tracks.audio
-            .where((track) => track.id != 'auto' && track.id != 'no')
-            .where(
-              (track) =>
-                  playerTrackLanguageScore(
-                    language: track.language,
-                    title: track.title,
-                    preferredLanguage: language,
-                    isDefault: track.isDefault == true,
-                  ) >
-                  0,
-            )
-            .toList(growable: false)
-          ..sort(
-            (a, b) =>
-                playerTrackLanguageScore(
-                  language: b.language,
-                  title: b.title,
-                  preferredLanguage: language,
-                  isDefault: b.isDefault == true,
-                ).compareTo(
-                  playerTrackLanguageScore(
-                    language: a.language,
-                    title: a.title,
-                    preferredLanguage: language,
-                    isDefault: a.isDefault == true,
-                  ),
-                ),
+    // Device-profile lookup crosses the platform channel. The player route can
+    // begin an engine handoff while it is pending, so never resume against a
+    // player whose release has already started.
+    if (_preferredAudioSelected || !_canApplyTrackSelection) return;
+    final preferred = _seriesPreferences.audioPreferenceSet
+        ? preferredAudioTrackForLanguage(
+            tracks.audio,
+            language: _seriesPreferences.audioLanguage,
+            preferSurround: device.hasHdmiAudio,
+            // A demuxer may announce its default track before publishing the
+            // rest. Do not lock a temporary fallback.
+            allowFallback: false,
+          )
+        : preferredAudioTrack(
+            tracks.audio,
+            preference: _audioPreference,
+            preferSurround: device.hasHdmiAudio,
+            allowFallback: false,
           );
-    final preferred =
-        languageMatches.firstOrNull ??
-        (canonicalPlayerLanguage(language) == 'eng'
-            ? preferredDubAudioTrack(
-                tracks.audio,
-                preferSurround: device.hasHdmiAudio,
-              )
-            : null);
-    if (preferred == null) return;
-    _preferredAudioSelected = true;
+    if (preferred == null || !_canApplyTrackSelection) return;
+    final matchesPreference = _seriesPreferences.audioPreferenceSet
+        ? playerTrackMatchesAudioLanguage(
+            preferred,
+            _seriesPreferences.audioLanguage,
+          )
+        : playerTrackMatchesAudioPreference(preferred, _audioPreference);
     await _player.setAudioTrack(preferred);
+    if (!_canApplyTrackSelection) return;
+    // A failed engine command must remain retryable on the next track snapshot.
+    _preferredAudioSelected = matchesPreference;
     _showTrackMessage(
-      'Dub audio: '
-      '${preferred.title ?? preferred.language ?? 'English'}',
+      'Preferred audio: '
+      '${preferred.title ?? preferred.language ?? _audioPreference.displayName}',
     );
   }
 
   Future<void> _selectPreferredTracks(Tracks tracks) async {
-    await _preferDubAudio(tracks);
-    if (_preferredSubtitleSelected || !_seriesPreferences.subtitleEnabled) {
+    await _applyPreferredAudio(tracks);
+    if (!_canApplyTrackSelection ||
+        _preferredSubtitleSelected ||
+        !_seriesPreferences.subtitleEnabled) {
       return;
     }
     final language = _seriesPreferences.subtitleLanguage.toLowerCase();
@@ -828,7 +858,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                 ),
           );
     final preferred = matches.firstOrNull;
-    if (preferred == null) return;
+    if (preferred == null || !_canApplyTrackSelection) return;
     _preferredSubtitleSelected = true;
     await _player.setSubtitleTrack(preferred);
   }
@@ -878,7 +908,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           (active.kind == SkipSegmentKind.opening && settings.autoSkipIntros) ||
           (active.kind == SkipSegmentKind.ending && settings.autoSkipOutros);
       final key = '${active.kind.name}:${active.start.inMilliseconds}';
-      if (autoSkip && _consumedSkipSegments.add(key)) {
+      if (autoSkip && !_skipInProgress && _consumedSkipSegments.add(key)) {
         if (mounted) {
           setState(() {
             _activeSkip = null;
@@ -895,12 +925,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _canSkipNow = canSkip;
         _activeSkip = active;
       });
-      if (canSkip) {
+      if (canSkip && !_controlsVisible) {
         _focusSkipOnce(active);
       }
     } else if (!identical(_activeSkip, active)) {
       setState(() => _activeSkip = active);
-      if (active != null) _focusSkipOnce(active);
+      if (active != null && !_controlsVisible) _focusSkipOnce(active);
     }
   }
 
@@ -937,6 +967,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       }
     } finally {
       _skipInProgress = false;
+      if (mounted && !_engineHandoffInProgress) {
+        _checkSkips(_player.state.position);
+      }
     }
   }
 
@@ -944,7 +977,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
     if (!_autoFocusedSkipSegments.add(key)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _activeSkip == segment) _skipControlFocus.requestFocus();
+      if (mounted && !_controlsVisible && _activeSkip == segment) {
+        _skipControlFocus.requestFocus();
+      }
     });
   }
 
@@ -1133,6 +1168,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             anilistMediaId: widget.anilistMediaId,
             malMediaId: widget.malMediaId,
           );
+      if (!mounted) return;
+      ref.invalidate(
+        linkedTrackingProgressProvider((
+          anilistMediaId: widget.anilistMediaId,
+          malMediaId: widget.malMediaId,
+        )),
+      );
       if (synced) {
         ref.invalidate(trackingHomeProvider);
       }
@@ -1376,7 +1418,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         completed: completed,
       ),
     );
-    if (force && mounted) ref.invalidate(recentPlaybackProvider);
+    if ((force || completed) && mounted) {
+      ref.invalidate(recentPlaybackProvider);
+      ref.invalidate(latestPlaybackProvider(mediaId));
+    }
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
         mediaId: mediaId,
@@ -1500,7 +1545,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _currentRelease = candidate;
           _currentStream = ready;
           _seriesPreferences = _seriesPreferences.copyWith(
-            subtitleEnabled: subtitlesEnabledByDefault(candidate),
+            subtitleEnabled: subtitlesEnabledForAudioPreference(
+              candidate,
+              _audioPreference,
+            ),
           );
           _preferredAudioSelected = false;
           _preferredSubtitleSelected = false;
@@ -1617,6 +1665,30 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     await _database.recordPlayerSuccess(device.key, 'mpv');
   }
 
+  Future<void> _detachAndroidVideoOutputBeforeRelease() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+
+    try {
+      final platformController = await _controller.platform.future;
+      if (platformController is! AndroidVideoController) return;
+
+      // SurfaceProducer sends an asynchronous wid=0 update when Flutter
+      // unmounts the Texture. AndroidVideoController's listener seeks after
+      // applying that update, so allowing it to run after Player.dispose()
+      // produces "[Player] has been disposed". Stop future producers first,
+      // detach while the Player is alive, then use the controller's own lock
+      // as the completion barrier for every listener already in flight.
+      platformController.wid.removeListener(platformController.widListener);
+      await platformController.videoParamsSubscription?.cancel();
+      platformController.videoParamsSubscription = null;
+      platformController.wid.value = 0;
+      await platformController.widListener();
+    } catch (_) {
+      // Decoder release remains authoritative if an already-broken video
+      // output cannot finish its best-effort surface detach.
+    }
+  }
+
   Future<bool> _prepareForEngineHandoff(Duration position) async {
     if (_handoffAttemptActive) return false;
     _handoffAttemptActive = true;
@@ -1680,6 +1752,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         // dispose() is authoritative and may still release a backend whose
         // explicit stop command failed during a decoder error.
       }
+      await _detachAndroidVideoOutputBeforeRelease();
       await _player.dispose();
       _playerReleasedForHandoff = true;
     });
@@ -1765,8 +1838,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         final provider = (a.provider?.toLowerCase() == currentProvider ? 0 : 1)
             .compareTo(b.provider?.toLowerCase() == currentProvider ? 0 : 1);
         if (provider != 0 && currentProvider != null) return provider;
-        final dub = (b.isDubbed ? 1 : 0).compareTo(a.isDubbed ? 1 : 0);
-        if (dub != 0) return dub;
+        final audio = releaseAudioPreferenceRank(
+          a,
+          _audioPreference,
+        ).compareTo(releaseAudioPreferenceRank(b, _audioPreference));
+        if (audio != 0) return audio;
         return b.seeders.compareTo(a.seeders);
       });
       await _resolveRelease(releases.first, next);
@@ -1787,16 +1863,17 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     // Dub") without setting its ISO language field. Persist the normalized
     // title in that case so the next episode does not silently fall back to
     // the previous Japanese preference.
-    final audioLanguage = canonicalPlayerLanguage(
-      audio.language ?? audio.title,
+    final audioLanguage = persistedPlayerAudioLanguage(
+      storedLanguage: _seriesPreferences.audioLanguage,
+      audioPreferenceSet: _seriesPreferences.audioPreferenceSet,
+      observedLanguage: audio.language,
+      observedTitle: audio.title,
     );
     final subtitleLanguage = canonicalPlayerLanguage(
       subtitle.language ?? subtitle.title,
     );
     _seriesPreferences = _seriesPreferences.copyWith(
-      audioLanguage: audioLanguage.isEmpty
-          ? _seriesPreferences.audioLanguage
-          : audioLanguage,
+      audioLanguage: audioLanguage,
       subtitleLanguage: subtitleLanguage.isEmpty
           ? _seriesPreferences.subtitleLanguage
           : subtitleLanguage,
@@ -2199,6 +2276,29 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     ].join(' • ');
   }
 
+  Future<void> _openCaptionSizePicker() async {
+    _controlsTimer?.cancel();
+    if (mounted) setState(() => _controlsVisible = true);
+    final selected = await showPlayerCaptionSizePicker(
+      context: context,
+      current: _subtitleSize,
+    );
+    if (!mounted) return;
+    if (selected == null) {
+      _scheduleControlsHide();
+      return;
+    }
+    if (selected != _subtitleSize) {
+      setState(() => _subtitleSize = selected);
+      _showTrackMessage('Caption size: ${playerCaptionSizeLabel(selected)}');
+      await _applyPlayerTuning();
+      if (!mounted) return;
+      await _saveSeriesPreferences();
+      if (!mounted) return;
+    }
+    _scheduleControlsHide();
+  }
+
   Future<void> _openPlaybackMenu() async {
     _controlsTimer?.cancel();
     if (mounted) setState(() => _controlsVisible = true);
@@ -2546,7 +2646,18 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final selected = tracks.firstWhere((track) => track.id == selectedId);
     _preferredAudioSelected = true;
     await _player.setAudioTrack(selected);
-    unawaited(_saveSeriesPreferences());
+    final selectedLanguage = persistedPlayerAudioLanguage(
+      storedLanguage: _seriesPreferences.audioLanguage,
+      audioPreferenceSet: _seriesPreferences.audioPreferenceSet,
+      observedLanguage: selected.language,
+      observedTitle: selected.title,
+      manualSelection: true,
+    );
+    _seriesPreferences = _seriesPreferences.copyWith(
+      audioLanguage: selectedLanguage,
+      audioPreferenceSet: true,
+    );
+    await _saveSeriesPreferences();
     _showTrackMessage(
       'Audio: ${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
     );
@@ -2593,6 +2704,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       }
     } finally {
       _skipInProgress = false;
+      if (mounted && !_engineHandoffInProgress) {
+        _checkSkips(_player.state.position);
+      }
     }
   }
 
@@ -2728,6 +2842,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return;
     }
     _confirmingExit = true;
+    // The HUD idle timer belongs to the player route, not the modal. If it
+    // fires while the confirmation is open it hides the controls and requests
+    // the video surface focus through the dialog on some Android TV devices.
+    _controlsTimer?.cancel();
     final wasPlaying = _player.state.playing;
     bool? exit;
     try {
@@ -2755,11 +2873,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (await _prepareForEngineHandoff(position)) {
         _popPlayerRouteAfterHandoff(navigator);
       }
-    } else if (wasPlaying) {
-      try {
-        await _player.play();
-      } catch (_) {
-        // Keep the player screen responsive if a broken decoder cannot resume.
+    } else {
+      if (wasPlaying) {
+        try {
+          await _player.play();
+        } catch (_) {
+          // Keep the player screen responsive if a broken decoder cannot resume.
+        }
       }
       if (mounted) _showControls(focusControls: true);
     }
@@ -2791,17 +2911,38 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _mediaActionSubscription?.cancel();
       _sourceDiscoverySubscription?.cancel();
     }
+    // Unexpected route disposal does not pass through the awaited handoff
+    // path. Close the mutation gate before releasing libmpv and join any
+    // already-running async track callback inside the release coordinator.
+    _engineHandoffInProgress = true;
     _playerRootFocus.dispose();
     _playControlFocus.dispose();
     _skipControlFocus.dispose();
     if (!_playerReleasedForHandoff) {
-      unawaited(_handoffRelease.release(_player.dispose));
+      unawaited(
+        _handoffRelease.release(() async {
+          try {
+            await _waitForPlayerMutations();
+          } catch (_) {
+            // A failed command is already terminal. Decoder disposal remains
+            // authoritative during unexpected route teardown.
+          }
+          try {
+            await _player.stop();
+          } catch (_) {
+            // dispose() is still authoritative for a failed decoder.
+          }
+          await _detachAndroidVideoOutputBeforeRelease();
+          await _player.dispose();
+        }),
+      );
     }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return PopScope(
       canPop: _allowExit,
       onPopInvokedWithResult: (didPop, _) {
@@ -2858,8 +2999,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     initialData: _player.state.buffering,
                     builder: (context, snapshot) {
                       if (snapshot.data != true) return const SizedBox.shrink();
-                      return const Center(
-                        child: CircularProgressIndicator(color: AppColors.cyan),
+                      return Center(
+                        child: CircularProgressIndicator(
+                          color: palette.secondaryAccent,
+                        ),
                       );
                     },
                   ),
@@ -2914,7 +3057,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                               _seekBy(Duration(seconds: _seekForwardSeconds)),
                           onAudio: _openAudioTrackPicker,
                           onSubtitles: _openSubtitleTrackPicker,
-                          onCaptionSize: _openPlaybackMenu,
+                          onCaptionSize: _openCaptionSizePicker,
                           onFit: _cycleFit,
                           onCompatibility: () => unawaited(_openPlayerPicker()),
                           onSources: _currentStream.isWebStream
@@ -2964,7 +3107,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xEE0A0A0A),
+                        color: palette.playerSurface(
+                          defaultColor: const Color(0xEE0A0A0A),
+                        ),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
@@ -2983,9 +3128,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                         width: 210,
                         padding: const EdgeInsets.all(4),
                         decoration: BoxDecoration(
-                          color: Colors.black,
+                          color: palette.playerSurface(
+                            defaultColor: Colors.black,
+                          ),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.accentBright),
+                          border: Border.all(color: palette.accentBright),
                         ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -3103,303 +3250,6 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
   }
 }
 
-// TODO: Remove after the shared chrome has shipped through one stable release.
-// ignore: unused_element
-class _PlayerChrome extends StatelessWidget {
-  const _PlayerChrome({
-    required this.player,
-    required this.title,
-    required this.streamLabel,
-    required this.decoderMode,
-    required this.playFocusNode,
-    required this.seekBackSeconds,
-    required this.seekForwardSeconds,
-    required this.onRewind,
-    required this.onPlayPause,
-    required this.onForward,
-    required this.onAudio,
-    required this.onSubtitles,
-    required this.onFit,
-    required this.onCompatibility,
-    // ignore: unused_element_parameter
-    this.onSources,
-    required this.onOptions,
-  });
-
-  final Player player;
-  final String title;
-  final String streamLabel;
-  final PlaybackDecoderMode decoderMode;
-  final FocusNode playFocusNode;
-  final int seekBackSeconds;
-  final int seekForwardSeconds;
-  final VoidCallback onRewind;
-  final VoidCallback onPlayPause;
-  final VoidCallback onForward;
-  final VoidCallback onAudio;
-  final VoidCallback onSubtitles;
-  final VoidCallback onFit;
-  final VoidCallback onCompatibility;
-  final VoidCallback? onSources;
-  final VoidCallback onOptions;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact =
-        MediaQuery.sizeOf(context).width < 720 ||
-        MediaQuery.sizeOf(context).height < 480;
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: SafeArea(
-        minimum: EdgeInsets.fromLTRB(
-          compact ? 12 : 28,
-          0,
-          compact ? 12 : 28,
-          compact ? 10 : 24,
-        ),
-        child: Container(
-          key: const ValueKey('mpv-bottom-player-chrome'),
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(
-            compact ? 12 : 16,
-            compact ? 9 : 12,
-            compact ? 12 : 16,
-            compact ? 9 : 13,
-          ),
-          decoration: BoxDecoration(
-            color: const Color(0xD6080808),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0xB3000000),
-                blurRadius: 24,
-                offset: Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: compact
-                          ? Theme.of(context).textTheme.titleMedium
-                          : Theme.of(context).textTheme.headlineSmall,
-                    ),
-                  ),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: compact ? 112 : 190),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: .2),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        streamLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.accentBright,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              SingleChildScrollView(
-                key: const ValueKey('mpv-player-controls-scroll'),
-                scrollDirection: Axis.horizontal,
-                clipBehavior: Clip.none,
-                child: Row(
-                  children: [
-                    _PlayerControl(
-                      icon: Icons.replay_rounded,
-                      label: 'Back ${seekBackSeconds}s',
-                      onPressed: onRewind,
-                    ),
-                    const SizedBox(width: 8),
-                    StreamBuilder<bool>(
-                      stream: player.stream.playing,
-                      initialData: player.state.playing,
-                      builder: (context, snapshot) => _PlayerControl(
-                        focusNode: playFocusNode,
-                        primary: true,
-                        icon: snapshot.data == true
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        label: snapshot.data == true ? 'Pause' : 'Play',
-                        onPressed: onPlayPause,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _PlayerControl(
-                      icon: Icons.forward_rounded,
-                      label: 'Forward ${seekForwardSeconds}s',
-                      onPressed: onForward,
-                    ),
-                    const SizedBox(width: 18),
-                    _PlayerControl(
-                      icon: Icons.audiotrack_rounded,
-                      label: 'Audio',
-                      onPressed: onAudio,
-                    ),
-                    const SizedBox(width: 8),
-                    _PlayerControl(
-                      icon: Icons.closed_caption_rounded,
-                      label: 'CC',
-                      onPressed: onSubtitles,
-                    ),
-                    const SizedBox(width: 8),
-                    _PlayerControl(
-                      icon: Icons.aspect_ratio_rounded,
-                      label: 'Picture',
-                      onPressed: onFit,
-                    ),
-                    const SizedBox(width: 8),
-                    _PlayerControl(
-                      icon: Icons.build_circle_outlined,
-                      label: 'Fix video',
-                      onPressed: onCompatibility,
-                    ),
-                    if (onSources != null) ...[
-                      const SizedBox(width: 8),
-                      _PlayerControl(
-                        icon: Icons.video_library_rounded,
-                        label: 'Sources',
-                        onPressed: onSources!,
-                      ),
-                    ],
-                    const SizedBox(width: 18),
-                    _PlayerControl(
-                      icon: Icons.tune_rounded,
-                      label: 'Options',
-                      onPressed: onOptions,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              StreamBuilder<Duration>(
-                stream: player.stream.position,
-                initialData: player.state.position,
-                builder: (context, positionSnapshot) {
-                  return StreamBuilder<Duration>(
-                    stream: player.stream.duration,
-                    initialData: player.state.duration,
-                    builder: (context, durationSnapshot) {
-                      final position = positionSnapshot.data ?? Duration.zero;
-                      final duration = durationSnapshot.data ?? Duration.zero;
-                      final progress = duration.inMilliseconds == 0
-                          ? 0.0
-                          : (position.inMilliseconds / duration.inMilliseconds)
-                                .clamp(0.0, 1.0);
-                      return Column(
-                        children: [
-                          LinearProgressIndicator(
-                            value: progress,
-                            minHeight: 4,
-                            backgroundColor: Colors.white.withValues(
-                              alpha: .24,
-                            ),
-                            color: AppColors.accentBright,
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Text(
-                                '${_format(position)}  /  ${_format(duration)}',
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
-                              if (!compact) ...[
-                                const Spacer(),
-                                Text(
-                                  'D-pad controls  |  J/L seek  |  '
-                                  'Menu/Y options  |  C compatibility',
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ],
-                      );
-                    },
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static String _format(Duration value) {
-    final hours = value.inHours;
-    final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
-  }
-}
-
-class _PlayerControl extends StatelessWidget {
-  const _PlayerControl({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.focusNode,
-    this.primary = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-  final FocusNode? focusNode;
-  final bool primary;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      focusNode: focusNode,
-      onPressed: onPressed,
-      focusScale: 1.025,
-      borderRadius: BorderRadius.circular(7),
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        color: primary ? AppColors.accent : const Color(0x8F242429),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18, color: Colors.white),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _PlaybackOptionsDialog extends StatelessWidget {
   const _PlaybackOptionsDialog({
     required this.decoderMode,
@@ -3431,6 +3281,7 @@ class _PlaybackOptionsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(12),
@@ -3440,11 +3291,9 @@ class _PlaybackOptionsDialog extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 900),
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
-              color: const Color(0xFF080808),
+              color: palette.playerSurface(),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: AppColors.accent.withValues(alpha: .55),
-              ),
+              border: Border.all(color: palette.accent.withValues(alpha: .55)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3452,22 +3301,16 @@ class _PlaybackOptionsDialog extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    const Icon(
-                      Icons.tune_rounded,
-                      color: AppColors.accentBright,
-                    ),
+                    Icon(Icons.tune_rounded, color: palette.accentBright),
                     const SizedBox(width: 9),
                     Text(
                       'Playback options',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const Spacer(),
-                    const Text(
+                    Text(
                       'Changes apply immediately',
-                      style: TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: palette.mutedText, fontSize: 11),
                     ),
                   ],
                 ),
@@ -3612,13 +3455,14 @@ class _OptionSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 600;
         final label = Text(
           title,
-          style: const TextStyle(
-            color: AppColors.textMuted,
+          style: TextStyle(
+            color: palette.mutedText,
             fontSize: 10,
             fontWeight: FontWeight.w900,
             letterSpacing: 1.1,
@@ -3660,6 +3504,10 @@ class _OptionChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final foreground = selected
+        ? palette.playerPrimaryActionText()
+        : palette.playerPrimaryText();
     return TvFocusable(
       autofocus: autofocus,
       onPressed: onPressed,
@@ -3668,7 +3516,7 @@ class _OptionChip extends StatelessWidget {
       child: Container(
         height: 34,
         padding: const EdgeInsets.symmetric(horizontal: 11),
-        color: selected ? AppColors.accent : const Color(0xFF1B1B1B),
+        color: selected ? palette.accent : palette.playerSelectableSurface(),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3678,8 +3526,8 @@ class _OptionChip extends StatelessWidget {
             ],
             Text(
               label,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: foreground,
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
@@ -3726,22 +3574,23 @@ class _NextEpisodeDialogState extends State<_NextEpisodeDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
         width: 520,
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: const Color(0xFF080808),
+          color: palette.playerSurface(),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .6)),
+          border: Border.all(color: palette.accent.withValues(alpha: .6)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.skip_next_rounded,
-              color: AppColors.accentBright,
+              color: palette.accentBright,
               size: 42,
             ),
             const SizedBox(height: 10),
@@ -3791,14 +3640,20 @@ class _PlaybackError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final errorAccent = palette.usesDefaultPlayerPalette
+        ? const Color(0xFFFF929B)
+        : palette.accentBright;
     return Center(
       child: Container(
         constraints: const BoxConstraints(maxWidth: 760),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
         decoration: BoxDecoration(
-          color: const Color(0xEE391D29),
+          color: palette.playerRaisedSurface(
+            defaultColor: const Color(0xEE391D29),
+          ),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFFF929B)),
+          border: Border.all(color: errorAccent),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -3806,10 +3661,7 @@ class _PlaybackError extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.error_outline_rounded,
-                  color: Color(0xFFFF929B),
-                ),
+                Icon(Icons.error_outline_rounded, color: errorAccent),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -3869,30 +3721,46 @@ class _RecoveryAction extends StatelessWidget {
   final bool primary;
 
   @override
-  Widget build(BuildContext context) => TvFocusable(
-    onPressed: onPressed,
-    borderRadius: BorderRadius.circular(7),
-    child: Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: primary ? AppColors.accent : const Color(0xFF202026),
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(color: Colors.white.withValues(alpha: .12)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 17),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final foreground = primary
+        ? palette.playerPrimaryActionText()
+        : palette.playerPrimaryText();
+    return TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: primary
+              ? palette.accent
+              : palette.playerSelectableSurface(
+                  defaultColor: const Color(0xFF202026),
+                ),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: palette.playerPrimaryText().withValues(alpha: .12),
           ),
-        ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 17, color: foreground),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class DebridOnlyPlaybackScreen extends StatelessWidget {
@@ -3900,26 +3768,27 @@ class DebridOnlyPlaybackScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Colors.black,
+    final palette = context.appPalette;
+    return Scaffold(
+      backgroundColor: palette.playerBackground(),
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_rounded, size: 68, color: AppColors.cyan),
-            SizedBox(height: 18),
-            Text(
+            Icon(Icons.lock_rounded, size: 68, color: palette.secondaryAccent),
+            const SizedBox(height: 18),
+            const Text(
               'Playback blocked',
               style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
             ),
-            SizedBox(height: 10),
+            const SizedBox(height: 10),
             SizedBox(
               width: 620,
               child: Text(
                 'TetoTV only accepts streams resolved through a connected '
                 'supported debrid account.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textMuted, fontSize: 18),
+                style: TextStyle(color: palette.mutedText, fontSize: 18),
               ),
             ),
           ],

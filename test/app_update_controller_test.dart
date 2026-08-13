@@ -23,6 +23,114 @@ void main() {
     expect(normalizeAppVersion('TetoTV v1.9.0+34901'), '1.9.0+34901');
   });
 
+  test('APK inspection parses the archive version name', () {
+    final inspection = ApkCompatibilityInfo.fromMap(const {
+      'compatible': true,
+      'issues': <String>[],
+      'packageName': 'dev.animetv.anime_tv',
+      'versionCode': 410001,
+      'versionName': '1.0.0',
+    });
+
+    expect(inspection.versionName, '1.0.0');
+  });
+
+  test('channel families allow intentional bidirectional switching', () {
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '2.0.0+410001',
+        releaseVersion: '1.0.0',
+        channel: AppUpdateChannel.public,
+      ),
+      isTrue,
+      reason: 'Public is an intentional sidegrade from the Beta family.',
+    );
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '1.0.0+410001',
+        releaseVersion: '2.0.0',
+        channel: AppUpdateChannel.beta,
+      ),
+      isTrue,
+      reason: 'Beta is an intentional sidegrade from the Public family.',
+    );
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '1.0.0+410001',
+        releaseVersion: '1.0.0',
+        channel: AppUpdateChannel.public,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '2.0.0+410001',
+        releaseVersion: '2.0.0',
+        channel: AppUpdateChannel.beta,
+      ),
+      isFalse,
+    );
+  });
+
+  test('a release must belong to the selected channel family', () {
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '2.0.0+410001',
+        releaseVersion: '2.0.1',
+        channel: AppUpdateChannel.public,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldOfferAppRelease(
+        currentVersion: '1.0.0+410001',
+        releaseVersion: '1.0.1',
+        channel: AppUpdateChannel.beta,
+      ),
+      isFalse,
+    );
+  });
+
+  test('controller downloads either selected cross-family release', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'tetotv-channel-switch-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+
+    FlutterSecureStorage.setMockInitialValues({});
+    final publicFromBeta = AppUpdateController(
+      storage,
+      _ChannelReleaseSource('1.0.0'),
+      () async => '2.0.0+410001',
+      () async => const ['arm64-v8a'],
+      () async => directory,
+      (_) async => 'launched',
+      betaReleaseSource: _ChannelReleaseSource('2.0.0'),
+    );
+    await publicFromBeta.checkForUpdates();
+    expect(publicFromBeta.state.phase, AppUpdatePhase.ready);
+    expect(publicFromBeta.state.latestVersion, '1.0.0');
+
+    FlutterSecureStorage.setMockInitialValues({
+      developerModeStorageKey: 'true',
+      updateChannelStorageKey: AppUpdateChannel.beta.name,
+      betaUpdateAccessKeyStorageKey: _betaAccessKey,
+    });
+    final betaFromPublic = AppUpdateController(
+      storage,
+      _ChannelReleaseSource('1.0.0'),
+      () async => '1.0.0+410001',
+      () async => const ['arm64-v8a'],
+      () async => directory,
+      (_) async => 'launched',
+      betaReleaseSource: _ChannelReleaseSource('2.0.0'),
+    );
+    await betaFromPublic.checkForUpdates();
+    expect(betaFromPublic.state.phase, AppUpdatePhase.ready);
+    expect(betaFromPublic.state.latestVersion, '2.0.0');
+    expect(betaFromPublic.state.message, contains('2.0.0 Beta'));
+  });
+
   test('coalesces concurrent secure-storage loads', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final version = Completer<String>();
@@ -94,7 +202,7 @@ void main() {
     expect(selectApkAsset(assets, const ['armeabi-v7a']).apiUrl, 'a32');
   });
 
-  test('broker release checks use fixed HTTPS endpoint without auth', () async {
+  test('broker release checks send Beta key only to fixed endpoint', () async {
     String? authorization;
     Uri? requestedUri;
     final dio = Dio()
@@ -116,9 +224,10 @@ void main() {
 
     final release = await BrokerAppReleaseSource(
       dio,
+      accessKeyLoader: () async => _betaAccessKey,
     ).latest(deviceAbis: const ['arm64-v8a']);
 
-    expect(authorization, isNull);
+    expect(authorization, 'Beta $_betaAccessKey');
     expect(
       requestedUri.toString(),
       '$tetoTvUpdateBroker/v1/app-updates/latest',
@@ -157,7 +266,10 @@ void main() {
       );
 
     await expectLater(
-      BrokerAppReleaseSource(dio).latest(deviceAbis: const ['arm64-v8a']),
+      BrokerAppReleaseSource(
+        dio,
+        accessKeyLoader: () async => _betaAccessKey,
+      ).latest(deviceAbis: const ['arm64-v8a']),
       throwsA(isA<FormatException>()),
     );
   });
@@ -197,7 +309,10 @@ void main() {
         );
 
       await expectLater(
-        BrokerAppReleaseSource(dio).latest(deviceAbis: const ['arm64-v8a']),
+        BrokerAppReleaseSource(
+          dio,
+          accessKeyLoader: () async => _betaAccessKey,
+        ).latest(deviceAbis: const ['arm64-v8a']),
         throwsA(isA<FormatException>()),
         reason: tamperedUrl,
       );
@@ -206,11 +321,13 @@ void main() {
 
   test('anonymous GitHub fallback never sends Authorization', () async {
     String? authorization;
+    Uri? requestedUri;
     final dio = Dio()
       ..interceptors.add(
         InterceptorsWrapper(
           onRequest: (options, handler) {
             authorization = options.headers['Authorization']?.toString();
+            requestedUri = options.uri;
             handler.resolve(
               Response<Map<String, dynamic>>(
                 requestOptions: options,
@@ -228,6 +345,132 @@ void main() {
 
     expect(release.version, '1.7.3');
     expect(authorization, isNull);
+    expect(
+      requestedUri.toString(),
+      'https://api.github.com/repos/$tetoTvPublicReleaseRepository/releases/latest',
+    );
+  });
+
+  test('public releases reject off-repository APK URLs', () async {
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <String, dynamic>{
+                  ..._githubReleasePayload,
+                  'assets': [
+                    <String, dynamic>{
+                      ...((_githubReleasePayload['assets']! as List).single
+                          as Map<String, dynamic>),
+                      'browser_download_url':
+                          'https://downloads.example/TetoTV-v1.7.3-universal.apk',
+                    },
+                  ],
+                },
+              ),
+            );
+          },
+        ),
+      );
+
+    await expectLater(
+      GitHubAppReleaseSource(dio).latest(deviceAbis: const ['arm64-v8a']),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test(
+    'public is the default update channel and developer choices persist',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final publicSource = _ChannelReleaseSource('1.0.0');
+      final betaSource = _ChannelReleaseSource('2.0.0');
+      final controller = AppUpdateController(
+        storage,
+        publicSource,
+        () async => '2.0.0+20000',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+        betaReleaseSource: betaSource,
+      );
+
+      await controller.load();
+      expect(controller.state.updateChannel, AppUpdateChannel.public);
+      expect(controller.state.developerMode, isFalse);
+      await controller.setUpdateChannel(AppUpdateChannel.beta);
+      expect(controller.state.updateChannel, AppUpdateChannel.public);
+
+      await controller.enableDeveloperMode();
+      await controller.setUpdateChannel(AppUpdateChannel.beta);
+      expect(controller.state.updateChannel, AppUpdateChannel.public);
+      expect(controller.state.message, contains('Beta access key'));
+      await controller.setBetaAccessKey(_betaAccessKey);
+      expect(controller.state.hasBetaAccessKey, isTrue);
+      expect(controller.state.message, isNot(contains(_betaAccessKey)));
+      expect(
+        await storage.read(key: betaUpdateAccessKeyStorageKey),
+        _betaAccessKey,
+      );
+      await controller.setUpdateChannel(AppUpdateChannel.beta);
+      await controller.checkForUpdates();
+      expect(publicSource.latestCalls, 0);
+      expect(betaSource.latestCalls, 1);
+      expect(
+        AppUpdateChannel.beta.versionLabel(betaSource.version),
+        '2.0.0 Beta',
+      );
+
+      final restored = AppUpdateController(
+        storage,
+        publicSource,
+        () async => '2.0.0+20000',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+        betaReleaseSource: betaSource,
+      );
+      await restored.load();
+      expect(restored.state.developerMode, isTrue);
+      expect(restored.state.updateChannel, AppUpdateChannel.beta);
+      expect(restored.state.hasBetaAccessKey, isTrue);
+      await restored.clearBetaAccessKey();
+      expect(restored.state.updateChannel, AppUpdateChannel.public);
+      expect(restored.state.hasBetaAccessKey, isFalse);
+      expect(await storage.read(key: betaUpdateAccessKeyStorageKey), isNull);
+    },
+  );
+
+  test('invalid stored Beta key fails closed to Public', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      developerModeStorageKey: 'true',
+      updateChannelStorageKey: AppUpdateChannel.beta.name,
+      betaUpdateAccessKeyStorageKey: 'too-short',
+    });
+    final controller = AppUpdateController(
+      storage,
+      _ChannelReleaseSource('1.0.0'),
+      () async => '2.0.0+410001',
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+      betaReleaseSource: _ChannelReleaseSource('2.0.0'),
+    );
+
+    await controller.load();
+
+    expect(controller.state.developerMode, isTrue);
+    expect(controller.state.updateChannel, AppUpdateChannel.public);
+    expect(controller.state.hasBetaAccessKey, isFalse);
+    expect(await storage.read(key: betaUpdateAccessKeyStorageKey), isNull);
+    expect(
+      await storage.read(key: updateChannelStorageKey),
+      AppUpdateChannel.public.name,
+    );
   });
 
   test('broker-first source falls back to GitHub anonymously', () async {
@@ -266,7 +509,10 @@ void main() {
       );
 
     final release = await BrokerFirstAppReleaseSource(
-      BrokerAppReleaseSource(brokerDio),
+      BrokerAppReleaseSource(
+        brokerDio,
+        accessKeyLoader: () async => _betaAccessKey,
+      ),
       GitHubAppReleaseSource(githubDio),
     ).latest(deviceAbis: const ['arm64-v8a']);
 
@@ -274,7 +520,7 @@ void main() {
     expect(githubAuthorization, isNull);
   });
 
-  test('broker APK downloads omit Authorization', () async {
+  test('broker APK downloads send the Beta key without redirects', () async {
     final directory = await Directory.systemTemp.createTemp(
       'tetotv-broker-download-',
     );
@@ -283,19 +529,126 @@ void main() {
     final dio = Dio()..httpClientAdapter = adapter;
     final destination = '${directory.path}${Platform.pathSeparator}app.apk';
 
-    await BrokerAppReleaseSource(dio).download(
+    await BrokerAppReleaseSource(
+      dio,
+      accessKeyLoader: () async => _betaAccessKey,
+    ).download(
       release: _brokerDownloadRelease,
       destination: destination,
       onProgress: (_, _) {},
     );
 
-    expect(adapter.authorizations, [null]);
+    expect(adapter.authorizations, ['Beta $_betaAccessKey']);
+    expect(adapter.followRedirects, [isFalse]);
     expect(
       adapter.uris.single.toString(),
       '$tetoTvUpdateBroker/v1/app-updates/releases/v1.7.3/assets/'
       '173001/universal.apk',
     );
     expect(await File(destination).readAsBytes(), adapter.payload);
+  });
+
+  test(
+    'broker APK download rejects redirects instead of following them',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'tetotv-broker-redirect-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final adapter = _RedirectingDownloadAdapter(
+        redirectLocation: 'https://attacker.example/tetotv.apk',
+      );
+      final dio = Dio()..httpClientAdapter = adapter;
+      final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+
+      await expectLater(
+        BrokerAppReleaseSource(
+          dio,
+          accessKeyLoader: () async => _betaAccessKey,
+        ).download(
+          release: _brokerDownloadRelease,
+          destination: destination,
+          onProgress: (_, _) {},
+        ),
+        throwsA(isA<DioException>()),
+      );
+
+      expect(adapter.followRedirects, [isFalse]);
+      expect(adapter.uris, hasLength(1));
+      expect(await File(destination).exists(), isFalse);
+    },
+  );
+
+  test('broker refuses requests when no valid Beta key is stored', () async {
+    final dio = Dio();
+    final source = BrokerAppReleaseSource(
+      dio,
+      accessKeyLoader: () async => null,
+    );
+
+    await expectLater(
+      source.latest(deviceAbis: const ['arm64-v8a']),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('Beta access key'),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'public APK download follows only a trusted redirect manually',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'tetotv-public-download-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final adapter = _RedirectingDownloadAdapter(
+        redirectLocation:
+            'https://release-assets.githubusercontent.com/github-production-'
+            'release-asset/123/tetotv.apk?sp=r&sig=signed',
+      );
+      final dio = Dio()..httpClientAdapter = adapter;
+      final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+
+      await GitHubAppReleaseSource(dio).download(
+        release: _publicDownloadRelease,
+        destination: destination,
+        onProgress: (_, _) {},
+      );
+
+      expect(adapter.followRedirects, everyElement(isFalse));
+      expect(adapter.uris, hasLength(2));
+      expect(adapter.uris.last.host, 'release-assets.githubusercontent.com');
+      expect(await File(destination).readAsBytes(), adapter.payload);
+    },
+  );
+
+  test('public APK download rejects an untrusted redirect', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'tetotv-public-redirect-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final adapter = _RedirectingDownloadAdapter(
+      redirectLocation: 'https://attacker.example/tetotv.apk',
+    );
+    final dio = Dio()..httpClientAdapter = adapter;
+    final destination = '${directory.path}${Platform.pathSeparator}app.apk';
+
+    await expectLater(
+      GitHubAppReleaseSource(dio).download(
+        release: _publicDownloadRelease,
+        destination: destination,
+        onProgress: (_, _) {},
+      ),
+      throwsA(isA<FormatException>()),
+    );
+
+    expect(adapter.followRedirects, everyElement(isFalse));
+    expect(adapter.uris, hasLength(1));
+    expect(await File(destination).exists(), isFalse);
   });
 
   test('downloads a newer broker release and opens the installer', () async {
@@ -409,7 +762,11 @@ void main() {
       (_) async => 'launched',
       apkInspector: (_) async {
         inspected = true;
-        return const ApkCompatibilityInfo(compatible: true, issues: []);
+        return const ApkCompatibilityInfo(
+          compatible: true,
+          issues: [],
+          versionName: '1.7.3',
+        );
       },
     );
 
@@ -442,7 +799,11 @@ void main() {
       (_) async => 'launched',
       apkInspector: (_) async {
         inspected = true;
-        return const ApkCompatibilityInfo(compatible: true, issues: []);
+        return const ApkCompatibilityInfo(
+          compatible: true,
+          issues: [],
+          versionName: '1.7.3',
+        );
       },
     );
 
@@ -450,6 +811,41 @@ void main() {
 
     expect(controller.state.phase, AppUpdatePhase.ready);
     expect(inspected, isTrue);
+  });
+
+  test('deletes an APK whose versionName does not match its release', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'tetotv-version-name-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    var installerOpened = false;
+    final controller = AppUpdateController(
+      storage,
+      _FakeReleaseSource(),
+      () async => '1.7.2',
+      () async => const ['arm64-v8a'],
+      () async => directory,
+      (_) async {
+        installerOpened = true;
+        return 'launched';
+      },
+      apkInspector: (_) async => const ApkCompatibilityInfo(
+        compatible: true,
+        issues: [],
+        versionName: '1.7.4',
+      ),
+    );
+
+    await controller.checkForUpdates(launchInstaller: true);
+
+    final downloaded = File(
+      '${directory.path}${Platform.pathSeparator}updates'
+      '${Platform.pathSeparator}TetoTV-1.7.3-arm64-v8a.apk',
+    );
+    expect(controller.state.phase, AppUpdatePhase.error);
+    expect(controller.state.message, contains('selected release version'));
+    expect(await downloaded.exists(), isFalse);
+    expect(installerOpened, isFalse);
   });
 
   test('failed automatic downloads remain eligible for retry', () async {
@@ -501,6 +897,36 @@ void main() {
     );
   });
 
+  test('matching Beta family automatic checks do not loop', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      developerModeStorageKey: 'true',
+      updateChannelStorageKey: AppUpdateChannel.beta.name,
+      betaUpdateAccessKeyStorageKey: _betaAccessKey,
+    });
+    final publicSource = _ChannelReleaseSource('1.0.0');
+    final betaSource = _ChannelReleaseSource('2.0.0');
+    final controller = AppUpdateController(
+      storage,
+      publicSource,
+      () async => '2.0.0+410001',
+      () async => const ['arm64-v8a'],
+      Directory.systemTemp.createTemp,
+      (_) async => 'launched',
+      betaReleaseSource: betaSource,
+    );
+
+    await controller.checkForUpdates(automatic: true);
+    await controller.checkForUpdates(automatic: true);
+
+    expect(controller.state.phase, AppUpdatePhase.upToDate);
+    expect(betaSource.latestCalls, 1);
+    expect(publicSource.latestCalls, 0);
+    expect(
+      await storage.read(key: '${lastAutomaticUpdateCheckStorageKey}_beta'),
+      isNotNull,
+    );
+  });
+
   test(
     'release notes are claimed only after the update is installed',
     () async {
@@ -531,6 +957,75 @@ void main() {
         'Improved playback.',
       );
       expect(await updatedController.takeInstalledReleaseNotes(), isNull);
+    },
+  );
+
+  test(
+    'opposite-channel install cancellation does not show release notes',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        pendingReleaseNotesVersionStorageKey: '1.0.0',
+        pendingReleaseNotesStorageKey: 'Public release notes.',
+      });
+      final betaController = AppUpdateController(
+        storage,
+        _FakeReleaseSource(),
+        () async => '2.0.0+410001',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+      );
+
+      expect(await betaController.takeInstalledReleaseNotes(), isNull);
+      expect(
+        await storage.read(key: pendingReleaseNotesStorageKey),
+        'Public release notes.',
+      );
+
+      final publicController = AppUpdateController(
+        storage,
+        _FakeReleaseSource(),
+        () async => '1.0.0+410001',
+        () async => const ['arm64-v8a'],
+        Directory.systemTemp.createTemp,
+        (_) async => 'launched',
+      );
+      expect(
+        await publicController.takeInstalledReleaseNotes(),
+        'Public release notes.',
+      );
+    },
+  );
+
+  test(
+    'public releases reject oversized APK metadata before download',
+    () async {
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              final asset = Map<String, dynamic>.from(
+                (_githubReleasePayload['assets']! as List).single
+                    as Map<String, dynamic>,
+              )..['size'] = maxPublicReleaseAssetBytes + 1;
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{
+                    ..._githubReleasePayload,
+                    'assets': [asset],
+                  },
+                ),
+              );
+            },
+          ),
+        );
+
+      await expectLater(
+        GitHubAppReleaseSource(dio).latest(deviceAbis: const ['arm64-v8a']),
+        throwsStateError,
+      );
     },
   );
 
@@ -567,7 +1062,9 @@ const _githubReleasePayload = <String, dynamic>{
     {
       'name': 'TetoTV-v1.7.3-universal.apk',
       'url': 'https://api.github.com/assets/1',
-      'browser_download_url': 'https://example.com/TetoTV.apk',
+      'browser_download_url':
+          'https://github.com/LindersOSX/TetoTV-Releases/releases/download/'
+          'v1.7.3/TetoTV-v1.7.3-universal.apk',
       'size': 2097152,
     },
   ],
@@ -575,6 +1072,7 @@ const _githubReleasePayload = <String, dynamic>{
 
 const _zeroDigest =
     '0000000000000000000000000000000000000000000000000000000000000000';
+const _betaAccessKey = 'beta_test_access_key_0123456789abcdef';
 
 const _brokerReleasePayload = <String, dynamic>{
   'version': '1.7.3',
@@ -609,10 +1107,25 @@ const _brokerDownloadRelease = AppReleaseInfo(
   ),
 );
 
+const _publicDownloadRelease = AppReleaseInfo(
+  tagName: 'v1.7.3',
+  version: '1.7.3',
+  name: 'TetoTV 1.7.3',
+  asset: AppReleaseAsset(
+    name: 'TetoTV-v1.7.3-universal.apk',
+    apiUrl: 'https://api.github.com/assets/173001',
+    publicUrl:
+        'https://github.com/LindersOSX/TetoTV-Releases/releases/download/'
+        'v1.7.3/TetoTV-v1.7.3-universal.apk',
+    size: 4,
+  ),
+);
+
 class _RecordingDownloadAdapter implements HttpClientAdapter {
   final payload = const [1, 2, 3, 4];
   final authorizations = <String?>[];
   final uris = <Uri>[];
+  final followRedirects = <bool>[];
 
   @override
   Future<ResponseBody> fetch(
@@ -623,9 +1136,49 @@ class _RecordingDownloadAdapter implements HttpClientAdapter {
     final authorization = options.headers['Authorization']?.toString();
     authorizations.add(authorization);
     uris.add(options.uri);
+    followRedirects.add(options.followRedirects);
     return ResponseBody.fromBytes(
       payload,
       200,
+      headers: {
+        Headers.contentLengthHeader: [payload.length.toString()],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _RedirectingDownloadAdapter implements HttpClientAdapter {
+  _RedirectingDownloadAdapter({required this.redirectLocation});
+
+  final String redirectLocation;
+  final payload = const [1, 2, 3, 4];
+  final uris = <Uri>[];
+  final followRedirects = <bool>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    uris.add(options.uri);
+    followRedirects.add(options.followRedirects);
+    if (uris.length == 1) {
+      return ResponseBody.fromBytes(
+        const [],
+        HttpStatus.found,
+        headers: {
+          HttpHeaders.locationHeader: [redirectLocation],
+          Headers.contentLengthHeader: ['0'],
+        },
+      );
+    }
+    return ResponseBody.fromBytes(
+      payload,
+      HttpStatus.ok,
       headers: {
         Headers.contentLengthHeader: [payload.length.toString()],
       },
@@ -670,6 +1223,40 @@ class _FakeReleaseSource implements AppReleaseSource {
   }) async {
     if (throwOnDownload) throw StateError('simulated download failure');
     final bytes = List<int>.filled(release.asset.size, 7);
+    await File(destination).writeAsBytes(bytes, flush: true);
+    onProgress(bytes.length, bytes.length);
+  }
+}
+
+class _ChannelReleaseSource implements AppReleaseSource {
+  _ChannelReleaseSource(this.version);
+
+  final String version;
+  int latestCalls = 0;
+
+  @override
+  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
+    latestCalls += 1;
+    return AppReleaseInfo(
+      tagName: 'v$version',
+      version: version,
+      name: 'TetoTV $version',
+      asset: AppReleaseAsset(
+        name: 'TetoTV-v$version-universal.apk',
+        apiUrl: 'https://example.com/TetoTV.apk',
+        publicUrl: 'https://example.com/TetoTV.apk',
+        size: 2 * 1024 * 1024,
+      ),
+    );
+  }
+
+  @override
+  Future<void> download({
+    required AppReleaseInfo release,
+    required String destination,
+    required void Function(int received, int total) onProgress,
+  }) async {
+    final bytes = List<int>.filled(release.asset.size, 9);
     await File(destination).writeAsBytes(bytes, flush: true);
     onProgress(bytes.length, bytes.length);
   }

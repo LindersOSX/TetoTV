@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
@@ -86,66 +87,132 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
     final pairing = ref.watch(provider);
 
     return Scaffold(
-      body: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 42, vertical: 28),
-        child: Column(
-          children: [
-            Row(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 720;
+          final short = constraints.maxHeight < 600;
+          return SafeArea(
+            minimum: EdgeInsets.symmetric(
+              horizontal: narrow ? 20 : 42,
+              vertical: short ? 14 : 28,
+            ),
+            child: Column(
               children: [
-                _BackButton(onPressed: context.pop),
-                const SizedBox(width: 18),
-                Text(
-                  'Connect ${widget.provider.displayName}',
-                  style: Theme.of(context).textTheme.headlineSmall,
+                _TrackingHeader(
+                  compact: narrow,
+                  provider: widget.provider,
+                  onBack: context.pop,
                 ),
-                const Spacer(),
-                const Text(
-                  'No password is entered on this TV',
-                  style: TextStyle(color: AppColors.textMuted),
+                SizedBox(height: short ? 16 : 28),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, viewport) => SingleChildScrollView(
+                      padding: EdgeInsets.only(bottom: short ? 8 : 20),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: (viewport.maxHeight - (short ? 8 : 20))
+                              .clamp(0, double.infinity)
+                              .toDouble(),
+                        ),
+                        child: Center(
+                          child: pairing.when(
+                            loading: () => const CircularProgressIndicator(),
+                            error: (error, _) {
+                              if (error is AuthBrokerNotConfigured ||
+                                  _editingBroker) {
+                                return _BrokerSetupPanel(
+                                  controller: _brokerController,
+                                  error: _brokerError,
+                                  onSave: _saveBrokerAndStart,
+                                );
+                              }
+                              return _ErrorPanel(
+                                message: error.toString(),
+                                onRetry: () => ref
+                                    .read(
+                                      pairingControllerProvider(
+                                        widget.provider,
+                                      ).notifier,
+                                    )
+                                    .start(),
+                                onConfigure: () =>
+                                    setState(() => _editingBroker = true),
+                              );
+                            },
+                            data: (session) {
+                              if (session == null) {
+                                return const SizedBox.shrink();
+                              }
+                              return _PairingPanel(
+                                provider: widget.provider,
+                                session: session,
+                                onRestart: () => ref
+                                    .read(
+                                      pairingControllerProvider(
+                                        widget.provider,
+                                      ).notifier,
+                                    )
+                                    .start(),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 28),
-            Expanded(
-              child: Center(
-                child: pairing.when(
-                  loading: () => const CircularProgressIndicator(),
-                  error: (error, _) {
-                    if (error is AuthBrokerNotConfigured || _editingBroker) {
-                      return _BrokerSetupPanel(
-                        controller: _brokerController,
-                        error: _brokerError,
-                        onSave: _saveBrokerAndStart,
-                      );
-                    }
-                    return _ErrorPanel(
-                      message: error.toString(),
-                      onRetry: () => ref
-                          .read(
-                            pairingControllerProvider(widget.provider).notifier,
-                          )
-                          .start(),
-                      onConfigure: () => setState(() => _editingBroker = true),
-                    );
-                  },
-                  data: (session) {
-                    if (session == null) return const SizedBox.shrink();
-                    return _PairingPanel(
-                      provider: widget.provider,
-                      session: session,
-                      onRestart: () => ref
-                          .read(
-                            pairingControllerProvider(widget.provider).notifier,
-                          )
-                          .start(),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
+    );
+  }
+}
+
+class _TrackingHeader extends StatelessWidget {
+  const _TrackingHeader({
+    required this.compact,
+    required this.provider,
+    required this.onBack,
+  });
+
+  final bool compact;
+  final TrackingProvider provider;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final leading = Row(
+      children: [
+        _BackButton(onPressed: onBack),
+        const SizedBox(width: 18),
+        Expanded(
+          child: Text(
+            'Connect ${provider.displayName}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+        ),
+      ],
+    );
+    final note = Text(
+      'No password is entered on this TV',
+      style: TextStyle(color: context.appPalette.mutedText),
+    );
+    if (compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [leading, const SizedBox(height: 8), note],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: leading),
+        const SizedBox(width: 20),
+        note,
+      ],
     );
   }
 }
@@ -189,86 +256,110 @@ class _PairingPanel extends StatelessWidget {
       );
     }
 
-    return Container(
+    return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 820),
-      padding: const EdgeInsets.all(34),
-      decoration: BoxDecoration(
-        color: AppColors.panel,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withValues(alpha: .08)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 220,
-            height: 220,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: QrImageView(
-              data: session.verificationUriComplete,
-              backgroundColor: Colors.white,
-              errorCorrectionLevel: QrErrorCorrectLevel.Q,
-              padding: EdgeInsets.zero,
-              eyeStyle: const QrEyeStyle(
-                eyeShape: QrEyeShape.square,
-                color: AppColors.ink,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 700;
+          final qrSize = compact ? 190.0 : 220.0;
+          final qr = CopyableQrInteraction(
+            data: session.verificationUriComplete,
+            semanticsLabel: 'QR code for anime tracker pairing',
+            confirmationMessage: 'Tracker pairing link copied.',
+            child: Container(
+              width: qrSize,
+              height: qrSize,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
               ),
-              dataModuleStyle: const QrDataModuleStyle(
-                dataModuleShape: QrDataModuleShape.square,
-                color: AppColors.ink,
+              child: QrImageView(
+                data: session.verificationUriComplete,
+                backgroundColor: Colors.white,
+                errorCorrectionLevel: QrErrorCorrectLevel.Q,
+                padding: EdgeInsets.zero,
+                eyeStyle: const QrEyeStyle(
+                  eyeShape: QrEyeShape.square,
+                  color: Colors.black,
+                ),
+                dataModuleStyle: const QrDataModuleStyle(
+                  dataModuleShape: QrDataModuleShape.square,
+                  color: Colors.black,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 38),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const _WaitingPill(),
-                const SizedBox(height: 18),
-                Text(
-                  'Scan with your phone',
-                  style: Theme.of(context).textTheme.displaySmall,
+          );
+          final details = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _WaitingPill(),
+              const SizedBox(height: 18),
+              Text(
+                'Scan with your phone',
+                style: Theme.of(context).textTheme.displaySmall,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Open ${session.verificationUri} and confirm the code:',
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
+              const SizedBox(height: 18),
+              Text(
+                session.userCode,
+                style: TextStyle(
+                  color: context.appPalette.primaryText,
+                  fontSize: compact ? 28 : 30,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: compact ? 3 : 4,
                 ),
-                const SizedBox(height: 12),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'This screen updates automatically after approval.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              if (provider == TrackingProvider.myAnimeList) ...[
+                const SizedBox(height: 10),
                 Text(
-                  'Open ${session.verificationUri} and confirm the code:',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  session.userCode,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 4,
+                  'Registered callback: '
+                  '${malCallback ?? 'your broker /oauth/myanimelist/callback'}',
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
+                    fontSize: 11,
                   ),
                 ),
-                const SizedBox(height: 14),
-                Text(
-                  'This screen updates automatically after approval.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                if (provider == TrackingProvider.myAnimeList) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    'Registered callback: '
-                    '${malCallback ?? 'your broker /oauth/myanimelist/callback'}',
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
               ],
+            ],
+          );
+          return Container(
+            width: constraints.maxWidth,
+            padding: EdgeInsets.all(compact ? 20 : 34),
+            decoration: BoxDecoration(
+              color: context.appPalette.surface,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: .08)),
             ),
-          ),
-        ],
+            child: compact
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Align(alignment: Alignment.center, child: qr),
+                      const SizedBox(height: 24),
+                      details,
+                    ],
+                  )
+                : Row(
+                    children: [
+                      qr,
+                      const SizedBox(width: 38),
+                      Expanded(child: details),
+                    ],
+                  ),
+          );
+        },
       ),
     );
   }
@@ -279,10 +370,10 @@ class _WaitingPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const _Pill(
+    return _Pill(
       icon: Icons.sync_rounded,
       text: 'WAITING FOR APPROVAL',
-      color: AppColors.cyan,
+      color: context.appPalette.secondaryAccent,
     );
   }
 }
@@ -327,7 +418,7 @@ class _StatusPanel extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
-    this.color = AppColors.accentBright,
+    this.color,
     this.actionLabel,
     this.onAction,
     this.secondaryActionLabel,
@@ -337,7 +428,7 @@ class _StatusPanel extends StatelessWidget {
   final IconData icon;
   final String title;
   final String body;
-  final Color color;
+  final Color? color;
   final String? actionLabel;
   final VoidCallback? onAction;
   final String? secondaryActionLabel;
@@ -345,28 +436,36 @@ class _StatusPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panelColor = color ?? context.appPalette.accentBright;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 72, color: color),
+        Icon(icon, size: 72, color: panelColor),
         const SizedBox(height: 18),
-        Text(title, style: Theme.of(context).textTheme.displaySmall),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.displaySmall,
+        ),
         const SizedBox(height: 10),
-        Text(body, style: Theme.of(context).textTheme.bodyLarge),
+        Text(
+          body,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
         if (actionLabel != null && onAction != null) ...[
           const SizedBox(height: 24),
-          Row(
-            mainAxisSize: MainAxisSize.min,
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
             children: [
               _ActionButton(label: actionLabel!, onPressed: onAction!),
-              if (secondaryActionLabel != null &&
-                  onSecondaryAction != null) ...[
-                const SizedBox(width: 12),
+              if (secondaryActionLabel != null && onSecondaryAction != null)
                 _ActionButton(
                   label: secondaryActionLabel!,
                   onPressed: onSecondaryAction!,
                 ),
-              ],
             ],
           ),
         ],
@@ -414,54 +513,62 @@ class _BrokerSetupPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 860,
-      padding: const EdgeInsets.all(30),
-      decoration: BoxDecoration(
-        color: AppColors.panel,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withValues(alpha: .10)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _Pill(
-            icon: Icons.dns_rounded,
-            text: 'ONE-TIME QR SETUP',
-            color: AppColors.cyan,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 860),
+      child: LayoutBuilder(
+        builder: (context, constraints) => Container(
+          width: constraints.maxWidth,
+          padding: EdgeInsets.all(constraints.maxWidth < 600 ? 20 : 30),
+          decoration: BoxDecoration(
+            color: context.appPalette.surface,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white.withValues(alpha: .10)),
           ),
-          const SizedBox(height: 16),
-          Text(
-            'Connect the TetoTV sign-in broker',
-            style: Theme.of(context).textTheme.headlineSmall,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _Pill(
+                icon: Icons.dns_rounded,
+                text: 'ONE-TIME QR SETUP',
+                color: context.appPalette.secondaryAccent,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Connect the TetoTV sign-in broker',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'AniList and MAL do not provide a native TV device-code '
+                'login. Deploy the included broker with your registered OAuth '
+                'clients, then enter its public address here. Provider secrets '
+                'stay on the server and never enter the APK.',
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
+              const SizedBox(height: 18),
+              TvTextInput(
+                controller: controller,
+                labelText: 'HTTPS broker URL',
+                hintText: 'https://auth.your-domain.example',
+                keyboardTitle: 'Enter TetoTV broker URL',
+                autofillSuggestions: const ['https://'],
+              ),
+              if (error case final message?) ...[
+                const SizedBox(height: 10),
+                Text(message, style: const TextStyle(color: Color(0xFFFF929B))),
+              ],
+              const SizedBox(height: 18),
+              Align(
+                alignment: Alignment.centerRight,
+                child: _ActionButton(
+                  label: 'Save and connect',
+                  onPressed: onSave,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            'AniList and MAL do not provide a native TV device-code '
-            'login. Deploy the included broker with your registered OAuth '
-            'clients, then enter its public address here. Provider secrets '
-            'stay on the server and never enter the APK.',
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-          const SizedBox(height: 18),
-          TvTextInput(
-            controller: controller,
-            labelText: 'HTTPS broker URL',
-            hintText: 'https://auth.your-domain.example',
-            keyboardTitle: 'Enter TetoTV broker URL',
-            autofillSuggestions: const ['https://'],
-          ),
-          if (error case final message?) ...[
-            const SizedBox(height: 10),
-            Text(message, style: const TextStyle(color: Color(0xFFFF929B))),
-          ],
-          const SizedBox(height: 18),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _ActionButton(label: 'Save and connect', onPressed: onSave),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -478,9 +585,9 @@ class _BackButton extends StatelessWidget {
       autofocus: true,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
-      child: const ColoredBox(
-        color: AppColors.panel,
-        child: Padding(
+      child: ColoredBox(
+        color: context.appPalette.surface,
+        child: const Padding(
           padding: EdgeInsets.all(10),
           child: Icon(Icons.arrow_back_rounded, size: 20),
         ),
@@ -501,7 +608,7 @@ class _ActionButton extends StatelessWidget {
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
       child: Container(
-        color: AppColors.accent,
+        color: context.appPalette.accent,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Text(
           label,

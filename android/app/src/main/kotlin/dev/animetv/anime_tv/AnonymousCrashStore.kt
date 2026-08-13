@@ -180,6 +180,21 @@ object AnonymousCrashStore {
         var output = value
             .replace(Regex("https?://[^\\s\\\"']+", RegexOption.IGNORE_CASE), "[URL]")
             .replace(Regex("magnet:\\?[^\\s\\\"']+", RegexOption.IGNORE_CASE), "[MAGNET]")
+            .replace(
+                Regex(
+                    "\\b(?![A-Za-z]:[\\\\/])[A-Za-z][A-Za-z0-9+.-]{0,31}:(?![0-9\\s])[^\\s\\\"'<>]+",
+                    RegexOption.IGNORE_CASE,
+                ),
+                "[URI]",
+            )
+            .replace(
+                Regex(
+                    "(^|[\\s\\\"'(=\\[])(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/\\s\\\"'<>]+[\\\\/])[^\\r\\n\\\"'<>]*",
+                )
+            ) { match -> "${match.groupValues[1]}[PATH]" }
+            .replace(Regex("(^|[\\s\\\"'(=\\[])/(?!/)[^\\r\\n\\\"'<>]*")) { match ->
+                "${match.groupValues[1]}[PATH]"
+            }
             .replace(Regex("\\bgithub_pat_[A-Za-z0-9_]+\\b", RegexOption.IGNORE_CASE), "[REDACTED]")
             .replace(Regex("\\bgh[pousr]_[A-Za-z0-9]{20,}\\b", RegexOption.IGNORE_CASE), "[REDACTED]")
             .replace(Regex("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b"), "[REDACTED]")

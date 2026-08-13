@@ -17,6 +17,7 @@ void main() {
   test('series playback and stream preferences survive JSON storage', () {
     const preferences = SeriesPlaybackPreferences(
       audioLanguage: 'jpn',
+      audioPreferenceSet: true,
       subtitleLanguage: 'eng',
       subtitleEnabled: true,
       subtitlePreferenceSet: true,
@@ -35,6 +36,7 @@ void main() {
     final restored = SeriesPlaybackPreferences.fromJson(preferences.toJson());
 
     expect(restored.audioLanguage, 'jpn');
+    expect(restored.audioPreferenceSet, isTrue);
     expect(restored.subtitlePreferenceSet, isTrue);
     expect(restored.subtitleSize, 42);
     expect(restored.preferredStreamLanguage, 'sub');
@@ -104,6 +106,7 @@ void main() {
     final redacted = redactDiagnosticValue(
       'Bearer secret https://cdn.example/video magnet:?xt=urn:btih:abc '
       '0123456789abcdef0123456789abcdef01234567 '
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef '
       'github_'
       'pat_exampleExampleExample123456 '
       'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature '
@@ -116,7 +119,36 @@ void main() {
     expect(redacted, isNot(contains('github_pat_')));
     expect(redacted, isNot(contains('eyJhbGci')));
     expect(redacted, contains('[MAGNET]'));
-    expect(redacted, contains('[INFO_HASH]'));
+    expect('[INFO_HASH]'.allMatches(redacted), hasLength(2));
+  });
+
+  test('diagnostic text redacts private URIs and absolute local paths', () {
+    final redacted = redactDiagnosticValue(
+      'content://com.android.providers.media.documents/document/'
+      'video%3Aprivate-show.mkv\n'
+      'file:///storage/emulated/0/Private%20Episode.mkv\n'
+      'teto+private:document-id-episode-42\n'
+      '/storage/emulated/0/Private Show Episode 7.mkv\n'
+      r'C:\Users\Viewer\Videos\Private Episode 8.mkv'
+      '\n'
+      'at dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy'
+      '(Media3PlayerActivity.kt:169)',
+      maximum: 1000,
+    );
+
+    expect(redacted, contains('[URI]'));
+    expect(redacted, contains('[PATH]'));
+    expect(redacted, isNot(contains('private-show')));
+    expect(redacted, isNot(contains('document-id-episode-42')));
+    expect(redacted, isNot(contains('Private Show Episode 7.mkv')));
+    expect(redacted, isNot(contains('Private Episode 8.mkv')));
+    expect(
+      redacted,
+      contains(
+        'dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy'
+        '(Media3PlayerActivity.kt:169)',
+      ),
+    );
   });
 }
 

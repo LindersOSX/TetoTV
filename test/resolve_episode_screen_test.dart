@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
@@ -301,6 +302,109 @@ void main() {
         reason: 'late source progress must not relaunch',
       );
       expect(playerBuilds, 1);
+    },
+  );
+
+  testWidgets(
+    'autoplay ranks all concurrent repositories before checking debrid cache',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final slowSource = Completer<List<ReleaseCandidate>>();
+      final neverWeb = Completer<void>();
+      addTearDown(() {
+        if (!slowSource.isCompleted) slowSource.complete(const []);
+        if (!neverWeb.isCompleted) neverWeb.complete();
+      });
+      var resolverCalls = 0;
+      PlaybackLaunch? opened;
+      final source = CompositeReleaseSource([
+        _CallbackReleaseSource(
+          'fast',
+          () async => const [
+            ReleaseCandidate(
+              infoHash: '1111111111111111111111111111111111111111',
+              magnetUri:
+                  'magnet:?xt=urn:btih:1111111111111111111111111111111111111111',
+              releaseName: 'Fast repository result English Dub',
+              seeders: 1,
+              sourceId: 'fast',
+              isDubbed: true,
+              quality: '1080p',
+              codec: 'H.264',
+            ),
+          ],
+        ),
+        _CallbackReleaseSource('slow', () => slowSource.future),
+      ]);
+      final router = GoRouter(
+        initialLocation: '/resolve',
+        routes: [
+          GoRoute(
+            path: '/resolve',
+            builder: (_, _) => const ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+                autoPlay: true,
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/player',
+            builder: (_, state) {
+              opened = state.extra! as PlaybackLaunch;
+              return const Scaffold(body: Text('RANKED PLAYER OPENED'));
+            },
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(source),
+            webStreamAggregatorProvider.overrideWithValue(
+              _NeverCompletingWebAggregator(neverWeb.future),
+            ),
+            debridStreamResolverFactoryProvider.overrideWithValue(({
+              required service,
+              required token,
+              required source,
+            }) {
+              resolverCalls++;
+              return const _ReadyResolver();
+            }),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+
+      await _pumpUntilFound(
+        tester,
+        find.text('Fast repository result English Dub'),
+      );
+      expect(resolverCalls, 0);
+      slowSource.complete(const [
+        ReleaseCandidate(
+          infoHash: '2222222222222222222222222222222222222222',
+          magnetUri:
+              'magnet:?xt=urn:btih:2222222222222222222222222222222222222222',
+          releaseName: 'Better ranked result English Dub',
+          seeders: 100,
+          sourceId: 'slow',
+          isDubbed: true,
+          quality: '1080p',
+          codec: 'H.264',
+        ),
+      ]);
+      await _pumpUntilFound(tester, find.text('RANKED PLAYER OPENED'));
+
+      expect(resolverCalls, 1);
+      expect(opened?.selectedRelease.infoHash, startsWith('2222'));
+      expect(neverWeb.isCompleted, isFalse);
     },
   );
 
@@ -771,10 +875,43 @@ void main() {
         ),
         isTrue,
       );
-      expect(releaseMatchesStreamFilters(release, language: 'sub'), isFalse);
+      expect(
+        releaseMatchesStreamFilters(release, language: 'sub'),
+        isTrue,
+        reason: 'dual-audio files contain a usable original-language track',
+      );
       expect(releaseMatchesStreamFilters(release, allowBatch: false), isFalse);
     },
   );
+
+  test('preferred language is ranked before provider affinity on fallback', () {
+    const dubbed = ReleaseCandidate(
+      infoHash: 'dub',
+      magnetUri: 'magnet:?xt=urn:btih:dub',
+      releaseName: '[Other] Show 01 English Dub',
+      seeders: 1,
+      sourceId: 'other',
+      isDubbed: true,
+    );
+    const subtitled = ReleaseCandidate(
+      infoHash: 'sub',
+      magnetUri: 'magnet:?xt=urn:btih:sub',
+      releaseName: '[Preferred] Show 01',
+      seeders: 500,
+      sourceId: 'preferred',
+      provider: 'Preferred provider',
+    );
+
+    expect(
+      compareStreamReleases(
+        dubbed,
+        subtitled,
+        preferredProvider: 'Preferred provider',
+        preferredAudio: PlaybackAudioPreference.dub,
+      ),
+      lessThan(0),
+    );
+  });
 
   test('web qualities are ranked from highest to lowest', () {
     final streams = [

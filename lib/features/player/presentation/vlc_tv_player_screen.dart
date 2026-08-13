@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -13,12 +14,14 @@ import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
@@ -50,6 +53,13 @@ int? preferredVlcTrack(
   bool preferDub = false,
 }) {
   if (tracks.isEmpty) return null;
+  bool isCommentary(String title) {
+    final value = title.toLowerCase();
+    return value.contains('commentary') ||
+        value.contains('descriptive') ||
+        value.contains('description');
+  }
+
   int score(String title) {
     final value = title.toLowerCase();
     var result = playerTrackLanguageScore(
@@ -57,15 +67,27 @@ int? preferredVlcTrack(
       preferredLanguage: language,
     );
     if (preferDub && value.contains('dub')) result += 3;
-    if (value.contains('commentary') || value.contains('description')) {
-      result -= 8;
-    }
     return result;
   }
 
-  final ranked = tracks.entries.toList()
-    ..sort((a, b) => score(b.value).compareTo(score(a.value)));
-  return score(ranked.first.value) > 0 ? ranked.first.key : null;
+  final usable = tracks.entries.where((entry) => entry.key >= 0).toList();
+  if (usable.isEmpty) return null;
+  final nonCommentary = usable
+      .where((entry) => !isCommentary(entry.value))
+      .toList();
+  final candidates = nonCommentary.isEmpty ? usable : nonCommentary;
+  candidates.sort((a, b) {
+    final byScore = score(b.value).compareTo(score(a.value));
+    return byScore != 0 ? byScore : a.key.compareTo(b.key);
+  });
+  final best = candidates.first;
+  if (score(best.value) > 0) return best.key;
+
+  // A single non-preferred track may be an incomplete VLC snapshot; leave it
+  // alone so discovery can still find a late Dub/Sub track. With multiple
+  // tracks, choose a deterministic non-commentary fallback instead of leaving
+  // VLC on a container-default commentary stream.
+  return usable.length > 1 ? best.key : null;
 }
 
 /// A second, independent Android playback engine.
@@ -166,6 +188,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   bool _skipLoadComplete = false;
   int _skipLoadAttempts = 0;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
+  PlaybackAudioPreference _audioPreference = PlaybackAudioPreference.dub;
   VlcDecoderMode _decoderMode = VlcDecoderMode.hardwareCopy;
   double _playbackRate = 1;
   double _subtitleSize = 34;
@@ -229,6 +252,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _bootstrap() async {
     final appearance = ref.read(settingsPreferencesProvider);
+    _audioPreference = appearance.preferredAudio;
     _seekBackSeconds = appearance.seekBackSeconds;
     _seekForwardSeconds = appearance.seekForwardSeconds;
     _captionTextColor = appearance.captionTextColor;
@@ -236,6 +260,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final mediaId = widget.anilistMediaId;
     if (mediaId != null) {
       _preferences = await _database.seriesPreferences(mediaId);
+      if (_preferences.audioPreferenceSet) {
+        _audioPreference =
+            playbackAudioPreferenceForLanguage(_preferences.audioLanguage) ??
+            _audioPreference;
+      }
       _subtitleSize = _preferences.subtitleSize == 34
           ? appearance.captionTextSize
           : _preferences.subtitleSize;
@@ -255,7 +284,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
     if (!_preferences.subtitlePreferenceSet) {
       _preferences = _preferences.copyWith(
-        subtitleEnabled: subtitlesEnabledByDefault(_release),
+        subtitleEnabled: subtitlesEnabledForAudioPreference(
+          _release,
+          _audioPreference,
+        ),
       );
     }
     if (_releaseRequiresSoftware(_release)) {
@@ -439,8 +471,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
+  bool _canApplyTracksTo(VlcPlayerController controller) =>
+      mounted &&
+      !_engineHandoffInProgress &&
+      identical(controller, _controller) &&
+      !_releasedControllers.contains(controller);
+
   Future<void> _applyPreferredTracks(VlcPlayerController controller) async {
-    if (controller != _controller ||
+    if (!_canApplyTracksTo(controller) ||
         (_audioPreferenceApplied && _subtitlePreferenceApplied)) {
       return;
     }
@@ -448,46 +486,73 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     try {
       if (!_audioPreferenceApplied) {
         final audioTracks = await controller.getAudioTracks();
+        if (!_canApplyTracksTo(controller)) return;
         if (audioTracks.isNotEmpty) {
           final audioId = preferredVlcTrack(
             audioTracks,
-            language: _preferences.audioLanguage,
-            preferDub: true,
+            language: _preferences.audioPreferenceSet
+                ? _preferences.audioLanguage
+                : _audioPreference.audioLanguage,
+            preferDub: _preferences.audioPreferenceSet
+                ? playbackAudioPreferenceForLanguage(
+                        _preferences.audioLanguage,
+                      ) ==
+                      PlaybackAudioPreference.dub
+                : _audioPreference == PlaybackAudioPreference.dub,
           );
           if (audioId != null) {
             await controller.setAudioTrack(audioId);
-            _audioPreferenceApplied = true;
+            if (!_canApplyTracksTo(controller)) return;
+            _audioPreferenceApplied = playerTrackMatchesLanguage(
+              title: audioTracks[audioId],
+              preferredLanguage: _preferences.audioPreferenceSet
+                  ? _preferences.audioLanguage
+                  : _audioPreference.audioLanguage,
+            );
+            await _saveTrackPreferences(audioLabel: audioTracks[audioId]);
+            if (!_canApplyTracksTo(controller)) return;
           }
         }
       }
+      if (!_canApplyTracksTo(controller)) return;
       if (!_preferences.subtitleEnabled && !_subtitlePreferenceApplied) {
         await controller.setSpuTrack(-1);
+        if (!_canApplyTracksTo(controller)) return;
         _subtitlePreferenceApplied = true;
       } else if (!_subtitlePreferenceApplied) {
         final subtitleTracks = await controller.getSpuTracks();
+        if (!_canApplyTracksTo(controller)) return;
         if (subtitleTracks.isNotEmpty) {
           final subtitleId = preferredVlcTrack(
             subtitleTracks,
             language: _preferences.subtitleLanguage,
           );
-          if (subtitleId != null) await controller.setSpuTrack(subtitleId);
+          if (subtitleId != null) {
+            await controller.setSpuTrack(subtitleId);
+            if (!_canApplyTracksTo(controller)) return;
+          }
           _subtitlePreferenceApplied = true;
         }
       }
     } catch (_) {
       // VLC commonly reports its track list a few frames after initialization.
     }
-    if (!_audioPreferenceApplied || !_subtitlePreferenceApplied) {
+    if (_canApplyTracksTo(controller) &&
+        (!_audioPreferenceApplied || !_subtitlePreferenceApplied)) {
       _scheduleTrackDiscoveryRetry(controller);
     }
   }
 
   void _scheduleTrackDiscoveryRetry(VlcPlayerController controller) {
-    if (controller != _controller || _trackDiscoveryAttempts >= 8) return;
+    if (!_canApplyTracksTo(controller) || _trackDiscoveryAttempts >= 8) return;
     _trackDiscoveryAttempts += 1;
     _trackDiscoveryTimer?.cancel();
     _trackDiscoveryTimer = Timer(const Duration(milliseconds: 700), () {
-      unawaited(_applyPreferredTracks(controller));
+      _trackDiscoveryTimer = null;
+      if (!_canApplyTracksTo(controller)) return;
+      // The timer Future must join the same mutation set as initialization and
+      // restarts so decoder release cannot race a delayed track command.
+      unawaited(_trackControllerMutation(_applyPreferredTracks(controller)));
     });
   }
 
@@ -722,7 +787,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         completed: completed,
       ),
     );
-    if (force && mounted) ref.invalidate(recentPlaybackProvider);
+    if ((force || completed) && mounted) {
+      ref.invalidate(recentPlaybackProvider);
+      ref.invalidate(latestPlaybackProvider(mediaId));
+    }
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
         mediaId: mediaId,
@@ -871,7 +939,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           (active.kind == SkipSegmentKind.opening && settings.autoSkipIntros) ||
           (active.kind == SkipSegmentKind.ending && settings.autoSkipOutros);
       final key = '${active.kind.name}:${active.start.inMilliseconds}';
-      if (autoSkip && _consumedSkipSegments.add(key)) {
+      if (autoSkip && !_skipInProgress && _consumedSkipSegments.add(key)) {
         final controller = _controller;
         if (mounted) {
           setState(() {
@@ -891,7 +959,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _canSkip = available;
         _activeSkip = active;
       });
-      if (active != null) _focusSkipOnce(active);
+      if (active != null && !_controlsVisible) _focusSkipOnce(active);
     }
   }
 
@@ -899,7 +967,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final key = '${segment.kind.name}:${segment.start.inMilliseconds}';
     if (!_autoFocusedSkipSegments.add(key)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _activeSkip == segment) _skipFocus.requestFocus();
+      if (mounted && !_controlsVisible && _activeSkip == segment) {
+        _skipFocus.requestFocus();
+      }
     });
   }
 
@@ -944,6 +1014,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       }
     } finally {
       _skipInProgress = false;
+      if (mounted && !_engineHandoffInProgress) {
+        _checkSkips(controller.value.position);
+      }
     }
   }
 
@@ -984,6 +1057,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       }
     } finally {
       _skipInProgress = false;
+      if (mounted && !_engineHandoffInProgress && controller == _controller) {
+        _checkSkips(controller.value.position);
+      }
     }
   }
 
@@ -1083,7 +1159,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (!mounted || selected == null) return;
       await controller.setAudioTrack(selected);
       _audioPreferenceApplied = true;
-      await _saveTrackPreferences(audioLabel: tracks[selected]);
+      await _saveTrackPreferences(
+        audioLabel: tracks[selected],
+        audioPreferenceSet: true,
+      );
       _showMessage('Audio: ${tracks[selected] ?? 'Track $selected'}');
     } catch (_) {
       _showMessage('Audio tracks are not available yet');
@@ -1166,6 +1245,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _saveTrackPreferences({
     String? audioLabel,
+    bool audioPreferenceSet = false,
     String? subtitleLabel,
     bool? subtitleEnabled,
   }) async {
@@ -1174,7 +1254,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _preferences = _preferences.copyWith(
       audioLanguage: audioLabel == null
           ? _preferences.audioLanguage
-          : canonicalPlayerLanguage(audioLabel),
+          : persistedPlayerAudioLanguage(
+              storedLanguage: _preferences.audioLanguage,
+              audioPreferenceSet: _preferences.audioPreferenceSet,
+              observedTitle: audioLabel,
+              manualSelection: audioPreferenceSet,
+            ),
+      audioPreferenceSet: audioPreferenceSet
+          ? true
+          : _preferences.audioPreferenceSet,
       subtitleLanguage: subtitleLabel == null
           ? _preferences.subtitleLanguage
           : canonicalPlayerLanguage(subtitleLabel),
@@ -1305,7 +1393,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _release = candidate;
         _currentStream = ready;
         _preferences = _preferences.copyWith(
-          subtitleEnabled: subtitlesEnabledByDefault(candidate),
+          subtitleEnabled: subtitlesEnabledForAudioPreference(
+            candidate,
+            _audioPreference,
+          ),
         );
         _decoderMode = _releaseRequiresSoftware(candidate)
             ? VlcDecoderMode.software
@@ -1388,6 +1479,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             anilistMediaId: widget.anilistMediaId,
             malMediaId: widget.malMediaId,
           );
+      if (!mounted) return;
+      ref.invalidate(
+        linkedTrackingProgressProvider((
+          anilistMediaId: widget.anilistMediaId,
+          malMediaId: widget.malMediaId,
+        )),
+      );
       if (synced) {
         ref.invalidate(trackingHomeProvider);
       }
@@ -1749,6 +1847,31 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     await _handoffTo(selected);
   }
 
+  Future<void> _openCaptionSizePicker() async {
+    _controlsTimer?.cancel();
+    final selected = await showPlayerCaptionSizePicker(
+      context: context,
+      current: _subtitleSize,
+    );
+    if (!mounted) return;
+    if (selected == null) {
+      _scheduleControlsHide();
+      return;
+    }
+    if (selected != _subtitleSize) {
+      _subtitleSize = selected;
+      _preferences = _preferences.copyWith(subtitleSize: selected);
+      await _saveTrackPreferences();
+      if (!mounted) return;
+      await _restart(
+        _decoderMode,
+        reason: 'Caption size: ${playerCaptionSizeLabel(selected)}',
+      );
+      if (!mounted) return;
+    }
+    _scheduleControlsHide();
+  }
+
   Future<void> _openOptions() async {
     _controlsTimer?.cancel();
     final result = await showDialog<_VlcMenuResult>(
@@ -1864,6 +1987,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       unawaited(_openSubtitleTrackPicker());
       return KeyEventResult.handled;
     }
+    if (key == LogicalKeyboardKey.keyI && _canSkip) {
+      unawaited(_skipCurrentSegment());
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.keyC) {
       if (_decoderMode == VlcDecoderMode.software) {
         _showMessage('VLC software decoding is already enabled');
@@ -1881,6 +2008,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         key == LogicalKeyboardKey.contextMenu ||
         key == LogicalKeyboardKey.gameButtonY) {
       unawaited(_openOptions());
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyA ||
+        key == LogicalKeyboardKey.gameButtonX) {
+      unawaited(_cyclePicture());
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -1960,6 +2092,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return;
     }
     _confirmingExit = true;
+    // Do not let the player HUD's idle timer steal focus from the modal exit
+    // route. It is restarted only if the viewer chooses to keep watching.
+    _controlsTimer?.cancel();
     final controller = _controller;
     final wasPlaying = controller?.value.isPlaying == true;
     bool? exit;
@@ -1987,11 +2122,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (await _prepareForEngineHandoff(position)) {
         _popPlayerRouteAfterHandoff(navigator);
       }
-    } else if (wasPlaying) {
-      try {
-        await controller?.play();
-      } catch (_) {
-        // Keep the HUD usable if the decoder cannot resume after cancellation.
+    } else {
+      if (wasPlaying) {
+        try {
+          await controller?.play();
+        } catch (_) {
+          // Keep the HUD usable if the decoder cannot resume after cancellation.
+        }
       }
       if (mounted) _showControls(focusControls: true);
     }
@@ -2001,16 +2138,29 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   void dispose() {
     _skipLoadTimer?.cancel();
     final controller = _controllerPendingRelease ?? _controller;
+    _trackDiscoveryTimer?.cancel();
+    // A timer callback may already be awaiting VLC's track API. Remove its
+    // controller identity immediately and make authoritative disposal wait for
+    // every tracked mutation before releasing the platform view.
+    _engineHandoffInProgress = true;
+    _controller = null;
     if (controller != null && !_controllerReleasedForHandoff) {
-      unawaited(_persistPlayback(controller.value.position, force: true));
+      unawaited(
+        _persistPlayback(
+          controller.value.position,
+          force: true,
+          controllerOverride: controller,
+        ),
+      );
       controller.removeListener(_onValueChanged);
-      if (controller.isReadyToInitialize == true) {
-        unawaited(
-          _handoffRelease.release(
-            () => _disposeControllerAuthoritatively(controller),
-          ),
-        );
-      }
+      unawaited(
+        _handoffRelease.release(() async {
+          await _waitForControllerMutations();
+          if (controller.isReadyToInitialize == true) {
+            await _disposeControllerAuthoritatively(controller);
+          }
+        }),
+      );
     }
     if (!_nativePlaybackStateClearedForHandoff) {
       unawaited(AndroidTvBridge.instance.clearMediaSession());
@@ -2021,7 +2171,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _trackMessageTimer?.cancel();
     _initializationWatchdog?.cancel();
     _videoWatchdog?.cancel();
-    _trackDiscoveryTimer?.cancel();
     _sourceDiscoverySubscription?.cancel();
     _rootFocus.dispose();
     _playFocus.dispose();
@@ -2032,6 +2181,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final palette = context.appPalette;
     return PopScope(
       canPop: _allowExit,
       onPopInvokedWithResult: (didPop, _) {
@@ -2079,8 +2229,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     height: 0,
                   ),
                 if (controller == null && !_engineHandoffInProgress)
-                  const Center(
-                    child: CircularProgressIndicator(color: AppColors.cyan),
+                  Center(
+                    child: CircularProgressIndicator(
+                      color: palette.secondaryAccent,
+                    ),
                   )
                 else if (controller != null && !_engineHandoffInProgress)
                   ValueListenableBuilder<VlcPlayerValue>(
@@ -2096,9 +2248,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                             height: 0,
                           ),
                         if (value.isBuffering)
-                          const Center(
+                          Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.cyan,
+                              color: palette.secondaryAccent,
                             ),
                           ),
                       ],
@@ -2156,7 +2308,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                         onAudio: () => unawaited(_openAudioTrackPicker()),
                         onSubtitles: () =>
                             unawaited(_openSubtitleTrackPicker()),
-                        onCaptionSize: () => unawaited(_openOptions()),
+                        onCaptionSize: () =>
+                            unawaited(_openCaptionSizePicker()),
                         onPicture: () => unawaited(_cyclePicture()),
                         onFixVideo: () => unawaited(_openPlayerPicker()),
                         onSources: _currentStream.isWebStream
@@ -2205,10 +2358,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xEE0A0A0A),
+                        color: palette.playerSurface(
+                          defaultColor: const Color(0xEE0A0A0A),
+                        ),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
-                          color: AppColors.accent.withValues(alpha: .6),
+                          color: palette.accent.withValues(alpha: .6),
                         ),
                       ),
                       child: Text(
@@ -2348,6 +2503,7 @@ class _VlcPlayerChrome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final compact =
         MediaQuery.sizeOf(context).width < 720 ||
         MediaQuery.sizeOf(context).height < 480;
@@ -2370,12 +2526,14 @@ class _VlcPlayerChrome extends StatelessWidget {
             compact ? 9 : 13,
           ),
           decoration: BoxDecoration(
-            color: const Color(0xD6080808),
+            color: palette.playerSurface(defaultColor: const Color(0xD6080808)),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
-            boxShadow: const [
+            border: Border.all(color: palette.accent.withValues(alpha: .7)),
+            boxShadow: [
               BoxShadow(
-                color: Color(0xB3000000),
+                color: palette.usesDefaultPlayerPalette
+                    ? const Color(0xB3000000)
+                    : palette.background.withValues(alpha: .70),
                 blurRadius: 24,
                 offset: Offset(0, 8),
               ),
@@ -2504,8 +2662,10 @@ class _VlcPlayerChrome extends StatelessWidget {
                         LinearProgressIndicator(
                           value: progress,
                           minHeight: 4,
-                          color: AppColors.accentBright,
-                          backgroundColor: Colors.white.withValues(alpha: .22),
+                          color: palette.accentBright,
+                          backgroundColor: palette
+                              .playerPrimaryText()
+                              .withValues(alpha: .22),
                         ),
                         const SizedBox(height: 9),
                         Row(
@@ -2516,9 +2676,9 @@ class _VlcPlayerChrome extends StatelessWidget {
                             ),
                             if (!compact) ...[
                               const Spacer(),
-                              const Text(
+                              Text(
                                 'VLC renderer  |  J/L seek  |  C decoder',
-                                style: TextStyle(color: AppColors.textMuted),
+                                style: TextStyle(color: palette.mutedText),
                               ),
                             ],
                           ],
@@ -2541,20 +2701,21 @@ class _EngineBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Container(
       constraints: const BoxConstraints(maxWidth: 170),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.accent.withValues(alpha: .18),
+        color: palette.accent.withValues(alpha: .18),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.accent.withValues(alpha: .4)),
+        border: Border.all(color: palette.accent.withValues(alpha: .4)),
       ),
       child: Text(
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: AppColors.accentBright,
+        style: TextStyle(
+          color: palette.accentBright,
           fontWeight: FontWeight.w800,
           fontSize: 11,
         ),
@@ -2580,6 +2741,10 @@ class _VlcControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final foreground = primary
+        ? palette.playerPrimaryActionText()
+        : palette.playerPrimaryText();
     return TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
@@ -2588,16 +2753,20 @@ class _VlcControl extends StatelessWidget {
       child: Container(
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 11),
-        color: primary ? AppColors.accent : const Color(0x8F242429),
+        color: primary
+            ? palette.accent
+            : palette.playerSelectableSurface(
+                defaultColor: const Color(0x8F242429),
+              ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 18, color: Colors.white),
+            Icon(icon, size: 18, color: foreground),
             const SizedBox(width: 6),
             Text(
               label,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: foreground,
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
@@ -2626,19 +2795,20 @@ class _VlcPlaybackError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xF20A0A0A),
+        color: palette.playerSurface(defaultColor: const Color(0xF20A0A0A)),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.accent),
+        border: Border.all(color: palette.accent),
       ),
       child: Wrap(
         spacing: 8,
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const Icon(Icons.error_outline, color: AppColors.accentBright),
+          Icon(Icons.error_outline, color: palette.accentBright),
           SizedBox(
             width: 300,
             child: Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
@@ -2695,6 +2865,7 @@ class _VlcOptionsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     Widget chip(
       String label,
       String type,
@@ -2712,10 +2883,14 @@ class _VlcOptionsDialog extends StatelessWidget {
             height: 40,
             padding: const EdgeInsets.symmetric(horizontal: 13),
             decoration: BoxDecoration(
-              color: selected ? AppColors.accent : const Color(0xFF1B1B1B),
+              color: selected
+                  ? palette.accent
+                  : palette.playerSelectableSurface(),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: selected ? AppColors.accentBright : Colors.white24,
+                color: selected
+                    ? palette.accentBright
+                    : palette.playerPrimaryText().withValues(alpha: .24),
               ),
             ),
             child: Row(
@@ -2741,8 +2916,8 @@ class _VlcOptionsDialog extends StatelessWidget {
       children: [
         Text(
           title,
-          style: const TextStyle(
-            color: AppColors.textMuted,
+          style: TextStyle(
+            color: palette.mutedText,
             fontSize: 10,
             fontWeight: FontWeight.w900,
             letterSpacing: 1.2,
@@ -2762,11 +2937,9 @@ class _VlcOptionsDialog extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 850),
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
-              color: const Color(0xFF080808),
+              color: palette.playerSurface(),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: AppColors.accent.withValues(alpha: .65),
-              ),
+              border: Border.all(color: palette.accent.withValues(alpha: .65)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2898,8 +3071,11 @@ class _VlcNextEpisodeDialogState extends State<_VlcNextEpisodeDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return AlertDialog(
-      backgroundColor: const Color(0xFF090909),
+      backgroundColor: palette.playerSurface(
+        defaultColor: const Color(0xFF090909),
+      ),
       title: const Text('Episode complete'),
       content: Text('Playing the next episode in $_seconds seconds.'),
       actions: [

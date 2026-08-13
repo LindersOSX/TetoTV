@@ -64,6 +64,11 @@ currently includes:
 - TV-safe stream ordering that prioritizes H.264/1080p SDR while preserving
   selectable HEVC, AV1, 4K, and HDR releases;
 - automatic English/Dub audio-track preference with remote track switching;
+- a persistent Dubbed/Subtitled preference used for release ranking and audio
+  selection across Media3, MPV, VLC, and consecutive episodes;
+- Android system-picker playback from USB or internal storage without broad
+  storage permission, plus optional Jellyfin and Plex library/direct-play
+  support;
 - a debrid-only player gate that rejects unresolved or direct demo URLs;
 - Android TV launcher declarations and a TV banner;
 - one universal release APK containing both `armeabi-v7a` and `arm64-v8a`,
@@ -100,7 +105,13 @@ flutter pub get
 flutter analyze
 flutter test
 flutter build apk --debug
-flutter build apk --release --target-platform android-arm,android-arm64
+New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
+# Private Beta artifact (the pubspec carries the 2.x Beta version).
+flutter build apk --release --target-platform android-arm,android-arm64 --build-name 2.0.0 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v2.0.0-universal.apk
+# Public artifact from the same commit/signing key.
+flutter build apk --release --target-platform android-arm,android-arm64 --build-name 1.0.0 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v1.0.0-universal.apk
 ```
 
 The sideloadable debug APK is written to:
@@ -129,12 +140,14 @@ the pairing broker; user credentials are stored with
 `flutter_secure_storage`.
 
 Release builds include the trusted HTTPS broker origin declared in
-`lib/core/config/app_config.dart`. Phone-assisted source entry and
-private-release update metadata are pinned to that origin. Tracker OAuth uses
-it by default and supports an explicitly saved self-hosted broker for advanced
-deployments. Client secrets and the read-only GitHub release credential are
-server-side environment variables only; they must never be compiled into an
-APK.
+`lib/core/config/app_config.dart`. Phone-assisted source entry and private Beta
+update metadata are pinned to that origin. Public updates use anonymous GitHub
+release metadata from the dedicated public, releases-only
+`LindersOSX/TetoTV-Releases` repository. Tracker OAuth uses the broker by
+default and supports an explicitly saved self-hosted broker for advanced
+deployments. Client secrets and the private-repository read-only GitHub release
+credential are server-side environment variables only; they must never be
+compiled into an APK.
 
 ## Current scope
 
@@ -164,12 +177,22 @@ CPU still exposes a 32-bit `armeabi-v7a` application runtime.
 ## Distribution and source policy
 
 Public builds contain no torrent index, default marketplace repository,
-preconfigured Stremio manifest, or GitHub credential. Source
-repositories and compatible manifests must be entered and installed explicitly
-by the user. The app checks the fixed TetoTV update broker; the broker uses a
-fine-grained, repository-scoped, Contents-read-only credential from its server
-environment to read a private release and streams only the signed universal
-APK. No update-token field or shared update secret exists on the device.
+preconfigured Stremio manifest, or GitHub credential. Source repositories and
+compatible manifests must be entered and installed explicitly by the user. The
+default Public update channel anonymously checks the releases-only
+`LindersOSX/TetoTV-Releases` repository. Activating **Settings > System** ten
+times reveals Developer mode, where testers can switch to the Beta channel.
+The first public release is `1.0.0`; the private preview line starts at
+`2.0.0 Beta`. Both initial signed APKs use Android `versionCode` `410001`, and
+future paired build codes continue increasing across both. Explicit channel
+changes may move between the 1.x Public and 2.x Beta families in either
+direction; normal version ordering resumes once the selected family is
+installed.
+Beta checks use the fixed TetoTV update broker; the broker uses a fine-grained,
+repository-scoped, Contents-read-only credential from its server environment
+to read the private `LindersOSX/TetoTV` release and streams only the signed
+universal APK. No update-token field or shared update secret exists on the
+device. See [the update-channel deployment contract](docs/UPDATE_CHANNELS.md).
 
 Any token previously compiled into an APK, committed, or shared outside the
 device must be treated as exposed and revoked. Moving a token into encrypted

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +31,7 @@ void main() {
     await controller.setNavigationSounds(false);
     await controller.setClickSounds(false);
     await controller.setPreferredPlayer(PreferredPlayer.vlc);
+    await controller.setPreferredAudio(PlaybackAudioPreference.sub);
     await controller.setDefaultLandingPage(LandingPage.myList);
     await controller.setAnonymousUsageCountEnabled(false);
     await controller.setAnonymousCrashReportingEnabled(true);
@@ -57,6 +59,7 @@ void main() {
     expect(restored.state.navigationSounds, isFalse);
     expect(restored.state.clickSounds, isFalse);
     expect(restored.state.preferredPlayer, PreferredPlayer.vlc);
+    expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
     expect(restored.state.anonymousUsageCountEnabled, isFalse);
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
@@ -85,6 +88,7 @@ void main() {
     expect(controller.state.showCalendar, isTrue);
     expect(controller.state.anonymousUsageCountEnabled, isFalse);
     expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+    expect(controller.state.preferredAudio, PlaybackAudioPreference.dub);
     expect(controller.state.loaded, isTrue);
     expect(
       controller.state.trackerUpdateThreshold,
@@ -194,7 +198,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 31, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 32, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

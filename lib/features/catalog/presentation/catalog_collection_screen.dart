@@ -28,7 +28,9 @@ class CatalogCollectionScreen extends ConsumerWidget {
         : ref.watch(staffAnimeProvider(id));
     final preference = ref.watch(titleLanguagePreferenceProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         minimum: const EdgeInsets.fromLTRB(34, 24, 34, 0),
         child: Column(
@@ -51,16 +53,16 @@ class CatalogCollectionScreen extends ConsumerWidget {
                   type == CatalogCollectionType.studio
                       ? 'Studio titles'
                       : 'Anime credits',
-                  style: const TextStyle(color: AppColors.textMuted),
+                  style: TextStyle(color: context.appPalette.mutedText),
                 ),
               ],
             ),
             const SizedBox(height: 14),
             Expanded(
               child: results.when(
-                loading: () => const Center(
+                loading: () => Center(
                   child: CircularProgressIndicator(
-                    color: AppColors.accentBright,
+                    color: context.appPalette.accentBright,
                   ),
                 ),
                 error: (error, _) =>

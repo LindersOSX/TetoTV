@@ -106,7 +106,7 @@ class _PremiumizePairingScreenState
         constraints: const BoxConstraints(maxWidth: 720),
         padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(24),
           border: Border.all(color: Colors.white.withValues(alpha: .08)),
         ),
@@ -119,11 +119,11 @@ class _PremiumizePairingScreenState
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 10),
-            const Text(
+            Text(
               'Open premiumize.me/account on your phone, copy the API key, '
               'then enter or paste it below. The key is sent only as a secure '
               'Bearer header for validation.',
-              style: TextStyle(color: AppColors.textMuted),
+              style: TextStyle(color: context.appPalette.mutedText),
             ),
             const SizedBox(height: 22),
             TvTextInput(
@@ -171,7 +171,7 @@ class _ActionButton extends StatelessWidget {
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(10),
     child: Container(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         mainAxisSize: MainAxisSize.min,

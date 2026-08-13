@@ -69,7 +69,7 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
   Widget build(BuildContext context) {
     final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding,
         child: Column(
@@ -295,10 +295,10 @@ class _PrivacyCommunityStep extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 9),
-          const Text(
+          Text(
             'Only active/streaming state is counted. No show, episode, account, device ID, source, or URL is sent.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           const SizedBox(height: 18),
           _SetupChoiceRow(
@@ -320,10 +320,10 @@ class _PrivacyCommunityStep extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 9),
-          const Text(
+          Text(
             'Reports include the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include the show, episode, account, device ID, source, or URL.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           const SizedBox(height: 18),
           if (discord.busy || !discord.loaded || !discord.available)
@@ -344,17 +344,17 @@ class _PrivacyCommunityStep extends ConsumerWidget {
                     },
             ),
           const SizedBox(height: 9),
-          const Text(
+          Text(
             'Discord Rich Presence can show what you are watching. TetoTV never sees or stores your Discord password.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           if (discord.error case final error?) ...[
             const SizedBox(height: 9),
             Text(
               error,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.accentBright),
+              style: TextStyle(color: context.appPalette.accentBright),
             ),
           ],
         ],
@@ -376,9 +376,11 @@ class _DeviceStep extends ConsumerWidget {
       subtitle:
           'TetoTV checks the device’s hardware decoders, HDR display, audio output, and anime subtitle renderer.',
       child: state.loading
-          ? const Padding(
-              padding: EdgeInsets.all(26),
-              child: CircularProgressIndicator(color: AppColors.accentBright),
+          ? Padding(
+              padding: const EdgeInsets.all(26),
+              child: CircularProgressIndicator(
+                color: context.appPalette.accentBright,
+              ),
             )
           : state.error != null
           ? Column(
@@ -415,8 +417,8 @@ class _DeviceStep extends ConsumerWidget {
                 Text(
                   report.recommendation,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: AppColors.cyan,
+                  style: TextStyle(
+                    color: context.appPalette.secondaryAccent,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -541,10 +543,10 @@ class _SourcesStep extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'This step is optional. You can add or remove sources later in Settings.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
         ],
       ),
@@ -594,10 +596,10 @@ class _TrackingStep extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'Connecting is optional. TetoTV can still browse and play without an anime-list account.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
         ],
       ),
@@ -620,19 +622,19 @@ class _SourceCount extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
     decoration: BoxDecoration(
-      color: AppColors.panelRaised,
+      color: context.appPalette.surfaceRaised,
       borderRadius: BorderRadius.circular(10),
       border: Border.all(color: Colors.white12),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 18, color: AppColors.cyan),
+        Icon(icon, size: 18, color: context.appPalette.secondaryAccent),
         const SizedBox(width: 7),
         Text(
           '$count',
-          style: const TextStyle(
-            color: AppColors.accentBright,
+          style: TextStyle(
+            color: context.appPalette.accentBright,
             fontWeight: FontWeight.w900,
           ),
         ),
@@ -680,13 +682,13 @@ class _SetupPage extends StatelessWidget {
           width: double.infinity,
           padding: EdgeInsets.all(context.isCompactWidth ? 18 : 28),
           decoration: BoxDecoration(
-            color: AppColors.panel,
+            color: context.appPalette.surface,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withValues(alpha: .08)),
           ),
           child: Column(
             children: [
-              Icon(icon, color: AppColors.accentBright, size: 48),
+              Icon(icon, color: context.appPalette.accentBright, size: 48),
               const SizedBox(height: 12),
               Text(
                 title,
@@ -697,7 +699,7 @@ class _SetupPage extends StatelessWidget {
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textMuted),
+                style: TextStyle(color: context.appPalette.mutedText),
               ),
               const SizedBox(height: 24),
               child,
@@ -724,7 +726,9 @@ class _SetupProgress extends StatelessWidget {
             duration: const Duration(milliseconds: 180),
             height: 4,
             decoration: BoxDecoration(
-              color: index <= step ? AppColors.accentBright : Colors.white12,
+              color: index <= step
+                  ? context.appPalette.accentBright
+                  : Colors.white12,
               borderRadius: BorderRadius.circular(99),
             ),
           ),
@@ -777,10 +781,12 @@ class _SetupChoice extends StatelessWidget {
         horizontal: context.isCompactWidth ? 10 : 14,
       ),
       decoration: BoxDecoration(
-        color: selected ? AppColors.accent : AppColors.panelRaised,
+        color: selected
+            ? context.appPalette.accent
+            : context.appPalette.surfaceRaised,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: selected ? AppColors.accentBright : Colors.white12,
+          color: selected ? context.appPalette.accentBright : Colors.white12,
         ),
       ),
       child: Row(
@@ -805,14 +811,14 @@ class _FeaturePill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
     decoration: BoxDecoration(
-      color: AppColors.panelRaised,
+      color: context.appPalette.surfaceRaised,
       borderRadius: BorderRadius.circular(99),
       border: Border.all(color: Colors.white12),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 18, color: AppColors.cyan),
+        Icon(icon, size: 18, color: context.appPalette.secondaryAccent),
         const SizedBox(width: 7),
         Flexible(child: Text(label)),
       ],
@@ -829,7 +835,9 @@ class _CapabilityPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
     decoration: BoxDecoration(
-      color: check.supported ? const Color(0xFF143526) : AppColors.panelRaised,
+      color: check.supported
+          ? const Color(0xFF143526)
+          : context.appPalette.surfaceRaised,
       borderRadius: BorderRadius.circular(8),
     ),
     child: Row(
@@ -873,7 +881,9 @@ class _SetupButton extends StatelessWidget {
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: primary ? AppColors.accent : AppColors.panelRaised,
+        color: primary
+            ? context.appPalette.accent
+            : context.appPalette.surfaceRaised,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white12),
       ),

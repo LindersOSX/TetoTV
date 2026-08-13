@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Derived from the Apache-2.0 AndroidX Media3 audio-track icon. -->
+<!-- Apache-2.0 Google Material Icons audiotrack_rounded glyph used by Flutter. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -7,11 +7,5 @@
     android:viewportHeight="24">
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M18.2,1H9.8C8.81,1 8,1.81 8,2.8v14.4c0,0.99 0.81,1.79 1.8,1.79L18.2,19c0.99,0 1.8,-0.81 1.8,-1.8V2.8C20,1.81 19.19,1 18.2,1zM14,3c1.1,0 2,0.89 2,2s-0.9,2 -2,2 -2,-0.89 -2,-2 0.9,-2 2,-2zM14,16.5c-2.21,0 -4,-1.79 -4,-4s1.79,-4 4,-4 4,1.79 4,4 -1.79,4 -4,4z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M14,12.5m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M6,5H4v16c0,1.1 0.89,2 2,2h10v-2H6V5z" />
+        android:pathData="M12,5v8.55c-0.94,-0.54 -2.1,-0.75 -3.33,-0.32 -1.34,0.48 -2.37,1.67 -2.61,3.07 -0.46,2.74 1.86,5.08 4.59,4.65 1.96,-0.31 3.35,-2.11 3.35,-4.1V7h2c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2h-2c-1.1,0 -2,0.9 -2,2z" />
 </vector>

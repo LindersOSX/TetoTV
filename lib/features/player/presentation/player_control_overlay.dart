@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -118,9 +119,18 @@ class PlayerDoubleDownDetector {
 
 String canonicalPlayerLanguage(String? value) {
   final normalized = (value ?? '').trim().toLowerCase().replaceAll('_', '-');
-  if (normalized.isEmpty) return '';
+  if (normalized.isEmpty ||
+      const {
+        'und',
+        'zxx',
+        'mul',
+        'unknown',
+        'undetermined',
+      }.contains(normalized)) {
+    return '';
+  }
   if (RegExp(
-    r'(^|[^a-z])(english|eng|en(?:-[a-z]{2})?)([^a-z]|$)',
+    r'(^|[^a-z])(english|eng|en(?:-[a-z]{2})?|dub(?:bed)?)([^a-z]|$)',
   ).hasMatch(normalized)) {
     return 'eng';
   }
@@ -134,6 +144,38 @@ String canonicalPlayerLanguage(String? value) {
     return 'fra';
   }
   return normalized;
+}
+
+/// Resolves the language a player actually exposed for a track.
+///
+/// Containers commonly put `und`, `zxx`, or `mul` in the ISO language field
+/// while keeping the useful value in a label such as "English Dub". Treat
+/// those placeholders as absent so an episode transition can retain the
+/// viewer's real Dub/Sub choice.
+String canonicalPlayerTrackLanguage({String? language, String? title}) {
+  final fromLanguage = canonicalPlayerLanguage(language);
+  if (fromLanguage.isNotEmpty) return fromLanguage;
+  return canonicalPlayerLanguage(title);
+}
+
+/// Chooses which observed audio language may be persisted for a series.
+///
+/// Automatic/default/fallback tracks are observations, not user intent. Once
+/// a viewer explicitly picks Dub or Sub for a series, only another manual
+/// selection may replace it.
+String persistedPlayerAudioLanguage({
+  required String storedLanguage,
+  required bool audioPreferenceSet,
+  String? observedLanguage,
+  String? observedTitle,
+  bool manualSelection = false,
+}) {
+  if (audioPreferenceSet && !manualSelection) return storedLanguage;
+  final observed = canonicalPlayerTrackLanguage(
+    language: observedLanguage,
+    title: observedTitle,
+  );
+  return observed.isEmpty ? storedLanguage : observed;
 }
 
 bool playerTrackMatchesLanguage({
@@ -199,15 +241,50 @@ Future<T?> showPlayerTrackPicker<T>({
   required List<PlayerTrackOption<T>> options,
   required T selectedValue,
 }) {
+  final palette = context.appPalette;
   return showDialog<T>(
     context: context,
-    barrierColor: const Color(0x99000000),
+    barrierColor: palette == AppThemePalette.defaults
+        ? const Color(0x99000000)
+        : palette.background.withValues(alpha: .60),
     builder: (context) => PlayerTrackPicker<T>(
       title: title,
       icon: icon,
       options: options,
       selectedValue: selectedValue,
     ),
+  );
+}
+
+const playerCaptionSizeValues = <double>[28, 34, 42, 50];
+
+String playerCaptionSizeLabel(double size) => switch (size) {
+  <= 30 => 'Small',
+  <= 38 => 'Medium',
+  <= 46 => 'Large',
+  _ => 'Extra large',
+};
+
+double nearestPlayerCaptionSize(double size) => playerCaptionSizeValues.reduce(
+  (closest, candidate) =>
+      (candidate - size).abs() < (closest - size).abs() ? candidate : closest,
+);
+
+Future<double?> showPlayerCaptionSizePicker({
+  required BuildContext context,
+  required double current,
+}) {
+  return showPlayerTrackPicker<double>(
+    context: context,
+    title: 'Choose caption size',
+    icon: Icons.text_fields_rounded,
+    selectedValue: nearestPlayerCaptionSize(current),
+    options: const [
+      PlayerTrackOption(value: 28, label: 'Small'),
+      PlayerTrackOption(value: 34, label: 'Medium'),
+      PlayerTrackOption(value: 42, label: 'Large'),
+      PlayerTrackOption(value: 50, label: 'Extra large'),
+    ],
   );
 }
 
@@ -259,6 +336,8 @@ class PlayerTrackPicker<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final usesDefaultPalette = palette == AppThemePalette.defaults;
     final hasSelected = options.any((option) => option.value == selectedValue);
     return Dialog(
       key: const ValueKey('player-track-picker'),
@@ -269,13 +348,18 @@ class PlayerTrackPicker<T> extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1040, maxHeight: 220),
         child: DecoratedBox(
+          key: const ValueKey('player-track-picker-panel'),
           decoration: BoxDecoration(
-            color: const Color(0xFA080808),
+            color: usesDefaultPalette
+                ? const Color(0xFA080808)
+                : palette.surface.withValues(alpha: .98),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .75)),
-            boxShadow: const [
+            border: Border.all(color: palette.accent.withValues(alpha: .75)),
+            boxShadow: [
               BoxShadow(
-                color: Color(0x99000000),
+                color: usesDefaultPalette
+                    ? const Color(0x99000000)
+                    : palette.background.withValues(alpha: .60),
                 blurRadius: 22,
                 offset: Offset(0, 8),
               ),
@@ -289,7 +373,7 @@ class PlayerTrackPicker<T> extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(icon, color: AppColors.accentBright, size: 20),
+                    Icon(icon, color: palette.accentBright, size: 20),
                     const SizedBox(width: 9),
                     Text(
                       title,
@@ -298,12 +382,9 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    const Text(
+                    Text(
                       'Select with D-pad',
-                      style: TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: palette.mutedText, fontSize: 11),
                     ),
                   ],
                 ),
@@ -332,8 +413,10 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                           ),
                           decoration: BoxDecoration(
                             color: selected
-                                ? AppColors.accent.withValues(alpha: .3)
-                                : const Color(0xFF171717),
+                                ? palette.accent.withValues(alpha: .3)
+                                : usesDefaultPalette
+                                ? const Color(0xFF171717)
+                                : palette.surfaceRaised,
                             borderRadius: BorderRadius.circular(9),
                           ),
                           child: Row(
@@ -345,8 +428,8 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                                     : option.icon ?? Icons.circle_outlined,
                                 size: 18,
                                 color: selected
-                                    ? AppColors.accentBright
-                                    : AppColors.textMuted,
+                                    ? palette.accentBright
+                                    : palette.mutedText,
                               ),
                               const SizedBox(width: 8),
                               Flexible(
@@ -358,8 +441,10 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                                       option.label,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Colors.white,
+                                      style: TextStyle(
+                                        color: usesDefaultPalette
+                                            ? Colors.white
+                                            : palette.primaryText,
                                         fontSize: 12,
                                         fontWeight: FontWeight.w800,
                                       ),
@@ -369,8 +454,8 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                                         detail,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: AppColors.textMuted,
+                                        style: TextStyle(
+                                          color: palette.mutedText,
                                           fontSize: 10,
                                         ),
                                       ),
@@ -394,10 +479,13 @@ class PlayerTrackPicker<T> extends StatelessWidget {
 }
 
 Future<bool?> showPlayerExitConfirmation(BuildContext context) {
+  final palette = context.appPalette;
   return showDialog<bool>(
     context: context,
     barrierDismissible: false,
-    barrierColor: const Color(0x99000000),
+    barrierColor: palette.usesDefaultPlayerPalette
+        ? const Color(0x99000000)
+        : palette.background.withValues(alpha: .60),
     builder: (_) => const PlayerExitDialog(),
   );
 }
@@ -441,6 +529,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Dialog(
       key: const ValueKey('player-exit-dialog'),
       backgroundColor: Colors.transparent,
@@ -450,12 +539,24 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
           child: DecoratedBox(
+            key: const ValueKey('player-exit-panel'),
             decoration: BoxDecoration(
-              color: const Color(0xFA09090B),
+              color: palette.playerSurface(
+                defaultColor: const Color(0xFA09090B),
+              ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withValues(alpha: .3)),
-              boxShadow: const [
-                BoxShadow(color: Color(0xA0000000), blurRadius: 28),
+              border: Border.all(
+                color: palette.usesDefaultPlayerPalette
+                    ? Colors.white.withValues(alpha: .3)
+                    : palette.accent.withValues(alpha: .3),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: palette.usesDefaultPlayerPalette
+                      ? const Color(0xA0000000)
+                      : palette.background.withValues(alpha: .63),
+                  blurRadius: 28,
+                ),
               ],
             ),
             child: Padding(
@@ -467,15 +568,17 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                   Text(
                     'Exit video?',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: Colors.white,
+                      color: palette.playerPrimaryText(),
                       fontWeight: FontWeight.w900,
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Your current playback position will be saved.',
                     style: TextStyle(
-                      color: Color(0xFFF0EAEC),
+                      color: palette.playerMutedText(
+                        defaultColor: const Color(0xFFF0EAEC),
+                      ),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -491,6 +594,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                         borderRadius: BorderRadius.circular(9),
                         onPressed: () => Navigator.of(context).pop(false),
                         child: Container(
+                          key: const ValueKey('player-exit-continue-surface'),
                           constraints: const BoxConstraints(minHeight: 48),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -498,24 +602,26 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                           ),
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: const Color(0xA629292E),
+                            color: palette.playerSelectableSurface(
+                              defaultColor: const Color(0xA629292E),
+                            ),
                             borderRadius: BorderRadius.circular(9),
                           ),
-                          child: const Row(
+                          child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
                                 Icons.play_arrow_rounded,
-                                color: Colors.white,
+                                color: palette.playerPrimaryText(),
                                 size: 20,
                               ),
-                              SizedBox(width: 8),
+                              const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
                                   'Continue watching',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: Colors.white,
+                                    color: palette.playerPrimaryText(),
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
@@ -531,6 +637,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                         borderRadius: BorderRadius.circular(9),
                         onPressed: () => Navigator.of(context).pop(true),
                         child: Container(
+                          key: const ValueKey('player-exit-confirm-surface'),
                           constraints: const BoxConstraints(minHeight: 48),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -538,24 +645,24 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                           ),
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: AppColors.accent,
+                            color: palette.accent,
                             borderRadius: BorderRadius.circular(9),
                           ),
-                          child: const Row(
+                          child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
                                 Icons.logout_rounded,
-                                color: Colors.white,
+                                color: palette.playerPrimaryActionText(),
                                 size: 19,
                               ),
-                              SizedBox(width: 8),
+                              const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
                                   'Exit video',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: Colors.white,
+                                    color: palette.playerPrimaryActionText(),
                                     fontWeight: FontWeight.w900,
                                   ),
                                 ),

@@ -4,7 +4,8 @@ import 'package:dio/dio.dart';
 
 class TrackingPairingClient {
   TrackingPairingClient(this._provider, {required String baseUrl})
-    : _dio = Dio(
+    : _brokerOrigin = _normalizedBrokerOrigin(baseUrl),
+      _dio = Dio(
         BaseOptions(
           baseUrl: '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/',
           // Render's free tier may cold-start after the TV opens pairing.
@@ -12,12 +13,15 @@ class TrackingPairingClient {
           // fail before the broker finishes waking up.
           connectTimeout: const Duration(seconds: 20),
           receiveTimeout: const Duration(seconds: 45),
+          followRedirects: false,
+          maxRedirects: 0,
           headers: const {'Accept': 'application/json'},
         ),
       );
 
   final Dio _dio;
   final TrackingProvider _provider;
+  final Uri _brokerOrigin;
 
   Future<void> ensureReady() async {
     try {
@@ -48,12 +52,20 @@ class TrackingPairingClient {
       throw StateError(_connectionMessage(error));
     }
     final data = response.data!;
+    final verificationUri = _trustedBrokerVerificationUri(
+      data['verification_uri'],
+      _brokerOrigin,
+    );
+    final verificationUriComplete = _trustedBrokerVerificationUri(
+      data['verification_uri_complete'],
+      _brokerOrigin,
+    );
     return PairingSession(
       pairingId: data['pairing_id'] as String,
       deviceCode: data['device_code'] as String,
       userCode: data['user_code'] as String,
-      verificationUri: data['verification_uri'] as String,
-      verificationUriComplete: data['verification_uri_complete'] as String,
+      verificationUri: verificationUri.toString(),
+      verificationUriComplete: verificationUriComplete.toString(),
       expiresAt: DateTime.parse(data['expires_at'] as String),
       pollInterval: Duration(seconds: data['interval'] as int? ?? 5),
     );
@@ -126,4 +138,31 @@ class TrackingPairingClient {
       },
     );
   }
+}
+
+Uri _normalizedBrokerOrigin(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      !uri.hasAuthority ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasFragment) {
+    throw ArgumentError.value(value, 'baseUrl', 'Use one HTTPS broker origin.');
+  }
+  return Uri(scheme: 'https', host: uri.host, port: uri.port);
+}
+
+Uri _trustedBrokerVerificationUri(Object? value, Uri brokerOrigin) {
+  final uri = Uri.tryParse(value?.toString().trim() ?? '');
+  if (uri == null ||
+      uri.scheme != brokerOrigin.scheme ||
+      uri.host.toLowerCase() != brokerOrigin.host.toLowerCase() ||
+      uri.port != brokerOrigin.port ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasFragment) {
+    throw const FormatException(
+      'The pairing service returned an untrusted verification address.',
+    );
+  }
+  return uri;
 }

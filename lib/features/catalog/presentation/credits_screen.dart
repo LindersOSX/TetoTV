@@ -15,12 +15,16 @@ class CreditsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final details = ref.watch(animeDetailsProvider(mediaId));
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         minimum: const EdgeInsets.fromLTRB(34, 24, 34, 24),
         child: details.when(
-          loading: () => const Center(
-            child: CircularProgressIndicator(color: AppColors.accentBright),
+          loading: () => Center(
+            child: CircularProgressIndicator(
+              color: context.appPalette.accentBright,
+            ),
           ),
           error: (error, _) =>
               Center(child: Text('Could not load credits: $error')),
@@ -47,17 +51,17 @@ class CreditsScreen extends ConsumerWidget {
                     child: Text(
                       anime.title,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: AppColors.textMuted),
+                      style: TextStyle(color: context.appPalette.mutedText),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
               if (anime.studios.isNotEmpty) ...[
-                const Text(
+                Text(
                   'STUDIOS',
                   style: TextStyle(
-                    color: AppColors.accentBright,
+                    color: context.appPalette.accentBright,
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                   ),
@@ -78,10 +82,10 @@ class CreditsScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 18),
               ],
-              const Text(
+              Text(
                 'CHARACTERS & ENGLISH CAST',
                 style: TextStyle(
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
                 ),
@@ -100,10 +104,10 @@ class CreditsScreen extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              const Text(
+              Text(
                 'STAFF',
                 style: TextStyle(
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
                 ),
@@ -158,7 +162,7 @@ class _CreditChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: AppColors.accentBright),
+          Icon(icon, size: 16, color: context.appPalette.accentBright),
           const SizedBox(width: 7),
           Text(
             label,
@@ -244,8 +248,8 @@ class _CharacterCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       character.role ?? '',
-                      style: const TextStyle(
-                        color: AppColors.accentBright,
+                      style: TextStyle(
+                        color: context.appPalette.accentBright,
                         fontSize: 9,
                       ),
                     ),
@@ -254,8 +258,8 @@ class _CharacterCard extends StatelessWidget {
                         'EN: ${voice.name}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.textMuted,
+                        style: TextStyle(
+                          color: context.appPalette.mutedText,
                           fontSize: 9,
                         ),
                       ),

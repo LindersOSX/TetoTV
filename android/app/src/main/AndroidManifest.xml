@@ -80,7 +80,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="TetoTV"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true">
 
         <!--
             Keep this activity and MainActivity on the default application

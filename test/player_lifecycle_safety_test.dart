@@ -50,7 +50,11 @@ void main() {
     expect(savePreferences, isNot(contains('ref.')));
     expect(
       savePreferences,
-      contains('audio.language ?? audio.title'),
+      allOf(
+        contains('persistedPlayerAudioLanguage('),
+        contains('observedLanguage: audio.language'),
+        contains('observedTitle: audio.title'),
+      ),
       reason: 'manually selected dub labels must persist without language tags',
     );
     expect(dispose, isNot(contains('ref.')));
@@ -88,6 +92,8 @@ void main() {
       source,
       contains('if (_skipInProgress || _engineHandoffInProgress)'),
     );
+    expect(source, contains('autoSkip && !_skipInProgress &&'));
+    expect(source, contains('_checkSkips(_player.state.position)'));
     expect(source, contains('safeSkipSegmentTarget('));
     expect(
       source,
@@ -103,12 +109,24 @@ void main() {
       'Future<bool> _prepareForEngineHandoff',
       'Future<void> _fallbackToVlc',
     );
+    final detachVideoOutput = _methodSlice(
+      source,
+      'Future<void> _detachAndroidVideoOutputBeforeRelease',
+      'Future<bool> _prepareForEngineHandoff',
+    );
+    _expectInOrder(detachVideoOutput, const [
+      'wid.removeListener',
+      'videoParamsSubscription?.cancel()',
+      'wid.value = 0',
+      'await platformController.widListener()',
+    ]);
     _expectInOrder(prepare, const [
       'await WidgetsBinding.instance.endOfFrame',
       'await _waitForPlayerMutations()',
       'await _waitForSeekDrain()',
       'await _progressSubscription?.cancel()',
       'await _player.stop()',
+      'await _detachAndroidVideoOutputBeforeRelease()',
       'await _player.dispose()',
       '_playerReleasedForHandoff = true',
     ]);
@@ -116,6 +134,46 @@ void main() {
       source,
       contains('if (!_engineHandoffInProgress && !_playerReleasedForHandoff)'),
     );
+    expect(
+      source,
+      contains(
+        '_tracksSubscription = _player.stream.tracks.listen(_onTracksChanged)',
+      ),
+    );
+    final trackCallback = _methodSlice(
+      source,
+      'void _onTracksChanged',
+      'Future<void> _applyPreferredAudio',
+    );
+    _expectInOrder(trackCallback, const [
+      '_runTrackedTrackSelection(tracks)',
+      '_trackPlayerMutation(() => _selectPreferredTracks(tracks))',
+    ]);
+    final preferredAudio = _methodSlice(
+      source,
+      'Future<void> _applyPreferredAudio',
+      'Future<void> _selectPreferredTracks',
+    );
+    _expectInOrder(preferredAudio, const [
+      'await AndroidTvBridge.instance.getDeviceProfile()',
+      'if (_preferredAudioSelected || !_canApplyTrackSelection) return',
+      'await _player.setAudioTrack(preferred)',
+    ]);
+    final mpvPlayer = _methodSlice(
+      source,
+      'class _MpvTvPlayerScreenState',
+      'class _UnifiedMpvPlayerChrome',
+    );
+    final dispose = mpvPlayer.substring(
+      mpvPlayer.lastIndexOf('void dispose()'),
+    );
+    _expectInOrder(dispose, const [
+      '_engineHandoffInProgress = true',
+      'await _waitForPlayerMutations()',
+      'await _player.stop()',
+      'await _detachAndroidVideoOutputBeforeRelease()',
+      'await _player.dispose()',
+    ]);
     expect(
       prepare,
       contains('if (!released) {\n      _handoffAttemptActive = false;'),
@@ -141,6 +199,7 @@ void main() {
       '@override\n  void dispose',
     );
     _expectInOrder(confirmExit, const [
+      '_controlsTimer?.cancel()',
       'await _player.pause()',
       'exit = await showPlayerExitConfirmation(context)',
       '_confirmingExit = false',
@@ -176,6 +235,8 @@ void main() {
     );
     expect(source, contains('safeSkipSegmentTarget('));
     expect(source, contains("_showMessage('Could not skip this segment')"));
+    expect(source, contains('autoSkip && !_skipInProgress &&'));
+    expect(source, contains('_checkSkips(controller.value.position)'));
     expect(source, contains('_controllerReleasedForHandoff = true'));
 
     final preferredTracks = _methodSlice(
@@ -184,9 +245,25 @@ void main() {
       'void _scheduleTrackDiscoveryRetry',
     );
     _expectInOrder(preferredTracks, const [
+      'if (!_canApplyTracksTo(controller)',
+      'final audioTracks = await controller.getAudioTracks()',
+      'if (!_canApplyTracksTo(controller)) return',
       'if (audioId != null)',
       'await controller.setAudioTrack(audioId)',
-      '_audioPreferenceApplied = true',
+      'if (!_canApplyTracksTo(controller)) return',
+      '_audioPreferenceApplied = playerTrackMatchesLanguage(',
+      'await _saveTrackPreferences(audioLabel: audioTracks[audioId])',
+    ]);
+    final discoveryRetry = _methodSlice(
+      source,
+      'void _scheduleTrackDiscoveryRetry',
+      'Future<void> _restoreResume',
+    );
+    _expectInOrder(discoveryRetry, const [
+      'if (!_canApplyTracksTo(controller)',
+      '_trackDiscoveryTimer = Timer(',
+      'if (!_canApplyTracksTo(controller)) return',
+      '_trackControllerMutation(_applyPreferredTracks(controller))',
     ]);
 
     final prepare = _methodSlice(
@@ -239,12 +316,29 @@ void main() {
     );
     expect(restart, contains('await _disposeControllerAuthoritatively(old)'));
 
+    final vlcPlayer = _methodSlice(
+      source,
+      'class _VlcTvPlayerScreenState',
+      'class _VlcPlayerChrome',
+    );
+    final dispose = vlcPlayer.substring(
+      vlcPlayer.lastIndexOf('void dispose()'),
+    );
+    _expectInOrder(dispose, const [
+      '_trackDiscoveryTimer?.cancel()',
+      '_engineHandoffInProgress = true',
+      '_controller = null',
+      'await _waitForControllerMutations()',
+      'await _disposeControllerAuthoritatively(controller)',
+    ]);
+
     final confirmExit = _methodSlice(
       source,
       'Future<void> _confirmExit',
       '@override\n  void dispose',
     );
     _expectInOrder(confirmExit, const [
+      '_controlsTimer?.cancel()',
       'await controller?.pause()',
       'exit = await showPlayerExitConfirmation(context)',
       '_confirmingExit = false',
@@ -305,6 +399,14 @@ void main() {
     );
     expect(source, contains('STATUS_RELEASE_FAILED'));
     expect(source, contains('if (!preserveDiscordPresenceForEngineHandoff)'));
+    expect(source, contains('suppressDiscordPresence = trustedLocalSource'));
+    expect(source, contains('R.string.tetotv_player_local_media3_only'));
+    expect(
+      source,
+      contains(
+        'if (suppressDiscordPresence || !::player.isInitialized || resultSent) return',
+      ),
+    );
     _expectInOrder(finish, const [
       'result.putExtra(RESULT_STATUS, deliveredStatus)',
       'preserveDiscordPresenceForEngineHandoff =',
@@ -343,17 +445,17 @@ void main() {
     );
     _expectInOrder(nativeRun, const [
       'nativePlayerReturnNavigationForStatus(',
-      'NativePlayerReturnNavigation.home',
+      'NativePlayerReturnNavigation.previousRoute',
       "_status = 'Closing video…'",
       'runBestEffortNativePlayerExitBookkeeping([',
       '() => _persistResult(result)',
       '() => _syncResultIfThresholdReached(result)',
       '() => _recordPlayerSuccess(result)',
       'switch (returnNavigation)',
-      'case NativePlayerReturnNavigation.home:',
-      "GoRouter.of(context).go('/')",
       'case NativePlayerReturnNavigation.previousRoute:',
-      'if (context.canPop()) context.pop()',
+      'if (context.canPop()) {',
+      'context.pop()',
+      "GoRouter.of(context).go('/anime/\$_mediaId')",
       'case NativePlayerReturnNavigation.none:',
     ]);
   });

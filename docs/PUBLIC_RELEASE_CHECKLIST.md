@@ -18,6 +18,10 @@ the same as legal, store, or codec certification.
 - Configure the broker's server-only `GITHUB_RELEASE_TOKEN` with access to only
   the TetoTV repository and **Contents: Read-only**. Confirm `/health` reports
   update support without revealing the token.
+- Configure `BETA_ACCESS_KEY_SHA256_HASHES` with only SHA-256 hashes of
+  separately distributed opaque tester keys. Verify anonymous/invalid Beta
+  metadata and APK requests fail, authentication is rate-limited, and `/health`
+  reveals only `beta_updates_configured`, never a key or hash.
 - Deploy exactly one broker instance while pairing state is process-local, or
   move pairing/rate-limit state to an atomic shared TTL store before scaling.
 - Obtain any required AniList authorization for a client that also integrates
@@ -26,7 +30,11 @@ the same as legal, store, or codec certification.
 - Confirm that the intended Teto name/artwork use and monetization comply with
   the official character guidelines and obtain permission where required.
 - Archive and ship the exact third-party notices, native binary provenance,
-  and LGPL source/relinking materials required for the release build.
+  and GPL/LGPL source/relinking materials required for the release build. Run
+  `powershell -ExecutionPolicy Bypass -File tool/release/verify_native_redistribution.ps1`
+  before building, then run it with `-StageBundle` and publish the generated
+  native source bundle beside the APK. Review every reported upstream
+  provenance limit before approving distribution.
 - Verify the vendored QuickJS 2026-06-04 archive and reviewed FFI bridge with
   `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_quickjs.ps1`, then run the packaged runtime and
   infinite-loop interruption tests on a 16 KiB-page Android device. Do not
@@ -78,8 +86,10 @@ in-place updates.
    TV/Chromecast, foldable phone portrait/landscape, and a 16-KiB-page Android
    device or emulator.
 8. After all local checks pass, publish one normal completed release containing
-   only the verified Universal APK. Immediately compare its hosted digest and
-   broker-downloaded bytes to the local file before announcing it.
+   exactly one APK variant: the verified Universal APK. Also attach the required
+   native corresponding-source bundle and third-party notices/license artifact;
+   do not attach per-ABI APK variants. Immediately compare the hosted APK digest
+   and broker-downloaded bytes to the local file before announcing it.
 
 ## Content/source policy
 

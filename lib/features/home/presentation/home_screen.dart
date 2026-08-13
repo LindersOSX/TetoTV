@@ -41,7 +41,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _ShelfItem(
       'Connect your tracker',
       'AniList or MAL',
-      AppColors.accent,
       route: '/settings/accounts',
     ),
   ];
@@ -110,7 +109,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
+        backgroundColor: context.appPalette.surface,
         title: const Text('What\'s new in TetoTV'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640, maxHeight: 420),
@@ -243,7 +242,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       context: context,
       barrierDismissible: true,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
+        backgroundColor: context.appPalette.surface,
         title: const Text('Remove from this TV?'),
         content: Text(
           'Remove “${item.title}” from local Watch History and Continue '
@@ -327,7 +326,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       '${item.trackingItems.length} connected lists.',
           ),
           backgroundColor: failures == 0
-              ? AppColors.accent
+              ? context.appPalette.accent
               : const Color(0xFF7D1E32),
         ),
       );
@@ -355,7 +354,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           backgroundColor: result.isPartial
               ? const Color(0xFF7D1E32)
-              : AppColors.accent,
+              : context.appPalette.accent,
         ),
       );
     } catch (error) {
@@ -583,7 +582,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         child: Stack(
           fit: StackFit.expand,
@@ -782,7 +783,7 @@ class _HeroPanel extends StatelessWidget {
       key: const ValueKey('home-hero'),
       height: dense ? (compact ? 270 : 224) : (compact ? 340 : 292),
       clipBehavior: Clip.hardEdge,
-      decoration: const BoxDecoration(color: AppColors.panel),
+      decoration: BoxDecoration(color: context.appPalette.surface),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -883,7 +884,7 @@ class _HeroPanel extends StatelessWidget {
                       maxLines: dense ? 2 : (compact ? 5 : 4),
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: AppColors.textPrimary,
+                        color: context.appPalette.primaryText,
                         height: 1.32,
                       ),
                     ),
@@ -952,13 +953,13 @@ class _HeroMeta extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 17, color: AppColors.accentBright),
+            Icon(icon, size: 17, color: context.appPalette.accentBright),
             const SizedBox(width: 4),
           ],
           Text(
             text.toUpperCase(),
-            style: const TextStyle(
-              color: AppColors.textPrimary,
+            style: TextStyle(
+              color: context.appPalette.primaryText,
               fontSize: 12,
               fontWeight: FontWeight.w800,
             ),
@@ -981,7 +982,7 @@ class _HeroDot extends StatelessWidget {
       height: 7,
       margin: const EdgeInsets.only(left: 5),
       decoration: BoxDecoration(
-        color: active ? AppColors.accentBright : Colors.white54,
+        color: active ? context.appPalette.accentBright : Colors.white54,
         borderRadius: BorderRadius.circular(99),
       ),
     );
@@ -1187,7 +1188,7 @@ class _PosterCard extends StatelessWidget {
                     children: [
                       if (item.coverImageUrl == null)
                         ColoredBox(
-                          color: item.color,
+                          color: context.appPalette.accent,
                           child: const Center(
                             child: Icon(
                               Icons.play_circle_outline_rounded,
@@ -1234,8 +1235,8 @@ class _PosterCard extends StatelessWidget {
                     item.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.textPrimary,
+                    style: TextStyle(
+                      color: context.appPalette.primaryText,
                       fontSize: 11,
                       height: 1.05,
                       fontWeight: FontWeight.w800,
@@ -1252,8 +1253,8 @@ class _PosterCard extends StatelessWidget {
                       item.subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.textMuted,
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
                         fontSize: 9,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1266,7 +1267,7 @@ class _PosterCard extends StatelessWidget {
                   value: item.progress,
                   minHeight: 3,
                   backgroundColor: Colors.white12,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
               ],
             ],
@@ -1303,7 +1304,7 @@ class _TvButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         decoration: BoxDecoration(
-          color: AppColors.accent,
+          color: context.appPalette.accent,
           borderRadius: BorderRadius.circular(99),
         ),
         child: Row(
@@ -1361,7 +1362,9 @@ class _HeaderAction extends StatelessWidget {
           color: active ? const Color(0x22E52B50) : Colors.transparent,
           border: Border(
             bottom: BorderSide(
-              color: active ? AppColors.accentBright : Colors.transparent,
+              color: active
+                  ? context.appPalette.accentBright
+                  : Colors.transparent,
               width: 2,
             ),
           ),
@@ -1371,7 +1374,9 @@ class _HeaderAction extends StatelessWidget {
             Icon(
               icon,
               size: 18,
-              color: active ? AppColors.accentBright : AppColors.textPrimary,
+              color: active
+                  ? context.appPalette.accentBright
+                  : context.appPalette.primaryText,
             ),
             if (!compact) ...[
               const SizedBox(width: 6),
@@ -1393,8 +1398,8 @@ class _Eyebrow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
-        color: AppColors.accentBright,
+      style: TextStyle(
+        color: context.appPalette.accentBright,
         fontSize: 11,
         fontWeight: FontWeight.w900,
         letterSpacing: 1.6,
@@ -1471,8 +1476,7 @@ List<_ShelfItem> _mergeContinueWatching({
 class _ShelfItem {
   const _ShelfItem(
     this.title,
-    this.subtitle,
-    this.color, {
+    this.subtitle, {
     this.progress,
     this.animeId,
     this.coverImageUrl,
@@ -1488,7 +1492,6 @@ class _ShelfItem {
 
   final String title;
   final String subtitle;
-  final Color color;
   final double? progress;
   final int? animeId;
   final String? coverImageUrl;
@@ -1511,7 +1514,6 @@ class _ShelfItem {
     return _ShelfItem(
       anime.displayTitle(titlePreference),
       anime.episodes == null ? '' : '${anime.episodes} episodes',
-      AppColors.accent,
       animeId: anime.id,
       malMediaId: anime.idMal,
       coverImageUrl: anime.coverImageUrl,
@@ -1526,7 +1528,6 @@ class _ShelfItem {
     return _ShelfItem(
       checkpoint.title,
       'Episode ${checkpoint.episode} • ${_shortDuration(checkpoint.position)}',
-      AppColors.accent,
       progress: checkpoint.progress,
       animeId: checkpoint.anilistMediaId,
       coverImageUrl: checkpoint.coverImageUrl,
@@ -1541,7 +1542,6 @@ class _ShelfItem {
   }) => _ShelfItem(
     title,
     subtitle ?? this.subtitle,
-    color,
     progress: progress,
     animeId: animeId,
     coverImageUrl: coverImageUrl,
@@ -1575,7 +1575,6 @@ class _ShelfItem {
     return _ShelfItem(
       tracked.displayTitle(titlePreference),
       subtitle,
-      AppColors.accent,
       progress: tracked.totalEpisodes == null || tracked.totalEpisodes == 0
           ? null
           : (tracked.progress / tracked.totalEpisodes!).clamp(0, 1),
@@ -1609,7 +1608,7 @@ class _HomeShowActionsDialog extends StatelessWidget {
         ? null
         : item.trackingItems.first.tracked.status;
     return AlertDialog(
-      backgroundColor: AppColors.panel,
+      backgroundColor: context.appPalette.surface,
       title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 680),
@@ -1622,7 +1621,7 @@ class _HomeShowActionsDialog extends StatelessWidget {
                 item.trackingItems.isEmpty
                     ? 'Add or update this show on your connected AniList and MAL accounts.'
                     : 'Update status on ${item.trackingItems.map((entry) => entry.provider.displayName).join(' and ')}',
-                style: const TextStyle(color: AppColors.textMuted),
+                style: TextStyle(color: context.appPalette.mutedText),
               ),
               const SizedBox(height: 14),
               TrackingStatusOptions(
@@ -1630,9 +1629,9 @@ class _HomeShowActionsDialog extends StatelessWidget {
                 onSelected: (status) => Navigator.of(context).pop(status),
               ),
             ] else
-              const Text(
+              Text(
                 'Connect AniList or MAL to change this show\'s list status.',
-                style: TextStyle(color: AppColors.textMuted),
+                style: TextStyle(color: context.appPalette.mutedText),
               ),
           ],
         ),

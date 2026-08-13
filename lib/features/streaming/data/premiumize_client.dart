@@ -29,7 +29,9 @@ class PremiumizeClient {
     : _dio = dio ?? Dio(BaseOptions(baseUrl: 'https://www.premiumize.me')) {
     _dio.options
       ..connectTimeout ??= const Duration(seconds: 15)
-      ..receiveTimeout ??= const Duration(seconds: 30);
+      ..receiveTimeout ??= const Duration(seconds: 30)
+      ..followRedirects = false
+      ..maxRedirects = 0;
     _dio.options.headers.addAll({
       'Accept': 'application/json',
       'Authorization': 'Bearer $token',

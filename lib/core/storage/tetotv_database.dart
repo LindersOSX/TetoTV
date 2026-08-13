@@ -68,6 +68,7 @@ class PlaybackCheckpoint {
 class SeriesPlaybackPreferences {
   const SeriesPlaybackPreferences({
     this.audioLanguage = 'eng',
+    this.audioPreferenceSet = false,
     this.subtitleLanguage = 'eng',
     this.subtitleEnabled = true,
     this.subtitlePreferenceSet = false,
@@ -90,6 +91,7 @@ class SeriesPlaybackPreferences {
   });
 
   final String audioLanguage;
+  final bool audioPreferenceSet;
   final String subtitleLanguage;
   final bool subtitleEnabled;
   final bool subtitlePreferenceSet;
@@ -112,6 +114,7 @@ class SeriesPlaybackPreferences {
 
   SeriesPlaybackPreferences copyWith({
     String? audioLanguage,
+    bool? audioPreferenceSet,
     String? subtitleLanguage,
     bool? subtitleEnabled,
     bool? subtitlePreferenceSet,
@@ -135,6 +138,7 @@ class SeriesPlaybackPreferences {
     bool clearPreferredReleaseGroup = false,
   }) => SeriesPlaybackPreferences(
     audioLanguage: audioLanguage ?? this.audioLanguage,
+    audioPreferenceSet: audioPreferenceSet ?? this.audioPreferenceSet,
     subtitleLanguage: subtitleLanguage ?? this.subtitleLanguage,
     subtitleEnabled: subtitleEnabled ?? this.subtitleEnabled,
     subtitlePreferenceSet: subtitlePreferenceSet ?? this.subtitlePreferenceSet,
@@ -163,6 +167,7 @@ class SeriesPlaybackPreferences {
 
   Map<String, Object?> toJson() => {
     'audioLanguage': audioLanguage,
+    'audioPreferenceSet': audioPreferenceSet,
     'subtitleLanguage': subtitleLanguage,
     'subtitleEnabled': subtitleEnabled,
     'subtitlePreferenceSet': subtitlePreferenceSet,
@@ -187,6 +192,7 @@ class SeriesPlaybackPreferences {
   factory SeriesPlaybackPreferences.fromJson(Map<String, dynamic> json) =>
       SeriesPlaybackPreferences(
         audioLanguage: json['audioLanguage'] as String? ?? 'eng',
+        audioPreferenceSet: json['audioPreferenceSet'] as bool? ?? false,
         subtitleLanguage: json['subtitleLanguage'] as String? ?? 'eng',
         subtitleEnabled: json['subtitleEnabled'] as bool? ?? true,
         subtitlePreferenceSet: json['subtitlePreferenceSet'] as bool? ?? false,
@@ -889,6 +895,24 @@ String redactDiagnosticValue(String value, {int maximum = 500}) {
         '[MAGNET]',
       )
       .replaceAll(
+        RegExp(
+          r'''\b(?![A-Za-z]:[\\/])[A-Za-z][A-Za-z0-9+.-]{0,31}:(?![0-9\s])[^\s"'<>]+''',
+          caseSensitive: false,
+        ),
+        '[URI]',
+      )
+      .replaceAllMapped(
+        RegExp(
+          r'''(^|[\s"'(=\[])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s"'<>]+[\\/])[^\r\n"'<>]*''',
+          multiLine: true,
+        ),
+        (match) => '${match.group(1)}[PATH]',
+      )
+      .replaceAllMapped(
+        RegExp(r'''(^|[\s"'(=\[])/(?!/)[^\r\n"'<>]*''', multiLine: true),
+        (match) => '${match.group(1)}[PATH]',
+      )
+      .replaceAll(
         RegExp(r'\bgithub_pat_[A-Za-z0-9_]+\b', caseSensitive: false),
         '[REDACTED]',
       )
@@ -911,7 +935,7 @@ String redactDiagnosticValue(String value, {int maximum = 500}) {
         ),
         '[REDACTED]',
       )
-      .replaceAll(RegExp(r'\b[a-fA-F0-9]{40}\b'), '[INFO_HASH]')
+      .replaceAll(RegExp(r'\b[a-fA-F0-9]{40,}\b'), '[INFO_HASH]')
       .replaceAll(RegExp(r'[\r\n]+'), ' ')
       .trim();
   if (redacted.length > maximum) redacted = redacted.substring(0, maximum);

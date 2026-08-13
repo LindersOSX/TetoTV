@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:media_kit/media_kit.dart';
 
 /// Gives a demuxer a short, bounded window to finish publishing its track
@@ -72,6 +73,8 @@ String? mediaKitAudioTrackDetail(AudioTrack track) {
   final values = <String>[];
   if (playerTrackMatchesEnglish(track)) {
     values.add('English');
+  } else if (playerTrackMatchesJapanese(track)) {
+    values.add('Japanese');
   } else if (track.language case final language?) {
     values.add(language);
   }
@@ -91,9 +94,46 @@ bool playerTrackMatchesEnglish(AudioTrack track) {
       title.contains('eng ');
 }
 
-AudioTrack? preferredDubAudioTrack(
+bool playerTrackMatchesJapanese(AudioTrack track) {
+  final language = (track.language ?? '').trim().toLowerCase();
+  final title = (track.title ?? '').trim().toLowerCase();
+  return const {'ja', 'jpn', 'jp', 'ja-jp'}.contains(language) ||
+      title.contains('japanese') ||
+      title.contains('original audio') ||
+      title.contains('original language');
+}
+
+bool playerTrackMatchesAudioLanguage(AudioTrack track, String language) {
+  final normalized = language.trim().toLowerCase().replaceAll('_', '-');
+  if (const {'eng', 'en', 'english', 'en-us', 'en-gb'}.contains(normalized)) {
+    return playerTrackMatchesEnglish(track);
+  }
+  if (const {'jpn', 'ja', 'japanese', 'ja-jp'}.contains(normalized)) {
+    return playerTrackMatchesJapanese(track);
+  }
+  final trackLanguage = (track.language ?? '').trim().toLowerCase().replaceAll(
+    '_',
+    '-',
+  );
+  final title = (track.title ?? '').trim().toLowerCase();
+  return trackLanguage == normalized ||
+      trackLanguage.split('-').first == normalized.split('-').first ||
+      title.contains(normalized);
+}
+
+bool _isCommentaryAudioTrack(AudioTrack track) {
+  final title = (track.title ?? '').toLowerCase();
+  return title.contains('commentary') ||
+      title.contains('descriptive') ||
+      title.contains('description');
+}
+
+/// Selects a stable per-series language while avoiding commentary tracks.
+AudioTrack? preferredAudioTrackForLanguage(
   Iterable<AudioTrack> tracks, {
+  required String language,
   bool preferSurround = false,
+  bool allowFallback = true,
 }) {
   final available = tracks
       .where((track) => track.id != 'auto' && track.id != 'no')
@@ -101,29 +141,91 @@ AudioTrack? preferredDubAudioTrack(
   if (available.isEmpty) return null;
 
   int score(AudioTrack track) {
-    final language = (track.language ?? '').toLowerCase();
-    final title = (track.title ?? '').toLowerCase();
-    var value = 0;
-    if (const {'en', 'eng', 'en-us', 'en-gb'}.contains(language)) {
-      value += 100;
-    }
-    if (title.contains('english') ||
-        title.contains('dub') ||
-        title.contains('eng ')) {
-      value += 80;
-    }
+    var value = playerTrackMatchesAudioLanguage(track, language) ? 100 : 0;
     if (track.isDefault == true) value += 10;
-    if (preferSurround) {
-      value += (track.channelscount ?? 0).clamp(0, 8) * 2;
-    }
-    if (title.contains('commentary') ||
-        title.contains('descriptive') ||
-        title.contains('signs')) {
+    if (preferSurround) value += (track.channelscount ?? 0).clamp(0, 8) * 2;
+    if (_isCommentaryAudioTrack(track)) {
       value -= 150;
     }
     return value;
   }
 
-  final ranked = [...available]..sort((a, b) => score(b).compareTo(score(a)));
-  return score(ranked.first) >= 50 ? ranked.first : null;
+  final ranked = available.indexed.toList()
+    ..sort((left, right) {
+      final byScore = score(right.$2).compareTo(score(left.$2));
+      return byScore != 0 ? byScore : left.$1.compareTo(right.$1);
+    });
+  final selected = ranked.first.$2;
+  if (playerTrackMatchesAudioLanguage(selected, language)) return selected;
+  if (allowFallback) return selected;
+
+  // `allowFallback: false` keeps discovery active, but it must not leave
+  // playback on an arbitrary/container-default track. Select deterministic
+  // normal dialogue provisionally; the player upgrades it if the requested
+  // language appears in a later track snapshot.
+  return selected;
+}
+
+bool playerTrackMatchesAudioPreference(
+  AudioTrack track,
+  PlaybackAudioPreference preference,
+) => switch (preference) {
+  PlaybackAudioPreference.dub => playerTrackMatchesEnglish(track),
+  PlaybackAudioPreference.sub => playerTrackMatchesJapanese(track),
+};
+
+/// Selects a deterministic track for the global dub/sub preference.
+///
+/// A missing preferred language falls back to the container default (or the
+/// first non-commentary track) so episode transitions do not depend on which
+/// order a specific player backend happens to publish its track list.
+AudioTrack? preferredAudioTrack(
+  Iterable<AudioTrack> tracks, {
+  required PlaybackAudioPreference preference,
+  bool preferSurround = false,
+  bool allowFallback = true,
+}) {
+  final available = tracks
+      .where((track) => track.id != 'auto' && track.id != 'no')
+      .toList(growable: false);
+  if (available.isEmpty) return null;
+
+  int score(AudioTrack track) {
+    var value = playerTrackMatchesAudioPreference(track, preference) ? 100 : 0;
+    if (track.isDefault == true) value += 10;
+    if (preferSurround) {
+      value += (track.channelscount ?? 0).clamp(0, 8) * 2;
+    }
+    if (_isCommentaryAudioTrack(track)) {
+      value -= 150;
+    }
+    return value;
+  }
+
+  final ranked = available.indexed.toList()
+    ..sort((left, right) {
+      final byScore = score(right.$2).compareTo(score(left.$2));
+      return byScore != 0 ? byScore : left.$1.compareTo(right.$1);
+    });
+  final selected = ranked.first.$2;
+  if (playerTrackMatchesAudioPreference(selected, preference)) return selected;
+  if (allowFallback) return selected;
+  return selected;
+}
+
+AudioTrack? preferredDubAudioTrack(
+  Iterable<AudioTrack> tracks, {
+  bool preferSurround = false,
+}) {
+  final selected = preferredAudioTrack(
+    tracks,
+    preference: PlaybackAudioPreference.dub,
+    preferSurround: preferSurround,
+    allowFallback: false,
+  );
+  return selected != null &&
+          playerTrackMatchesEnglish(selected) &&
+          !_isCommentaryAudioTrack(selected)
+      ? selected
+      : null;
 }

@@ -103,7 +103,7 @@ Future<void> manageCatalogTrackingStatus({
         ),
         backgroundColor: result.isPartial
             ? const Color(0xFF7D1E32)
-            : AppColors.accent,
+            : context.appPalette.accent,
       ),
     );
   } catch (error) {

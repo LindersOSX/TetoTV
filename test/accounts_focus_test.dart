@@ -1,8 +1,10 @@
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -93,6 +95,66 @@ void main() {
     expect(find.text('Plan to watch'), findsOneWidget);
     expect(find.text('Airing soon'), findsOneWidget);
     expect(find.text('Recently completed'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Settings uses the saved Theme Studio palette', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFF102030),
+      surface: const Color(0xFF203040),
+      accent: const Color(0xFF00CC88),
+      primaryText: const Color(0xFFF0FAFF),
+      mutedText: const Color(0xFFA0B8C8),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.darkFor(palette),
+          home: const AccountsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor,
+      palette.background,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is AnimatedContainer &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration! as BoxDecoration).color == palette.accent,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Container &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration! as BoxDecoration).color == palette.surface,
+      ),
+      findsWidgets,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.text(
+              'Choose what appears on Home and move favorites toward the top.',
+            ),
+          )
+          .style
+          ?.color,
+      palette.mutedText,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -335,7 +397,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-qr',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.discord',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.donation-qr',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -371,6 +445,132 @@ void main() {
     expect(
       find.textContaining('AI-assisted development tools'),
       findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ten System activations unlock persistent update channels', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+          if (call.method == 'getAppVersion') {
+            return <String, Object?>{
+              'versionName': '1.0.0',
+              'versionCode': 10000,
+            };
+          }
+          return null;
+        });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    for (var index = 0; index < 3; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.area.system',
+    );
+    for (var index = 0; index < 10; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+    }
+    await tester.runAsync(() async {
+      final storage = const FlutterSecureStorage();
+      for (var attempt = 0; attempt < 50; attempt++) {
+        if (await storage.read(key: developerModeStorageKey) == 'true') return;
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+    });
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(container.read(appUpdateControllerProvider).developerMode, isTrue);
+    expect(find.text('Developer mode'), findsOneWidget);
+    expect(find.text('Update channel'), findsOneWidget);
+    expect(find.text('Public'), findsOneWidget);
+    expect(find.text('Private Beta access'), findsOneWidget);
+    expect(find.text('KEY REQUIRED'), findsOneWidget);
+    expect(find.text('Set Beta key'), findsOneWidget);
+    expect(find.textContaining('Installed version:'), findsOneWidget);
+    expect(find.textContaining('Build:'), findsOneWidget);
+    expect(
+      await const FlutterSecureStorage().read(key: developerModeStorageKey),
+      'true',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('saved Beta access key is never displayed in Developer UI', (
+    tester,
+  ) async {
+    const betaKey = 'beta_test_access_key_0123456789abcdef';
+    FlutterSecureStorage.setMockInitialValues({
+      developerModeStorageKey: 'true',
+      betaUpdateAccessKeyStorageKey: betaKey,
+    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+          if (call.method == 'getAppVersion') {
+            return <String, Object?>{
+              'versionName': '1.0.0',
+              'versionCode': 410001,
+            };
+          }
+          return null;
+        });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    for (var index = 0; index < 3; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.text('KEY SAVED'), findsOneWidget);
+    expect(find.text('Replace Beta key'), findsOneWidget);
+    expect(find.text('Clear Beta key'), findsOneWidget);
+    expect(find.text(betaKey), findsNothing);
+    expect(find.textContaining(betaKey), findsNothing);
+    for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+    ]) {
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.beta-access',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.beta-access-clear',
     );
     expect(tester.takeException(), isNull);
   });
@@ -412,6 +612,10 @@ void main() {
       find.text('Discord Rich Presence', skipOffstage: false),
       findsOneWidget,
     );
+    expect(
+      find.text('Double-click or press OK twice to copy', skipOffstage: false),
+      findsNWidgets(2),
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -426,13 +630,61 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-qr',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.discord',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.donation-qr',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.donate',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Discord Rich Presence actions align with update actions', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('System'));
+    await tester.pumpAndSettle();
+
+    final updateActions = find.byKey(
+      const ValueKey('app-update-actions'),
+      skipOffstage: false,
+    );
+    final discordActions = find.byKey(
+      const ValueKey('discord-presence-actions'),
+      skipOffstage: false,
+    );
+    expect(updateActions, findsOneWidget);
+    expect(discordActions, findsOneWidget);
+
+    await tester.ensureVisible(discordActions);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getRect(discordActions).right,
+      closeTo(tester.getRect(updateActions).right, 0.1),
     );
     expect(tester.takeException(), isNull);
   });
@@ -612,13 +864,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.marketplace',
+      'accounts.streaming.local-media',
     );
+    expect(find.text('Open media'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.marketplace',
+      'accounts.streaming.local-media',
     );
     expect(tester.takeException(), isNull);
   });

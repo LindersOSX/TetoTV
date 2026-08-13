@@ -1,10 +1,10 @@
 name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
-# Reserve 10,000 version-code values per public release. Flutter adds an
-# ABI-specific offset to split APKs, so the next universal APK must still be
-# newer than every split APK from the previous release.
-version: 1.11.33+400001
+# Public and Beta artifacts built from the same source use one monotonically
+# increasing Android versionCode. The private source branch carries the Beta
+# display version; the public universal APK overrides the build name to 1.x.
+version: 2.0.0+410001
 
 environment:
   sdk: ^3.12.2
@@ -24,6 +24,7 @@ dependencies:
   qr_flutter: ^4.1.0
   cached_network_image: ^3.4.1
   crypto: ^3.0.6
+  xml: ^6.6.1
   path: ^1.9.1
   path_provider: ^2.1.5
   sqflite: ^2.4.2
@@ -67,6 +68,13 @@ flutter:
     - assets/branding/tetotv_icon.png
     - assets/easter_egg/teto_plush.png
     - assets/fonts/NotoSans-Regular.ttf
+    - assets/fonts/OFL.txt
+    - assets/legal/native/GPL-2.0.txt
+    - assets/legal/native/GPL-3.0.txt
+    - assets/legal/native/LGPL-2.1.txt
+    - assets/legal/native/LGPL-3.0.txt
+    - assets/legal/native/LIBMPV_ANDROID_BUILD_DEFAULT_LICENSE.txt
+    - assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt
     - assets/typescript/sucrase.js
     - assets/typescript/SUCRASE_LICENSE.txt
     - assets/addon_runtime/linkedom.js

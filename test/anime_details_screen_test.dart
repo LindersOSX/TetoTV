@@ -11,6 +11,29 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('completed local episodes immediately advance details progress', () {
+    expect(
+      effectiveCompletedEpisodeProgress(
+        trackedProgress: 3,
+        localEpisode: 5,
+        localCompleted: true,
+      ),
+      5,
+    );
+    expect(
+      effectiveCompletedEpisodeProgress(
+        trackedProgress: 7,
+        localEpisode: 5,
+        localCompleted: true,
+      ),
+      7,
+    );
+    expect(
+      effectiveCompletedEpisodeProgress(trackedProgress: 3, localEpisode: 5),
+      3,
+    );
+  });
+
   testWidgets('details error state starts on Back', (tester) async {
     await tester.pumpWidget(
       ProviderScope(

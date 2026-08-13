@@ -102,8 +102,9 @@ class _ThirdPartyNoticesScreenState extends State<ThirdPartyNoticesScreen> {
   @override
   Widget build(BuildContext context) {
     final compact = context.isCompactWidth;
+    final palette = context.appPalette;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: palette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding,
         child: Focus(
@@ -125,17 +126,17 @@ class _ThirdPartyNoticesScreenState extends State<ThirdPartyNoticesScreen> {
                   future: _notices,
                   builder: (context, snapshot) {
                     if (snapshot.connectionState != ConnectionState.done) {
-                      return const Center(
+                      return Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.accentBright,
+                          color: palette.accentBright,
                         ),
                       );
                     }
                     if (snapshot.hasError || snapshot.data == null) {
-                      return const Center(
+                      return Center(
                         child: Text(
                           'Third-party notices could not be loaded.',
-                          style: TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: palette.mutedText),
                         ),
                       );
                     }
@@ -185,6 +186,7 @@ class _NoticesHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final back = _NoticeAction(
       autofocus: true,
       focusNode: backFocusNode,
@@ -203,7 +205,7 @@ class _NoticesHeader extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: TextStyle(
-        color: Colors.white,
+        color: palette.primaryText,
         fontSize: compact ? 22 : 26,
         fontWeight: FontWeight.w900,
       ),
@@ -253,6 +255,7 @@ class _NoticeAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return TvFocusable(
       autofocus: autofocus,
       focusNode: focusNode,
@@ -260,21 +263,21 @@ class _NoticeAction extends StatelessWidget {
       onPressed: onPressed,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: palette.surface,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF3B2A2F)),
+          border: Border.all(color: palette.accent.withValues(alpha: .42)),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: 21),
+              Icon(icon, color: palette.primaryText, size: 21),
               const SizedBox(width: 8),
               Text(
                 label,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: palette.primaryText,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -400,12 +403,14 @@ class _NoticeBlockView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final bodyStyle = _bodyStyle(context);
     final text = _plainInline(block.lines.join(' '));
     return switch (block.type) {
       _NoticeBlockType.heading => Text(
         text,
         style: TextStyle(
-          color: block.level == 1 ? Colors.white : AppColors.accentBright,
+          color: block.level == 1 ? palette.primaryText : palette.accentBright,
           fontSize: block.level == 1
               ? (compact ? 22 : 28)
               : (compact ? 18 : 21),
@@ -413,28 +418,28 @@ class _NoticeBlockView extends StatelessWidget {
           height: 1.2,
         ),
       ),
-      _NoticeBlockType.paragraph => SelectableText(text, style: _bodyStyle),
+      _NoticeBlockType.paragraph => SelectableText(text, style: bodyStyle),
       _NoticeBlockType.bullet => Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 2, right: 10),
-            child: Text('•', style: TextStyle(color: AppColors.accentBright)),
+          Padding(
+            padding: const EdgeInsets.only(top: 2, right: 10),
+            child: Text('•', style: TextStyle(color: palette.accentBright)),
           ),
-          Expanded(child: SelectableText(text, style: _bodyStyle)),
+          Expanded(child: SelectableText(text, style: bodyStyle)),
         ],
       ),
       _NoticeBlockType.code => DecoratedBox(
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: palette.surface,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF3B2A2F)),
+          border: Border.all(color: palette.accent.withValues(alpha: .42)),
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: SelectableText(
             block.lines.join('\n'),
-            style: _bodyStyle.copyWith(color: Colors.white),
+            style: bodyStyle.copyWith(color: palette.primaryText),
           ),
         ),
       ),
@@ -446,8 +451,8 @@ class _NoticeBlockView extends StatelessWidget {
   }
 }
 
-const _bodyStyle = TextStyle(
-  color: Color(0xFFD6D2D3),
+TextStyle _bodyStyle(BuildContext context) => TextStyle(
+  color: context.appPalette.primaryText.withValues(alpha: .86),
   fontSize: 15,
   height: 1.55,
 );
@@ -460,6 +465,8 @@ class _NoticeTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final bodyStyle = _bodyStyle(context);
     final rows = lines.map(_tableCells).toList(growable: false);
     final content = rows.length > 2
         ? rows.skip(2).toList()
@@ -473,9 +480,11 @@ class _NoticeTable extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 10),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: AppColors.panel,
+                  color: palette.surface,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFF3B2A2F)),
+                  border: Border.all(
+                    color: palette.accent.withValues(alpha: .42),
+                  ),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(13),
@@ -484,22 +493,22 @@ class _NoticeTable extends StatelessWidget {
                     children: [
                       Text(
                         row.isEmpty ? '' : _plainInline(row[0]),
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: palette.primaryText,
                           fontSize: 16,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
                       if (row.length > 1) ...[
                         const SizedBox(height: 7),
-                        Text(_plainInline(row[1]), style: _bodyStyle),
+                        Text(_plainInline(row[1]), style: bodyStyle),
                       ],
                       if (row.length > 2) ...[
                         const SizedBox(height: 7),
                         Text(
                           _plainInline(row[2]),
-                          style: _bodyStyle.copyWith(
-                            color: AppColors.accentBright,
+                          style: bodyStyle.copyWith(
+                            color: palette.accentBright,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -515,24 +524,29 @@ class _NoticeTable extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: Table(
-        border: TableBorder.all(color: const Color(0xFF3B2A2F)),
+        border: TableBorder.all(color: palette.accent.withValues(alpha: .42)),
         columnWidths: const {
           0: FlexColumnWidth(1.15),
           1: FlexColumnWidth(1.7),
           2: FlexColumnWidth(1.25),
         },
         children: [
-          if (rows.isNotEmpty) _tableRow(rows.first, heading: true),
-          for (final row in content) _tableRow(row),
+          if (rows.isNotEmpty) _tableRow(context, rows.first, heading: true),
+          for (final row in content) _tableRow(context, row),
         ],
       ),
     );
   }
 
-  TableRow _tableRow(List<String> row, {bool heading = false}) {
+  TableRow _tableRow(
+    BuildContext context,
+    List<String> row, {
+    bool heading = false,
+  }) {
+    final palette = context.appPalette;
     return TableRow(
       decoration: BoxDecoration(
-        color: heading ? AppColors.panelRaised : AppColors.panel,
+        color: heading ? palette.surfaceRaised : palette.surface,
       ),
       children: [
         for (var index = 0; index < 3; index++)
@@ -540,8 +554,10 @@ class _NoticeTable extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: Text(
               index < row.length ? _plainInline(row[index]) : '',
-              style: _bodyStyle.copyWith(
-                color: heading ? Colors.white : const Color(0xFFD6D2D3),
+              style: _bodyStyle(context).copyWith(
+                color: heading
+                    ? palette.primaryText
+                    : palette.primaryText.withValues(alpha: .86),
                 fontWeight: heading ? FontWeight.w900 : FontWeight.w400,
               ),
             ),

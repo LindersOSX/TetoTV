@@ -13,6 +13,7 @@ import 'package:anime_tv/features/catalog/presentation/credits_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_collection_screen.dart';
 import 'package:anime_tv/features/discord/presentation/discord_device_pairing_screen.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
+import 'package:anime_tv/features/local_media/presentation/local_media_screen.dart';
 import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
@@ -21,6 +22,7 @@ import 'package:anime_tv/features/settings/presentation/diagnostics_screen.dart'
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/privacy_screen.dart';
 import 'package:anime_tv/features/settings/presentation/third_party_notices_screen.dart';
+import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -157,8 +159,16 @@ final appRouter = GoRouter(
       builder: (context, state) => const ThirdPartyNoticesScreen(),
     ),
     GoRoute(
+      path: ThemeStudioScreen.routePath,
+      builder: (context, state) => const ThemeStudioScreen(),
+    ),
+    GoRoute(
       path: '/settings/marketplace',
       builder: (context, state) => const MarketplaceScreen(),
+    ),
+    GoRoute(
+      path: '/settings/local-media',
+      builder: (context, state) => const LocalMediaScreen(),
     ),
     GoRoute(
       path: '/resolve',

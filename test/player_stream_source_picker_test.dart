@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
@@ -152,6 +153,58 @@ void main() {
 
     expect(find.textContaining('1080p'), findsWidgets);
     expect(detectorFor(low).focusNode?.hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('source picker follows a custom Theme Studio palette', (
+    tester,
+  ) async {
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFF061522),
+      surface: const Color(0xFF1A3548),
+      accent: const Color(0xFF32A86B),
+      primaryText: const Color(0xFFF2E5D2),
+      mutedText: const Color(0xFF90A8BA),
+    );
+    final selected = _option('https://video.example/1080.m3u8', '1080p');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.darkFor(palette),
+        home: Scaffold(
+          body: PlayerStreamSourcePicker(
+            initialOptions: [selected],
+            selectedUri: selected.stream.uri,
+            onOptionsChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final panel = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('player-source-picker-panel')),
+    );
+    final decoration = panel.decoration as BoxDecoration;
+    expect(
+      decoration.color,
+      palette.surface.withValues(alpha: const Color(0xF5080808).a),
+    );
+    expect(decoration.border!.top.color, palette.accent.withValues(alpha: .75));
+    expect(
+      tester.widget<Icon>(find.byIcon(Icons.video_library_rounded)).color,
+      palette.accentBright,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('player-source-status')))
+          .style
+          ?.color,
+      palette.mutedText,
+    );
+    expect(
+      tester.widget<Icon>(find.byIcon(Icons.check_circle_rounded)).color,
+      palette.accentBright,
+    );
     expect(tester.takeException(), isNull);
   });
 }

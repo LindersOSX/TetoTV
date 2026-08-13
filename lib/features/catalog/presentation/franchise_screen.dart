@@ -16,7 +16,9 @@ class FranchiseScreen extends ConsumerWidget {
     final franchise = ref.watch(franchiseProvider(mediaId));
     final preference = ref.watch(titleLanguagePreferenceProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         minimum: const EdgeInsets.fromLTRB(34, 24, 34, 0),
         child: Column(
@@ -38,18 +40,18 @@ class FranchiseScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(width: 14),
-                const Text(
+                Text(
                   'Sequels, prequels, side stories, and connected titles',
-                  style: TextStyle(color: AppColors.textMuted),
+                  style: TextStyle(color: context.appPalette.mutedText),
                 ),
               ],
             ),
             const SizedBox(height: 16),
             Expanded(
               child: franchise.when(
-                loading: () => const Center(
+                loading: () => Center(
                   child: CircularProgressIndicator(
-                    color: AppColors.accentBright,
+                    color: context.appPalette.accentBright,
                   ),
                 ),
                 error: (error, _) =>

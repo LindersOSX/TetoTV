@@ -87,7 +87,7 @@ class PosterMetadataOverlay extends StatelessWidget {
             if (score case final value?)
               _PosterBadge(
                 text: '★${value.toStringAsFixed(1)}',
-                color: AppColors.accent,
+                color: context.appPalette.accent,
               ),
             if (releaseYear case final value?) ...[
               const SizedBox(width: 3),

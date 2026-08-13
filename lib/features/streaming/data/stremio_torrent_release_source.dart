@@ -419,6 +419,8 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       final provider = _firstMatch(RegExp(r'⚙️\s*([^\r\n]+)'), searchable);
       final isDubbed =
           lower.contains('dubbed') ||
+          RegExp(r'(^|[^a-z0-9])dub([^a-z0-9]|$)').hasMatch(lower) ||
+          RegExp(r'\b(?:eng|english)\s+audio\b').hasMatch(lower) ||
           lower.contains('dual audio') ||
           lower.contains('dual-audio') ||
           lower.contains('multi audio') ||

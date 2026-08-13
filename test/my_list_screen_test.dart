@@ -3,6 +3,9 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
@@ -102,6 +105,70 @@ void main() {
       tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus,
       isTrue,
     );
+  });
+
+  testWidgets('shows linked tracker profile, avatar, and basic statistics', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const profile = TrackingAccountProfile(
+      provider: TrackingProvider.anilist,
+      username: 'TetoFan',
+      avatarUrl: 'https://img.anili.st/avatar.png',
+      animeCount: 120,
+      episodesWatched: 2400,
+      minutesWatched: 48000,
+      meanScore: 82.4,
+    );
+    const malProfile = TrackingAccountProfile(
+      provider: TrackingProvider.myAnimeList,
+      username: 'MALFan',
+      meanScore: 8.1,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                usernames: {
+                  TrackingProvider.anilist: 'TetoFan',
+                  TrackingProvider.myAnimeList: 'MALFan',
+                },
+                profiles: {
+                  TrackingProvider.anilist: profile,
+                  TrackingProvider.myAnimeList: malProfile,
+                },
+              ),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pump();
+
+    final card = find.byKey(const ValueKey('my-list-profile-anilist'));
+    expect(card, findsOneWidget);
+    expect(find.text('TetoFan'), findsOneWidget);
+    expect(find.text('AniList'), findsOneWidget);
+    expect(find.text('120 titles'), findsOneWidget);
+    expect(find.text('2400 episodes'), findsOneWidget);
+    expect(find.text('800h watched'), findsOneWidget);
+    expect(find.text('Mean 82.4/100'), findsOneWidget);
+    expect(find.text('Mean 8.1/10'), findsOneWidget);
+    final artwork = tester.widget<NetworkArtwork>(
+      find.descendant(of: card, matching: find.byType(NetworkArtwork)),
+    );
+    expect(artwork.url, 'https://img.anili.st/avatar.png');
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('refresh reloads the active list and home tracking shelves', (
@@ -357,3 +424,18 @@ class _RemovingRepository implements TrackingRepository {
     required TrackingListStatus status,
   }) async {}
 }
+
+class _StaticTrackingAccountsController extends TrackingAccountsController {
+  _StaticTrackingAccountsController(TrackingAccountsState initial)
+    : super(
+        _TrackingAccountsRef(),
+        TrackingTokenService(const FlutterSecureStorage()),
+      ) {
+    state = initial;
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
+class _TrackingAccountsRef extends Fake implements Ref {}

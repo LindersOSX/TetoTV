@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/data/all_debrid_pin_auth_client.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
@@ -155,34 +156,41 @@ class _AllDebridPairingScreenState
     }
     final session = _session;
     if (session == null) {
-      return const CircularProgressIndicator(color: AppColors.cyan);
+      return CircularProgressIndicator(
+        color: context.appPalette.secondaryAccent,
+      );
     }
     return Container(
       constraints: const BoxConstraints(maxWidth: 900),
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 650;
-          final qr = Container(
-            width: compact ? 170 : 220,
-            height: compact ? 170 : 220,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: QrImageView(
-              data: session.verificationUrl.toString(),
-              backgroundColor: Colors.white,
-              errorCorrectionLevel: QrErrorCorrectLevel.Q,
-              padding: EdgeInsets.zero,
-              eyeStyle: const QrEyeStyle(color: AppColors.ink),
-              dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
+          final qr = CopyableQrInteraction(
+            data: session.verificationUrl.toString(),
+            semanticsLabel: 'QR code for AllDebrid pairing',
+            confirmationMessage: 'AllDebrid pairing link copied.',
+            child: Container(
+              width: compact ? 170 : 220,
+              height: compact ? 170 : 220,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: session.verificationUrl.toString(),
+                backgroundColor: Colors.white,
+                errorCorrectionLevel: QrErrorCorrectLevel.Q,
+                padding: EdgeInsets.zero,
+                eyeStyle: const QrEyeStyle(color: Colors.black),
+                dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
+              ),
             ),
           );
           final instructions = Column(
@@ -210,9 +218,9 @@ class _AllDebridPairingScreenState
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'TetoTV saves the key only after AllDebrid confirms an active premium account.',
-                style: TextStyle(color: AppColors.textMuted),
+                style: TextStyle(color: context.appPalette.mutedText),
               ),
             ],
           );
@@ -243,18 +251,22 @@ class _WaitingPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: AppColors.cyan.withValues(alpha: .12),
+      color: context.appPalette.secondaryAccent.withValues(alpha: .12),
       borderRadius: BorderRadius.circular(999),
     ),
-    child: const Row(
+    child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.sync_rounded, size: 15, color: AppColors.cyan),
-        SizedBox(width: 7),
+        Icon(
+          Icons.sync_rounded,
+          size: 15,
+          color: context.appPalette.secondaryAccent,
+        ),
+        const SizedBox(width: 7),
         Text(
           'WAITING FOR APPROVAL',
           style: TextStyle(
-            color: AppColors.cyan,
+            color: context.appPalette.secondaryAccent,
             fontSize: 11,
             fontWeight: FontWeight.w800,
             letterSpacing: 1.1,
@@ -321,7 +333,7 @@ class _ActionButton extends StatelessWidget {
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(10),
     child: Container(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         mainAxisSize: MainAxisSize.min,

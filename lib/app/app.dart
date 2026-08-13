@@ -8,6 +8,7 @@ import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ class TetoTvApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final preferences = ref.watch(settingsPreferencesProvider);
+    final appPalette = ref.watch(themeStudioControllerProvider).palette;
     final isTelevision = ref.watch(isTelevisionProvider);
     ref.watch(trackingOutboxFlushProvider);
     // Rich Presence is opt-in. Watching the controller only restores an
@@ -35,7 +37,7 @@ class TetoTvApp extends ConsumerWidget {
     return MaterialApp.router(
       title: 'TetoTV',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
+      theme: AppTheme.darkFor(appPalette),
       routerConfig: appRouter,
       builder: (context, child) {
         final mq = MediaQuery.of(context);

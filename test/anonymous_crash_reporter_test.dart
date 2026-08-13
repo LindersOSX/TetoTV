@@ -24,6 +24,8 @@ void main() {
   });
 
   test('opted-in report is redacted, delivered, and acknowledged', () async {
+    const sha256LikeValue =
+        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     final client = _CrashClient();
     final platform = _CrashPlatform();
     final reporter = AnonymousCrashReporter(client, platform);
@@ -31,9 +33,16 @@ void main() {
 
     await reporter.record(
       kind: 'flutter',
-      error: StateError('failed at https://secret.example/path?token=abc'),
+      error: StateError(
+        'failed at https://secret.example/path?token=abc '
+        'content://media.documents/document/video%3Aprivate-show.mkv '
+        '$sha256LikeValue',
+      ),
       stack: StackTrace.fromString(
-        'Bearer very-secret-token\nhttps://source.example/episode',
+        'Bearer very-secret-token\n'
+        'https://source.example/episode\n'
+        '/storage/emulated/0/Private Show Episode 7.mkv\n'
+        'at dev.animetv.Player.open(Player.kt:42)',
       ),
     );
 
@@ -41,9 +50,16 @@ void main() {
     expect(client.reports, hasLength(1));
     final report = client.reports.single;
     expect(report.message, contains('[URL]'));
+    expect(report.message, contains('[INFO_HASH]'));
+    expect(report.message, isNot(contains(sha256LikeValue)));
     expect(report.message, isNot(contains('secret.example')));
+    expect(report.message, isNot(contains('private-show')));
+    expect(report.message, contains('[URI]'));
     expect(report.stack, contains('Bearer [REDACTED]'));
     expect(report.stack, isNot(contains('source.example')));
+    expect(report.stack, isNot(contains('Private Show Episode 7.mkv')));
+    expect(report.stack, contains('[PATH]'));
+    expect(report.stack, contains('dev.animetv.Player.open(Player.kt:42)'));
     expect(report.toWireJson(), isNot(contains('report_id')));
     expect(report.toWireJson()['event_id'], report.reportId);
     expect(platform.acknowledged, [report.reportId]);

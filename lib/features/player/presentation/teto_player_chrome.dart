@@ -3,6 +3,61 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+const double _playerControlMaxTextScale = 1.35;
+const Color _defaultPlayerChromePanel = Color(0xD6080808);
+const Color _defaultPlayerChromeShadow = Color(0xA8000000);
+const Color _defaultPlayerControlSurface = Color(0x8F242429);
+const Color _defaultPlayerSkipSurface = Color(0xB30B0B0D);
+const Color _defaultPlayerSkipShadow = Color(0x77000000);
+
+bool _usesDefaultPlayerPalette(AppThemePalette palette) =>
+    palette == AppThemePalette.defaults;
+
+Color _playerChromePanelColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? _defaultPlayerChromePanel
+    : Color.lerp(
+        palette.background,
+        palette.surface,
+        .62,
+      )!.withValues(alpha: .84);
+
+Color _playerChromeShadowColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? _defaultPlayerChromeShadow
+    : Color.lerp(palette.background, Colors.black, .85)!.withValues(alpha: .66);
+
+Color _playerControlSurfaceColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? _defaultPlayerControlSurface
+    : palette.selectableSurface.withValues(alpha: .56);
+
+Color _playerSkipSurfaceColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? _defaultPlayerSkipSurface
+    : Color.lerp(
+        palette.background,
+        palette.surface,
+        .55,
+      )!.withValues(alpha: .70);
+
+Color _playerSkipShadowColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? _defaultPlayerSkipShadow
+    : _playerChromeShadowColor(palette).withValues(alpha: .47);
+
+Color _playerPrimaryTextColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette) ? Colors.white : palette.primaryText;
+
+Color _playerPrimaryControlTextColor(AppThemePalette palette) =>
+    _usesDefaultPlayerPalette(palette)
+    ? Colors.white
+    : contrastForeground(palette.accent);
+
+Color _playerProgressTrackColor(AppThemePalette palette) =>
+    (_usesDefaultPlayerPalette(palette) ? Colors.white : palette.primaryText)
+        .withValues(alpha: .24);
+
 /// Visual language shared by every Flutter-backed playback engine.
 ///
 /// Engine integration remains deliberately outside this widget. MPV and VLC
@@ -61,6 +116,7 @@ class TetoPlayerChrome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    final palette = context.appPalette;
     final compact = media.size.width < 720 || media.size.height < 480;
     final horizontalInset = compact ? 12.0 : 28.0;
     final bottomInset = compact ? 10.0 : 24.0;
@@ -82,15 +138,15 @@ class TetoPlayerChrome extends StatelessWidget {
           child: DecoratedBox(
             key: ValueKey('$engineKey-bottom-player-chrome'),
             decoration: BoxDecoration(
-              color: const Color(0xD6080808),
+              color: _playerChromePanelColor(palette),
               borderRadius: BorderRadius.circular(compact ? 12 : 16),
               border: Border.all(
-                color: AppColors.accent.withValues(alpha: .78),
+                color: palette.accent.withValues(alpha: .78),
                 width: 1.4,
               ),
-              boxShadow: const [
+              boxShadow: [
                 BoxShadow(
-                  color: Color(0xA8000000),
+                  color: _playerChromeShadowColor(palette),
                   blurRadius: 26,
                   offset: Offset(0, 10),
                 ),
@@ -210,12 +266,13 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.tune_rounded,
                           label: 'Options',
+                          revealScrollEnd: true,
                           onPressed: onOptions,
                           onDismiss: onDismiss,
                         ),
                         // Keep the focused ring and glow inside the horizontal
                         // viewport on narrow TVs and phones.
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 20),
                       ],
                     ),
                   ),
@@ -223,10 +280,11 @@ class TetoPlayerChrome extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(999),
                     child: LinearProgressIndicator(
+                      key: ValueKey('$engineKey-player-progress-bar'),
                       value: progress,
                       minHeight: compact ? 3 : 4,
-                      color: AppColors.accentBright,
-                      backgroundColor: Colors.white.withValues(alpha: .24),
+                      color: palette.accentBright,
+                      backgroundColor: _playerProgressTrackColor(palette),
                     ),
                   ),
                   SizedBox(height: compact ? 6 : 9),
@@ -236,7 +294,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         '${formatPlayerChromeDuration(position)}  /  '
                         '${formatPlayerChromeDuration(duration)}',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: _playerPrimaryTextColor(palette),
                           fontSize: compact ? 11 : 13,
                           fontWeight: FontWeight.w700,
                         ),
@@ -249,8 +307,8 @@ class TetoPlayerChrome extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
-                            style: const TextStyle(
-                              color: AppColors.textMuted,
+                            style: TextStyle(
+                              color: palette.mutedText,
                               fontSize: 11,
                             ),
                           ),
@@ -282,6 +340,7 @@ class TetoSkipSegmentOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return TvFocusable(
       key: const ValueKey('player-skip-segment-overlay'),
       focusNode: focusNode,
@@ -292,29 +351,35 @@ class TetoSkipSegmentOverlay extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
         decoration: BoxDecoration(
-          color: const Color(0xB30B0B0D),
+          color: _playerSkipSurfaceColor(palette),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: AppColors.accentBright.withValues(alpha: .82),
+            color: palette.accentBright.withValues(alpha: .82),
           ),
-          boxShadow: const [
-            BoxShadow(color: Color(0x77000000), blurRadius: 16),
+          boxShadow: [
+            BoxShadow(color: _playerSkipShadowColor(palette), blurRadius: 16),
           ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.skip_next_rounded,
-              color: AppColors.accentBright,
+              color: palette.accentBright,
               size: 21,
             ),
             const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
+            MediaQuery.withClampedTextScaling(
+              maxScaleFactor: _playerControlMaxTextScale,
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _playerPrimaryTextColor(palette),
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
           ],
@@ -331,6 +396,7 @@ class TetoPlayerControl extends StatelessWidget {
     required this.onPressed,
     this.focusNode,
     this.primary = false,
+    this.revealScrollEnd = false,
     this.onDismiss,
     super.key,
   });
@@ -340,10 +406,15 @@ class TetoPlayerControl extends StatelessWidget {
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final bool primary;
+  final bool revealScrollEnd;
   final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final foreground = primary
+        ? _playerPrimaryControlTextColor(palette)
+        : _playerPrimaryTextColor(palette);
     return TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
@@ -351,6 +422,17 @@ class TetoPlayerControl extends StatelessWidget {
         if (!focused) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!context.mounted) return;
+          if (revealScrollEnd) {
+            final position = Scrollable.maybeOf(context)?.position;
+            if (position != null) {
+              position.animateTo(
+                position.maxScrollExtent,
+                duration: const Duration(milliseconds: 100),
+                curve: Curves.easeOutCubic,
+              );
+              return;
+            }
+          }
           Scrollable.ensureVisible(
             context,
             alignment: 1,
@@ -373,23 +455,30 @@ class TetoPlayerControl extends StatelessWidget {
       focusScale: 1.025,
       borderRadius: BorderRadius.circular(8),
       child: Container(
+        key: ValueKey('player-control-$label'),
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: primary ? AppColors.accent : const Color(0x8F242429),
+          color: primary ? palette.accent : _playerControlSurfaceColor(palette),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 18, color: Colors.white),
+            Icon(icon, size: 18, color: foreground),
             const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
+            MediaQuery.withClampedTextScaling(
+              maxScaleFactor: _playerControlMaxTextScale,
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           ],
@@ -406,20 +495,21 @@ class _PlayerBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Container(
       constraints: const BoxConstraints(maxWidth: 190),
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.accent.withValues(alpha: .2),
+        color: palette.accent.withValues(alpha: .2),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.accent.withValues(alpha: .35)),
+        border: Border.all(color: palette.accent.withValues(alpha: .35)),
       ),
       child: Text(
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: AppColors.accentBright,
+        style: TextStyle(
+          color: palette.accentBright,
           fontWeight: FontWeight.w800,
           fontSize: 11,
         ),

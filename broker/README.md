@@ -170,6 +170,12 @@ before broad public or app-store distribution.
 
 ## Private GitHub release updates
 
+This endpoint now serves only the in-app **Beta** channel. The default Public
+channel reads completed releases anonymously from the dedicated public
+`LindersOSX/TetoTV-Releases` repository and does not pass through this broker.
+Private Beta routes remain broker-only and require the access-hash environment
+configuration described below.
+
 The broker can publish a deliberately narrow view of the latest private
 TetoTV release without putting a GitHub credential in the APK. Add these
 server-side environment variables in Render:
@@ -177,6 +183,7 @@ server-side environment variables in Render:
 ```text
 GITHUB_RELEASE_TOKEN=<fine-grained token>
 GITHUB_RELEASE_REPOSITORY=LindersOSX/TetoTV
+BETA_ACCESS_KEY_SHA256_HASHES=<comma-separated lowercase SHA-256 hashes>
 ```
 
 Restrict the fine-grained token to only the TetoTV repository and grant only
@@ -185,10 +192,15 @@ deployment, `No expiration` is acceptable only while that one-repository,
 read-only scope remains enforced and there is a documented plan to revoke the
 token immediately if Render or GitHub access is compromised or no longer
 needed. Never pass this value as a Flutter build define, commit it to `.env`,
-or expose it in a client settings field. The broker health response reports
-only `app_updates: true` or `false`.
+or expose it in a client settings field.
 
-The Android app uses the following public broker contract and sends no GitHub
+Generate a separate 32-128 character opaque tester key, distribute it privately,
+and store only its lowercase SHA-256 hash in
+`BETA_ACCESS_KEY_SHA256_HASHES`. Multiple comma-separated hashes support
+individual revocation. The broker health response reports only
+`beta_updates_configured: true` or `false`; it never exposes keys or hashes.
+
+The Android app uses the following broker contract and sends no GitHub
 credential:
 
 ```text
@@ -196,6 +208,12 @@ GET /v1/app-updates/latest
 GET /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
 HEAD /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
 ```
+
+All three routes require `Authorization: Beta <opaque tester key>`. Anonymous,
+malformed, and invalid credentials receive no private release metadata or APK
+bytes and failed authentication is separately rate-limited. The app keeps the
+raw tester key only in Keystore-backed secure storage, never displays it after
+save, and sends it only to the fixed broker origin. Broker routes do not redirect.
 
 The metadata endpoint returns only the version, tag, title, release notes,
 publication time, and a single sanitized universal-APK descriptor. The

@@ -53,6 +53,17 @@ void main() {
         }),
         throwsFormatException,
       );
+      expect(
+        () => TorBoxDeviceSession.fromJson({
+          'device_code': 'device-secret',
+          'code': '123456',
+          'verification_url': 'https://torbox.app.attacker.test/link',
+          'friendly_verification_url': 'https://tor.box/link',
+          'expires_at': '2099-08-01T12:00:00Z',
+          'interval': 5,
+        }),
+        throwsFormatException,
+      );
     });
   });
 }

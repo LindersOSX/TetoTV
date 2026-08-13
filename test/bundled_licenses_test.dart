@@ -32,5 +32,10 @@ void main() {
     expect(javascriptNotices, contains('Package: linkedom 0.18.12'));
     expect(javascriptNotices, contains('Package: sucrase 3.35.0'));
     expect(javascriptNotices, contains('Package: boolbase 1.0.0'));
+    expect(byPackage['Noto Sans Regular'], contains('SIL OPEN FONT LICENSE'));
+    expect(
+      byPackage['Noto Sans Regular'],
+      contains('Copyright 2018 The Noto Project Authors'),
+    );
   });
 }

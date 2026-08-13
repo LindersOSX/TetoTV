@@ -44,7 +44,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.black,
+    backgroundColor: context.appPalette.background,
     body: SafeArea(
       minimum: context.responsiveScreenPadding,
       child: Column(
@@ -84,9 +84,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 }
                 final data = snapshot.data;
                 if (data == null) {
-                  return const Center(
+                  return Center(
                     child: CircularProgressIndicator(
-                      color: AppColors.accentBright,
+                      color: context.appPalette.accentBright,
                     ),
                   );
                 }
@@ -107,6 +107,7 @@ class _DiagnosticsBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final events = (data.database['diagnosticEvents'] as List? ?? const [])
         .whereType<Map>()
         .take(12)
@@ -157,25 +158,25 @@ class _DiagnosticsBody extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: AppColors.panel,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'RECENT REDACTED EVENTS',
                 style: TextStyle(
-                  color: AppColors.accentBright,
+                  color: palette.accentBright,
                   fontWeight: FontWeight.w900,
                   fontSize: 10,
                 ),
               ),
               const SizedBox(height: 8),
               if (events.isEmpty)
-                const Text(
+                Text(
                   'No recent playback or provider failures.',
-                  style: TextStyle(color: AppColors.textMuted),
+                  style: TextStyle(color: palette.mutedText),
                 )
               else
                 for (final event in events) ...[
@@ -191,10 +192,7 @@ class _DiagnosticsBody extends StatelessWidget {
                     '${event['message'] ?? ''}',
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 10,
-                    ),
+                    style: TextStyle(color: palette.mutedText, fontSize: 10),
                   ),
                   const Divider(height: 14),
                 ],
@@ -268,14 +266,16 @@ class _DiagnosticCard extends StatelessWidget {
     height: 112,
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.white.withValues(alpha: .07)),
+      border: Border.all(
+        color: context.appPalette.primaryText.withValues(alpha: .07),
+      ),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: AppColors.accentBright),
+        Icon(icon, color: context.appPalette.accentBright),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -283,7 +283,10 @@ class _DiagnosticCard extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: const TextStyle(color: AppColors.textMuted, fontSize: 9),
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
+                  fontSize: 9,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
@@ -297,7 +300,10 @@ class _DiagnosticCard extends StatelessWidget {
                 detail,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppColors.textMuted, fontSize: 9),
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
+                  fontSize: 9,
+                ),
               ),
             ],
           ),
@@ -323,28 +329,37 @@ class _DiagnosticsAction extends StatelessWidget {
   final bool autofocus;
 
   @override
-  Widget build(BuildContext context) => TvFocusable(
-    autofocus: autofocus,
-    onPressed: onPressed,
-    borderRadius: BorderRadius.circular(8),
-    child: Container(
-      height: 41,
-      padding: const EdgeInsets.symmetric(horizontal: 13),
-      decoration: BoxDecoration(
-        color: primary ? AppColors.accent : AppColors.selectableSurface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: .1)),
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final foreground = primary
+        ? contrastForeground(palette.accent)
+        : palette.primaryText;
+    return TvFocusable(
+      autofocus: autofocus,
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 41,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
+        decoration: BoxDecoration(
+          color: primary ? palette.accent : palette.selectableSurface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: palette.primaryText.withValues(alpha: .1)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: foreground),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: TextStyle(color: foreground, fontWeight: FontWeight.w900),
+            ),
+          ],
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18),
-          const SizedBox(width: 7),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _DiagnosticsViewData {

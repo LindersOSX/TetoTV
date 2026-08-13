@@ -4,6 +4,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter/material.dart';
 
@@ -162,16 +163,21 @@ Future<PlaybackStreamOption?> showPlayerStreamSourcePicker({
   required Uri selectedUri,
   required void Function(List<PlaybackStreamOption>) onOptionsChanged,
   PlayerSourceDiscovery? discover,
-}) => showDialog<PlaybackStreamOption>(
-  context: context,
-  barrierColor: const Color(0x99000000),
-  builder: (_) => PlayerStreamSourcePicker(
-    initialOptions: initialOptions,
-    selectedUri: selectedUri,
-    onOptionsChanged: onOptionsChanged,
-    discover: discover,
-  ),
-);
+}) {
+  final palette = context.appPalette;
+  return showDialog<PlaybackStreamOption>(
+    context: context,
+    barrierColor: palette.usesDefaultPlayerPalette
+        ? const Color(0x99000000)
+        : palette.background.withValues(alpha: .60),
+    builder: (_) => PlayerStreamSourcePicker(
+      initialOptions: initialOptions,
+      selectedUri: selectedUri,
+      onOptionsChanged: onOptionsChanged,
+      discover: discover,
+    ),
+  );
+}
 
 class PlayerStreamSourcePicker extends StatefulWidget {
   const PlayerStreamSourcePicker({
@@ -255,6 +261,7 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final selectedKey = widget.selectedUri.toString();
     final hasSelected = _options.any(
       (option) => option.stream.uri.toString() == selectedKey,
@@ -277,14 +284,20 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1040, maxHeight: 330),
           child: DecoratedBox(
+            key: const ValueKey('player-source-picker-panel'),
             decoration: BoxDecoration(
-              color: const Color(0xF5080808),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: AppColors.accent.withValues(alpha: .75),
+              color: palette.playerSurface(
+                defaultColor: const Color(0xF5080808),
               ),
-              boxShadow: const [
-                BoxShadow(color: Color(0x99000000), blurRadius: 22),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: palette.accent.withValues(alpha: .75)),
+              boxShadow: [
+                BoxShadow(
+                  color: palette.usesDefaultPlayerPalette
+                      ? const Color(0x99000000)
+                      : palette.background.withValues(alpha: .60),
+                  blurRadius: 22,
+                ),
               ],
             ),
             child: Padding(
@@ -295,9 +308,9 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                 children: [
                   Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.video_library_rounded,
-                        color: AppColors.accentBright,
+                        color: palette.accentBright,
                         size: 20,
                       ),
                       const SizedBox(width: 9),
@@ -315,8 +328,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                               key: const ValueKey('player-source-status'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: AppColors.textMuted,
+                              style: TextStyle(
+                                color: palette.mutedText,
                                 fontSize: 11,
                               ),
                             ),
@@ -387,10 +400,14 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                                       padding: const EdgeInsets.all(12),
                                       decoration: BoxDecoration(
                                         color: selected
-                                            ? AppColors.accent.withValues(
+                                            ? palette.accent.withValues(
                                                 alpha: .3,
                                               )
-                                            : const Color(0xFF171717),
+                                            : palette.playerSelectableSurface(
+                                                defaultColor: const Color(
+                                                  0xFF171717,
+                                                ),
+                                              ),
                                         borderRadius: BorderRadius.circular(9),
                                       ),
                                       child: Row(
@@ -402,8 +419,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                                                       .play_circle_outline_rounded,
                                             size: 19,
                                             color: selected
-                                                ? AppColors.accentBright
-                                                : AppColors.textMuted,
+                                                ? palette.accentBright
+                                                : palette.mutedText,
                                           ),
                                           const SizedBox(width: 9),
                                           Expanded(
@@ -429,8 +446,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                                                   maxLines: 2,
                                                   overflow:
                                                       TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    color: AppColors.textMuted,
+                                                  style: TextStyle(
+                                                    color: palette.mutedText,
                                                     fontSize: 10,
                                                   ),
                                                 ),

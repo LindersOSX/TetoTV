@@ -15,9 +15,12 @@ void main() {
       'videoMime': 'video/hevc',
       'model': 'AFTKRT',
       'audioLanguage': 'jpn',
+      'audioPreferenceSet': true,
       'subtitleLanguage': 'eng',
       'subtitlesEnabled': true,
       'subtitleSize': 42.0,
+      'subtitleBackgroundColor': 0xCC000000,
+      'highContrastSubtitles': true,
     });
 
     expect(result.failed, isTrue);
@@ -28,9 +31,12 @@ void main() {
     expect(result.diagnostics['videoMime'], 'video/hevc');
     expect(result.diagnostics['model'], 'AFTKRT');
     expect(result.audioLanguage, 'jpn');
+    expect(result.audioPreferenceSet, isTrue);
     expect(result.subtitleLanguage, 'eng');
     expect(result.subtitlesEnabled, isTrue);
     expect(result.subtitleSize, 42);
+    expect(result.subtitleBackgroundColor, 0xCC000000);
+    expect(result.highContrastSubtitles, isTrue);
   });
 
   test('native player exit is not treated as a decoder failure', () {
@@ -43,5 +49,14 @@ void main() {
 
     expect(result.failed, isFalse);
     expect(result.firstFrameRendered, isTrue);
+  });
+
+  test('normalizes signed Android caption colors to unsigned ARGB', () {
+    final result = NativePlaybackResult.fromMap(<Object?, Object?>{
+      'status': 'stopped',
+      'subtitleBackgroundColor': -1728053248,
+    });
+
+    expect(result.subtitleBackgroundColor, 0x99000000);
   });
 }

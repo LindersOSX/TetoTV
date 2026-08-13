@@ -6,6 +6,7 @@ import android.app.AlarmManager
 import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.ContentResolver
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -24,6 +25,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.speech.RecognitionListener
@@ -54,6 +56,7 @@ class MainActivity : FlutterActivity() {
     private var pendingApkInstallResult: MethodChannel.Result? = null
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
+    private var pendingLocalMediaResult: MethodChannel.Result? = null
     private var speechRecognizer: SpeechRecognizer? = null
     private lateinit var homeEasterEggAudio: HomeEasterEggAudio
     private val voiceSearchHandler = Handler(Looper.getMainLooper())
@@ -116,7 +119,8 @@ class MainActivity : FlutterActivity() {
                     "inspectApk" -> result.success(inspectApk(call.argument<String>("path")))
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
-                    "clearAppCache" -> result.success(clearAppCache())
+                    "pickLocalVideo" -> pickLocalVideo(result)
+                    "clearAppCache" -> clearAppCacheAsync(result)
                     "playHomeEasterEgg" -> {
                         homeEasterEggAudio.play(
                             call.argument<Number>("maximumDurationMs")?.toLong()
@@ -210,6 +214,88 @@ class MainActivity : FlutterActivity() {
             Configuration.UI_MODE_TYPE_TELEVISION
 
     /**
+     * Lets Android's Storage Access Framework expose only the video selected
+     * by the viewer. This covers internal storage and transient USB document
+     * providers without broad storage permissions or raw filesystem paths.
+     */
+    private fun pickLocalVideo(result: MethodChannel.Result) {
+        if (pendingLocalMediaResult != null) {
+            result.error(
+                "LOCAL_MEDIA_PICKER_BUSY",
+                "A local-media picker is already open.",
+                null,
+            )
+            return
+        }
+        val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    "video/*",
+                    "application/x-matroska",
+                    "application/vnd.apple.mpegurl",
+                ),
+            )
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+            )
+        }
+        pendingLocalMediaResult = result
+        try {
+            startActivityForResult(picker, LOCAL_MEDIA_PICKER_REQUEST_CODE)
+        } catch (error: ActivityNotFoundException) {
+            pendingLocalMediaResult = null
+            result.error(
+                "LOCAL_MEDIA_PICKER_UNAVAILABLE",
+                "This device does not provide a compatible file picker.",
+                null,
+            )
+        } catch (error: Throwable) {
+            pendingLocalMediaResult = null
+            result.error("LOCAL_MEDIA_PICKER", error.message, null)
+        }
+    }
+
+    private fun localMediaMetadata(
+        uri: Uri,
+        persistedReadPermission: Boolean,
+    ): Map<String, Any?> {
+        require(uri.scheme == ContentResolver.SCHEME_CONTENT) {
+            "Android returned an unsupported local-media URI."
+        }
+        var displayName: String? = null
+        var size: Long? = null
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                    displayName = cursor.getString(nameIndex)?.take(300)
+                }
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                }
+            }
+        }
+        return mapOf(
+            "uri" to uri.toString(),
+            "name" to displayName.orEmpty().ifBlank { "Local video" },
+            "mimeType" to contentResolver.getType(uri),
+            "size" to size,
+            "persistedReadPermission" to persistedReadPermission,
+        )
+    }
+
+    /**
      * Remove only Android-designated cache roots. Persistent application files
      * (databases, encrypted credentials, preferences, sources, and history)
      * are deliberately outside these roots and must never be traversed here.
@@ -223,6 +309,27 @@ class MainActivity : FlutterActivity() {
             }
         }
         return AppStoragePolicy.clearCacheRoots(cacheRoots)
+    }
+
+    private fun clearAppCacheAsync(result: MethodChannel.Result) {
+        Thread(
+            {
+                val outcome = runCatching(::clearAppCache)
+                runOnUiThread {
+                    outcome.onSuccess(result::success).onFailure { error ->
+                        result.error(
+                            "CACHE_CLEAR_FAILED",
+                            "TetoTV could not clear its cache.",
+                            error.message,
+                        )
+                    }
+                }
+            },
+            "TetoTV-cache-cleaner",
+        ).apply {
+            isDaemon = true
+            start()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -311,6 +418,17 @@ class MainActivity : FlutterActivity() {
                 Media3PlayerActivity.EXTRA_SUBTITLE_BACKGROUND_COLOR,
                 (data["subtitleBackgroundColor"] as? Number)?.toInt() ?: Color.TRANSPARENT,
             )
+            listOf(
+                "themeBackgroundColor",
+                "themeSurfaceColor",
+                "themeAccentColor",
+                "themeAccentBrightColor",
+                "themeFocusColor",
+                "themePrimaryTextColor",
+                "themeMutedTextColor",
+            ).forEach { key ->
+                (data[key] as? Number)?.toInt()?.let { color -> putExtra(key, color) }
+            }
             putExtra(
                 Media3PlayerActivity.EXTRA_SEEK_BACK_MS,
                 mediaSeekBackIncrementMs,
@@ -341,6 +459,10 @@ class MainActivity : FlutterActivity() {
                 data["hasDirectSources"] as? Boolean ?: false,
             )
             putExtra(
+                Media3PlayerActivity.EXTRA_TRUSTED_LOCAL_SOURCE,
+                data["trustedLocalSource"] as? Boolean ?: false,
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,
                 data["startFromBeginning"] as? Boolean ?: false,
             )
@@ -365,6 +487,73 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == LOCAL_MEDIA_PICKER_REQUEST_CODE) {
+            val pending = pendingLocalMediaResult
+            pendingLocalMediaResult = null
+            if (pending == null) return
+            val uri = data?.data
+            if (resultCode != RESULT_OK || uri == null) {
+                pending.success(null)
+                return
+            }
+            if (
+                uri.scheme != ContentResolver.SCHEME_CONTENT ||
+                uri.authority.isNullOrBlank() ||
+                uri.userInfo != null ||
+                uri.fragment != null
+            ) {
+                pending.error(
+                    "LOCAL_MEDIA_URI",
+                    "Android returned an unsupported local-media URI.",
+                    null,
+                )
+                return
+            }
+            val hasReadGrant =
+                data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0
+            val metadata = runCatching {
+                localMediaMetadata(uri, persistedReadPermission = false)
+            }.getOrElse { error ->
+                pending.error(
+                    "LOCAL_MEDIA_METADATA",
+                    "The selected video could not be read.",
+                    error.message,
+                )
+                return
+            }
+            val grantPersisted = hasReadGrant && runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }.isSuccess
+            val persistedReadPermission = grantPersisted ||
+                runCatching {
+                    contentResolver.persistedUriPermissions.any {
+                        it.uri == uri && it.isReadPermission
+                    }
+                }.getOrDefault(false)
+            if (persistedReadPermission) {
+                runCatching {
+                    contentResolver.persistedUriPermissions
+                        .filter { permission ->
+                            permission.isReadPermission && permission.uri != uri
+                        }
+                        .forEach { permission ->
+                            runCatching {
+                                contentResolver.releasePersistableUriPermission(
+                                    permission.uri,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                                )
+                            }
+                        }
+                }
+            }
+            pending.success(
+                metadata + ("persistedReadPermission" to persistedReadPermission),
+            )
+            return
+        }
         if (requestCode == VOICE_SEARCH_REQUEST_CODE) {
             val pending = pendingVoiceSearchResult
             pendingVoiceSearchResult = null
@@ -464,8 +653,23 @@ class MainActivity : FlutterActivity() {
                         data.getIntExtra(Media3PlayerActivity.RESULT_DROPPED_FRAMES, 0),
                     Media3PlayerActivity.RESULT_SUBTITLE_SIZE to
                         data.getFloatExtra(Media3PlayerActivity.RESULT_SUBTITLE_SIZE, 34f),
+                    Media3PlayerActivity.RESULT_SUBTITLE_BACKGROUND_COLOR to
+                        data.getIntExtra(
+                            Media3PlayerActivity.RESULT_SUBTITLE_BACKGROUND_COLOR,
+                            Color.TRANSPARENT,
+                        ),
+                    Media3PlayerActivity.RESULT_HIGH_CONTRAST_SUBTITLES to
+                        data.getBooleanExtra(
+                            Media3PlayerActivity.RESULT_HIGH_CONTRAST_SUBTITLES,
+                            false,
+                        ),
                     Media3PlayerActivity.RESULT_AUDIO_LANGUAGE to
                         data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_LANGUAGE),
+                    Media3PlayerActivity.RESULT_AUDIO_PREFERENCE_SET to
+                        data.getBooleanExtra(
+                            Media3PlayerActivity.RESULT_AUDIO_PREFERENCE_SET,
+                            false,
+                        ),
                     Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE to
                         data.getStringExtra(Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE),
                     Media3PlayerActivity.RESULT_SUBTITLES_ENABLED to
@@ -757,6 +961,8 @@ class MainActivity : FlutterActivity() {
         val installed = packageManager.getPackageInfo(packageName, flags)
         val archiveVersion = packageVersionCode(archive)
         val installedVersion = packageVersionCode(installed)
+        val archiveVersionName = archive.versionName.orEmpty()
+        val installedVersionName = installed.versionName.orEmpty()
         val minSdk = archive.applicationInfo?.minSdkVersion ?: 1
         val archiveAbis = runCatching {
             ZipFile(file).use { zip ->
@@ -778,9 +984,12 @@ class MainActivity : FlutterActivity() {
         if (archive.packageName != packageName) {
             issues.add("The APK belongs to ${archive.packageName}, not TetoTV.")
         }
-        if (archiveVersion <= installedVersion) {
+        if (
+            archiveVersion < installedVersion ||
+            (archiveVersion == installedVersion && archiveVersionName == installedVersionName)
+        ) {
             issues.add(
-                "The APK build ($archiveVersion) is not newer than the installed build ($installedVersion).",
+                "The APK build ($archiveVersion) is not a newer build or a signed channel counterpart of the installed build ($installedVersion).",
             )
         }
         if (!signerMatches) {
@@ -807,6 +1016,7 @@ class MainActivity : FlutterActivity() {
             "issues" to issues,
             "packageName" to archive.packageName,
             "versionCode" to archiveVersion,
+            "versionName" to archiveVersionName,
             "minSdk" to minSdk,
             "archiveAbis" to archiveAbis,
             "deviceAbis" to deviceAbis,
@@ -1185,6 +1395,12 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        pendingLocalMediaResult?.error(
+            "LOCAL_MEDIA_PICKER_DESTROYED",
+            "The Android TV activity closed before a video was selected.",
+            null,
+        )
+        pendingLocalMediaResult = null
         pendingNativePlayerResult?.error(
             "NATIVE_PLAYER_DESTROYED",
             "The Android TV activity closed before native playback returned.",
@@ -1218,6 +1434,7 @@ class MainActivity : FlutterActivity() {
         private const val APK_INSTALL_PERMISSION_REQUEST_CODE = 7315
         private const val VOICE_SEARCH_REQUEST_CODE = 7316
         private const val VOICE_SEARCH_PERMISSION_REQUEST_CODE = 7317
+        private const val LOCAL_MEDIA_PICKER_REQUEST_CODE = 7318
         private const val VOICE_SEARCH_TIMEOUT_MS = 20_000L
         private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
         private const val MIN_SEEK_INCREMENT_MS = 5_000L

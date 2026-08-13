@@ -1,9 +1,11 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
@@ -15,6 +17,7 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
@@ -54,6 +57,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _webStreamsFocus = FocusNode(debugLabel: 'accounts.streaming.web');
   final _marketplaceFocus = FocusNode(
     debugLabel: 'accounts.streaming.marketplace',
+  );
+  final _localMediaFocus = FocusNode(
+    debugLabel: 'accounts.streaming.local-media',
   );
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
@@ -97,7 +103,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.updates.automatic',
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
+  final _updateChannelFocus = FocusNode(debugLabel: 'accounts.updates.channel');
+  final _betaAccessFocus = FocusNode(
+    debugLabel: 'accounts.updates.beta-access',
+  );
+  final _betaAccessClearFocus = FocusNode(
+    debugLabel: 'accounts.updates.beta-access-clear',
+  );
   final _discordFocus = FocusNode(debugLabel: 'accounts.system.discord');
+  final _discordQrFocus = FocusNode(debugLabel: 'accounts.system.discord-qr');
   final _discordPresenceFocus = FocusNode(
     debugLabel: 'accounts.system.discord-presence',
   );
@@ -105,6 +119,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     debugLabel: 'accounts.system.discord-unlink',
   );
   final _donateFocus = FocusNode(debugLabel: 'accounts.system.donate');
+  final _donationQrFocus = FocusNode(debugLabel: 'accounts.system.donation-qr');
   final _clearCacheFocus = FocusNode(debugLabel: 'accounts.system.clear-cache');
   final _resetAppFocus = FocusNode(debugLabel: 'accounts.system.reset-app');
   final _privacyFocus = FocusNode(debugLabel: 'accounts.system.privacy');
@@ -117,6 +132,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     for (final shelf in HomeShelf.values)
       shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
   };
+  int _systemActivationCount = 0;
 
   @override
   void dispose() {
@@ -131,6 +147,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _debridStreamsFocus.dispose();
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
+    _localMediaFocus.dispose();
     _customizationFocus.dispose();
     _setupFocus.dispose();
     _calibrationFocus.dispose();
@@ -155,10 +172,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _malSaveFocus.dispose();
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
+    _updateChannelFocus.dispose();
+    _betaAccessFocus.dispose();
+    _betaAccessClearFocus.dispose();
     _discordFocus.dispose();
+    _discordQrFocus.dispose();
     _discordPresenceFocus.dispose();
     _discordDisconnectFocus.dispose();
     _donateFocus.dispose();
+    _donationQrFocus.dispose();
     _clearCacheFocus.dispose();
     _resetAppFocus.dispose();
     _privacyFocus.dispose();
@@ -170,6 +192,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       node.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _setOrReplaceBetaAccessKey() async {
+    final value = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const TvKeyboardDialog(
+        title: 'Enter private Beta access key',
+        initialValue: '',
+        obscureText: true,
+      ),
+    );
+    if (!mounted || value == null) return;
+    await ref
+        .read(appUpdateControllerProvider.notifier)
+        .setBetaAccessKey(value);
   }
 
   KeyEventResult _handleKey(FocusNode _, KeyEvent event) {
@@ -296,9 +334,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _marketplaceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
+    } else if (current == _localMediaFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _marketplaceFocus;
       // Streaming is the end of this tab. Keep focus here instead of pointing
-      // at a tracking control which is not mounted while this tab is active.
-      if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
+      // at a control which is not mounted while this tab is active.
+      if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
     } else if (current == _trackingProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.tracking];
@@ -386,28 +427,54 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _automaticUpdatesFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _discordPresenceFocus;
+        target = ref.read(appUpdateControllerProvider).developerMode
+            ? _updateChannelFocus
+            : _discordPresenceFocus;
       }
-    } else if (current == _discordPresenceFocus) {
+    } else if (current == _updateChannelFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _betaAccessFocus;
+    } else if (current == _betaAccessFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _updateChannelFocus;
+      if (key == LogicalKeyboardKey.arrowRight &&
+          ref.read(appUpdateControllerProvider).hasBetaAccessKey) {
+        target = _betaAccessClearFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
+    } else if (current == _betaAccessClearFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _updateChannelFocus;
+      if (key == LogicalKeyboardKey.arrowLeft) target = _betaAccessFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
+    } else if (current == _discordPresenceFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = ref.read(appUpdateControllerProvider).developerMode
+            ? _betaAccessFocus
+            : _checkUpdatesFocus;
+      }
       if (key == LogicalKeyboardKey.arrowRight &&
           _discordDisconnectFocus.context != null) {
         target = _discordDisconnectFocus;
       }
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordQrFocus;
     } else if (current == _discordDisconnectFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) target = _discordPresenceFocus;
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
-    } else if (current == _discordFocus) {
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordQrFocus;
+    } else if (current == _discordQrFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _discordDisconnectFocus.context != null
             ? _discordDisconnectFocus
             : _discordPresenceFocus;
       }
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordFocus;
+    } else if (current == _discordFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordQrFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _donationQrFocus;
+    } else if (current == _donationQrFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _donateFocus;
     } else if (current == _donateFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _discordFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _donationQrFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _clearCacheFocus;
     } else if (current == _clearCacheFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
@@ -455,6 +522,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     return KeyEventResult.handled;
   }
 
+  Future<void> _selectSettingsArea(_SettingsArea area) async {
+    setState(() => _activeArea = area);
+    final updateState = ref.read(appUpdateControllerProvider);
+    if (updateState.developerMode) return;
+    if (area != _SettingsArea.system) {
+      _systemActivationCount = 0;
+      return;
+    }
+    _systemActivationCount += 1;
+    if (_systemActivationCount < 10) return;
+    _systemActivationCount = 0;
+    await ref.read(appUpdateControllerProvider.notifier).enableDeveloperMode();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Developer mode enabled. You can now choose Public or Beta updates.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final debrid = ref.watch(realDebridSettingsControllerProvider);
@@ -470,7 +559,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final preferences = ref.watch(settingsPreferencesProvider);
     final isTelevision = ref.watch(isTelevisionProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: _settingsPageBackground(context),
       resizeToAvoidBottomInset: true,
       body: SafeArea(
         minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
@@ -504,10 +593,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                 style: Theme.of(context).textTheme.titleLarge,
                               ),
                             ),
-                            const Icon(
+                            Icon(
                               Icons.lock_rounded,
                               size: 18,
-                              color: AppColors.cyan,
+                              color: context.appPalette.secondaryAccent,
                             ),
                           ],
                         ),
@@ -550,12 +639,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         },
                       ),
                       const SizedBox(width: 12),
-                      const Tooltip(
+                      Tooltip(
                         message: 'Secrets stay encrypted on this device',
                         child: Icon(
                           Icons.lock_rounded,
                           size: 18,
-                          color: AppColors.cyan,
+                          color: context.appPalette.secondaryAccent,
                         ),
                       ),
                       if (showSecurityLabel) ...[
@@ -573,7 +662,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               _SettingsAreaTabs(
                 selected: _activeArea,
                 focusNodes: _areaFocusNodes,
-                onSelected: (area) => setState(() => _activeArea = area),
+                onSelected: _selectSettingsArea,
               ),
               const SizedBox(height: 12),
               Expanded(
@@ -611,6 +700,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           settingsPreferencesProvider.notifier,
                         ),
                         firstFocusNode: _customizationFocus,
+                        onOpenThemeStudio: () =>
+                            context.push(ThemeStudioScreen.routePath),
                         onReset: () async {
                           final controller = ref.read(
                             settingsPreferencesProvider.notifier,
@@ -701,7 +792,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         DebridService.allDebrid => _ApiKeyDebridPanel(
                           title: 'AllDebrid',
                           icon: Icons.cloud_sync_rounded,
-                          gradient: const [AppColors.accent, AppColors.cyan],
+                          gradient: [
+                            context.appPalette.accent,
+                            context.appPalette.secondaryAccent,
+                          ],
                           connected: allDebrid.account != null,
                           hasSavedToken: allDebrid.hasSavedToken,
                           connectedLabel: 'PREMIUM',
@@ -746,9 +840,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         DebridService.premiumize => _ApiKeyDebridPanel(
                           title: 'Premiumize',
                           icon: Icons.cloud_queue_rounded,
-                          gradient: const [
-                            AppColors.cyan,
-                            AppColors.accentBright,
+                          gradient: [
+                            context.appPalette.secondaryAccent,
+                            context.appPalette.accentBright,
                           ],
                           connected: premiumize.account != null,
                           hasSavedToken: premiumize.hasSavedToken,
@@ -815,6 +909,44 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         onMarketplace: () =>
                             context.push('/settings/marketplace'),
                       ),
+                      const SizedBox(height: 8),
+                      _Panel(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Local media, Jellyfin & Plex',
+                                    style: TextStyle(
+                                      color: context.appPalette.primaryText,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    'Play from USB/internal storage, Jellyfin, or Plex.',
+                                    style: TextStyle(
+                                      color: context.appPalette.mutedText,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            _TvTextButton(
+                              label: 'Open media',
+                              icon: Icons.video_library_rounded,
+                              focusNode: _localMediaFocus,
+                              onPressed: () =>
+                                  context.push('/settings/local-media'),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 14),
                       const _DebridOnlyPanel(),
                       const SizedBox(height: 10),
@@ -850,7 +982,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         color:
                             preferences.trackingProvider ==
                                 TrackingProvider.anilist
-                            ? AppColors.accentBright
+                            ? context.appPalette.accentBright
                             : const Color(0xFFB41F3D),
                         description:
                             preferences.trackingProvider ==
@@ -912,11 +1044,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             .setTrackerUpdateThreshold,
                       ),
                       const SizedBox(height: 5),
-                      const Text(
+                      Text(
                         'Trackers store whole completed episodes, so the '
                         'selected percentage marks the current episode watched.',
                         style: TextStyle(
-                          color: AppColors.textMuted,
+                          color: context.appPalette.mutedText,
                           fontSize: 11,
                         ),
                       ),
@@ -968,7 +1100,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         icon: Icons.system_update_alt_rounded,
                         title: 'APP UPDATES',
                         subtitle:
-                            'Secure public releases download directly to this device.',
+                            'Stable public releases download directly to this device.',
                       ),
                       const SizedBox(height: 8),
                       _AppUpdatePanel(
@@ -989,6 +1121,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           }
                         },
                       ),
+                      if (appUpdate.developerMode) ...[
+                        const SizedBox(height: 8),
+                        _DeveloperUpdatePanel(
+                          state: appUpdate,
+                          channelFocusNode: _updateChannelFocus,
+                          betaAccessFocusNode: _betaAccessFocus,
+                          betaAccessClearFocusNode: _betaAccessClearFocus,
+                          onChannelSelected: ref
+                              .read(appUpdateControllerProvider.notifier)
+                              .setUpdateChannel,
+                          onSetBetaAccessKey: _setOrReplaceBetaAccessKey,
+                          onClearBetaAccessKey: ref
+                              .read(appUpdateControllerProvider.notifier)
+                              .clearBetaAccessKey,
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.sports_esports_rounded,
@@ -1030,9 +1178,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             'Join the TetoTV Discord for announcements, support, and feature requests.',
                       ),
                       const SizedBox(height: 8),
-                      _DiscordCommunityPanel(focusNode: _discordFocus),
+                      _DiscordCommunityPanel(
+                        qrFocusNode: _discordQrFocus,
+                        focusNode: _discordFocus,
+                      ),
                       const SizedBox(height: 8),
-                      _DonationPanel(focusNode: _donateFocus),
+                      _DonationPanel(
+                        qrFocusNode: _donationQrFocus,
+                        focusNode: _donateFocus,
+                      ),
                       const SizedBox(height: 12),
                       const _SectionHeader(
                         icon: Icons.storage_rounded,
@@ -1102,12 +1256,14 @@ class _SettingsAreaTabs extends StatelessWidget {
             vertical: compact ? 5 : 0,
           ),
           decoration: BoxDecoration(
-            color: active ? AppColors.accent : AppColors.panel,
+            color: active
+                ? context.appPalette.accent
+                : context.appPalette.surface,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: active
-                  ? AppColors.accentBright
-                  : Colors.white.withValues(alpha: .08),
+                  ? context.appPalette.accentBright
+                  : _settingsBorderColor(context, .08),
             ),
           ),
           child: compact
@@ -1117,7 +1273,9 @@ class _SettingsAreaTabs extends StatelessWidget {
                     Icon(
                       icon,
                       size: 18,
-                      color: active ? Colors.white : AppColors.textPrimary,
+                      color: active
+                          ? _settingsAccentForeground(context)
+                          : context.appPalette.primaryText,
                     ),
                     const SizedBox(height: 2),
                     FittedBox(
@@ -1126,7 +1284,9 @@ class _SettingsAreaTabs extends StatelessWidget {
                         label,
                         maxLines: 1,
                         style: TextStyle(
-                          color: active ? Colors.white : AppColors.textPrimary,
+                          color: active
+                              ? _settingsAccentForeground(context)
+                              : context.appPalette.primaryText,
                           fontSize: 10,
                           fontWeight: FontWeight.w900,
                         ),
@@ -1140,13 +1300,17 @@ class _SettingsAreaTabs extends StatelessWidget {
                     Icon(
                       icon,
                       size: 19,
-                      color: active ? Colors.white : AppColors.textPrimary,
+                      color: active
+                          ? _settingsAccentForeground(context)
+                          : context.appPalette.primaryText,
                     ),
                     const SizedBox(width: 8),
                     Text(
                       label,
                       style: TextStyle(
-                        color: active ? Colors.white : AppColors.textPrimary,
+                        color: active
+                            ? _settingsAccentForeground(context)
+                            : context.appPalette.primaryText,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -1231,10 +1395,10 @@ class _SettingsSelection<T> extends StatelessWidget {
               width: 560,
               padding: const EdgeInsets.all(22),
               decoration: BoxDecoration(
-                color: AppColors.panel,
+                color: context.appPalette.surface,
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: AppColors.accent.withValues(alpha: .7),
+                  color: context.appPalette.accent.withValues(alpha: .7),
                 ),
               ),
               child: ConstrainedBox(
@@ -1267,8 +1431,10 @@ class _SettingsSelection<T> extends StatelessWidget {
                               ),
                               decoration: BoxDecoration(
                                 color: option.value == value
-                                    ? AppColors.accent.withValues(alpha: .28)
-                                    : AppColors.panelRaised,
+                                    ? context.appPalette.accent.withValues(
+                                        alpha: .28,
+                                      )
+                                    : context.appPalette.surfaceRaised,
                                 borderRadius: BorderRadius.circular(9),
                               ),
                               child: Row(
@@ -1278,8 +1444,8 @@ class _SettingsSelection<T> extends StatelessWidget {
                                         ? Icons.radio_button_checked_rounded
                                         : Icons.radio_button_off_rounded,
                                     color: option.value == value
-                                        ? AppColors.accentBright
-                                        : AppColors.textMuted,
+                                        ? context.appPalette.accentBright
+                                        : context.appPalette.mutedText,
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
@@ -1289,16 +1455,18 @@ class _SettingsSelection<T> extends StatelessWidget {
                                       children: [
                                         Text(
                                           option.label,
-                                          style: const TextStyle(
-                                            color: Colors.white,
+                                          style: TextStyle(
+                                            color: _settingsPrimaryText(
+                                              context,
+                                            ),
                                             fontWeight: FontWeight.w900,
                                           ),
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
                                           option.detail,
-                                          style: const TextStyle(
-                                            color: AppColors.textMuted,
+                                          style: TextStyle(
+                                            color: context.appPalette.mutedText,
                                             fontSize: 11,
                                           ),
                                         ),
@@ -1325,9 +1493,9 @@ class _SettingsSelection<T> extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: AppColors.panel,
+          color: context.appPalette.surface,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.white.withValues(alpha: .1)),
+          border: Border.all(color: _settingsBorderColor(context, .1)),
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -1337,8 +1505,8 @@ class _SettingsSelection<T> extends StatelessWidget {
               children: [
                 Text(
                   selected.label,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: _settingsPrimaryText(context),
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -1346,8 +1514,8 @@ class _SettingsSelection<T> extends StatelessWidget {
                   selected.detail,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
                     fontSize: 10,
                   ),
                 ),
@@ -1362,8 +1530,8 @@ class _SettingsSelection<T> extends StatelessWidget {
                       children: [
                         Text(
                           label,
-                          style: const TextStyle(
-                            color: AppColors.textMuted,
+                          style: TextStyle(
+                            color: context.appPalette.mutedText,
                             fontSize: 10,
                             fontWeight: FontWeight.w800,
                           ),
@@ -1373,9 +1541,9 @@ class _SettingsSelection<T> extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Icon(
+                  Icon(
                     Icons.expand_more_rounded,
-                    color: AppColors.accentBright,
+                    color: context.appPalette.accentBright,
                   ),
                 ],
               );
@@ -1386,8 +1554,8 @@ class _SettingsSelection<T> extends StatelessWidget {
                   width: 180,
                   child: Text(
                     label,
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
                       fontSize: 12,
                       fontWeight: FontWeight.w800,
                     ),
@@ -1395,9 +1563,9 @@ class _SettingsSelection<T> extends StatelessWidget {
                 ),
                 Expanded(child: value),
                 const SizedBox(width: 12),
-                const Icon(
+                Icon(
                   Icons.expand_more_rounded,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
               ],
             );
@@ -1413,12 +1581,14 @@ class _CustomizationPanel extends StatelessWidget {
     required this.preferences,
     required this.controller,
     required this.firstFocusNode,
+    required this.onOpenThemeStudio,
     required this.onReset,
   });
 
   final SettingsPreferences preferences;
   final SettingsPreferencesController controller;
   final FocusNode firstFocusNode;
+  final VoidCallback onOpenThemeStudio;
   final VoidCallback onReset;
 
   @override
@@ -1441,8 +1611,17 @@ class _CustomizationPanel extends StatelessWidget {
         children: [
           const _MiniSectionLabel('DISPLAY'),
           const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _TvTextButton(
+              label: 'Open Theme Studio',
+              icon: Icons.palette_rounded,
+              focusNode: firstFocusNode,
+              onPressed: onOpenThemeStudio,
+            ),
+          ),
+          const SizedBox(height: 8),
           _SettingsSelection<InterfaceMode>(
-            focusNode: firstFocusNode,
             label: 'Screen layout',
             value: preferences.interfaceMode,
             options: [
@@ -1620,14 +1799,14 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
-          const Padding(
-            padding: EdgeInsets.only(top: 2, bottom: 4),
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 4),
             child: Text(
               'Shares only whether this app session is active or playing. '
               'TetoTV never sends the show, episode, account, device ID, '
               'stream provider, or URL.',
               style: TextStyle(
-                color: AppColors.textMuted,
+                color: context.appPalette.mutedText,
                 fontSize: 10,
                 height: 1.35,
               ),
@@ -1643,15 +1822,15 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
-          const Padding(
-            padding: EdgeInsets.only(top: 2, bottom: 4),
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 4),
             child: Text(
               'Off by default. Sends only the app/build, error type and time, '
               'Android version, CPU architecture, device class, and a '
               'redacted technical trace. No show, episode, '
               'account, device ID, source, or URL is sent.',
               style: TextStyle(
-                color: AppColors.textMuted,
+                color: context.appPalette.mutedText,
                 fontSize: 10,
                 height: 1.35,
               ),
@@ -1718,6 +1897,21 @@ class _CustomizationPanel extends StatelessWidget {
             ],
             onSelected: controller.setPreferredPlayer,
           ),
+          const SizedBox(height: 8),
+          _SettingsSelection<PlaybackAudioPreference>(
+            label: 'Preferred audio',
+            value: preferences.preferredAudio,
+            options: [
+              for (final preference in PlaybackAudioPreference.values)
+                _SettingsOption(
+                  value: preference,
+                  label: preference.displayName,
+                  detail: preference.description,
+                ),
+            ],
+            onSelected: controller.setPreferredAudio,
+          ),
+          const SizedBox(height: 8),
           _PreferenceRow(
             label: 'Rewind',
             children: [
@@ -1778,8 +1972,8 @@ class _MiniSectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
     label,
-    style: const TextStyle(
-      color: AppColors.accentBright,
+    style: TextStyle(
+      color: context.appPalette.accentBright,
       fontSize: 9,
       fontWeight: FontWeight.w900,
       letterSpacing: 1.1,
@@ -1793,7 +1987,7 @@ class _PreferenceDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 10),
-    child: Divider(color: Colors.white.withValues(alpha: .07), height: 1),
+    child: Divider(color: _settingsBorderColor(context, .07), height: 1),
   );
 }
 
@@ -1822,9 +2016,9 @@ class _StreamingSourcesPanel extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF101010),
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: .07)),
+        border: Border.all(color: _settingsBorderColor(context, .07)),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -1891,8 +2085,8 @@ class _PreferenceRow extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
                   ),
@@ -1908,8 +2102,8 @@ class _PreferenceRow extends StatelessWidget {
                 width: 180,
                 child: Text(
                   label,
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
                   ),
@@ -1950,12 +2144,14 @@ class _PreferenceChip extends StatelessWidget {
         height: 31,
         padding: const EdgeInsets.symmetric(horizontal: 11),
         decoration: BoxDecoration(
-          color: selected ? AppColors.accent : AppColors.panelRaised,
+          color: selected
+              ? context.appPalette.accent
+              : context.appPalette.surfaceRaised,
           borderRadius: BorderRadius.circular(7),
           border: Border.all(
             color: selected
-                ? AppColors.accentBright
-                : Colors.white.withValues(alpha: .1),
+                ? context.appPalette.accentBright
+                : _settingsBorderColor(context, .1),
           ),
         ),
         child: Row(
@@ -1968,21 +2164,195 @@ class _PreferenceChip extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: color,
                   borderRadius: BorderRadius.circular(3),
-                  border: Border.all(color: Colors.white54),
+                  border: Border.all(color: _settingsBorderColor(context, .54)),
                 ),
               ),
               const SizedBox(width: 6),
             ],
             Text(
               label,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: selected
+                    ? _settingsAccentForeground(context)
+                    : _settingsPrimaryText(context),
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _DeveloperUpdatePanel extends StatelessWidget {
+  const _DeveloperUpdatePanel({
+    required this.state,
+    required this.channelFocusNode,
+    required this.betaAccessFocusNode,
+    required this.betaAccessClearFocusNode,
+    required this.onChannelSelected,
+    required this.onSetBetaAccessKey,
+    required this.onClearBetaAccessKey,
+  });
+
+  final AppUpdateState state;
+  final FocusNode channelFocusNode;
+  final FocusNode betaAccessFocusNode;
+  final FocusNode betaAccessClearFocusNode;
+  final ValueChanged<AppUpdateChannel> onChannelSelected;
+  final VoidCallback onSetBetaAccessKey;
+  final VoidCallback onClearBetaAccessKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = normalizeAppVersion(state.currentVersion);
+    final versionParts = normalized.split('+');
+    final versionName = versionParts.first;
+    final buildNumber = versionParts.length > 1
+        ? versionParts.sublist(1).join('+')
+        : 'Not reported';
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.developer_mode_rounded,
+                color: context.appPalette.accentBright,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Developer mode',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Text(
+                      'Preview builds may be less stable than public releases.',
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const _StatusPill(connected: true, label: 'ENABLED'),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _SettingsSelection<AppUpdateChannel>(
+            label: 'Update channel',
+            value: state.updateChannel,
+            focusNode: channelFocusNode,
+            options: [
+              for (final channel in AppUpdateChannel.values)
+                _SettingsOption(
+                  value: channel,
+                  label: channel.displayName,
+                  detail: channel.description,
+                ),
+            ],
+            onSelected: onChannelSelected,
+          ),
+          const SizedBox(height: 10),
+          Divider(color: _settingsBorderColor(context, .08), height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Private Beta access',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      state.hasBetaAccessKey
+                          ? 'A tester key is stored securely. Its value is never displayed.'
+                          : 'A tester key is required before the private Beta channel can be selected.',
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _StatusPill(
+                connected: state.hasBetaAccessKey,
+                label: state.hasBetaAccessKey ? 'KEY SAVED' : 'KEY REQUIRED',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: [
+                _TvTextButton(
+                  key: const ValueKey('beta-access-set'),
+                  label: state.hasBetaAccessKey
+                      ? 'Replace Beta key'
+                      : 'Set Beta key',
+                  icon: Icons.key_rounded,
+                  focusNode: betaAccessFocusNode,
+                  onPressed: state.isBusy ? null : onSetBetaAccessKey,
+                ),
+                _TvTextButton(
+                  key: const ValueKey('beta-access-clear'),
+                  label: 'Clear Beta key',
+                  icon: Icons.key_off_rounded,
+                  focusNode: betaAccessClearFocusNode,
+                  onPressed: state.isBusy || !state.hasBetaAccessKey
+                      ? null
+                      : onClearBetaAccessKey,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 18,
+            runSpacing: 6,
+            children: [
+              Text(
+                'Installed version: $versionName',
+                style: TextStyle(
+                  color: context.appPalette.primaryText,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                'Build: $buildNumber',
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
+                  fontSize: 11,
+                ),
+              ),
+              if (state.latestVersion case final latest?)
+                Text(
+                  'Latest ${state.updateChannel.displayName}: '
+                  '${state.updateChannel.versionLabel(latest)}',
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
+                    fontSize: 11,
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -2028,12 +2398,12 @@ class _AppUpdatePanel extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: .18),
+                  color: context.appPalette.accent.withValues(alpha: .18),
                   borderRadius: BorderRadius.circular(9),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.system_update_rounded,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
               ),
               const SizedBox(width: 12),
@@ -2075,7 +2445,7 @@ class _AppUpdatePanel extends StatelessWidget {
             style: TextStyle(
               color: state.phase == AppUpdatePhase.error
                   ? const Color(0xFFFF929B)
-                  : AppColors.textMuted,
+                  : context.appPalette.mutedText,
               fontSize: 10,
             ),
           ),
@@ -2085,17 +2455,17 @@ class _AppUpdatePanel extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: .35),
+                color: _settingsPageBackground(context).withValues(alpha: .35),
                 borderRadius: BorderRadius.circular(9),
-                border: Border.all(color: Colors.white.withValues(alpha: .07)),
+                border: Border.all(color: _settingsBorderColor(context, .07)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'WHAT’S NEW',
                     style: TextStyle(
-                      color: AppColors.accentBright,
+                      color: context.appPalette.accentBright,
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                     ),
@@ -2113,6 +2483,7 @@ class _AppUpdatePanel extends StatelessWidget {
           ],
           const SizedBox(height: 8),
           Align(
+            key: const ValueKey('app-update-actions'),
             alignment: Alignment.centerRight,
             child: Wrap(
               spacing: 7,
@@ -2143,7 +2514,7 @@ class _AppUpdatePanel extends StatelessWidget {
             const SizedBox(height: 8),
             LinearProgressIndicator(
               value: state.progress > 0 ? state.progress : null,
-              color: AppColors.accentBright,
+              color: context.appPalette.accentBright,
               backgroundColor: const Color(0xFF2A2A2A),
             ),
           ],
@@ -2176,9 +2547,9 @@ class _HomeShelfOrganizer extends StatelessWidget {
         children: [
           const _MiniSectionLabel('HOME SHELVES'),
           const SizedBox(height: 3),
-          const Text(
+          Text(
             'Choose what appears on Home and move favorites toward the top.',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           const SizedBox(height: 10),
           for (var index = 0; index < order.length; index++) ...[
@@ -2230,8 +2601,8 @@ class _HomeShelfRow extends StatelessWidget {
           child: Text(
             '${index + 1}',
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: AppColors.textMuted,
+            style: TextStyle(
+              color: context.appPalette.mutedText,
               fontSize: 10,
               fontWeight: FontWeight.w800,
             ),
@@ -2249,13 +2620,13 @@ class _HomeShelfRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
                 color: enabled
-                    ? AppColors.accent.withValues(alpha: .28)
-                    : AppColors.panelRaised,
+                    ? context.appPalette.accent.withValues(alpha: .28)
+                    : context.appPalette.surfaceRaised,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: enabled
-                      ? AppColors.accentBright.withValues(alpha: .7)
-                      : Colors.white.withValues(alpha: .08),
+                      ? context.appPalette.accentBright.withValues(alpha: .7)
+                      : _settingsBorderColor(context, .08),
                 ),
               ),
               child: Row(
@@ -2265,7 +2636,9 @@ class _HomeShelfRow extends StatelessWidget {
                         ? Icons.visibility_rounded
                         : Icons.visibility_off_rounded,
                     size: 17,
-                    color: enabled ? Colors.white : AppColors.textMuted,
+                    color: enabled
+                        ? _settingsPrimaryText(context)
+                        : context.appPalette.mutedText,
                   ),
                   const SizedBox(width: 9),
                   Expanded(
@@ -2274,7 +2647,9 @@ class _HomeShelfRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: enabled ? Colors.white : AppColors.textMuted,
+                        color: enabled
+                            ? _settingsPrimaryText(context)
+                            : context.appPalette.mutedText,
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
                       ),
@@ -2284,8 +2659,8 @@ class _HomeShelfRow extends StatelessWidget {
                     enabled ? 'SHOWN' : 'HIDDEN',
                     style: TextStyle(
                       color: enabled
-                          ? AppColors.accentBright
-                          : AppColors.textMuted,
+                          ? context.appPalette.accentBright
+                          : context.appPalette.mutedText,
                       fontSize: 8,
                       fontWeight: FontWeight.w900,
                       letterSpacing: .7,
@@ -2330,7 +2705,7 @@ class _ShelfOrderButton extends StatelessWidget {
       return SizedBox(
         width: 38,
         height: 38,
-        child: Icon(icon, color: Colors.white24, size: 19),
+        child: Icon(icon, color: _settingsBorderColor(context, .24), size: 19),
       );
     }
     return Semantics(
@@ -2344,7 +2719,7 @@ class _ShelfOrderButton extends StatelessWidget {
           height: 38,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: AppColors.panelRaised,
+            color: context.appPalette.surfaceRaised,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, size: 19),
@@ -2370,15 +2745,15 @@ class _SectionHeader extends StatelessWidget {
     final heading = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 16, color: AppColors.accentBright),
+        Icon(icon, size: 16, color: context.appPalette.accentBright),
         const SizedBox(width: 7),
         Flexible(
           child: Text(
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: _settingsPrimaryText(context),
               fontSize: 11,
               fontWeight: FontWeight.w900,
               letterSpacing: 1.1,
@@ -2399,7 +2774,10 @@ class _SectionHeader extends StatelessWidget {
               subtitle,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 10,
+              ),
             ),
           ),
         ],
@@ -2414,7 +2792,7 @@ class _SectionHeader extends StatelessWidget {
             subtitle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
           ),
         ),
       ],
@@ -2442,13 +2820,13 @@ class _LegalNoticesPanel extends StatelessWidget {
               'services, addon authors, or media rights holders. Users add '
               'and are responsible for their own services and repositories.';
           const attribution = '重音テト © 線 / 小山乃舞世 / TWINDRILL';
-          final copy = const Column(
+          final copy = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 notice,
                 style: TextStyle(
-                  color: AppColors.textMuted,
+                  color: context.appPalette.mutedText,
                   fontSize: 10,
                   height: 1.35,
                 ),
@@ -2457,7 +2835,7 @@ class _LegalNoticesPanel extends StatelessWidget {
               Text(
                 attribution,
                 style: TextStyle(
-                  color: Colors.white,
+                  color: _settingsPrimaryText(context),
                   fontSize: 10,
                   fontWeight: FontWeight.w800,
                 ),
@@ -2468,7 +2846,7 @@ class _LegalNoticesPanel extends StatelessWidget {
                 'reviewed with AI-assisted development tools. Releases are '
                 'tested and maintained by the project owner.',
                 style: TextStyle(
-                  color: AppColors.textMuted,
+                  color: context.appPalette.mutedText,
                   fontSize: 10,
                   height: 1.35,
                 ),
@@ -2518,15 +2896,22 @@ class _LegalNoticesPanel extends StatelessWidget {
 }
 
 class _DiscordCommunityPanel extends StatelessWidget {
-  const _DiscordCommunityPanel({required this.focusNode});
+  const _DiscordCommunityPanel({
+    required this.qrFocusNode,
+    required this.focusNode,
+  });
 
   static const inviteUrl = 'https://discord.gg/juC6k7d4WY';
+  final FocusNode qrFocusNode;
   final FocusNode focusNode;
 
   @override
   Widget build(BuildContext context) {
-    final qr = Semantics(
-      label: 'QR code for the TetoTV Discord invite',
+    final qr = CopyableQrInteraction(
+      data: inviteUrl,
+      semanticsLabel: 'QR code for the TetoTV Discord invite',
+      confirmationMessage: 'Discord invite copied.',
+      focusNode: qrFocusNode,
       child: Container(
         width: 132,
         height: 132,
@@ -2559,9 +2944,9 @@ class _DiscordCommunityPanel extends StatelessWidget {
           style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 5),
-        const Text(
+        Text(
           'Scan the code with your phone, or select the invite below to copy it.',
-          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+          style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
         ),
         const SizedBox(height: 10),
         TvFocusable(
@@ -2576,14 +2961,14 @@ class _DiscordCommunityPanel extends StatelessWidget {
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-            color: AppColors.selectableSurface,
-            child: const Row(
+            color: context.appPalette.selectableSurface,
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   Icons.copy_rounded,
                   size: 18,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
                 SizedBox(width: 8),
                 Flexible(
@@ -2704,11 +3089,11 @@ class _DiscordPresencePanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 7),
-        const Text(
+        Text(
           'Optional. When enabled, Discord can show the anime title, episode, '
           'playing or paused state, and playback timer. TetoTV never asks for '
           'or stores your Discord password.',
-          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+          style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
         ),
         if (state.error case final error?) ...[
           const SizedBox(height: 8),
@@ -2741,41 +3126,36 @@ class _DiscordPresencePanel extends StatelessWidget {
     );
 
     return _Panel(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < 700) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                copy,
-                const SizedBox(height: 12),
-                Align(alignment: Alignment.centerRight, child: actions),
-              ],
-            );
-          }
-          return Row(
-            children: [
-              Expanded(child: copy),
-              const SizedBox(width: 18),
-              Flexible(child: actions),
-            ],
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          copy,
+          const SizedBox(height: 12),
+          Align(
+            key: const ValueKey('discord-presence-actions'),
+            alignment: Alignment.centerRight,
+            child: actions,
+          ),
+        ],
       ),
     );
   }
 }
 
 class _DonationPanel extends StatelessWidget {
-  const _DonationPanel({required this.focusNode});
+  const _DonationPanel({required this.qrFocusNode, required this.focusNode});
 
   static const donationUrl = 'https://ko-fi.com/lindowsosx';
+  final FocusNode qrFocusNode;
   final FocusNode focusNode;
 
   @override
   Widget build(BuildContext context) {
-    final qr = Semantics(
-      label: 'QR code for the TetoTV Ko-fi donation page',
+    final qr = CopyableQrInteraction(
+      data: donationUrl,
+      semanticsLabel: 'QR code for the TetoTV Ko-fi donation page',
+      confirmationMessage: 'Ko-fi donation link copied.',
+      focusNode: qrFocusNode,
       child: Container(
         width: 132,
         height: 132,
@@ -2805,10 +3185,10 @@ class _DonationPanel extends StatelessWidget {
       children: [
         Text('Support TetoTV', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 5),
-        const Text(
+        Text(
           'Donations are optional. Scan with your phone to open the official '
           'TetoTV Ko-fi page, or select the link below to copy it.',
-          style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+          style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
         ),
         const SizedBox(height: 10),
         TvFocusable(
@@ -2823,14 +3203,14 @@ class _DonationPanel extends StatelessWidget {
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-            color: AppColors.selectableSurface,
-            child: const Row(
+            color: context.appPalette.selectableSurface,
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   Icons.volunteer_activism_rounded,
                   size: 18,
-                  color: AppColors.accentBright,
+                  color: context.appPalette.accentBright,
                 ),
                 SizedBox(width: 8),
                 Flexible(
@@ -2906,7 +3286,7 @@ class _ServiceAccountHeader extends StatelessWidget {
             ),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(icon, color: AppColors.ink, size: 24),
+          child: Icon(icon, color: context.appPalette.background, size: 24),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -2974,7 +3354,10 @@ class _RealDebridPanel extends StatelessWidget {
         children: [
           _ServiceAccountHeader(
             icon: Icons.cloud_download_rounded,
-            gradient: const [AppColors.accent, AppColors.cyan],
+            gradient: [
+              context.appPalette.accent,
+              context.appPalette.secondaryAccent,
+            ],
             title: 'Real-Debrid',
             status: _StatusPill(
               connected: account != null,
@@ -3049,7 +3432,10 @@ class _TorBoxPanel extends StatelessWidget {
         children: [
           _ServiceAccountHeader(
             icon: Icons.cloud_circle_rounded,
-            gradient: const [AppColors.accent, AppColors.accentBright],
+            gradient: [
+              context.appPalette.accent,
+              context.appPalette.accentBright,
+            ],
             title: 'TorBox',
             status: _StatusPill(
               connected: account != null,
@@ -3089,7 +3475,7 @@ class _TorBoxPanel extends StatelessWidget {
           ],
           if (account == null) ...[
             const SizedBox(height: 10),
-            Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+            Divider(color: _settingsBorderColor(context, .08), height: 1),
             const SizedBox(height: 10),
             _ResponsiveTokenRow(
               title: 'TorBox API token',
@@ -3199,7 +3585,7 @@ class _ApiKeyDebridPanel extends StatelessWidget {
         ],
         if (!connected) ...[
           const SizedBox(height: 10),
-          Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+          Divider(color: _settingsBorderColor(context, .08), height: 1),
           const SizedBox(height: 10),
           _ResponsiveTokenRow(
             title: tokenTitle,
@@ -3348,7 +3734,7 @@ class _TrackingPanelState extends State<_TrackingPanel> {
           ),
           if (widget.username == null) ...[
             const SizedBox(height: 8),
-            Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+            Divider(color: _settingsBorderColor(context, .08), height: 1),
             const SizedBox(height: 8),
             _ResponsiveTokenRow(
               title: 'Manual API token',
@@ -3393,12 +3779,12 @@ class _DebridOnlyPanel extends StatelessWidget {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: .14),
+              color: context.appPalette.accent.withValues(alpha: .14),
               borderRadius: BorderRadius.circular(9),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.verified_user_rounded,
-              color: AppColors.accentBright,
+              color: context.appPalette.accentBright,
             ),
           ),
           const SizedBox(width: 10),
@@ -3422,7 +3808,7 @@ class _DebridOnlyPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          const Icon(Icons.lock_rounded, color: AppColors.accentBright),
+          Icon(Icons.lock_rounded, color: context.appPalette.accentBright),
         ],
       ),
     );
@@ -3497,9 +3883,9 @@ class _Panel extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: Colors.white.withValues(alpha: .10)),
+        border: Border.all(color: _settingsBorderColor(context, .10)),
       ),
       child: child,
     );
@@ -3611,7 +3997,7 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
             title: _clearingCache ? 'Clearing cache…' : 'Clear cache',
             detail:
                 'Removes temporary images, playback cache, and downloaded update leftovers. Accounts, settings, history, and sources stay saved.',
-            accent: AppColors.cyan,
+            accent: context.appPalette.secondaryAccent,
             enabled: !_clearingCache && !_resetting,
             onPressed: _clearCache,
           );
@@ -3622,7 +4008,7 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
             title: _resetting ? 'Resetting TetoTV…' : 'Reset TetoTV',
             detail:
                 'Erases every account, preference, source, and watch-history item. The app closes and starts at first-time setup.',
-            accent: AppColors.accentBright,
+            accent: context.appPalette.accentBright,
             enabled: !_clearingCache && !_resetting,
             onPressed: _confirmReset,
           );
@@ -3677,14 +4063,18 @@ class _StorageAction extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 112),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: AppColors.panelRaised,
+          color: context.appPalette.surfaceRaised,
           borderRadius: BorderRadius.circular(9),
           border: Border.all(color: accent.withValues(alpha: .45)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: enabled ? accent : AppColors.textMuted, size: 24),
+            Icon(
+              icon,
+              color: enabled ? accent : context.appPalette.mutedText,
+              size: 24,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -3693,15 +4083,17 @@ class _StorageAction extends StatelessWidget {
                   Text(
                     title,
                     style: TextStyle(
-                      color: enabled ? Colors.white : AppColors.textMuted,
+                      color: enabled
+                          ? _settingsPrimaryText(context)
+                          : context.appPalette.mutedText,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     detail,
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
                       fontSize: 11,
                       height: 1.25,
                     ),
@@ -3795,9 +4187,9 @@ class _ResetDialogFrame extends StatelessWidget {
       width: 620,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.accentBright, width: 2),
+        border: Border.all(color: context.appPalette.accentBright, width: 2),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3805,7 +4197,7 @@ class _ResetDialogFrame extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, color: AppColors.accentBright, size: 28),
+              Icon(icon, color: context.appPalette.accentBright, size: 28),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -3816,7 +4208,7 @@ class _ResetDialogFrame extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          Text(message, style: const TextStyle(color: AppColors.textMuted)),
+          Text(message, style: TextStyle(color: context.appPalette.mutedText)),
           const SizedBox(height: 20),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -3872,7 +4264,9 @@ class _DialogAction extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: 52),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: dangerous ? AppColors.accent : AppColors.panelRaised,
+        color: dangerous
+            ? context.appPalette.accent
+            : context.appPalette.surfaceRaised,
         borderRadius: BorderRadius.circular(9),
       ),
       child: Row(
@@ -3893,6 +4287,45 @@ class _DialogAction extends StatelessWidget {
   );
 }
 
+bool _usesDefaultSettingsPalette(BuildContext context) =>
+    context.appPalette == AppThemePalette.defaults;
+
+Color _settingsPageBackground(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? Colors.black
+    : context.appPalette.background;
+
+Color _settingsPrimaryText(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? Colors.white
+    : context.appPalette.primaryText;
+
+Color _settingsAccentForeground(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? Colors.white
+    : contrastForeground(context.appPalette.accent);
+
+Color _settingsTitleToggleSurface(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? const Color(0xFF171717)
+    : context.appPalette.surfaceRaised;
+
+Color _settingsDisabledActionSurface(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? const Color(0xFF3A2228)
+    : context.appPalette.selectableSurface;
+
+Color _settingsDisabledText(BuildContext context) =>
+    _usesDefaultSettingsPalette(context)
+    ? Colors.white54
+    : context.appPalette.mutedText;
+
+Color _settingsBorderColor(BuildContext context, double opacity) =>
+    (_usesDefaultSettingsPalette(context)
+            ? Colors.white
+            : context.appPalette.primaryText)
+        .withValues(alpha: opacity);
+
 String _formatStorageBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
   final kib = bytes / 1024;
@@ -3910,7 +4343,9 @@ class _StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = connected ? const Color(0xFF67D49B) : AppColors.textMuted;
+    final color = connected
+        ? const Color(0xFF67D49B)
+        : context.appPalette.mutedText;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -3952,23 +4387,23 @@ class _TitleLanguageToggle extends StatelessWidget {
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 11),
         decoration: BoxDecoration(
-          color: const Color(0xFF171717),
+          color: _settingsTitleToggleSurface(context),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+          border: Border.all(color: _settingsBorderColor(context, .08)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.translate_rounded,
               size: 17,
-              color: AppColors.accentBright,
+              color: context.appPalette.accentBright,
             ),
             const SizedBox(width: 7),
             Text(
               'Titles: ${preference.displayName}',
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: _settingsPrimaryText(context),
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
@@ -4001,7 +4436,7 @@ class _TvIconButton extends StatelessWidget {
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
       child: ColoredBox(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Icon(icon, size: 20),
@@ -4017,6 +4452,7 @@ class _TvTextButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.focusNode,
+    super.key,
   });
 
   final String label;
@@ -4032,14 +4468,18 @@ class _TvTextButton extends StatelessWidget {
       focusNode: focusNode,
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        color: enabled ? AppColors.accent : const Color(0xFF3A2228),
+        color: enabled
+            ? context.appPalette.accent
+            : _settingsDisabledActionSurface(context),
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
-              color: enabled ? Colors.white : Colors.white54,
+              color: enabled
+                  ? _settingsAccentForeground(context)
+                  : _settingsDisabledText(context),
               size: 19,
             ),
             const SizedBox(width: 8),
@@ -4049,7 +4489,9 @@ class _TvTextButton extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: enabled ? Colors.white : Colors.white54,
+                  color: enabled
+                      ? _settingsAccentForeground(context)
+                      : _settingsDisabledText(context),
                 ),
               ),
             ),
