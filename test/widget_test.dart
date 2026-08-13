@@ -1,5 +1,6 @@
 import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/core/layout/interface_scaling.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -10,6 +11,7 @@ import 'package:anime_tv/features/home/presentation/home_screen.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -137,6 +139,105 @@ void main() {
 
     expect(trendingLoads, greaterThan(1));
     expect(seasonalLoads, greaterThan(1));
+  });
+
+  testWidgets(
+    'ten rapid Home activations reveal the bottom decoration for five seconds',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trendingAnimeProvider.overrideWith((_) async => const []),
+            seasonalAnimeProvider.overrideWith((_) async => const []),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+
+      final home = find.byIcon(Icons.home_rounded);
+      for (var activation = 0; activation < 9; activation++) {
+        await tester.tap(home);
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      expect(find.byKey(const ValueKey('home.easter-egg.image')), findsNothing);
+
+      await tester.tap(home);
+      await tester.pump();
+
+      final image = find.byKey(const ValueKey('home.easter-egg.image'));
+      final region = find.byKey(const ValueKey('home.easter-egg.region'));
+      expect(image, findsOneWidget);
+      expect(
+        tester.widget<Image>(image).image,
+        isA<AssetImage>().having(
+          (asset) => asset.assetName,
+          'asset name',
+          'assets/easter_egg/teto_plush.png',
+        ),
+      );
+      expect(tester.getSize(region), const Size(1280, 360));
+      expect(tester.getBottomRight(region).dy, 720);
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find.byKey(const ValueKey('home.easter-egg.ignore-pointer')),
+            )
+            .ignoring,
+        isTrue,
+      );
+
+      await tester.pump(const Duration(milliseconds: 4999));
+      expect(image, findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(image, findsNothing);
+    },
+  );
+
+  testWidgets('Android bridge bounds the decoration audio to five seconds', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    const channel = MethodChannel('dev.tetotv/android_tv');
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return null;
+          });
+
+      await AndroidTvBridge.instance.playHomeEasterEgg();
+      await AndroidTvBridge.instance.stopHomeEasterEgg();
+
+      expect(calls.map((call) => call.method), [
+        'playHomeEasterEgg',
+        'stopHomeEasterEgg',
+      ]);
+      expect(
+        (calls.first.arguments as Map<Object?, Object?>)['maximumDurationMs'],
+        5000,
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
   });
 
   testWidgets('holding an unwatched Home shelf card opens status actions', (

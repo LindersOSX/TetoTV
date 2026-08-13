@@ -349,6 +349,32 @@ class AndroidTvBridge {
   Stream<MediaAction> get mediaActions => _mediaActions.stream;
   Stream<DiscordBridgeEvent> get discordEvents => _discordEvents.stream;
 
+  Future<void> playHomeEasterEgg({
+    Duration maximumDuration = const Duration(seconds: 5),
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('playHomeEasterEgg', {
+        'maximumDurationMs': maximumDuration.inMilliseconds,
+      });
+    } on PlatformException {
+      // This hidden decoration must never interfere with Home navigation.
+    } on MissingPluginException {
+      // Desktop/widget hosts intentionally do not install the Android bridge.
+    }
+  }
+
+  Future<void> stopHomeEasterEgg() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('stopHomeEasterEgg');
+    } on PlatformException {
+      // Best effort only; Android also releases the local player on destroy.
+    } on MissingPluginException {
+      // Desktop/widget hosts intentionally do not install the Android bridge.
+    }
+  }
+
   Future<bool> isTelevision({bool refresh = false}) async {
     if (!refresh && _cachedIsTelevision != null) {
       return _cachedIsTelevision!;

@@ -55,6 +55,7 @@ class MainActivity : FlutterActivity() {
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
     private var speechRecognizer: SpeechRecognizer? = null
+    private lateinit var homeEasterEggAudio: HomeEasterEggAudio
     private val voiceSearchHandler = Handler(Looper.getMainLooper())
     private val voiceSearchTimeout = Runnable {
         if (pendingVoiceSearchResult != null) {
@@ -103,6 +104,9 @@ class MainActivity : FlutterActivity() {
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         DiscordRichPresenceBridge.attach(this, channel)
         createMediaSession()
+        if (!::homeEasterEggAudio.isInitialized) {
+            homeEasterEggAudio = HomeEasterEggAudio(this)
+        }
         channel.setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
@@ -113,6 +117,17 @@ class MainActivity : FlutterActivity() {
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
                     "clearAppCache" -> result.success(clearAppCache())
+                    "playHomeEasterEgg" -> {
+                        homeEasterEggAudio.play(
+                            call.argument<Number>("maximumDurationMs")?.toLong()
+                                ?: HomeEasterEggAudio.MAXIMUM_DURATION_MS,
+                        )
+                        result.success(null)
+                    }
+                    "stopHomeEasterEgg" -> {
+                        homeEasterEggAudio.stop()
+                        result.success(null)
+                    }
                     "setAnonymousCrashReportingEnabled" -> {
                         AnonymousCrashStore.setEnabled(
                             this,
@@ -1193,6 +1208,7 @@ class MainActivity : FlutterActivity() {
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        if (::homeEasterEggAudio.isInitialized) homeEasterEggAudio.stop()
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
     }
