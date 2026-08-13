@@ -42,4 +42,28 @@ void main() {
       );
     }
   });
+
+  test('Android TV banner is generated from the wide branding source', () {
+    final source = File(
+      'assets/branding/tetotv_tv_banner.png',
+    ).readAsBytesSync();
+    final sourceData = ByteData.sublistView(Uint8List.fromList(source));
+    expect(sourceData.getUint32(16), greaterThanOrEqualTo(1280));
+    expect(
+      sourceData.getUint32(16) / sourceData.getUint32(20),
+      closeTo(16 / 9, 0.01),
+    );
+
+    final generated = File(
+      'android/app/src/main/res/drawable-xhdpi/tv_banner.png',
+    ).readAsBytesSync();
+    final generatedData = ByteData.sublistView(Uint8List.fromList(generated));
+    expect(generatedData.getUint32(16), 320);
+    expect(generatedData.getUint32(20), 180);
+
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    expect(manifest, contains('android:banner="@drawable/tv_banner"'));
+  });
 }

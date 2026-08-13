@@ -183,6 +183,7 @@ void main() {
       final image = find.byKey(const ValueKey('home.easter-egg.image'));
       final region = find.byKey(const ValueKey('home.easter-egg.region'));
       expect(image, findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
       expect(
         tester.widget<Image>(image).image,
         isA<AssetImage>().having(

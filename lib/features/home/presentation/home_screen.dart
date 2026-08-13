@@ -180,6 +180,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _revealHomeEasterEgg() {
     _homeEasterEggTimer?.cancel();
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.removeCurrentSnackBar();
     if (!_showHomeEasterEgg) setState(() => _showHomeEasterEgg = true);
     unawaited(
       AndroidTvBridge.instance.playHomeEasterEgg(
@@ -213,7 +216,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ref.read(trackingHomeProvider.future),
         ref.read(recentPlaybackProvider.future),
       ]);
-      if (!mounted) return;
+      if (!mounted || _showHomeEasterEgg) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Home refreshed.'),
@@ -221,7 +224,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
       );
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || _showHomeEasterEgg) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Some Home shelves could not be refreshed.'),
