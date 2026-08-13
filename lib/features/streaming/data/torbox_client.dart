@@ -27,6 +27,8 @@ class TorBoxClient {
               baseUrl: 'https://api.torbox.app/v1/api',
               connectTimeout: const Duration(seconds: 15),
               receiveTimeout: const Duration(seconds: 30),
+              followRedirects: false,
+              maxRedirects: 0,
               headers: {
                 'Accept': 'application/json',
                 'Authorization': 'Bearer $token',

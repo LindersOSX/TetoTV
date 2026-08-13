@@ -46,7 +46,13 @@
     <string name="tetotv_player_select_audio">Audio tracks</string>
     <string name="tetotv_player_select_captions">Closed captions</string>
     <string name="tetotv_player_show_more_controls">Show more controls</string>
-    <string name="tetotv_player_time_separator">/</string>
+    <string name="tetotv_player_time_separator">"  /  "</string>
     <string name="tetotv_player_media3">Media3</string>
+    <string name="tetotv_player_local_media3_only">Local and media-server videos use Media3</string>
+    <string name="tetotv_player_caption_background">Caption background</string>
+    <string name="tetotv_player_caption_background_transparent">Transparent</string>
+    <string name="tetotv_player_caption_background_dark">Dark</string>
+    <string name="tetotv_player_caption_background_high_contrast">High contrast</string>
+    <string name="tetotv_player_caption_background_changed">Caption background: %1$s</string>
     <string name="tetotv_player_footer_hint">D-pad controls  |  J/L seek  |  Menu/Y options</string>
 </resources>

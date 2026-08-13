@@ -3,28 +3,34 @@ package dev.animetv.anime_tv.player
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Dialog
+import android.content.res.ColorStateList
 import android.content.Intent
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.StateListDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.PathInterpolator
 import android.widget.ImageButton
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.Toast
 import android.widget.TextView
 import androidx.annotation.OptIn
@@ -53,6 +59,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import dev.animetv.anime_tv.R
@@ -97,6 +104,104 @@ internal fun nativeReleaseAdvertisesMultipleAudio(releaseName: String?): Boolean
     return Regex("\\b(?:dual|multi) audio\\b").containsMatchIn(normalized)
 }
 
+internal fun nativeSelectedTrackLanguage(language: String?, label: String?): String? {
+    val normalized = language.orEmpty().trim().lowercase()
+    if (normalized.isNotEmpty() && normalized !in setOf("und", "zxx", "mul")) {
+        return language?.trim()
+    }
+    return label?.trim()?.takeIf(String::isNotEmpty)
+}
+
+/**
+ * Chooses the same black-or-white foreground as Flutter's
+ * `contrastForeground`, using WCAG relative luminance.
+ *
+ * This is kept Android-framework-free so JVM contract tests can verify light
+ * and dark Theme Studio accents without relying on mocked [Color] methods.
+ */
+internal fun nativeThemeContrastForeground(background: Int): Int {
+    fun linear(channel: Int): Double {
+        val value = channel / 255.0
+        return if (value <= 0.03928) value / 12.92
+        else Math.pow((value + 0.055) / 1.055, 2.4)
+    }
+    val red = background ushr 16 and 0xFF
+    val green = background ushr 8 and 0xFF
+    val blue = background and 0xFF
+    val luminance =
+        0.2126 * linear(red) +
+            0.7152 * linear(green) +
+            0.0722 * linear(blue)
+    return if (luminance > 0.179) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+}
+
+/** Preserve the exact legacy foreground unless Theme Studio is customized. */
+internal fun nativeThemeAccentForeground(
+    hasCustomTheme: Boolean,
+    accent: Int,
+    legacyForeground: Int,
+): Int = if (hasCustomTheme) nativeThemeContrastForeground(accent) else legacyForeground
+
+internal fun nativePreferredAudioCandidateIsUsable(score: Int, description: String): Boolean {
+    val normalized = description.lowercase()
+    val isCommentary = "commentary" in normalized ||
+        "descriptive" in normalized ||
+        "description" in normalized
+    return score >= 50 && !isCommentary
+}
+
+internal data class NativePreferredAudioOverrideAction(
+    val applyOverride: Boolean,
+    val markPreferredApplied: Boolean,
+)
+
+/**
+ * Keeps a provisional audio fallback replaceable while Media3 is still
+ * publishing tracks for the current item.
+ *
+ * Some Matroska streams first expose only their default Japanese track and add
+ * the English/Dub track in a later [Player.Listener.onTracksChanged] snapshot.
+ * A fallback override is useful for avoiding commentary, but it must not make
+ * preferred-language discovery terminal. The last-override check also avoids
+ * an onTracksChanged loop when applying that provisional override.
+ */
+internal fun nativePreferredAudioOverrideAction(
+    preferredAlreadyApplied: Boolean,
+    viewerSelectionActive: Boolean,
+    candidateMatchesPreference: Boolean,
+    candidateMatchesLastOverride: Boolean,
+): NativePreferredAudioOverrideAction {
+    if (preferredAlreadyApplied || viewerSelectionActive) {
+        return NativePreferredAudioOverrideAction(
+            applyOverride = false,
+            markPreferredApplied = false,
+        )
+    }
+    return NativePreferredAudioOverrideAction(
+        applyOverride = !candidateMatchesLastOverride,
+        markPreferredApplied = candidateMatchesPreference,
+    )
+}
+
+internal data class NativeSkipSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val kind: String,
+)
+
+internal fun nativeSkipSegmentKey(segment: NativeSkipSegment): String =
+    "${segment.kind}:${segment.startMs}"
+
+internal fun activeNativeSkipSegment(
+    positionMs: Long,
+    segments: List<NativeSkipSegment>,
+    consumedSegmentKeys: Set<String>,
+): NativeSkipSegment? = segments.firstOrNull { segment ->
+    positionMs >= segment.startMs &&
+        positionMs < segment.endMs - 500L &&
+        nativeSkipSegmentKey(segment) !in consumedSegmentKeys
+}
+
 /**
  * Full-screen native Android playback isolated from Flutter's texture pipeline.
  *
@@ -116,6 +221,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var fixVideoButton: ImageButton
     private lateinit var sourcesButton: ImageButton
     private lateinit var optionsButton: ImageButton
+    private lateinit var playPauseButton: ImageButton
     private lateinit var playPauseLabel: TextView
     private lateinit var rewindControlContainer: View
     private lateinit var playPauseControlContainer: View
@@ -132,10 +238,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         .retryOnConnectionFailure(true)
         .build()
 
-    private fun isTelevisionDevice(): Boolean =
-        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
-
     private var source = ""
     private var displayTitle = "TetoTV"
     private var artworkUrl = ""
@@ -148,6 +250,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var terminalError: String? = null
     private var resultSent = false
     private var preserveDiscordPresenceForEngineHandoff = false
+    private var suppressDiscordPresence = false
     private var playbackResourcesReleased = false
     private var playerViewReleased = false
     private var playerListenersReleased = false
@@ -159,6 +262,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var resumeAfterTransientPause = false
     private var isForeground = false
     private var preferredAudioLanguage = "eng"
+    private var audioPreferenceChanged = false
     private var preferredSubtitleLanguage = "eng"
     private var subtitlesEnabled = true
     private var subtitleSize = 34f
@@ -166,6 +270,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var highContrastSubtitles = false
     private var subtitleTextColor = Color.WHITE
     private var subtitleBackgroundColor = Color.TRANSPARENT
+    private var hasCustomNativeTheme = false
+    private var themeBackgroundColor = Color.BLACK
+    private var themeSurfaceColor = LEGACY_THEME_SURFACE
+    private var themeAccentColor = LEGACY_THEME_ACCENT
+    private var themeAccentBrightColor = LEGACY_THEME_ACCENT_BRIGHT
+    private var themeFocusColor = LEGACY_THEME_FOCUS
+    private var themePrimaryTextColor = Color.WHITE
+    private var themeMutedTextColor = LEGACY_THEME_MUTED_TEXT
     private var seekBackIncrementMs = 10_000L
     private var seekForwardIncrementMs = 10_000L
     private var autoSkipIntros = false
@@ -173,6 +285,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var hasDirectSources = false
     private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
+    private var lastAutomaticAudioOverride: TrackSelectionOverride? = null
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
     private var backgroundResumeMs = 0L
@@ -193,12 +306,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val autoFocusedSkipSegments = mutableSetOf<String>()
     private val autoSkippedSegments = mutableSetOf<String>()
     private var exitDialog: AlertDialog? = null
-
-    private data class NativeSkipSegment(
-        val startMs: Long,
-        val endMs: Long,
-        val kind: String,
-    )
 
     private val checkpointPreferences by lazy {
         getSharedPreferences(CHECKPOINT_PREFERENCES, MODE_PRIVATE)
@@ -297,6 +404,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterImmersiveMode()
+        readNativePlayerTheme()
 
         source = normalizeMediaUri(intent.getStringExtra(EXTRA_SOURCE).orEmpty())
         displayTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
@@ -309,9 +417,28 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         malMediaId = intent.getIntExtra(EXTRA_MAL_MEDIA_ID, 0).coerceAtLeast(0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
         hasDirectSources = intent.getBooleanExtra(EXTRA_HAS_DIRECT_SOURCES, false)
-        val sourceOrigin = NetworkRequestPolicy.httpsOrigin(source)
-        if (source.isBlank() || (sourceOrigin == null && source != SMOKE_VIDEO_URI)) {
-            terminalError = "The native player requires an HTTPS debrid URL."
+        val trustedLocalSource = intent.getBooleanExtra(EXTRA_TRUSTED_LOCAL_SOURCE, false)
+        suppressDiscordPresence = trustedLocalSource
+        if (suppressDiscordPresence) {
+            // Local filenames and private media-server titles are not part of
+            // the viewer's public anime activity. Never disclose them through
+            // Discord Rich Presence, even when Discord is linked globally.
+            DiscordRichPresenceBridge.clearPlayback()
+        }
+        val publicSourceOrigin = NetworkRequestPolicy.httpsOrigin(source)
+        val localSourceOrigin = if (trustedLocalSource) {
+            NetworkRequestPolicy.trustedLocalMediaOrigin(source)
+        } else {
+            null
+        }
+        val trustedContentSource = trustedLocalSource &&
+            NetworkRequestPolicy.isTrustedContentUri(source)
+        val sourceOrigin = localSourceOrigin ?: publicSourceOrigin
+        if (
+            source.isBlank() ||
+            (sourceOrigin == null && !trustedContentSource && source != SMOKE_VIDEO_URI)
+        ) {
+            terminalError = "The native player requires a supported media URL."
             finishWithResult(STATUS_ERROR)
             return
         }
@@ -391,12 +518,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
         val suppliedHeaders = NetworkRequestPolicy.sanitizeRequestHeaders(intentHeaders())
         val httpClientBuilder = OkHttpClient.Builder()
-            .dns(PublicNetworkDns())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
+        // Public add-on/debrid URLs must never resolve to the LAN. A Jellyfin
+        // URL entered by the viewer is explicitly marked trusted and uses
+        // system DNS only for HTTPS; cleartext HTTP is numeric-private-only.
+        if (localSourceOrigin == null) {
+            httpClientBuilder.dns(PublicNetworkDns())
+        }
         if (sourceOrigin != null && suppliedHeaders.isNotEmpty()) {
             // The same Media3 data-source factory also loads external subtitle
             // files and cross-origin playlist segments. Never forward account
@@ -466,7 +598,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             useController = true
             // Media3 otherwise keeps controls visible forever while paused.
             // TetoTV uses one deterministic inactivity policy in every state.
-            controllerAutoShow = !isTelevisionDevice()
+            controllerAutoShow = false
             controllerHideOnTouch = true
             controllerShowTimeoutMs = CONTROLLER_HIDE_TIMEOUT_MS.toInt()
             setShowPreviousButton(false)
@@ -552,15 +684,40 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         fastForwardControlContainer = playerView.findViewById(R.id.tetotv_fast_forward_control)
         audioControlContainer = playerView.findViewById(R.id.tetotv_audio_control)
         captionControlContainer = playerView.findViewById(R.id.tetotv_caption_control)
+        playPauseButton =
+            playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_play_pause).apply {
+                setImageResource(R.drawable.tetotv_ic_play_arrow_rounded)
+            }
         playPauseLabel = playerView.findViewById<TextView>(R.id.tetotv_play_pause_label).apply {
             text = getString(R.string.tetotv_player_play)
         }
         skipSegmentButton =
             findViewById<Button>(R.id.tetotv_skip_segment).apply {
                 visibility = View.GONE
+                applyTvSafeActionLabelTextSize(
+                    tvSafeHudTextSizePx(HUD_SKIP_LABEL_SIZE_DP),
+                )
                 setOnClickListener {
                     val segment = activeSkipSegment ?: return@setOnClickListener
                     seekPastSkipSegment(segment, announce = false)
+                }
+                setOnKeyListener { _, keyCode, event ->
+                    if (
+                        event.action == KeyEvent.ACTION_DOWN &&
+                        event.repeatCount == 0 &&
+                        keyCode in SKIP_TO_CONTROLLER_KEYS
+                    ) {
+                        // The floating skip action is useful on TV, but it must
+                        // never become a D-pad island. One direction press
+                        // reveals the HUD and returns focus to Play/Pause.
+                        consumedNavigationKeyUp = keyCode
+                        playerView.showController()
+                        requestTransportFocus()
+                        armControllerAutoHide()
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
         playerView.setControllerVisibilityListener(
@@ -577,8 +734,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getStringExtra(EXTRA_TITLE).orEmpty()
         playerView.findViewById<TextView>(R.id.tetotv_stream_label).text =
             intent.getStringExtra(EXTRA_STREAM_LABEL).orEmpty().ifBlank { "Debrid stream" }
+        applyNativePlayerTheme()
         updateCaptionSizeDescription()
-        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_rew).apply {
+        playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_rew).apply {
+            setImageResource(R.drawable.tetotv_ic_replay_rounded)
             contentDescription = getString(
                 R.string.tetotv_player_rewind_seconds,
                 seekBackIncrementMs / 1_000,
@@ -589,7 +748,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             R.string.tetotv_player_back_seconds,
             seekBackIncrementMs / 1_000,
         )
-        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd).apply {
+        playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_ffwd).apply {
+            setImageResource(R.drawable.tetotv_ic_forward_rounded)
             contentDescription = getString(
                 R.string.tetotv_player_fast_forward_seconds,
                 seekForwardIncrementMs / 1_000,
@@ -753,10 +913,298 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 else R.string.tetotv_player_play,
             )
         }
+        if (::playPauseButton.isInitialized) {
+            val icon = if (playbackIntended) {
+                R.drawable.tetotv_ic_pause_rounded
+            } else {
+                R.drawable.tetotv_ic_play_arrow_rounded
+            }
+            // PlayerControlView refreshes its stock image from the same player
+            // event. Re-apply the app-owned MPV glyph after that listener has
+            // finished so the native engine cannot visually drift.
+            playPauseButton.setImageResource(icon)
+            playPauseButton.post {
+                if (!isFinishing && !isDestroyed && ::player.isInitialized) {
+                    val currentIcon = if (isPlaybackIntended()) {
+                        R.drawable.tetotv_ic_pause_rounded
+                    } else {
+                        R.drawable.tetotv_ic_play_arrow_rounded
+                    }
+                    playPauseButton.setImageResource(currentIcon)
+                }
+            }
+        }
     }
 
     override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
         updateTransportControlAvailability(availableCommands)
+    }
+
+    private fun readNativePlayerTheme() {
+        val contracts = listOf(
+            EXTRA_THEME_BACKGROUND_COLOR to FLUTTER_DEFAULT_BACKGROUND,
+            EXTRA_THEME_SURFACE_COLOR to FLUTTER_DEFAULT_SURFACE,
+            EXTRA_THEME_ACCENT_COLOR to LEGACY_THEME_ACCENT,
+            EXTRA_THEME_ACCENT_BRIGHT_COLOR to LEGACY_THEME_ACCENT_BRIGHT,
+            EXTRA_THEME_FOCUS_COLOR to LEGACY_THEME_FOCUS,
+            EXTRA_THEME_PRIMARY_TEXT_COLOR to FLUTTER_DEFAULT_PRIMARY_TEXT,
+            EXTRA_THEME_MUTED_TEXT_COLOR to LEGACY_THEME_MUTED_TEXT,
+        )
+        hasCustomNativeTheme = contracts.any { (key, defaultColor) ->
+            intent.hasExtra(key) && intent.getIntExtra(key, defaultColor) != defaultColor
+        }
+        themeBackgroundColor = themeColorExtra(
+            EXTRA_THEME_BACKGROUND_COLOR,
+            FLUTTER_DEFAULT_BACKGROUND,
+            Color.BLACK,
+        )
+        themeSurfaceColor = themeColorExtra(
+            EXTRA_THEME_SURFACE_COLOR,
+            FLUTTER_DEFAULT_SURFACE,
+            LEGACY_THEME_SURFACE,
+        )
+        themeAccentColor = themeColorExtra(
+            EXTRA_THEME_ACCENT_COLOR,
+            LEGACY_THEME_ACCENT,
+            LEGACY_THEME_ACCENT,
+        )
+        themeAccentBrightColor = themeColorExtra(
+            EXTRA_THEME_ACCENT_BRIGHT_COLOR,
+            LEGACY_THEME_ACCENT_BRIGHT,
+            LEGACY_THEME_ACCENT_BRIGHT,
+        )
+        themeFocusColor = themeColorExtra(
+            EXTRA_THEME_FOCUS_COLOR,
+            LEGACY_THEME_FOCUS,
+            LEGACY_THEME_FOCUS,
+        )
+        themePrimaryTextColor = themeColorExtra(
+            EXTRA_THEME_PRIMARY_TEXT_COLOR,
+            FLUTTER_DEFAULT_PRIMARY_TEXT,
+            Color.WHITE,
+        )
+        themeMutedTextColor = themeColorExtra(
+            EXTRA_THEME_MUTED_TEXT_COLOR,
+            LEGACY_THEME_MUTED_TEXT,
+            LEGACY_THEME_MUTED_TEXT,
+        )
+    }
+
+    private fun themeColorExtra(key: String, flutterDefault: Int, legacyDefault: Int): Int {
+        if (!intent.hasExtra(key)) return legacyDefault
+        val supplied = intent.getIntExtra(key, legacyDefault)
+        return if (supplied == flutterDefault) legacyDefault else supplied
+    }
+
+    /** Apply Theme Studio colors without changing the original default HUD palette. */
+    private fun applyNativePlayerTheme() {
+        if (!hasCustomNativeTheme) return
+        window.navigationBarColor = themeBackgroundColor
+        window.statusBarColor = themeBackgroundColor
+        findViewById<View>(android.R.id.content).setBackgroundColor(themeBackgroundColor)
+        playerView.setBackgroundColor(themeBackgroundColor)
+        playerView.setShutterBackgroundColor(themeBackgroundColor)
+
+        val density = resources.displayMetrics.density
+        fun dp(value: Float): Int = (value * density).toInt().coerceAtLeast(1)
+        val compact = resources.configuration.screenWidthDp < 720 ||
+            resources.configuration.screenHeightDp < 480
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_bottom_bar).background =
+            roundedThemeDrawable(
+                colorWithAlpha(themeSurfaceColor, 0xD6),
+                if (compact) 12f else 16f,
+                dp(1.4f),
+                colorWithAlpha(themeAccentColor, 0xC7),
+            )
+
+        val neutralControls = listOf(
+            R.id.tetotv_rewind_control,
+            R.id.tetotv_fast_forward_control,
+            R.id.tetotv_audio_control,
+            R.id.tetotv_caption_control,
+            R.id.tetotv_caption_size_control,
+            R.id.tetotv_picture_control,
+            R.id.tetotv_player_control,
+            R.id.tetotv_sources_control,
+            R.id.tetotv_options_control,
+        )
+        neutralControls.forEach { id ->
+            playerView.findViewById<View>(id)?.background = themedControlBackground(primary = false)
+        }
+        playerView.findViewById<View>(R.id.tetotv_play_pause_control).background =
+            themedControlBackground(primary = true)
+
+        playerView.findViewById<View>(R.id.tetotv_player_controls_scroll)
+            .applyThemeForeground(themePrimaryTextColor)
+        // The Play/Pause pill is accent-filled. Re-apply a contrast-aware
+        // foreground after the neutral action row receives primaryText.
+        playerView.findViewById<View>(R.id.tetotv_play_pause_control)
+            .applyThemeForeground(
+                nativeThemeAccentForeground(
+                    hasCustomTheme = true,
+                    accent = themeAccentColor,
+                    legacyForeground = themePrimaryTextColor,
+                ),
+            )
+        playerView.findViewById<View>(R.id.tetotv_time_footer)
+            .applyThemeForeground(themePrimaryTextColor)
+        playerView.findViewById<TextView>(R.id.tetotv_controller_title)
+            .setTextColor(themePrimaryTextColor)
+        playerView.findViewById<TextView>(R.id.tetotv_paused_title)
+            .setTextColor(themePrimaryTextColor)
+        playerView.findViewById<TextView>(R.id.tetotv_footer_hint)
+            .setTextColor(themeMutedTextColor)
+
+        listOf(R.id.tetotv_engine_label, R.id.tetotv_stream_label).forEach { id ->
+            playerView.findViewById<TextView>(id)?.apply {
+                setTextColor(themeAccentBrightColor)
+                background = roundedThemeDrawable(
+                    colorWithAlpha(themeAccentColor, 0x33),
+                    999f,
+                    dp(1f),
+                    colorWithAlpha(themeAccentColor, 0x59),
+                )
+            }
+        }
+        playerView.findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress).apply {
+            setPlayedColor(themeAccentBrightColor)
+            setBufferedColor(colorWithAlpha(themePrimaryTextColor, 0x3D))
+            setUnplayedColor(colorWithAlpha(themePrimaryTextColor, 0x3D))
+            setScrubberColor(Color.TRANSPARENT)
+        }
+        skipSegmentButton.apply {
+            setTextColor(themePrimaryTextColor)
+            background = themedSkipBackground()
+            compoundDrawablesRelative.forEach { it?.mutate()?.setTint(themePrimaryTextColor) }
+        }
+    }
+
+    private fun View.applyThemeForeground(color: Int) {
+        when (this) {
+            is ImageButton -> imageTintList = ColorStateList.valueOf(color)
+            is TextView -> setTextColor(color)
+            is ViewGroup -> {
+                for (index in 0 until childCount) getChildAt(index).applyThemeForeground(color)
+            }
+        }
+    }
+
+    private fun themedControlBackground(primary: Boolean): StateListDrawable {
+        val density = resources.displayMetrics.density
+        fun dp(value: Float): Int = (value * density).toInt().coerceAtLeast(1)
+        val neutral = blendThemeColors(themeSurfaceColor, themePrimaryTextColor, 0.10f)
+        val base = if (primary) themeAccentColor else colorWithAlpha(neutral, 0x8F)
+        val pressed = if (primary) {
+            blendThemeColors(themeAccentColor, Color.BLACK, 0.14f)
+        } else {
+            blendThemeColors(neutral, themePrimaryTextColor, 0.10f)
+        }
+        val keyline = colorWithAlpha(nativeThemeContrastForeground(themeAccentColor), 0xE6)
+        val focused = LayerDrawable(
+            arrayOf(
+                roundedThemeDrawable(colorWithAlpha(themeFocusColor, 0x99), 8f),
+                roundedThemeDrawable(base, 7f, dp(3f), themeFocusColor),
+                roundedThemeDrawable(base, 4f, dp(1f), keyline),
+            ),
+        ).apply {
+            setLayerInset(1, dp(1f), dp(1f), dp(1f), dp(1f))
+            setLayerInset(2, dp(4f), dp(4f), dp(4f), dp(4f))
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_activated), focused)
+            addState(intArrayOf(android.R.attr.state_pressed), roundedThemeDrawable(pressed, 8f))
+            addState(intArrayOf(), roundedThemeDrawable(base, 8f))
+        }
+    }
+
+    private fun themedSkipBackground(): StateListDrawable {
+        val density = resources.displayMetrics.density
+        fun dp(value: Float): Int = (value * density).toInt().coerceAtLeast(1)
+        val base = colorWithAlpha(themeSurfaceColor, 0xB3)
+        val focused = LayerDrawable(
+            arrayOf(
+                roundedThemeDrawable(colorWithAlpha(themeFocusColor, 0x66), 12f),
+                roundedThemeDrawable(base, 10f, dp(3f), themeFocusColor),
+                roundedThemeDrawable(Color.TRANSPARENT, 7f, dp(1f),
+                    colorWithAlpha(nativeThemeContrastForeground(themeAccentColor), 0xE6)),
+            ),
+        ).apply {
+            setLayerInset(1, dp(2f), dp(2f), dp(2f), dp(2f))
+            setLayerInset(2, dp(5f), dp(5f), dp(5f), dp(5f))
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(
+                intArrayOf(android.R.attr.state_pressed),
+                roundedThemeDrawable(blendThemeColors(themeAccentColor, Color.BLACK, 0.18f), 10f),
+            )
+            addState(
+                intArrayOf(),
+                roundedThemeDrawable(
+                    base,
+                    10f,
+                    dp(1f),
+                    colorWithAlpha(themeAccentBrightColor, 0xD1),
+                ),
+            )
+        }
+    }
+
+    private fun themedDialogButtonBackground(danger: Boolean): StateListDrawable {
+        val density = resources.displayMetrics.density
+        fun dp(value: Float): Int = (value * density).toInt().coerceAtLeast(1)
+        val neutral = blendThemeColors(themeSurfaceColor, themePrimaryTextColor, 0.12f)
+        val base = if (danger) themeAccentColor else neutral
+        val focusedBase = blendThemeColors(base, themePrimaryTextColor, 0.08f)
+        val pressed = blendThemeColors(base, Color.BLACK, 0.15f)
+        return StateListDrawable().apply {
+            addState(
+                intArrayOf(android.R.attr.state_focused),
+                roundedThemeDrawable(focusedBase, 10f, dp(3f), themeFocusColor),
+            )
+            addState(
+                intArrayOf(android.R.attr.state_pressed),
+                roundedThemeDrawable(pressed, 10f),
+            )
+            addState(
+                intArrayOf(),
+                roundedThemeDrawable(
+                    base,
+                    10f,
+                    dp(1f),
+                    colorWithAlpha(themePrimaryTextColor, if (danger) 0x77 else 0x55),
+                ),
+            )
+        }
+    }
+
+    private fun roundedThemeDrawable(
+        color: Int,
+        radiusDp: Float,
+        strokeWidth: Int = 0,
+        strokeColor: Int = Color.TRANSPARENT,
+    ): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(color)
+        cornerRadius = radiusDp * resources.displayMetrics.density
+        if (strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+    }
+
+    private fun colorWithAlpha(color: Int, alpha: Int): Int = Color.argb(
+        alpha.coerceIn(0, 255),
+        Color.red(color),
+        Color.green(color),
+        Color.blue(color),
+    )
+
+    private fun blendThemeColors(first: Int, second: Int, amount: Float): Int {
+        val t = amount.coerceIn(0f, 1f)
+        fun blend(start: Int, end: Int): Int = (start + (end - start) * t).toInt()
+        return Color.rgb(
+            blend(Color.red(first), Color.red(second)),
+            blend(Color.green(first), Color.green(second)),
+            blend(Color.blue(first), Color.blue(second)),
+        )
     }
 
     /** Match the responsive insets and 1280dp width cap used by Flutter chrome. */
@@ -787,21 +1235,21 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             if (compact) View.GONE else View.VISIBLE
         playerView.findViewById<View>(R.id.tetotv_footer_hint).visibility =
             if (compact) View.GONE else View.VISIBLE
+        // Keep the fixed 40dp HUD pills stable when Android's system font scale
+        // is large. The focused icon remains the accessible control surface,
+        // while these short visual labels stay on one line inside the pill.
+        playerView.findViewById<View>(R.id.tetotv_player_controls_scroll)
+            .applyTvSafeActionLabelTextSize(
+                tvSafeHudTextSizePx(HUD_ACTION_LABEL_SIZE_DP),
+            )
         if (compact) {
             // Mirror TetoPlayerChrome's compact (<720x480) tokens. Media3 owns
             // a native hierarchy, so these values are applied at runtime.
             playerView.findViewById<TextView>(R.id.tetotv_controller_title)
                 .setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            playerView.findViewById<TextView>(R.id.tetotv_paused_title)
-                .setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             (card.background?.mutate() as? GradientDrawable)?.cornerRadius = dp(12).toFloat()
             playerView.findViewById<View>(R.id.tetotv_player_controls_scroll)
                 .setTopMargin(dp(7))
-            playerView.findViewById<View>(androidx.media3.ui.R.id.exo_progress).apply {
-                layoutParams = layoutParams.apply { height = dp(3) }
-                setTopMargin(dp(15))
-            }
-            playerView.findViewById<View>(R.id.tetotv_time_footer).setTopMargin(dp(6))
             listOf(
                 androidx.media3.ui.R.id.exo_position,
                 androidx.media3.ui.R.id.exo_duration,
@@ -811,6 +1259,25 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             }
         }
     }
+
+    private fun View.applyTvSafeActionLabelTextSize(textSizePx: Float) {
+        when (this) {
+            is TextView -> {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, textSizePx)
+            }
+            is ViewGroup -> {
+                for (index in 0 until childCount) {
+                    getChildAt(index).applyTvSafeActionLabelTextSize(textSizePx)
+                }
+            }
+        }
+    }
+
+    private fun tvSafeHudTextSizePx(textSizeDp: Float): Float =
+        textSizeDp * resources.displayMetrics.density *
+            resources.configuration.fontScale.coerceAtMost(HUD_MAX_TEXT_SCALE)
 
     private fun View.setTopMargin(margin: Int) {
         (layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
@@ -851,9 +1318,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         val existingFocusListener = control.onFocusChangeListener
         control.setOnFocusChangeListener { view, hasFocus ->
             existingFocusListener?.onFocusChange(view, hasFocus)
-            container.isActivated = hasFocus
+            setChromeControlHighlighted(container, hasFocus)
             if (hasFocus) {
                 container.post {
+                    if (controlId == R.id.tetotv_player_options) {
+                        playerView
+                            .findViewById<HorizontalScrollView>(R.id.tetotv_player_controls_scroll)
+                            ?.fullScroll(View.FOCUS_RIGHT)
+                    }
                     val revealInset =
                         (FOCUS_REVEAL_INSET_DP * resources.displayMetrics.density).toInt()
                     container.requestRectangleOnScreen(
@@ -863,7 +1335,39 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 }
             }
         }
-        container.isActivated = control.hasFocus()
+        val touchListener = View.OnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> setChromeControlHighlighted(container, true)
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL,
+                -> setChromeControlHighlighted(container, control.hasFocus())
+            }
+            false
+        }
+        container.setOnTouchListener(touchListener)
+        control.setOnTouchListener(touchListener)
+        setChromeControlHighlighted(container, control.hasFocus(), animate = false)
+    }
+
+    private fun setChromeControlHighlighted(
+        container: View,
+        highlighted: Boolean,
+        animate: Boolean = true,
+    ) {
+        container.isActivated = highlighted
+        container.animate().cancel()
+        if (!animate) {
+            val scale = if (highlighted) CHROME_FOCUS_SCALE else 1f
+            container.scaleX = scale
+            container.scaleY = scale
+            return
+        }
+        container.animate()
+            .scaleX(if (highlighted) CHROME_FOCUS_SCALE else 1f)
+            .scaleY(if (highlighted) CHROME_FOCUS_SCALE else 1f)
+            .setDuration(CHROME_FOCUS_ANIMATION_MS)
+            .setInterpolator(CHROME_FOCUS_INTERPOLATOR)
+            .start()
     }
 
     private fun updateTransportControlAvailability(commands: Player.Commands) {
@@ -893,7 +1397,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun publishDiscordPresence() {
-        if (!::player.isInitialized || resultSent) return
+        if (suppressDiscordPresence || !::player.isInitialized || resultSent) return
         DiscordRichPresenceBridge.updatePlayback(
             title = displayTitle,
             episode = episodeNumber,
@@ -1065,19 +1569,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             !::player.isInitialized
         ) return
         val position = safePositionMs()
-        val active = skipSegments.firstOrNull {
-            val key = "${it.kind}:${it.startMs}"
-            position >= it.startMs &&
-                position < it.endMs - 500L &&
-                !autoSkippedSegments.contains(key)
-        }
+        val active = activeNativeSkipSegment(position, skipSegments, autoSkippedSegments)
         if (active == activeSkipSegment) return
         activeSkipSegment = active
         if (active != null) {
             val autoSkip =
                 (active.kind == "opening" && autoSkipIntros) ||
                     (active.kind == "ending" && autoSkipOutros)
-            val key = "${active.kind}:${active.startMs}"
+            val key = nativeSkipSegmentKey(active)
             if (autoSkip && autoSkippedSegments.add(key)) {
                 seekPastSkipSegment(active, announce = true)
                 return
@@ -1092,8 +1591,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     else -> R.string.tetotv_player_skip_intro
                 },
             )
-            val focusKey = "${active.kind}:${active.startMs}"
-            if (autoFocusedSkipSegments.add(focusKey)) {
+            val focusKey = nativeSkipSegmentKey(active)
+            if (
+                autoFocusedSkipSegments.add(focusKey) &&
+                !playerView.isControllerFullyVisible
+            ) {
+                // Never steal focus from a viewer already operating the HUD.
+                // When playback is unobstructed, retain the MPV behavior of
+                // focusing a newly available skip action once.
                 skipSegmentButton.post { skipSegmentButton.requestFocus() }
             }
         }
@@ -1206,31 +1711,22 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun updateTrackButtons(tracks: Tracks) {
         if (!::audioTrackButton.isInitialized || !::captionTrackButton.isInitialized) return
-        val hasAudio = tracks.groups.any { group ->
-            group.type == C.TRACK_TYPE_AUDIO &&
-                (0 until group.length).any(group::isTrackSupported)
-        }
-        val hasCaptions = tracks.groups.any { group ->
-            group.type == C.TRACK_TYPE_TEXT &&
-                (0 until group.length).any(group::isTrackSupported)
-        }
-        audioTrackButton.isEnabled = hasAudio
+        // Keep the same explanatory behavior as MPV/VLC. A viewer may open an
+        // unavailable picker and receive the engine's "no tracks" message;
+        // silently dimming/removing focus made the native HUD feel different.
+        audioTrackButton.isEnabled = true
         audioTrackButton.alpha = 1f
-        setChromeControlAvailable(audioControlContainer, hasAudio)
-        captionTrackButton.isEnabled = hasCaptions
+        setChromeControlAvailable(audioControlContainer, true)
+        captionTrackButton.isEnabled = true
         captionTrackButton.alpha = 1f
-        setChromeControlAvailable(captionControlContainer, hasCaptions)
+        setChromeControlAvailable(captionControlContainer, true)
         val captionsSelected = tracks.groups.any { group ->
             group.type == C.TRACK_TYPE_TEXT && group.isSelected
         }
         captionTrackButton.isSelected = captionsSelected
-        captionTrackButton.setImageResource(
-            if (captionsSelected) {
-                R.drawable.tetotv_ic_subtitle_on
-            } else {
-                R.drawable.tetotv_ic_subtitle_off
-            },
-        )
+        // TetoPlayerChrome intentionally uses one stable CC glyph; state is
+        // communicated by the description and picker selection instead.
+        captionTrackButton.setImageResource(R.drawable.tetotv_ic_subtitle_on)
         captionTrackButton.contentDescription = getString(
             if (captionsSelected) {
                 R.string.tetotv_player_closed_captions_on
@@ -1323,6 +1819,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         } else {
             R.string.tetotv_player_select_captions
         }
+        val audioSelectionParametersBefore = if (trackType == C.TRACK_TYPE_AUDIO) {
+            player.trackSelectionParameters
+        } else {
+            null
+        }
         try {
             val dialog = TrackSelectionDialogBuilder(this, getString(title), player, trackType)
                 .setTheme(R.style.NativePlayerTrackDialogTheme)
@@ -1332,9 +1833,27 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 .build()
             activeTrackDialog = dialog
             dialog.setOnDismissListener {
+                var audioSelectionChanged = false
+                if (
+                    trackType == C.TRACK_TYPE_AUDIO &&
+                    player.trackSelectionParameters != audioSelectionParametersBefore
+                ) {
+                    audioSelectionChanged = true
+                    audioPreferenceChanged = true
+                    // A viewer's explicit choice owns the remainder of this
+                    // session, even if the demuxer publishes another snapshot.
+                    preferredAudioOverrideApplied = true
+                }
                 if (activeTrackDialog === dialog) activeTrackDialog = null
                 consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
+                    if (!audioSelectionChanged) {
+                        // Track updates are intentionally ignored while the
+                        // picker is open so they cannot replace a viewer's
+                        // selection. Reconsider the latest snapshot if the
+                        // picker was dismissed without changing anything.
+                        applyPreferredAudioOverride(player.currentTracks)
+                    }
                     playerView.showController()
                     sourceButton.requestFocus()
                     armControllerAutoHide()
@@ -1409,6 +1928,74 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
     }
 
+    private fun showSubtitleBackgroundPicker(sourceButton: View) {
+        handler.removeCallbacks(hideControllerRunnable)
+        activeTrackDialog?.dismiss()
+        val labels = arrayOf(
+            getString(R.string.tetotv_player_caption_background_transparent),
+            getString(R.string.tetotv_player_caption_background_dark),
+            getString(R.string.tetotv_player_caption_background_high_contrast),
+        )
+        val selectedIndex = when {
+            highContrastSubtitles -> 2
+            Color.alpha(subtitleBackgroundColor) == 0 -> 0
+            else -> 1
+        }
+        try {
+            val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+                .setTitle(R.string.tetotv_player_caption_background)
+                .setSingleChoiceItems(labels, selectedIndex) { picker, index ->
+                    when (index) {
+                        0 -> {
+                            highContrastSubtitles = false
+                            subtitleBackgroundColor = Color.TRANSPARENT
+                        }
+                        1 -> {
+                            highContrastSubtitles = false
+                            subtitleBackgroundColor = CAPTION_DARK_BACKGROUND
+                        }
+                        else -> {
+                            highContrastSubtitles = true
+                            subtitleBackgroundColor = CAPTION_HIGH_CONTRAST_BACKGROUND
+                        }
+                    }
+                    applySubtitleStyle()
+                    Toast.makeText(
+                        this,
+                        getString(
+                            R.string.tetotv_player_caption_background_changed,
+                            labels[index],
+                        ),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    picker.dismiss()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+            activeTrackDialog = dialog
+            dialog.setOnDismissListener {
+                if (activeTrackDialog === dialog) activeTrackDialog = null
+                consumedNavigationKeyUp = null
+                if (!isFinishing && !isDestroyed) {
+                    playerView.showController()
+                    sourceButton.requestFocus()
+                    armControllerAutoHide()
+                }
+            }
+            dialog.show()
+        } catch (_: Throwable) {
+            activeTrackDialog = null
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_track_picker_error,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
+        }
+    }
+
     private fun cyclePictureMode(sourceButton: View) {
         videoResizeMode = when (videoResizeMode) {
             AspectRatioFrameLayout.RESIZE_MODE_FIT ->
@@ -1437,6 +2024,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             "Audio tracks",
             "Closed captions",
             "Caption size",
+            getString(R.string.tetotv_player_caption_background),
             "Choose player",
         )
         try {
@@ -1450,7 +2038,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                             1 -> showTrackPicker(C.TRACK_TYPE_AUDIO, audioTrackButton)
                             2 -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
                             3 -> showSubtitleSizePicker(captionSizeButton)
-                            4 -> showPlayerPicker(sourceButton)
+                            4 -> showSubtitleBackgroundPicker(sourceButton)
+                            5 -> showPlayerPicker(sourceButton)
                         }
                     }
                 }
@@ -1481,6 +2070,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun showPlayerPicker(sourceButton: View) {
+        if (suppressDiscordPresence) {
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_local_media3_only,
+                Toast.LENGTH_SHORT,
+            ).show()
+            playerView.showController()
+            sourceButton.requestFocus()
+            armControllerAutoHide()
+            return
+        }
         handler.removeCallbacks(hideControllerRunnable)
         activeTrackDialog?.dismiss()
         val labels = arrayOf(
@@ -1558,6 +2158,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         null,
                     ),
                 )
+            } else {
+                // Explicitly clear a style applied by a prior in-player
+                // selection. Merely re-enabling embedded styles leaves the
+                // old CaptionStyleCompat background attached to SubtitleView.
+                setStyle(CaptionStyleCompat.DEFAULT)
             }
         }
         updateCaptionSizeDescription()
@@ -1595,7 +2200,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (resultSent || playbackResourcesReleased || !::player.isInitialized) return
         val duration = safeDurationMs()
         val target = safeNativeSkipTargetMs(segment.endMs, duration)
-        val segmentKey = "${segment.kind}:${segment.startMs}"
+        val segmentKey = nativeSkipSegmentKey(segment)
         val wasPlaying = player.playWhenReady
         autoSkippedSegments.add(segmentKey)
         activeSkipSegment = null
@@ -1628,6 +2233,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     if (segment.kind == "opening") "Intro skipped" else "Outro skipped",
                     Toast.LENGTH_SHORT,
                 ).show()
+            }
+            if (seekSucceeded && !resultSent && !playbackResourcesReleased) {
+                // Re-evaluate against every remaining segment. Consuming an
+                // opening is keyed independently and cannot suppress a later
+                // ending/outro action.
+                updateSkipSegmentButton()
             }
         }
     }
@@ -1683,23 +2294,32 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 11f,
                 resources.displayMetrics,
             ).toInt()
+            val dangerForeground = nativeThemeAccentForeground(
+                hasCustomTheme = hasCustomNativeTheme,
+                accent = themeAccentColor,
+                legacyForeground = themePrimaryTextColor,
+            )
             dialog.findViewById<TextView>(android.R.id.message)?.apply {
-                setTextColor(Color.WHITE)
+                setTextColor(themePrimaryTextColor)
                 alpha = 0.92f
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             }
             val alertTitleId = resources.getIdentifier("alertTitle", "id", "android")
             if (alertTitleId != 0) {
                 dialog.findViewById<TextView>(alertTitleId)?.apply {
-                    setTextColor(Color.WHITE)
+                    setTextColor(themePrimaryTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
                 }
             }
             continueButton?.apply {
                 isAllCaps = false
-                setTextColor(Color.WHITE)
-                setBackgroundResource(R.drawable.tetotv_dialog_neutral_button)
+                setTextColor(themePrimaryTextColor)
+                if (hasCustomNativeTheme) {
+                    background = themedDialogButtonBackground(danger = false)
+                } else {
+                    setBackgroundResource(R.drawable.tetotv_dialog_neutral_button)
+                }
                 setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
                 minimumHeight = dp(48)
                 minHeight = dp(48)
@@ -1709,12 +2329,19 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     0,
                     0,
                 )
+                compoundDrawablesRelative.forEach {
+                    it?.mutate()?.setTint(themePrimaryTextColor)
+                }
                 compoundDrawablePadding = dp(8)
             }
             exitButton?.apply {
                 isAllCaps = false
-                setTextColor(Color.WHITE)
-                setBackgroundResource(R.drawable.tetotv_dialog_danger_button)
+                setTextColor(dangerForeground)
+                if (hasCustomNativeTheme) {
+                    background = themedDialogButtonBackground(danger = true)
+                } else {
+                    setBackgroundResource(R.drawable.tetotv_dialog_danger_button)
+                }
                 setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
                 minimumHeight = dp(48)
                 minHeight = dp(48)
@@ -1724,7 +2351,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     0,
                     0,
                 )
+                compoundDrawablesRelative.forEach {
+                    it?.mutate()?.setTint(dangerForeground)
+                }
                 compoundDrawablePadding = dp(8)
+            }
+            (continueButton?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                params.marginEnd = dp(EXIT_BUTTON_GAP_DP / 2)
+                continueButton.layoutParams = params
+            }
+            (exitButton?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                params.marginStart = dp(EXIT_BUTTON_GAP_DP / 2)
+                exitButton.layoutParams = params
             }
             continueButton?.setOnKeyListener { _, keyCode, event ->
                 if (
@@ -1754,6 +2392,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 min(dp(520), resources.displayMetrics.widthPixels - dp(64)),
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
+            if (hasCustomNativeTheme) {
+                dialog.window?.setBackgroundDrawable(
+                    roundedThemeDrawable(
+                        colorWithAlpha(themeSurfaceColor, 0xFA),
+                        16f,
+                        dp(1),
+                        colorWithAlpha(themePrimaryTextColor, 0x4D),
+                    ),
+                )
+            }
             continueButton?.requestFocus()
         }
         dialog.show()
@@ -1860,6 +2508,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             KeyEvent.KEYCODE_K -> if (isPlaybackIntended()) player.pause() else player.play()
             KeyEvent.KEYCODE_S -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
             KeyEvent.KEYCODE_C -> showPlayerPicker(fixVideoButton)
+            KeyEvent.KEYCODE_A,
+            KeyEvent.KEYCODE_BUTTON_X,
+            -> cyclePictureMode(pictureModeButton)
+            KeyEvent.KEYCODE_I -> {
+                val segment = activeSkipSegment ?: return false
+                seekPastSkipSegment(segment, announce = false)
+            }
             KeyEvent.KEYCODE_M,
             KeyEvent.KEYCODE_MENU,
             KeyEvent.KEYCODE_BUTTON_Y,
@@ -1872,7 +2527,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun applyPreferredAudioOverride(tracks: Tracks) {
-        if (preferredAudioOverrideApplied) return
+        if (preferredAudioOverrideApplied || audioPreferenceChanged || activeTrackDialog != null) {
+            return
+        }
         val preferredTags = preferredLanguageTags(preferredAudioLanguage).toSet()
         val normalizedPreference = preferredAudioLanguage.trim().lowercase()
         var bestGroup: Tracks.Group? = null
@@ -1881,7 +2538,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         var bestNonCommentaryGroup: Tracks.Group? = null
         var bestNonCommentaryTrack = -1
         var bestNonCommentaryScore = Int.MIN_VALUE
-        var preferredCommentarySeen = false
         for (group in tracks.groups) {
             if (group.type != C.TRACK_TYPE_AUDIO) continue
             for (index in 0 until group.length) {
@@ -1900,7 +2556,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     "commentary" in description ||
                         "descriptive" in description ||
                         "description" in description
-                if (isPreferred && isCommentary) preferredCommentarySeen = true
                 var score = 0
                 if (language in preferredTags) score += 120
                 if (normalizedPreference in description) score += 70
@@ -1927,18 +2582,37 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 }
             }
         }
-        var group = bestGroup ?: return
-        var track = bestTrack
-        if (bestScore < 50) {
-            if (!preferredCommentarySeen) return
-            group = bestNonCommentaryGroup ?: return
-            track = bestNonCommentaryTrack
+        // Never let a preferred-language commentary track outrank normal
+        // dialogue. When the requested language is unavailable, explicitly
+        // select the best deterministic non-commentary fallback rather than
+        // trusting a container default that may itself be commentary.
+        val usePreferred = bestGroup != null && bestTrack >= 0 &&
+            bestGroup.getTrackFormat(bestTrack).let { format ->
+                nativePreferredAudioCandidateIsUsable(
+                    bestScore,
+                    "${format.language.orEmpty()} ${format.label.orEmpty()}",
+                )
+            }
+        val group = if (usePreferred) bestGroup else bestNonCommentaryGroup ?: bestGroup ?: return
+        val track = if (usePreferred) bestTrack else if (bestNonCommentaryGroup != null) {
+            bestNonCommentaryTrack
+        } else {
+            bestTrack
         }
         if (track < 0) return
-        preferredAudioOverrideApplied = true
+        val override = TrackSelectionOverride(group.mediaTrackGroup, track)
+        val action = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = preferredAudioOverrideApplied,
+            viewerSelectionActive = audioPreferenceChanged || activeTrackDialog != null,
+            candidateMatchesPreference = usePreferred,
+            candidateMatchesLastOverride = override == lastAutomaticAudioOverride,
+        )
+        if (action.markPreferredApplied) preferredAudioOverrideApplied = true
+        if (!action.applyOverride) return
+        lastAutomaticAudioOverride = override
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
-            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track))
+            .setOverrideForType(override)
             .build()
     }
 
@@ -2206,7 +2880,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             putExtra(RESULT_DECODER, decoderName)
             putExtra(RESULT_DROPPED_FRAMES, droppedFrames)
             putExtra(RESULT_SUBTITLE_SIZE, subtitleSize)
+            putExtra(RESULT_SUBTITLE_BACKGROUND_COLOR, subtitleBackgroundColor)
+            putExtra(RESULT_HIGH_CONTRAST_SUBTITLES, highContrastSubtitles)
             putExtra(RESULT_AUDIO_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_AUDIO))
+            putExtra(RESULT_AUDIO_PREFERENCE_SET, audioPreferenceChanged)
             putExtra(RESULT_SUBTITLE_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_TEXT))
             putExtra(RESULT_SUBTITLES_ENABLED, hasSelectedTextTrack())
             putExtra(RESULT_SURFACE_READY, surfaceReady)
@@ -2275,8 +2952,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             for (index in 0 until group.length) {
                 if (!group.isTrackSelected(index)) continue
                 val format = group.getTrackFormat(index)
-                return format.language?.takeIf(String::isNotBlank)
-                    ?: format.label?.takeIf(String::isNotBlank)
+                return nativeSelectedTrackLanguage(format.language, format.label)
             }
         }
         return null
@@ -2326,6 +3002,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_MAL_MEDIA_ID = "malMediaId"
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
         const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
+        const val EXTRA_TRUSTED_LOCAL_SOURCE = "trustedLocalSource"
+        const val EXTRA_THEME_BACKGROUND_COLOR = "themeBackgroundColor"
+        const val EXTRA_THEME_SURFACE_COLOR = "themeSurfaceColor"
+        const val EXTRA_THEME_ACCENT_COLOR = "themeAccentColor"
+        const val EXTRA_THEME_ACCENT_BRIGHT_COLOR = "themeAccentBrightColor"
+        const val EXTRA_THEME_FOCUS_COLOR = "themeFocusColor"
+        const val EXTRA_THEME_PRIMARY_TEXT_COLOR = "themePrimaryTextColor"
+        const val EXTRA_THEME_MUTED_TEXT_COLOR = "themeMutedTextColor"
 
         const val RESULT_STATUS = "status"
         const val RESULT_POSITION_MS = "positionMs"
@@ -2336,7 +3020,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val RESULT_DECODER = "decoder"
         const val RESULT_DROPPED_FRAMES = "droppedFrames"
         const val RESULT_SUBTITLE_SIZE = "subtitleSize"
+        const val RESULT_SUBTITLE_BACKGROUND_COLOR = "subtitleBackgroundColor"
+        const val RESULT_HIGH_CONTRAST_SUBTITLES = "highContrastSubtitles"
         const val RESULT_AUDIO_LANGUAGE = "audioLanguage"
+        const val RESULT_AUDIO_PREFERENCE_SET = "audioPreferenceSet"
         const val RESULT_SUBTITLE_LANGUAGE = "subtitleLanguage"
         const val RESULT_SUBTITLES_ENABLED = "subtitlesEnabled"
         const val RESULT_SURFACE_READY = "surfaceReady"
@@ -2365,6 +3052,23 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val SKIP_DURATION_STABILITY_DELAY_MS = 1_200L
         private const val SKIP_DURATION_STABILITY_TOLERANCE_MS = 1_000L
         private const val FOCUS_REVEAL_INSET_DP = 8
+        private const val CHROME_FOCUS_SCALE = 1.025f
+        private const val CHROME_FOCUS_ANIMATION_MS = 80L
+        private const val HUD_ACTION_LABEL_SIZE_DP = 11f
+        private const val HUD_SKIP_LABEL_SIZE_DP = 14f
+        private const val HUD_MAX_TEXT_SCALE = 1.35f
+        private val CHROME_FOCUS_INTERPOLATOR = PathInterpolator(0.215f, 0.61f, 0.355f, 1f)
+
+        // Theme Studio's default seeds are translated back to the exact native
+        // HUD colors that shipped before customization support.
+        private val FLUTTER_DEFAULT_BACKGROUND = 0xFF030303.toInt()
+        private val FLUTTER_DEFAULT_SURFACE = 0xFF101010.toInt()
+        private val FLUTTER_DEFAULT_PRIMARY_TEXT = 0xFFF8F5F6.toInt()
+        private val LEGACY_THEME_SURFACE = 0xFF080808.toInt()
+        private val LEGACY_THEME_ACCENT = 0xFFE52B50.toInt()
+        private val LEGACY_THEME_ACCENT_BRIGHT = 0xFFFF496A.toInt()
+        private val LEGACY_THEME_FOCUS = 0xFFFF5C78.toInt()
+        private val LEGACY_THEME_MUTED_TEXT = 0xFFB7AEB1.toInt()
 
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
@@ -2379,6 +3083,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val MIN_SKIP_SEGMENT_MS = 8_000L
         private const val MAX_SKIP_SEGMENT_MS = 240_000L
         private const val DEFAULT_SUBTITLE_SIZE = 34f
+        private val CAPTION_DARK_BACKGROUND = 0x99000000.toInt()
+        private val CAPTION_HIGH_CONTRAST_BACKGROUND = 0xDD000000.toInt()
+        private const val EXIT_BUTTON_GAP_DP = 12
         private val SUBTITLE_SIZE_VALUES = floatArrayOf(28f, 34f, 42f, 50f)
         private const val DISABLED_CONTROL_ALPHA = 0.38f
         private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
@@ -2394,6 +3101,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
+        )
+        private val SKIP_TO_CONTROLLER_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_DOWN,
         )
         private val CONTROLLER_INTERACTION_KEYS = CONTROLLER_NAVIGATION_KEYS + setOf(
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,

@@ -172,6 +172,7 @@ class _TvFocusableState extends State<TvFocusable> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final highlighted = _focused || _hovered || _pressed;
     return Semantics(
       button: true,
@@ -230,13 +231,13 @@ class _TvFocusableState extends State<TvFocusable> {
                               // The dark outer keyline keeps the Teto-red ring
                               // distinct from primary red buttons; the red glow
                               // remains visible on black and pale artwork.
-                              const BoxShadow(
-                                color: Color(0xE6000000),
+                              BoxShadow(
+                                color: palette.focusInnerKeyline,
                                 blurRadius: 0,
                                 spreadRadius: 2,
                               ),
-                              const BoxShadow(
-                                color: AppColors.focusGlow,
+                              BoxShadow(
+                                color: palette.focusGlow,
                                 blurRadius: 11,
                                 spreadRadius: 2,
                               ),
@@ -247,7 +248,7 @@ class _TvFocusableState extends State<TvFocusable> {
                       borderRadius: widget.borderRadius,
                       border: Border.all(
                         color: highlighted
-                            ? AppColors.focusRing
+                            ? palette.focusRing
                             : Colors.transparent,
                         width: 3,
                       ),
@@ -269,7 +270,7 @@ class _TvFocusableState extends State<TvFocusable> {
                                     decoration: BoxDecoration(
                                       borderRadius: widget.borderRadius,
                                       border: Border.all(
-                                        color: AppColors.focusInnerKeyline,
+                                        color: palette.focusInnerKeyline,
                                         width: 1,
                                       ),
                                     ),

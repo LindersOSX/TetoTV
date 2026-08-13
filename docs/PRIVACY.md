@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 12, 2026
+Effective date: August 13, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
@@ -12,6 +12,11 @@ TetoTV pairing/update broker.
 TetoTV stores the following data locally:
 
 - account and debrid credentials in Android Keystore-backed secure storage;
+- an optional Jellyfin server address, username, access token, and random app
+  device ID in Keystore-backed secure storage; the Jellyfin password is used
+  only for sign-in and is not saved;
+- an optional Plex server address, X-Plex-Token, and random client identifier
+  in Keystore-backed secure storage;
 - playback history, resume positions, per-series preferences, tracker-sync
   outbox entries, installed source definitions, and app preferences;
 - short-lived catalog/artwork caches and bounded performance or error
@@ -49,6 +54,29 @@ TetoTV makes network requests only for app features the user uses:
   IMDb series and episode identifier; and
 - image hosts receive ordinary artwork requests.
 
+When the user opens local media, Android's system file picker grants TetoTV
+read access only to the selected video. TetoTV does not request broad storage
+access. A durable provider grant and a hashed resume key can be retained for a
+recent file; providers that do not grant durable access work only for the
+current app session. USB and internal-storage video contents are not uploaded
+by this feature.
+
+When the user connects Jellyfin, TetoTV sends the entered username and password
+directly to that server for authentication, stores the returned access token,
+and sends the token back to that same server for library, artwork, playback,
+and logout requests. HTTPS is recommended. The app permits HTTP only after a
+warning and only for an explicit numeric private-network address or localhost;
+HTTP credentials and video traffic are not encrypted. Jellyfin traffic does
+not pass through the TetoTV broker.
+
+When the user connects Plex, TetoTV sends the saved X-Plex-Token directly to
+that server in an HTTP request header for library, artwork, and playback
+requests. The token is never placed in a media or artwork URL. Redirects are
+not followed for authenticated metadata or artwork requests. HTTPS is
+recommended; private-network HTTP requires the same explicit warning and has
+the same lack of transport encryption described for Jellyfin. Plex traffic
+does not pass through the TetoTV broker.
+
 When the user explicitly links Discord and enables **Discord Rich Presence**,
 TetoTV sends Discord the current anime title, episode number, playing or paused
 state, playback timing, and the public show-artwork URL so Discord can display
@@ -56,7 +84,9 @@ that activity with the show's thumbnail. Discord OAuth
 access and refresh tokens are stored in Android Keystore-backed secure storage.
 Disabling Rich Presence stops sharing playback activity; unlinking Discord also
 revokes the connection when possible and deletes the saved tokens from TetoTV.
-TetoTV never asks for or stores the user's Discord password.
+TetoTV never asks for or stores the user's Discord password. Playback opened
+from USB, internal storage, Jellyfin, or Plex is excluded from Rich Presence so
+private filenames and media-library titles are not shared.
 
 On Android TV and Fire TV, Discord linking uses Discord's limited-input device
 authorization directly. TetoTV sends a one-time authorization request to
@@ -81,7 +111,11 @@ and signed APK update delivery:
   to ten minutes. They are deleted after the authenticated device confirms
   local processing or when the session expires.
 - The update proxy reads release metadata with a server-only credential and
-  streams the signed universal APK. The credential is never sent to the app.
+  streams the signed universal APK. The GitHub credential is never sent to the
+  app. Private Beta users enter a separately issued tester key; its raw value
+  is stored only in Android Keystore-backed secure storage and sent only to the
+  fixed TetoTV update broker. The broker stores only configured SHA-256 hashes
+  for access checks and does not return keys or hashes from its health endpoint.
 - The host may process ordinary connection metadata for security, rate
   limiting, and operational logs. TetoTV does not use it for advertising or
   cross-service tracking.
@@ -138,8 +172,10 @@ report before sharing it.
 
 ## Security and user choices
 
-Network integrations require HTTPS. User-added endpoints are checked against
-private/local addresses and are fetched through a constrained client. No
+Network integrations require HTTPS except an explicitly approved Jellyfin or Plex
+connection to a numeric private-network address or localhost. User-added
+endpoints are checked against their expected network boundary and are fetched
+through constrained clients. No
 software can promise absolute security; users should revoke a service token if
 they believe a device or account has been compromised.
 

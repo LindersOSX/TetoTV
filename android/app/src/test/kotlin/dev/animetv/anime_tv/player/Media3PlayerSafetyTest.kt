@@ -74,10 +74,90 @@ class Media3PlayerSafetyTest {
     }
 
     @Test
+    fun `consuming an intro leaves a later outro eligible`() {
+        val intro = NativeSkipSegment(60_000L, 150_000L, "opening")
+        val outro = NativeSkipSegment(1_290_000L, 1_440_000L, "ending")
+        val consumed = setOf(nativeSkipSegmentKey(intro))
+
+        assertEquals(
+            outro,
+            activeNativeSkipSegment(
+                positionMs = 1_300_000L,
+                segments = listOf(intro, outro),
+                consumedSegmentKeys = consumed,
+            ),
+        )
+        assertFalse(nativeSkipSegmentKey(outro) in consumed)
+    }
+
+    @Test
     fun `dual and multi audio release labels request extended discovery`() {
         assertTrue(nativeReleaseAdvertisesMultipleAudio("[Group] Show - Dual Audio"))
         assertTrue(nativeReleaseAdvertisesMultipleAudio("Show.Multi-Audio.1080p"))
         assertFalse(nativeReleaseAdvertisesMultipleAudio("Show Japanese Audio 1080p"))
         assertFalse(nativeReleaseAdvertisesMultipleAudio(null))
+    }
+
+    @Test
+    fun `undefined native track language uses its descriptive label`() {
+        assertEquals("English Dub", nativeSelectedTrackLanguage("und", "English Dub"))
+        assertEquals("Japanese", nativeSelectedTrackLanguage("zxx", "Japanese"))
+        assertEquals("eng", nativeSelectedTrackLanguage("eng", "Japanese"))
+        assertEquals(null, nativeSelectedTrackLanguage("mul", ""))
+    }
+
+    @Test
+    fun `commentary never qualifies as preferred native dialogue`() {
+        assertTrue(nativePreferredAudioCandidateIsUsable(140, "eng English Dub"))
+        assertFalse(
+            nativePreferredAudioCandidateIsUsable(
+                140,
+                "eng English Director Commentary",
+            ),
+        )
+        assertFalse(nativePreferredAudioCandidateIsUsable(20, "jpn Japanese Stereo"))
+    }
+
+    @Test
+    fun `provisional audio fallback remains replaceable by a later preferred track`() {
+        val provisional = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = false,
+            viewerSelectionActive = false,
+            candidateMatchesPreference = false,
+            candidateMatchesLastOverride = false,
+        )
+        assertTrue(provisional.applyOverride)
+        assertFalse(provisional.markPreferredApplied)
+
+        val repeatedSnapshot = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = provisional.markPreferredApplied,
+            viewerSelectionActive = false,
+            candidateMatchesPreference = false,
+            candidateMatchesLastOverride = true,
+        )
+        assertFalse(repeatedSnapshot.applyOverride)
+        assertFalse(repeatedSnapshot.markPreferredApplied)
+
+        val preferredArrives = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = repeatedSnapshot.markPreferredApplied,
+            viewerSelectionActive = false,
+            candidateMatchesPreference = true,
+            candidateMatchesLastOverride = false,
+        )
+        assertTrue(preferredArrives.applyOverride)
+        assertTrue(preferredArrives.markPreferredApplied)
+    }
+
+    @Test
+    fun `viewer audio selection stops automatic snapshot overrides`() {
+        val action = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = false,
+            viewerSelectionActive = true,
+            candidateMatchesPreference = true,
+            candidateMatchesLastOverride = false,
+        )
+
+        assertFalse(action.applyOverride)
+        assertFalse(action.markPreferredApplied)
     }
 }

@@ -138,7 +138,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             failure ??
                 'No title was recognized. Check the microphone permission and try again.',
           ),
-          backgroundColor: AppColors.panelRaised,
+          backgroundColor: context.appPalette.surfaceRaised,
           duration: const Duration(seconds: 5),
         ),
       );
@@ -170,9 +170,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 final back = TvFocusable(
                   onPressed: context.pop,
                   borderRadius: BorderRadius.circular(10),
-                  child: const ColoredBox(
-                    color: AppColors.panel,
-                    child: Padding(
+                  child: ColoredBox(
+                    color: context.appPalette.surface,
+                    child: const Padding(
                       padding: EdgeInsets.all(10),
                       child: Icon(Icons.arrow_back_rounded, size: 20),
                     ),
@@ -196,12 +196,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     width: 52,
                     height: 52,
                     alignment: Alignment.center,
-                    color: AppColors.panel,
+                    color: context.appPalette.surface,
                     child: Icon(
                       _voiceSearching
                           ? Icons.graphic_eq_rounded
                           : Icons.mic_rounded,
-                      color: AppColors.accentBright,
+                      color: context.appPalette.accentBright,
                       size: 25,
                     ),
                   ),
@@ -260,8 +260,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _resultsBody(TitleLanguagePreference titlePreference) {
     return _results.when(
-      loading: () =>
-          const Center(child: CircularProgressIndicator(color: AppColors.cyan)),
+      loading: () => Center(
+        child: CircularProgressIndicator(
+          color: context.appPalette.secondaryAccent,
+        ),
+      ),
       error: (error, _) => _SearchMessage(
         icon: Icons.cloud_off_rounded,
         title: 'Search failed',
@@ -409,8 +412,8 @@ class _SearchCard extends StatelessWidget {
                           '$episodes episodes',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.textMuted,
+                          style: TextStyle(
+                            color: context.appPalette.mutedText,
                             fontSize: 9,
                           ),
                         ),
@@ -444,7 +447,7 @@ class _SearchMessage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 60, color: AppColors.textMuted),
+          Icon(icon, size: 60, color: context.appPalette.mutedText),
           const SizedBox(height: 14),
           Text(title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),

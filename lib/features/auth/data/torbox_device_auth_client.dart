@@ -34,10 +34,8 @@ class TorBoxDeviceSession {
     };
     if (deviceCode.isEmpty ||
         userCode.isEmpty ||
-        verificationUrl == null ||
-        verificationUrl.scheme != 'https' ||
-        friendlyUrl == null ||
-        friendlyUrl.scheme != 'https' ||
+        !_isTrustedTorBoxVerificationUrl(verificationUrl) ||
+        !_isTrustedTorBoxVerificationUrl(friendlyUrl) ||
         expiresAt == null) {
       throw const FormatException(
         'TorBox returned an incomplete device authorization response.',
@@ -46,12 +44,20 @@ class TorBoxDeviceSession {
     return TorBoxDeviceSession(
       deviceCode: deviceCode,
       userCode: userCode,
-      verificationUrl: verificationUrl,
-      friendlyVerificationUrl: friendlyUrl,
+      verificationUrl: verificationUrl!,
+      friendlyVerificationUrl: friendlyUrl!,
       expiresAt: expiresAt,
       interval: Duration(seconds: intervalSeconds.clamp(3, 30)),
     );
   }
+}
+
+bool _isTrustedTorBoxVerificationUrl(Uri? uri) {
+  if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) return false;
+  final host = uri.host.toLowerCase();
+  return host == 'torbox.app' ||
+      host.endsWith('.torbox.app') ||
+      host == 'tor.box';
 }
 
 class TorBoxDeviceAuthClient {
@@ -63,6 +69,8 @@ class TorBoxDeviceAuthClient {
               baseUrl: 'https://api.torbox.app/v1/api',
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 20),
+              followRedirects: false,
+              maxRedirects: 0,
               headers: const {'Accept': 'application/json'},
             ),
           );

@@ -92,6 +92,8 @@ class RealDebridOAuthClient {
               baseUrl: 'https://api.real-debrid.com/oauth/v2',
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 20),
+              followRedirects: false,
+              maxRedirects: 0,
               headers: const {'Accept': 'application/json'},
             ),
           );

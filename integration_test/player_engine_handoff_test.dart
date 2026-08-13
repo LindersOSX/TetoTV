@@ -14,7 +14,7 @@ void main() {
   MediaKit.ensureInitialized();
 
   testWidgets(
-    'MPV and VLC hand off the decoder and resume position in both directions',
+    'MPV and VLC repeatedly hand off the decoder without late surface callbacks',
     (tester) async {
       await tester.pumpWidget(
         const ProviderScope(
@@ -33,31 +33,54 @@ void main() {
             .isNotEmpty,
       );
       await tester.pump(const Duration(seconds: 2));
-      await _choosePlayer(tester, 'VLC');
 
-      await _pumpUntil(
-        tester,
-        () => find
-            .byKey(const ValueKey('engine-vlc'), skipOffstage: false)
-            .evaluate()
-            .isNotEmpty,
-      );
-      await _pumpUntil(
-        tester,
-        () => find
-            .byKey(const ValueKey('vlc-playback-advancing'))
-            .evaluate()
-            .isNotEmpty,
-      );
-      await _choosePlayer(tester, 'MPV');
+      for (var roundTrip = 0; roundTrip < 2; roundTrip++) {
+        final vlcHandoff = roundTrip * 2 + 1;
+        final mpvHandoff = vlcHandoff + 1;
 
-      await _pumpUntil(
-        tester,
-        () => find
-            .byKey(const ValueKey('engine-mpv-2'), skipOffstage: false)
-            .evaluate()
-            .isNotEmpty,
-      );
+        await _choosePlayer(tester, 'VLC');
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(ValueKey('engine-vlc-$vlcHandoff'), skipOffstage: false)
+              .evaluate()
+              .isNotEmpty,
+        );
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(const ValueKey('vlc-playback-advancing'))
+              .evaluate()
+              .isNotEmpty,
+        );
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'MPV surface detach must finish before VLC takes ownership',
+        );
+
+        await _choosePlayer(tester, 'MPV');
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(ValueKey('engine-mpv-$mpvHandoff'), skipOffstage: false)
+              .evaluate()
+              .isNotEmpty,
+        );
+        await _pumpUntil(
+          tester,
+          () => find
+              .byKey(const ValueKey('mpv-bottom-player-chrome'))
+              .evaluate()
+              .isNotEmpty,
+        );
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'VLC-to-MPV handoff must not revive the released MPV player',
+        );
+      }
+
       expect(
         find.byKey(
           const ValueKey('handoff-position-valid'),
@@ -313,10 +336,8 @@ class _EngineHandoffHarnessState extends State<_EngineHandoffHarness> {
         Offstage(
           child: Column(
             children: [
-              if (_engine == _SmokeEngine.vlc)
-                const SizedBox(key: ValueKey('engine-vlc')),
-              if (_engine == _SmokeEngine.mpv && _handoffs >= 2)
-                const SizedBox(key: ValueKey('engine-mpv-2')),
+              if (_handoffs > 0)
+                SizedBox(key: ValueKey('engine-${_engine.name}-$_handoffs')),
               if (_handoffs >= 2 && _resume > const Duration(seconds: 1))
                 const SizedBox(key: ValueKey('handoff-position-valid')),
             ],

@@ -213,12 +213,52 @@ class AppVersionInfo {
   );
 }
 
+class LocalMediaDocument {
+  const LocalMediaDocument({
+    required this.uri,
+    required this.name,
+    this.mimeType,
+    this.size,
+    this.persistedReadPermission = false,
+  });
+
+  final Uri uri;
+  final String name;
+  final String? mimeType;
+  final int? size;
+  final bool persistedReadPermission;
+
+  factory LocalMediaDocument.fromMap(Map<Object?, Object?> value) {
+    final rawUri = value['uri'] as String? ?? '';
+    final uri = Uri.tryParse(rawUri);
+    if (uri == null ||
+        uri.scheme != 'content' ||
+        !uri.hasAuthority ||
+        uri.authority.trim().isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasFragment) {
+      throw const FormatException('Android returned an invalid local video.');
+    }
+    return LocalMediaDocument(
+      uri: uri,
+      name: (value['name'] as String?)?.trim().isNotEmpty == true
+          ? (value['name'] as String).trim()
+          : 'Local video',
+      mimeType: (value['mimeType'] as String?)?.trim(),
+      size: (value['size'] as num?)?.toInt(),
+      persistedReadPermission:
+          value['persistedReadPermission'] as bool? ?? false,
+    );
+  }
+}
+
 class ApkCompatibilityInfo {
   const ApkCompatibilityInfo({
     required this.compatible,
     required this.issues,
     this.packageName,
     this.versionCode = 0,
+    this.versionName,
     this.minSdk = 0,
     this.archiveAbis = const [],
     this.deviceAbis = const [],
@@ -229,6 +269,7 @@ class ApkCompatibilityInfo {
   final List<String> issues;
   final String? packageName;
   final int versionCode;
+  final String? versionName;
   final int minSdk;
   final List<String> archiveAbis;
   final List<String> deviceAbis;
@@ -242,6 +283,7 @@ class ApkCompatibilityInfo {
             .toList(growable: false),
         packageName: value['packageName'] as String?,
         versionCode: (value['versionCode'] as num?)?.toInt() ?? 0,
+        versionName: value['versionName'] as String?,
         minSdk: (value['minSdk'] as num?)?.toInt() ?? 0,
         archiveAbis: (value['archiveAbis'] as List? ?? const [])
             .whereType<String>()
@@ -264,7 +306,10 @@ class NativePlaybackResult {
     this.decoder,
     this.error,
     this.subtitleSize,
+    this.subtitleBackgroundColor,
+    this.highContrastSubtitles,
     this.audioLanguage,
+    this.audioPreferenceSet = false,
     this.subtitleLanguage,
     this.subtitlesEnabled,
     this.diagnostics = const {},
@@ -279,7 +324,10 @@ class NativePlaybackResult {
   final String? decoder;
   final String? error;
   final double? subtitleSize;
+  final int? subtitleBackgroundColor;
+  final bool? highContrastSubtitles;
   final String? audioLanguage;
+  final bool audioPreferenceSet;
   final String? subtitleLanguage;
   final bool? subtitlesEnabled;
   final Map<String, Object?> diagnostics;
@@ -301,7 +349,12 @@ class NativePlaybackResult {
         decoder: value['decoder'] as String?,
         error: value['error'] as String?,
         subtitleSize: (value['subtitleSize'] as num?)?.toDouble(),
+        subtitleBackgroundColor: (value['subtitleBackgroundColor'] as num?)
+            ?.toInt()
+            .toUnsigned(32),
+        highContrastSubtitles: value['highContrastSubtitles'] as bool?,
         audioLanguage: value['audioLanguage'] as String?,
+        audioPreferenceSet: value['audioPreferenceSet'] as bool? ?? false,
         subtitleLanguage: value['subtitleLanguage'] as String?,
         subtitlesEnabled: value['subtitlesEnabled'] as bool?,
         diagnostics: {
@@ -544,6 +597,24 @@ class AndroidTvBridge {
     return query.isEmpty ? null : query;
   }
 
+  /// Opens Android's permission-scoped document picker for one video.
+  ///
+  /// The returned content URI may refer to internal storage or a mounted USB
+  /// provider. Android owns the picker and grants only read access to the
+  /// selected document, so no broad storage permission is required.
+  Future<LocalMediaDocument?> pickLocalVideo() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw PlatformException(
+        code: 'LOCAL_MEDIA_UNSUPPORTED',
+        message: 'Local media is only available on Android devices.',
+      );
+    }
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'pickLocalVideo',
+    );
+    return value == null ? null : LocalMediaDocument.fromMap(value);
+  }
+
   /// Removes only disposable application cache and downloaded update files.
   /// Accounts, preferences, sources, history, databases, and secure storage
   /// live outside Android's cache directories and are intentionally retained.
@@ -667,6 +738,8 @@ class AndroidTvBridge {
     String? artworkUrl,
     bool hasDirectSources = false,
     Map<String, String> headers = const {},
+    bool trustedLocalSource = false,
+    Map<String, Object> theme = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return const NativePlaybackResult(
@@ -677,41 +750,54 @@ class AndroidTvBridge {
       );
     }
     try {
-      final value = await _channel
-          .invokeMapMethod<Object?, Object?>('startNativePlayer', {
-            'source': source.toString(),
-            'title': title,
-            'checkpointKey': checkpointKey,
-            'releaseName': releaseName,
-            'streamLabel': streamLabel,
-            'resumeMs': resumePosition.inMilliseconds,
-            'resumeProvided':
-                resumeUpdatedAt != null || resumePosition > Duration.zero,
-            if (resumeUpdatedAt != null)
-              'resumeUpdatedAtMs': resumeUpdatedAt.millisecondsSinceEpoch,
-            'startFromBeginning': startFromBeginning,
-            if (externalSubtitle != null && externalSubtitle.isNotEmpty)
-              'externalSubtitle': externalSubtitle,
-            'audioLanguage': audioLanguage,
-            'subtitleLanguage': subtitleLanguage,
-            'subtitlesEnabled': subtitlesEnabled,
-            'subtitleSize': subtitleSize,
-            'subtitlePosition': subtitlePosition,
-            'highContrastSubtitles': highContrastSubtitles,
-            'subtitleTextColor': subtitleTextColor,
-            'subtitleBackgroundColor': subtitleBackgroundColor,
-            'seekBackMs': seekBackSeconds * 1000,
-            'seekForwardMs': seekForwardSeconds * 1000,
-            'autoSkipIntros': autoSkipIntros,
-            'autoSkipOutros': autoSkipOutros,
-            'videoFit': videoFit,
-            'malMediaId': ?malMediaId,
-            'episodeNumber': ?episodeNumber,
-            'hasDirectSources': hasDirectSources,
-            if (artworkUrl != null && artworkUrl.isNotEmpty)
-              'artworkUrl': artworkUrl,
-            if (headers.isNotEmpty) 'headers': headers,
-          });
+      final value = await _channel.invokeMapMethod<Object?, Object?>(
+        'startNativePlayer',
+        {
+          'source': source.toString(),
+          'title': title,
+          'checkpointKey': checkpointKey,
+          'releaseName': releaseName,
+          'streamLabel': streamLabel,
+          'resumeMs': resumePosition.inMilliseconds,
+          'resumeProvided':
+              resumeUpdatedAt != null || resumePosition > Duration.zero,
+          if (resumeUpdatedAt != null)
+            'resumeUpdatedAtMs': resumeUpdatedAt.millisecondsSinceEpoch,
+          'startFromBeginning': startFromBeginning,
+          if (externalSubtitle != null && externalSubtitle.isNotEmpty)
+            'externalSubtitle': externalSubtitle,
+          'audioLanguage': audioLanguage,
+          'subtitleLanguage': subtitleLanguage,
+          'subtitlesEnabled': subtitlesEnabled,
+          'subtitleSize': subtitleSize,
+          'subtitlePosition': subtitlePosition,
+          'highContrastSubtitles': highContrastSubtitles,
+          'subtitleTextColor': subtitleTextColor,
+          'subtitleBackgroundColor': subtitleBackgroundColor,
+          'seekBackMs': seekBackSeconds * 1000,
+          'seekForwardMs': seekForwardSeconds * 1000,
+          'autoSkipIntros': autoSkipIntros,
+          'autoSkipOutros': autoSkipOutros,
+          'videoFit': videoFit,
+          'malMediaId': ?malMediaId,
+          'episodeNumber': ?episodeNumber,
+          'hasDirectSources': hasDirectSources,
+          if (artworkUrl != null && artworkUrl.isNotEmpty)
+            'artworkUrl': artworkUrl,
+          if (headers.isNotEmpty) 'headers': headers,
+          if (trustedLocalSource) 'trustedLocalSource': true,
+          for (final key in const [
+            'themeBackgroundColor',
+            'themeSurfaceColor',
+            'themeAccentColor',
+            'themeAccentBrightColor',
+            'themeFocusColor',
+            'themePrimaryTextColor',
+            'themeMutedTextColor',
+          ])
+            if (theme[key] case final int color) key: color,
+        },
+      );
       return value == null
           ? const NativePlaybackResult(
               status: 'exit',

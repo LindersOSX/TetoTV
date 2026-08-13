@@ -1,16 +1,18 @@
+import 'dart:async';
+
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('native player return navigation', () {
-    test('Exit video always returns to the home route', () {
+    test('Exit video returns to the anime route that opened the player', () {
       expect(
         nativePlayerReturnNavigationForStatus('stopped'),
-        NativePlayerReturnNavigation.home,
+        NativePlayerReturnNavigation.previousRoute,
       );
       expect(
         nativePlayerReturnNavigationForStatus('exit'),
-        NativePlayerReturnNavigation.home,
+        NativePlayerReturnNavigation.previousRoute,
       );
     });
 
@@ -55,6 +57,23 @@ void main() {
         },
       ]);
 
+      expect(attempted, ['checkpoint', 'tracking', 'player-success']);
+    });
+
+    test('Exit bookkeeping cannot strand terminal navigation', () async {
+      final stopwatch = Stopwatch()..start();
+      final attempted = <String>[];
+
+      await runBestEffortNativePlayerExitBookkeeping([
+        () async {
+          attempted.add('checkpoint');
+          await Completer<void>().future;
+        },
+        () async => attempted.add('tracking'),
+        () async => attempted.add('player-success'),
+      ], totalTimeout: const Duration(milliseconds: 25));
+
+      expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 250)));
       expect(attempted, ['checkpoint', 'tracking', 'player-success']);
     });
   });

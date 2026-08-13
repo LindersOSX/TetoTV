@@ -32,6 +32,7 @@ const _bundledNotices = <_BundledNotice>[
   _BundledNotice([
     'Discord Social SDK bundled components 1.10.18369',
   ], 'third_party/discord_social_sdk/License-Notices.txt'),
+  _BundledNotice(['Noto Sans Regular'], 'assets/fonts/OFL.txt'),
 ];
 
 class _BundledNotice {

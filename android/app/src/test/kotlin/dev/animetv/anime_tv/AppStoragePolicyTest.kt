@@ -1,5 +1,6 @@
 package dev.animetv.anime_tv
 
+import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -7,6 +8,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppStoragePolicyTest {
+    @Test
+    fun `method channel clears cache away from the Android main thread`() {
+        val activity = source(
+            "main/kotlin/dev/animetv/anime_tv/MainActivity.kt",
+        ).readText()
+        val bridgeHandler = activity
+            .substringAfter("channel.setMethodCallHandler", "")
+            .substringBefore("private fun appVersion", "")
+        val asyncCleanup = activity
+            .substringAfter("private fun clearAppCacheAsync", "")
+            .substringBefore("private fun startNativePlayer", "")
+
+        assertTrue(bridgeHandler.contains("\"clearAppCache\" -> clearAppCacheAsync(result)"))
+        assertTrue(asyncCleanup.contains("Thread("))
+        assertTrue(asyncCleanup.contains("runOnUiThread"))
+        assertTrue(asyncCleanup.contains("runCatching(::clearAppCache)"))
+    }
+
     @Test
     fun `cache cleanup deletes only supplied roots`() {
         val appRoot = Files.createTempDirectory("tetotv-storage-policy").toFile()
@@ -48,5 +67,20 @@ class AppStoragePolicyTest {
         } finally {
             appRoot.deleteRecursively()
         }
+    }
+
+    private fun source(relativePath: String): File {
+        val workingDirectory = System.getProperty("user.dir") ?: "."
+        return generateSequence(File(workingDirectory)) { it.parentFile }
+            .take(7)
+            .flatMap { directory ->
+                sequenceOf(
+                    File(directory, "src/$relativePath"),
+                    File(directory, "app/src/$relativePath"),
+                    File(directory, "android/app/src/$relativePath"),
+                )
+            }
+            .firstOrNull(File::isFile)
+            ?: error("Missing Android source: $relativePath")
     }
 }

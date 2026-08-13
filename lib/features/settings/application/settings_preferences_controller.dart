@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -33,6 +34,7 @@ const _navigationSoundsKey = 'audio_navigation_sounds';
 const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
+const _preferredAudioKey = 'player_preferred_audio';
 const _anonymousUsageCountKey = 'privacy_anonymous_usage_count';
 const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
 
@@ -200,6 +202,7 @@ class SettingsPreferences {
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.automatic,
+    this.preferredAudio = PlaybackAudioPreference.dub,
     this.anonymousUsageCountEnabled = false,
     this.anonymousCrashReportingEnabled = false,
     this.loaded = false,
@@ -234,6 +237,7 @@ class SettingsPreferences {
   final bool clickSounds;
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
+  final PlaybackAudioPreference preferredAudio;
   final bool anonymousUsageCountEnabled;
   final bool anonymousCrashReportingEnabled;
   final bool loaded;
@@ -268,6 +272,7 @@ class SettingsPreferences {
     bool? clickSounds,
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
+    PlaybackAudioPreference? preferredAudio,
     bool? anonymousUsageCountEnabled,
     bool? anonymousCrashReportingEnabled,
     bool? loaded,
@@ -303,6 +308,7 @@ class SettingsPreferences {
     clickSounds: clickSounds ?? this.clickSounds,
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
+    preferredAudio: preferredAudio ?? this.preferredAudio,
     anonymousUsageCountEnabled:
         anonymousUsageCountEnabled ?? this.anonymousUsageCountEnabled,
     anonymousCrashReportingEnabled:
@@ -393,6 +399,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_preferredPlayerKey),
       _safeRead(_anonymousUsageCountKey),
       _safeRead(_anonymousCrashReportingKey),
+      _safeRead(_preferredAudioKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -548,6 +555,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(_anonymousCrashReportingKey, 30)) {
       restored = restored.copyWith(
         anonymousCrashReportingEnabled: valueAt(30) == 'true',
+      );
+    }
+    if (canRestore(_preferredAudioKey, 31)) {
+      restored = restored.copyWith(
+        preferredAudio: PlaybackAudioPreferenceLabel.fromStorage(valueAt(31)),
       );
     }
     state = restored.copyWith(loaded: true);
@@ -722,6 +734,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_preferredPlayerKey: value.name},
   );
 
+  Future<void> setPreferredAudio(PlaybackAudioPreference value) => _update(
+    state.copyWith(preferredAudio: value),
+    {_preferredAudioKey: value.name},
+  );
+
   Future<void> setAnonymousUsageCountEnabled(bool value) => _update(
     state.copyWith(anonymousUsageCountEnabled: value),
     {_anonymousUsageCountKey: value.toString()},
@@ -781,6 +798,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _seekBackSecondsKey,
       _seekForwardSecondsKey,
       _preferredPlayerKey,
+      _preferredAudioKey,
     ];
     _markMutated(keys);
     state = state.copyWith(
@@ -794,6 +812,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,
       preferredPlayer: defaults.preferredPlayer,
+      preferredAudio: defaults.preferredAudio,
     );
     return _enqueueStorage(() async {
       for (final key in keys) {

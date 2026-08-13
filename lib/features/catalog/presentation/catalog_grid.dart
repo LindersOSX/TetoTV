@@ -338,8 +338,8 @@ class _CatalogGridState extends State<CatalogGrid> {
                         anime.displayTitle(widget.titlePreference),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.textPrimary,
+                        style: TextStyle(
+                          color: context.appPalette.primaryText,
                           fontSize: 11,
                           height: 1.05,
                           fontWeight: FontWeight.w800,

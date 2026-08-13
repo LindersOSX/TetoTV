@@ -53,6 +53,27 @@ void main() {
     expect(releases, isEmpty);
   });
 
+  test('recognizes common dub tags without matching unrelated words', () {
+    final releases = StremioTorrentReleaseSource.parseStreams({
+      'streams': [
+        {
+          'name': '[Group] Example S01E01 [DUB] 1080p',
+          'infoHash': '1111111111111111111111111111111111111111',
+        },
+        {
+          'name': '[Group] Example S01E02 English Audio 1080p',
+          'infoHash': '2222222222222222222222222222222222222222',
+        },
+        {
+          'name': '[Group] Example S01E03 adubious-title 1080p',
+          'infoHash': '3333333333333333333333333333333333333333',
+        },
+      ],
+    });
+
+    expect(releases.map((release) => release.isDubbed), [true, true, false]);
+  });
+
   test('rejects redirects instead of following them to another host', () async {
     final addonDio = Dio()
       ..interceptors.add(

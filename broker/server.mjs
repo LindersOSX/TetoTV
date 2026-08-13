@@ -71,6 +71,13 @@ const githubReleaseRepository =
 const githubReleaseToken =
   process.env.GITHUB_RELEASE_TOKEN ||
   (selfTest ? "self-test-github-release-token" : "");
+const selfTestBetaAccessKey = selfTest ? "B".repeat(43) : "";
+const betaAccessKeyHashes = parseBetaAccessKeyHashes(
+  process.env.BETA_ACCESS_KEY_SHA256_HASHES ||
+    (selfTest
+      ? createHash("sha256").update(selfTestBetaAccessKey).digest("hex")
+      : ""),
+);
 const githubReleaseApiVersion = "2022-11-28";
 const releaseMetadataTtlMs = 60 * 1000;
 const versionedReleaseTtlMs = 24 * 60 * 60 * 1000;
@@ -231,22 +238,23 @@ function privacyPage(response) {
     response,
     200,
     `<h1>TetoTV privacy disclosure</h1>
-     <p><small>Effective August 12, 2026</small></p>
+     <p><small>Effective August 13, 2026</small></p>
      <p>TetoTV is an independent Android application. It has no advertising or analytics SDK, no TetoTV account system, and does not sell personal data.</p>
 
      <h2>Data kept on the device</h2>
-     <p>Account and debrid credentials use Android Keystore-backed secure storage. Playback history, resume positions, preferences, tracker-sync entries, installed source definitions, bounded diagnostics, and device playback capabilities remain in app storage until removed in TetoTV, Android app storage is cleared, or the app is uninstalled.</p>
+     <p>Account and debrid credentials use Android Keystore-backed secure storage. An optional Jellyfin server address, username, access token, and random app device ID, plus an optional Plex server address, X-Plex-Token, and random client identifier, use the same protected device storage. Jellyfin passwords are used only for sign-in and are not saved. Playback history, resume positions, preferences, tracker-sync entries, installed source definitions, bounded diagnostics, and device playback capabilities remain in app storage until removed in TetoTV, Android app storage is cleared, or the app is uninstalled.</p>
      <p>TetoTV's <strong>Settings &gt; System &gt; Reset TetoTV</strong> action and Android's Clear storage action remove all TetoTV local data. The separate <strong>Clear cache</strong> action removes only temporary files and retains accounts, preferences, sources, and history.</p>
 
      <h2>Services selected by the user</h2>
      <p>Features the user chooses can send the minimum required requests to AniList, MAL, Kitsu, a selected debrid provider, AniSkip, artwork hosts, and source repositories or extensions the user explicitly installs. Those independent services receive ordinary connection metadata and apply their own terms and privacy policies. TetoTV does not bundle or recommend a streaming-source repository.</p>
-     <p>When a user explicitly links Discord and enables <strong>Discord Rich Presence</strong>, TetoTV sends Discord the current anime title, episode number, playing or paused state, playback timing, and the public show-artwork URL so Discord can display that activity with the show's thumbnail. Discord OAuth access and refresh tokens are stored in Android Keystore-backed secure storage. Disabling Rich Presence stops sharing playback activity; unlinking Discord also revokes the connection when possible and deletes the saved tokens from TetoTV. TetoTV never asks for or stores the user's Discord password.</p>
+     <p>Android's system file picker grants TetoTV read access only to a local video the user selects; TetoTV does not upload that USB or internal-storage video. If the user connects Jellyfin, the entered username and password go directly to that server for sign-in, the password is not saved, and the returned access token is kept in Keystore-backed secure storage. If the user connects Plex, the saved X-Plex-Token goes directly to that server in request headers and is never placed in media or artwork URLs. HTTPS is recommended. HTTP requires a warning and is limited to a numeric private-network address or localhost, where credentials and video traffic are not encrypted. Jellyfin and Plex traffic do not pass through the TetoTV broker.</p>
+     <p>When a user explicitly links Discord and enables <strong>Discord Rich Presence</strong>, TetoTV sends Discord the current anime title, episode number, playing or paused state, playback timing, and the public show-artwork URL so Discord can display that activity with the show's thumbnail. USB, internal-storage, Jellyfin, and Plex playback is excluded so private filenames and library titles are not shared. Discord OAuth access and refresh tokens are stored in Android Keystore-backed secure storage. Disabling Rich Presence stops sharing playback activity; unlinking Discord also revokes the connection when possible and deletes the saved tokens from TetoTV. TetoTV never asks for or stores the user's Discord password.</p>
      <p>On Android TV and Fire TV, Discord linking uses Discord's limited-input device authorization directly. TetoTV sends a one-time authorization request to Discord and polls Discord only until the link succeeds, expires, or is canceled. The private device code is kept only in app memory during that attempt; completed access and refresh tokens use the same Android Keystore-backed secure storage described above. The TetoTV broker is not involved in Discord linking.</p>
 
      <h2>Pairing and update broker</h2>
      <p>OAuth pairing keeps one-time state, a device-code hash, PKCE data, and token material in process memory for at most ten minutes. A successful authenticated device poll deletes the complete pairing immediately.</p>
      <p>Phone-assisted source entry keeps submitted URLs in volatile memory for at most ten minutes after submission. The URLs are deleted when the authenticated app acknowledges local processing or the session expires. A count-only confirmation can remain for at most another ten minutes.</p>
-     <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app.</p>
+     <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app. Private Beta users enter a separately issued tester key; its raw value is stored only in Android Keystore-backed secure storage and sent only to the fixed TetoTV update broker. The broker stores only configured SHA-256 hashes for access checks and never returns tester keys or hashes from its health endpoint.</p>
      <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
 
      <h2>Anonymous live activity count</h2>
@@ -259,7 +267,7 @@ function privacyPage(response) {
      <p>Other diagnostics stay on the device unless the user explicitly copies or shares a report. Users can disconnect services, remove local history and sources, clear Android app storage, or uninstall TetoTV. Removing local history does not modify AniList or MAL.</p>
 
      <h2>Security, children, and changes</h2>
-     <p>Network integrations require HTTPS and user-added endpoints are constrained against private or local network targets. TetoTV is not directed to children and does not knowingly collect a child's personal information. This disclosure will be updated when material features or hosting practices change.</p>
+     <p>Network integrations require HTTPS except an explicitly approved Jellyfin or Plex connection to a numeric private-network address or localhost. User-added endpoints are constrained to their expected network boundary. TetoTV is not directed to children and does not knowingly collect a child's personal information. This disclosure will be updated when material features or hosting practices change.</p>
 
      <h2>Contact</h2>
      <p>Privacy questions, support requests, and deletion requests can be sent to the TetoTV maintainer through the public <a href="https://discord.gg/juC6k7d4WY">TetoTV Discord community</a>.</p>`,
@@ -442,6 +450,18 @@ function sanitizeCrashText(value, maximum) {
   let output = String(value || "")
     .replace(/https?:\/\/[^\s"']+/gi, "[URL]")
     .replace(/magnet:\?[^\s"']+/gi, "[MAGNET]")
+    .replace(
+      /\b(?![A-Za-z]:[\\/])[A-Za-z][A-Za-z0-9+.-]{0,31}:(?![0-9\s])[^\s"'<>]+/gi,
+      "[URI]",
+    )
+    .replace(
+      /(^|[\s"'(=\[])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s"'<>]+[\\/])[^\r\n"'<>]*/gm,
+      "$1[PATH]",
+    )
+    .replace(
+      /(^|[\s"'(=\[])\/(?!\/)[^\r\n"'<>]*/gm,
+      "$1[PATH]",
+    )
     .replace(/bearer\s+[^\s,;"']+/gi, "Bearer [REDACTED]")
     .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+\b/gi, "[REDACTED]")
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
@@ -1188,6 +1208,7 @@ async function exchangeCode(pairing, code) {
         redirect_uri: callbackUrl(pairing.provider),
         code,
       }),
+      redirect: "error",
       signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
     });
     const body = await result.json();
@@ -1217,6 +1238,7 @@ async function exchangeCode(pairing, code) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form,
+    redirect: "error",
     signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
   });
   const body = await result.json();
@@ -1263,6 +1285,7 @@ async function refreshMyAnimeListToken(request, response) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form,
+    redirect: "error",
     signal: AbortSignal.timeout(oauthUpstreamTimeoutMs),
   });
   const tokenBody = await result.json();
@@ -1348,6 +1371,61 @@ function updateProxyConfigured({
     repositoryPattern.test(repository) &&
     token.length >= 20
   );
+}
+
+function parseBetaAccessKeyHashes(value) {
+  return [...new Set(String(value || "").toLowerCase().split(/[\s,]+/))]
+    .filter((candidate) => /^[0-9a-f]{64}$/.test(candidate))
+    .slice(0, 32)
+    .map((candidate) => Buffer.from(candidate, "hex"));
+}
+
+function betaUpdatesConfigured({
+  updatesConfigured = updateProxyConfigured(),
+  hashes = betaAccessKeyHashes,
+} = {}) {
+  return updatesConfigured && hashes.length > 0;
+}
+
+function betaUpdateAuthorized(request, hashes = betaAccessKeyHashes) {
+  const authorization = String(request.headers.authorization || "");
+  const match = authorization.match(/^Beta ([A-Za-z0-9_-]{32,128})$/);
+  const candidate = digest(match?.[1] || "");
+  let matched = 0;
+  for (const expected of hashes) {
+    matched |= timingSafeEqual(candidate, expected) ? 1 : 0;
+  }
+  return match !== null && hashes.length > 0 && matched === 1;
+}
+
+function betaAccessError(request, response, status, error, extraHeaders = {}) {
+  if (request.method !== "HEAD") {
+    return json(response, status, { error }, extraHeaders);
+  }
+  response.writeHead(status, {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    ...extraHeaders,
+  });
+  response.end();
+}
+
+function requireBetaUpdateAccess(request, response) {
+  if (!betaUpdatesConfigured()) {
+    betaAccessError(request, response, 503, "beta_updates_not_configured");
+    return false;
+  }
+  if (betaUpdateAuthorized(request)) return true;
+  if (rateLimited(request, 8, "beta-update-auth")) {
+    betaAccessError(request, response, 429, "rate_limited", {
+      "Retry-After": "60",
+    });
+    return false;
+  }
+  betaAccessError(request, response, 401, "beta_access_required", {
+    "WWW-Authenticate": 'Beta realm="TetoTV Beta Updates"',
+  });
+  return false;
 }
 
 function githubRepositoryApiPath() {
@@ -1863,7 +1941,7 @@ const server = createServer(
         source_pairing_version: 2,
         app_presence: true,
         crash_reporting: crashReportingConfigured(),
-        app_updates: updateProxyConfigured(),
+        beta_updates_configured: betaUpdatesConfigured(),
       });
     }
     if (request.method === "GET" && url.pathname === "/privacy") {
@@ -1940,6 +2018,7 @@ const server = createServer(
       request.method === "GET" &&
       url.pathname === "/v1/app-updates/latest"
     ) {
+      if (!requireBetaUpdateAccess(request, response)) return;
       if (rateLimited(request, 60, "update-metadata")) {
         return json(
           response,
@@ -1957,6 +2036,7 @@ const server = createServer(
       (request.method === "GET" || request.method === "HEAD") &&
       updateDownloadMatch
     ) {
+      if (!requireBetaUpdateAccess(request, response)) return;
       if (
         request.method === "GET" &&
         rateLimited(request, 4, "update-download")
@@ -2217,8 +2297,16 @@ server.listen(port, async () => {
             schema_version: 1,
             event_id: "self-test-event-123456",
             kind: "native",
-            message: "Decoder failed at https://signed.example/private",
-            stack: "Bearer never-forward-this-token token=also-private",
+            message:
+              "Decoder failed at https://signed.example/private " +
+              "content://media.documents/document/video%3Aprivate-show.mkv " +
+              `${"a".repeat(64)}\n` +
+              "/storage/emulated/0/Private Show Episode 7.mkv",
+            stack:
+              "Bearer never-forward-this-token token=also-private\n" +
+              "C:\\Users\\Viewer\\Videos\\Private Episode 8.mkv\n" +
+              "at dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy" +
+              "(Media3PlayerActivity.kt:169)",
             occurred_at: new Date().toISOString(),
             app_version: "1.11.27",
             build_number: 340001,
@@ -2229,8 +2317,33 @@ server.listen(port, async () => {
         },
       );
       const crashReportBody = await crashReportResponse.json();
+      const betaAuthorization = {
+        Authorization: `Beta ${selfTestBetaAccessKey}`,
+      };
+      const anonymousUpdateMetadataResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-updates/latest`,
+      );
+      const invalidUpdateMetadataResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-updates/latest`,
+        { headers: { Authorization: `Beta ${"C".repeat(43)}` } },
+      );
+      const betaAuthRateResponses = [];
+      for (let index = 0; index < 9; index += 1) {
+        betaAuthRateResponses.push(
+          await fetch(
+            `http://127.0.0.1:${port}/v1/app-updates/latest`,
+            {
+              headers: {
+                Authorization: `Beta ${"D".repeat(43)}`,
+                "X-Forwarded-For": "self-test-beta-auth-rate",
+              },
+            },
+          ),
+        );
+      }
       const updateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
+        { headers: betaAuthorization },
       );
       const updateMetadata = await updateMetadataResponse.json();
       const advertisedUpdateUrl = new URL(updateMetadata.asset.download_url);
@@ -2239,27 +2352,41 @@ server.listen(port, async () => {
       // Force the first binary request through the immutable tag lookup rather
       // than relying on metadata's in-memory release object.
       cachedVersionedReleases.clear();
+      const anonymousUpdateHead = await fetch(localUpdateUrl, {
+        method: "HEAD",
+      });
       const updateHead = await fetch(
         localUpdateUrl,
-        { method: "HEAD" },
+        { method: "HEAD", headers: betaAuthorization },
       );
-      const updateDownload = await fetch(localUpdateUrl);
+      const anonymousUpdateDownload = await fetch(localUpdateUrl);
+      const updateDownload = await fetch(localUpdateUrl, {
+        headers: betaAuthorization,
+      });
       const updateDownloadBody = Buffer.from(
         await updateDownload.arrayBuffer(),
       );
       const updateRange = await fetch(localUpdateUrl, {
-        headers: { Range: "bytes=16-31" },
+        headers: { ...betaAuthorization, Range: "bytes=16-31" },
       });
       const updateRangeBody = Buffer.from(await updateRange.arrayBuffer());
       const invalidUpdateRange = await fetch(localUpdateUrl, {
-        headers: { Range: "bytes=999999-1000000" },
+        headers: {
+          ...betaAuthorization,
+          Range: "bytes=999999-1000000",
+        },
       });
       const mismatchedIfRange = await fetch(localUpdateUrl, {
         method: "HEAD",
-        headers: { Range: "bytes=16-31", "If-Range": '"old-asset"' },
+        headers: {
+          ...betaAuthorization,
+          Range: "bytes=16-31",
+          "If-Range": '"old-asset"',
+        },
       });
       const wrongAssetDownload = await fetch(
         localUpdateUrl.replace("/assets/116001/", "/assets/116002/"),
+        { headers: betaAuthorization },
       );
       const wrongAssetBody = await wrongAssetDownload.text();
       const pairing = await fetch(
@@ -2634,6 +2761,14 @@ server.listen(port, async () => {
           },
         },
       );
+      const oauthExchangeRedirectPolicies =
+        exchangeCode
+          .toString()
+          .match(/redirect:\s*["']error["']/g)?.length ?? 0;
+      const oauthRefreshRedirectPolicies =
+        refreshMyAnimeListToken
+          .toString()
+          .match(/redirect:\s*["']error["']/g)?.length ?? 0;
       if (
         health.status !== "ok" ||
         normalizePublicOrigin("https://example.com/path") !== "" ||
@@ -2664,7 +2799,13 @@ server.listen(port, async () => {
           ?.includes("default-src 'none'") ||
         !privacyBody.includes("TetoTV privacy disclosure") ||
         !privacyBody.includes("at most ten minutes") ||
-        !privacyBody.includes("Effective August 12, 2026") ||
+        !privacyBody.includes("Effective August 13, 2026") ||
+        !privacyBody.includes("Android's system file picker") ||
+        !privacyBody.includes("Jellyfin and Plex traffic do not pass through") ||
+        !privacyBody.includes("X-Plex-Token") ||
+        !privacyBody.includes("random app device ID") ||
+        !privacyBody.includes("random client identifier") ||
+        !privacyBody.includes("private filenames and library titles are not shared") ||
         !privacyBody.includes("Reset TetoTV") ||
         !privacyBody.includes("Clear cache") ||
         !privacyBody.includes("Discord Rich Presence") ||
@@ -2676,7 +2817,14 @@ server.listen(port, async () => {
         !privacyBody.includes("Anonymous crash reporting is disabled by default") ||
         !privacyBody.includes("unexpected handled app errors") ||
         !privacyBody.includes("designated crash-report channel") ||
+        !privacyBody.includes("Private Beta users") ||
+        !privacyBody.includes("SHA-256 hashes for access checks") ||
         privacyBody.includes(githubReleaseToken) ||
+        privacyBody.includes(selfTestBetaAccessKey) ||
+        JSON.stringify(health).includes(selfTestBetaAccessKey) ||
+        JSON.stringify(health).includes(
+          createHash("sha256").update(selfTestBetaAccessKey).digest("hex"),
+        ) ||
         health.source_pairing !== true ||
         health.source_pairing_version !== 2 ||
         health.app_presence !== true ||
@@ -2687,7 +2835,18 @@ server.listen(port, async () => {
         selfTestCrashForwards[0].body.includes("signed.example") ||
         selfTestCrashForwards[0].body.includes("never-forward-this-token") ||
         selfTestCrashForwards[0].body.includes("also-private") ||
+        selfTestCrashForwards[0].body.includes("private-show") ||
+        selfTestCrashForwards[0].body.includes("document/video") ||
+        selfTestCrashForwards[0].body.includes("Private Show Episode 7.mkv") ||
+        selfTestCrashForwards[0].body.includes("Private Episode 8.mkv") ||
+        selfTestCrashForwards[0].body.includes("a".repeat(40)) ||
         !selfTestCrashForwards[0].body.includes("[URL]") ||
+        !selfTestCrashForwards[0].body.includes("[URI]") ||
+        !selfTestCrashForwards[0].body.includes("[PATH]") ||
+        !selfTestCrashForwards[0].body.includes(
+          "dev.animetv.anime_tv.player.Media3PlayerActivity.onDestroy" +
+            "(Media3PlayerActivity.kt:169)",
+        ) ||
         !selfTestCrashForwards[0].signature.startsWith("sha256=") ||
         presenceCreateResponse.status !== 201 ||
         !/^[A-Za-z0-9_-]{43}$/.test(presenceSession.session_token) ||
@@ -2701,8 +2860,18 @@ server.listen(port, async () => {
         presenceCloseResponse.status !== 204 ||
         presenceClosed.active !== 0 ||
         presenceClosed.streaming !== 0 ||
-        health.app_updates !== true ||
+        health.beta_updates_configured !== true ||
+        Object.hasOwn(health, "app_updates") ||
         updateProxyConfigured({ token: "" }) !== false ||
+        betaUpdatesConfigured({ hashes: [] }) !== false ||
+        anonymousUpdateMetadataResponse.status !== 401 ||
+        anonymousUpdateMetadataResponse.headers.get("www-authenticate") !==
+          'Beta realm="TetoTV Beta Updates"' ||
+        invalidUpdateMetadataResponse.status !== 401 ||
+        betaAuthRateResponses.slice(0, 8).some(
+          (response) => response.status !== 401,
+        ) ||
+        betaAuthRateResponses.at(-1)?.status !== 429 ||
         updateMetadataResponse.status !== 200 ||
         updateMetadataResponse.headers.get("cache-control") !== "no-store" ||
         updateMetadataResponse.headers.get("strict-transport-security") !==
@@ -2721,6 +2890,9 @@ server.listen(port, async () => {
         updateHead.headers.get("accept-ranges") !== "bytes" ||
         updateHead.headers.get("etag") !==
           `"asset-116001-${selfTestApk.length}"` ||
+        anonymousUpdateHead.status !== 401 ||
+        anonymousUpdateHead.headers.has("content-length") ||
+        anonymousUpdateDownload.status !== 401 ||
         updateDownload.status !== 200 ||
         updateDownload.headers.get("strict-transport-security") !==
           "max-age=31536000" ||
@@ -2758,6 +2930,8 @@ server.listen(port, async () => {
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(malPairing.user_code) ||
+        oauthExchangeRedirectPolicies !== 2 ||
+        oauthRefreshRedirectPolicies !== 1 ||
         oauthRateResponses
           .map((value) => value.status)
           .sort()

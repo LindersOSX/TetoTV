@@ -19,7 +19,7 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
   context: context,
   barrierDismissible: true,
   builder: (context) => AlertDialog(
-    backgroundColor: AppColors.panel,
+    backgroundColor: context.appPalette.surface,
     title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 680),
@@ -27,9 +27,9 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Add or update this show on your connected AniList and MAL accounts.',
-            style: TextStyle(color: AppColors.textMuted),
+            style: TextStyle(color: context.appPalette.mutedText),
           ),
           const SizedBox(height: 14),
           TrackingStatusOptions(
@@ -70,10 +70,13 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Remove deletes the tracker list entry. Dropped keeps the show '
               'in your list as something you started and stopped.',
-              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 12,
+              ),
             ),
           ],
         ],
@@ -114,7 +117,9 @@ class TrackingStatusOptions extends StatelessWidget {
             width: 126,
             padding: const EdgeInsets.symmetric(vertical: 12),
             alignment: Alignment.center,
-            color: status == current ? AppColors.accent : AppColors.panelRaised,
+            color: status == current
+                ? context.appPalette.accent
+                : context.appPalette.surfaceRaised,
             child: Text(
               status.displayName,
               style: const TextStyle(fontWeight: FontWeight.w800),

@@ -279,7 +279,9 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       canRequestFocus: false,
       onKeyEvent: _handleNavigationKey,
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: context.appPalette == AppThemePalette.defaults
+            ? Colors.black
+            : context.appPalette.background,
         body: SafeArea(
           minimum: context.responsiveScreenPadding,
           child: Column(
@@ -325,9 +327,9 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
               const SizedBox(height: 18),
               Expanded(
                 child: state.loading && state.repositories.isEmpty
-                    ? const Center(
+                    ? Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.accentBright,
+                          color: context.appPalette.accentBright,
                         ),
                       )
                     : CustomScrollView(
@@ -381,12 +383,14 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                 'Optional Stremio-compatible manifests you add yourself. TetoTV does not include or recommend a torrent catalog.',
                           ),
                           if (torrentSources.manifestUrls.isEmpty)
-                            const SliverToBoxAdapter(
+                            SliverToBoxAdapter(
                               child: Padding(
-                                padding: EdgeInsets.only(bottom: 10),
+                                padding: const EdgeInsets.only(bottom: 10),
                                 child: Text(
                                   'No torrent sources added. Debrid searches stay unavailable until you explicitly add one.',
-                                  style: TextStyle(color: AppColors.textMuted),
+                                  style: TextStyle(
+                                    color: context.appPalette.mutedText,
+                                  ),
                                 ),
                               ),
                             )
@@ -583,7 +587,7 @@ SliverToBoxAdapter _section(
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: AppColors.accentBright),
+        Icon(icon, color: context.appPalette.accentBright),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -621,7 +625,7 @@ class _RepositoryTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
@@ -629,7 +633,9 @@ class _RepositoryTile extends StatelessWidget {
         children: [
           Icon(
             repository.enabled ? Icons.link_rounded : Icons.link_off_rounded,
-            color: repository.enabled ? AppColors.cyan : Colors.white38,
+            color: repository.enabled
+                ? context.appPalette.secondaryAccent
+                : Colors.white38,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -699,13 +705,16 @@ class _TorrentSourceTile extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
     decoration: BoxDecoration(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       borderRadius: BorderRadius.circular(16),
       border: Border.all(color: Colors.white.withValues(alpha: .08)),
     ),
     child: Row(
       children: [
-        const Icon(Icons.cloud_done_outlined, color: AppColors.cyan),
+        Icon(
+          Icons.cloud_done_outlined,
+          color: context.appPalette.secondaryAccent,
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -786,7 +795,10 @@ class _InstalledAddonCard extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.right,
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 11,
+              ),
             ),
           ),
         Wrap(
@@ -900,7 +912,7 @@ class _AddonShell extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
@@ -932,8 +944,8 @@ class _AddonShell extends StatelessWidget {
                       addon.manifestUri.host,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.textMuted,
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
                         fontSize: 10,
                       ),
                     ),
@@ -946,7 +958,7 @@ class _AddonShell extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
             decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: .18),
+              color: context.appPalette.accent.withValues(alpha: .18),
               borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
@@ -983,7 +995,7 @@ class _AddonIcon extends StatelessWidget {
     height: 50,
     child: DecoratedBox(
       decoration: BoxDecoration(
-        color: AppColors.accent.withValues(alpha: .16),
+        color: context.appPalette.accent.withValues(alpha: .16),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Icon(
@@ -1026,7 +1038,7 @@ class _MarketplaceButton extends StatelessWidget {
             child: Container(
               constraints: const BoxConstraints(minHeight: 42),
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-              color: AppColors.selectableSurface,
+              color: context.appPalette.selectableSurface,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1077,7 +1089,7 @@ Future<void> _addRepository(
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
+        backgroundColor: context.appPalette.surface,
         title: const Text('Add Marketplace repository'),
         content: SizedBox(
           width: 680,
@@ -1119,7 +1131,7 @@ Future<void> _addTorrentSource(
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.panel,
+        backgroundColor: context.appPalette.surface,
         title: const Text('Add torrent source'),
         content: SizedBox(
           width: 680,
@@ -1246,7 +1258,7 @@ Future<bool> showMarketplaceConfirmationDialog(
     return await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
-            backgroundColor: AppColors.panel,
+            backgroundColor: dialogContext.appPalette.surface,
             title: Text(title),
             content: SizedBox(width: 620, child: Text(body)),
             actions: [

@@ -6,13 +6,21 @@ import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+int effectiveCompletedEpisodeProgress({
+  required int trackedProgress,
+  int? localEpisode,
+  bool localCompleted = false,
+}) {
+  final localProgress = localCompleted ? (localEpisode ?? 0) : 0;
+  return localProgress > trackedProgress ? localProgress : trackedProgress;
+}
 
 class AnimeDetailsScreen extends ConsumerWidget {
   const AnimeDetailsScreen({required this.animeId, super.key});
@@ -24,8 +32,10 @@ class AnimeDetailsScreen extends ConsumerWidget {
     final details = ref.watch(animeDetailsProvider(animeId));
     return Scaffold(
       body: details.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppColors.cyan),
+        loading: () => Center(
+          child: CircularProgressIndicator(
+            color: context.appPalette.secondaryAccent,
+          ),
         ),
         error: (error, _) => _DetailsError(
           message: error.toString(),
@@ -61,24 +71,38 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
         : ((anime.nextAiringEpisode ?? 1) - 1).clamp(1, 999);
 
     final tracking = ref.watch(trackingHomeProvider).valueOrNull;
+    final linkedProgress = ref
+        .watch(
+          linkedTrackingProgressProvider((
+            anilistMediaId: anime.id,
+            malMediaId: anime.idMal,
+          )),
+        )
+        .valueOrNull;
     final localPlayback = ref
         .watch(latestPlaybackProvider(anime.id))
         .valueOrNull;
-    final trackedItem = tracking?.watching
-        .where(
-          (item) =>
-              item.anilistId == anime.id ||
-              (anime.idMal != null &&
-                  item.provider == TrackingProvider.myAnimeList &&
-                  item.tracked.mediaId == anime.idMal),
-        )
-        .firstOrNull;
-    final progress = trackedItem?.tracked.progress ?? 0;
+    final shelfProgress =
+        tracking?.progressFor(
+          anilistMediaId: anime.id,
+          malMediaId: anime.idMal,
+        ) ??
+        0;
+    final trackedProgress =
+        linkedProgress != null && linkedProgress > shelfProgress
+        ? linkedProgress
+        : shelfProgress;
+    final progress = effectiveCompletedEpisodeProgress(
+      trackedProgress: trackedProgress,
+      localEpisode: localPlayback?.episode,
+      localCompleted: localPlayback?.completed == true,
+    );
 
     final localResume =
         localPlayback != null &&
         !localPlayback.completed &&
-        localPlayback.position > const Duration(seconds: 15);
+        localPlayback.position > const Duration(seconds: 15) &&
+        localPlayback.episode > progress;
     final targetEpisode = (localResume ? localPlayback.episode : (progress + 1))
         .clamp(1, knownEpisodes);
     final selectedEpisode = (_selectedEpisode ?? targetEpisode).clamp(
@@ -221,8 +245,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                         const SizedBox(height: 9),
                                         Text(
                                           'Status: ${status.replaceAll('_', ' ')}',
-                                          style: const TextStyle(
-                                            color: AppColors.textMuted,
+                                          style: TextStyle(
+                                            color: context.appPalette.mutedText,
                                             fontSize: 11,
                                             fontWeight: FontWeight.w700,
                                           ),
@@ -379,7 +403,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                     overflow: TextOverflow.ellipsis,
                                     style: Theme.of(context).textTheme.bodyLarge
                                         ?.copyWith(
-                                          color: AppColors.textPrimary,
+                                          color: context.appPalette.primaryText,
                                           fontSize: wide ? 18 : 15,
                                           height: 1.48,
                                         ),
@@ -389,7 +413,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                     Text(
                                       'Status:  ${status.replaceAll('_', ' ')}',
                                       style: TextStyle(
-                                        color: AppColors.accentBright,
+                                        color: context.appPalette.accentBright,
                                         fontSize: wide ? 17 : 13,
                                         fontWeight: FontWeight.w800,
                                       ),
@@ -452,8 +476,8 @@ class _MetadataRow extends StatelessWidget {
             ),
             child: Text(
               value,
-              style: const TextStyle(
-                color: AppColors.textPrimary,
+              style: TextStyle(
+                color: context.appPalette.primaryText,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
@@ -494,7 +518,7 @@ class _EpisodeCounterBadge extends StatelessWidget {
             ? 'EP $selectedEpisode / $totalEpisodes'
             : 'EPISODE $selectedEpisode OF $totalEpisodes',
         style: TextStyle(
-          color: AppColors.textPrimary,
+          color: context.appPalette.primaryText,
           fontSize: large ? 15 : (compact ? 10 : 12),
           fontWeight: FontWeight.w700,
           letterSpacing: 1.1,
@@ -562,13 +586,15 @@ class _MediaFact extends StatelessWidget {
         Icon(
           icon,
           size: large ? 22 : 17,
-          color: accent ? AppColors.accentBright : AppColors.textMuted,
+          color: accent
+              ? context.appPalette.accentBright
+              : context.appPalette.mutedText,
         ),
         SizedBox(width: large ? 8 : 5),
         Text(
           label,
           style: TextStyle(
-            color: AppColors.textPrimary,
+            color: context.appPalette.primaryText,
             fontSize: large ? 17 : 13,
             fontWeight: FontWeight.w700,
           ),
@@ -753,7 +779,7 @@ class _EpisodeActions extends StatelessWidget {
             child: Text(
               'EPISODE',
               style: TextStyle(
-                color: AppColors.textMuted,
+                color: context.appPalette.mutedText,
                 fontSize: large ? 13 : 10,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1.1,
@@ -831,7 +857,7 @@ class _EpisodeActionButton extends StatelessWidget {
     final content = Container(
       height: large ? 76 : 42,
       padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
-      color: primary ? AppColors.accent : const Color(0xFF1B1B1B),
+      color: primary ? context.appPalette.accent : const Color(0xFF1B1B1B),
       child: Row(
         children: [
           Icon(icon, size: large ? 29 : 19),
@@ -842,7 +868,7 @@ class _EpisodeActionButton extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: AppColors.textPrimary,
+                color: context.appPalette.primaryText,
                 fontSize: large ? 18 : 14,
                 fontWeight: FontWeight.w800,
               ),
@@ -979,10 +1005,10 @@ class _DetailsError extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.cloud_off_rounded,
                     size: 66,
-                    color: AppColors.textMuted,
+                    color: context.appPalette.mutedText,
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -994,17 +1020,17 @@ class _DetailsError extends StatelessWidget {
                   const SizedBox(height: 20),
                   TvFocusable(
                     onPressed: onRetry,
-                    child: const ColoredBox(
-                      color: AppColors.textPrimary,
+                    child: ColoredBox(
+                      color: context.appPalette.primaryText,
                       child: Padding(
-                        padding: EdgeInsets.symmetric(
+                        padding: const EdgeInsets.symmetric(
                           horizontal: 18,
                           vertical: 11,
                         ),
                         child: Text(
                           'Retry',
                           style: TextStyle(
-                            color: AppColors.ink,
+                            color: context.appPalette.background,
                             fontWeight: FontWeight.w800,
                           ),
                         ),

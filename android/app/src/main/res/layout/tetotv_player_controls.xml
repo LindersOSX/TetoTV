@@ -42,6 +42,7 @@
         android:layout_marginEnd="28dp"
         android:layout_marginBottom="24dp"
         android:background="@drawable/tetotv_player_card_background"
+        android:clipChildren="false"
         android:elevation="10dp"
         android:layoutDirection="ltr"
         android:outlineProvider="background"
@@ -53,7 +54,7 @@
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="30dp"
+            android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -99,6 +100,7 @@
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
+                android:clipChildren="false"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -106,6 +108,7 @@
                     android:id="@id/exo_center_controls"
                     android:layout_width="wrap_content"
                     android:layout_height="40dp"
+                    android:clipChildren="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
@@ -119,7 +122,8 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_rewind"
                             android:nextFocusLeft="@id/tetotv_skip_segment"
-                            android:nextFocusRight="@id/exo_play_pause" />
+                            android:nextFocusRight="@id/exo_play_pause"
+                            android:src="@drawable/tetotv_ic_replay_rounded" />
 
                         <TextView
                             android:id="@+id/tetotv_rewind_label"
@@ -141,7 +145,8 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_play_pause"
                             android:nextFocusLeft="@id/exo_rew"
-                            android:nextFocusRight="@id/exo_ffwd" />
+                            android:nextFocusRight="@id/exo_ffwd"
+                            android:src="@drawable/tetotv_ic_play_arrow_rounded" />
 
                         <TextView
                             android:id="@+id/tetotv_play_pause_label"
@@ -163,7 +168,8 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_fast_forward"
                             android:nextFocusLeft="@id/exo_play_pause"
-                            android:nextFocusRight="@id/tetotv_audio_tracks" />
+                            android:nextFocusRight="@id/tetotv_audio_tracks"
+                            android:src="@drawable/tetotv_ic_forward_rounded" />
 
                         <TextView
                             android:id="@+id/tetotv_fast_forward_label"
@@ -180,6 +186,7 @@
                     android:id="@id/exo_basic_controls"
                     android:layout_width="wrap_content"
                     android:layout_height="40dp"
+                    android:clipChildren="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
@@ -336,7 +343,7 @@
                     </LinearLayout>
 
                     <Space
-                        android:layout_width="8dp"
+                        android:layout_width="20dp"
                         android:layout_height="1dp" />
                 </LinearLayout>
             </LinearLayout>
@@ -347,12 +354,12 @@
             android:id="@id/exo_progress"
             android:layout_width="match_parent"
             android:layout_height="32dp"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="@dimen/tetotv_player_progress_touch_margin_top"
             android:clickable="false"
             android:focusable="false"
             android:importantForAccessibility="no"
             android:longClickable="false"
-            app:bar_height="4dp"
+            app:bar_height="@dimen/tetotv_player_progress_bar_height"
             app:buffered_color="#3DFFFFFF"
             app:played_color="#FFFF496A"
             app:scrubber_color="@android:color/transparent"
@@ -366,7 +373,7 @@
             android:id="@+id/tetotv_time_footer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
+            android:layout_marginTop="@dimen/tetotv_player_time_footer_margin_top"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -393,8 +400,6 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:includeFontPadding="false"
-                    android:paddingStart="5dp"
-                    android:paddingEnd="5dp"
                     android:text="@string/tetotv_player_time_separator"
                     android:textColor="@android:color/white"
                     android:textSize="13sp"

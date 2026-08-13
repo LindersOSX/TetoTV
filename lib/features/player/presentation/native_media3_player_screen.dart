@@ -2,15 +2,18 @@ import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
@@ -24,7 +27,7 @@ import 'package:go_router/go_router.dart';
 bool isTerminalDebridAlternativeFailure(Object error) =>
     isTerminalDebridFailoverFailure(error);
 
-enum NativePlayerReturnNavigation { home, previousRoute, none }
+enum NativePlayerReturnNavigation { previousRoute, none }
 
 /// Converts only terminal native-player return statuses into route actions.
 ///
@@ -34,7 +37,8 @@ enum NativePlayerReturnNavigation { home, previousRoute, none }
 NativePlayerReturnNavigation nativePlayerReturnNavigationForStatus(
   String status,
 ) => switch (status) {
-  'stopped' || 'exit' => NativePlayerReturnNavigation.home,
+  'stopped' ||
+  'exit' ||
   'cancelled' => NativePlayerReturnNavigation.previousRoute,
   _ => NativePlayerReturnNavigation.none,
 };
@@ -44,15 +48,17 @@ NativePlayerReturnNavigation nativePlayerReturnNavigationForStatus(
 /// database or platform write does not suppress the remaining best-effort
 /// updates.
 Future<void> runBestEffortNativePlayerExitBookkeeping(
-  Iterable<Future<void> Function()> operations,
-) async {
-  for (final operation in operations) {
+  Iterable<Future<void> Function()> operations, {
+  Duration totalTimeout = const Duration(seconds: 2),
+}) async {
+  final tasks = operations.map((operation) async {
     try {
-      await operation();
+      await operation().timeout(totalTimeout);
     } catch (_) {
       // Confirmed Exit must always retain its terminal navigation decision.
     }
-  }
+  });
+  await Future.wait(tasks);
 }
 
 /// Automatic routing protects known-incompatible streams, while a viewer's
@@ -189,6 +195,10 @@ class _NativeMedia3PlayerScreenState
         return;
       }
       while (mounted) {
+        final effectiveAudio = _preferences.audioPreferenceSet
+            ? playbackAudioPreferenceForLanguage(_preferences.audioLanguage) ??
+                  appearance.preferredAudio
+            : appearance.preferredAudio;
         setState(() {
           _status = _automaticStreamAttempts == 0
               ? 'Opening the native TV player…'
@@ -209,11 +219,13 @@ class _NativeMedia3PlayerScreenState
           externalSubtitle:
               _currentStream.externalSubtitle?.toString() ?? widget.subtitle,
           headers: _currentStream.headers,
-          audioLanguage: _preferences.audioLanguage,
+          audioLanguage: _preferences.audioPreferenceSet
+              ? _preferences.audioLanguage
+              : effectiveAudio.audioLanguage,
           subtitleLanguage: _preferences.subtitleLanguage,
           subtitlesEnabled: _preferences.subtitlePreferenceSet
               ? _preferences.subtitleEnabled
-              : subtitlesEnabledByDefault(_release),
+              : subtitlesEnabledForAudioPreference(_release, effectiveAudio),
           subtitleSize: _preferences.subtitleSize == 34
               ? appearance.captionTextSize
               : _preferences.subtitleSize,
@@ -230,17 +242,19 @@ class _NativeMedia3PlayerScreenState
           episodeNumber: _episodeNumber,
           artworkUrl: widget.coverImageUrl,
           hasDirectSources: _currentStream.isWebStream,
+          theme: ref
+              .read(themeStudioControllerProvider)
+              .palette
+              .nativePlayerThemePayload,
         );
         if (!mounted) return;
         final returnNavigation = nativePlayerReturnNavigationForStatus(
           result.status,
         );
-        if (returnNavigation == NativePlayerReturnNavigation.home) {
+        if (returnNavigation == NativePlayerReturnNavigation.previousRoute) {
           // The native Activity is gone at this point, so do not leave its
           // launch message visible while checkpoints are copied into Flutter's
-          // database. More importantly, a generic Navigator pop can close the
-          // application when playback was opened from a shallow/deep-link
-          // stack. "Exit video" always has one deterministic destination.
+          // database.
           setState(() => _status = 'Closing video…');
         }
         _startFromBeginning = false;
@@ -248,7 +262,7 @@ class _NativeMedia3PlayerScreenState
             ? Duration.zero
             : result.position;
         _resumeUpdatedAt = DateTime.now();
-        if (returnNavigation == NativePlayerReturnNavigation.home) {
+        if (returnNavigation == NativePlayerReturnNavigation.previousRoute) {
           await runBestEffortNativePlayerExitBookkeeping([
             () => _persistResult(result),
             () => _syncResultIfThresholdReached(result),
@@ -264,11 +278,15 @@ class _NativeMedia3PlayerScreenState
         if (!mounted) return;
 
         switch (returnNavigation) {
-          case NativePlayerReturnNavigation.home:
-            GoRouter.of(context).go('/');
-            return;
           case NativePlayerReturnNavigation.previousRoute:
-            if (context.canPop()) context.pop();
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              // A player opened from a shallow/deep-link stack still has a
+              // deterministic series destination instead of falling through
+              // to Home or leaving the closing screen mounted.
+              GoRouter.of(context).go('/anime/$_mediaId');
+            }
             return;
           case NativePlayerReturnNavigation.none:
             break;
@@ -443,10 +461,11 @@ class _NativeMedia3PlayerScreenState
   Future<void> _persistResult(NativePlaybackResult result) async {
     if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
+    final settingsController = ref.read(settingsPreferencesProvider.notifier);
     final normalizedSize = result.subtitleSize?.clamp(18, 60).toDouble();
-    final audioLanguage = result.audioLanguage == null
-        ? null
-        : canonicalPlayerLanguage(result.audioLanguage);
+    final audioLanguage = canonicalPlayerTrackLanguage(
+      language: result.audioLanguage,
+    );
     final subtitleLanguage = result.subtitleLanguage == null
         ? null
         : canonicalPlayerLanguage(result.subtitleLanguage);
@@ -460,8 +479,18 @@ class _NativeMedia3PlayerScreenState
     if (normalizedSize != null) {
       nextPreferences = nextPreferences.copyWith(subtitleSize: normalizedSize);
     }
-    if (audioLanguage != null && audioLanguage.isNotEmpty) {
-      nextPreferences = nextPreferences.copyWith(audioLanguage: audioLanguage);
+    if (audioLanguage.isNotEmpty || result.audioPreferenceSet) {
+      nextPreferences = nextPreferences.copyWith(
+        audioLanguage: persistedPlayerAudioLanguage(
+          storedLanguage: nextPreferences.audioLanguage,
+          audioPreferenceSet: nextPreferences.audioPreferenceSet,
+          observedLanguage: audioLanguage,
+          manualSelection: result.audioPreferenceSet,
+        ),
+        audioPreferenceSet: result.audioPreferenceSet
+            ? true
+            : nextPreferences.audioPreferenceSet,
+      );
     }
     if (subtitleLanguage != null && subtitleLanguage.isNotEmpty) {
       nextPreferences = nextPreferences.copyWith(
@@ -474,10 +503,18 @@ class _NativeMedia3PlayerScreenState
         subtitlePreferenceSet: true,
       );
     }
+    if (result.highContrastSubtitles case final enabled?) {
+      nextPreferences = nextPreferences.copyWith(
+        highContrastSubtitles: enabled,
+      );
+    }
     if (nextPreferences.toJson().toString() !=
         _preferences.toJson().toString()) {
       _preferences = nextPreferences;
       await database.saveSeriesPreferences(_mediaId, _preferences);
+    }
+    if (result.subtitleBackgroundColor case final backgroundColor?) {
+      await settingsController.setCaptionBackgroundColor(backgroundColor);
     }
     if (result.duration <= Duration.zero) {
       return;
@@ -509,6 +546,7 @@ class _NativeMedia3PlayerScreenState
     }
     if (!mounted) return;
     ref.invalidate(recentPlaybackProvider);
+    ref.invalidate(latestPlaybackProvider(_mediaId));
     if (!completed && position > const Duration(seconds: 30)) {
       await AndroidTvBridge.instance.publishWatchNext(
         mediaId: _mediaId,
@@ -523,10 +561,10 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _recordPlayerSuccess(NativePlaybackResult result) async {
     if (!result.firstFrameRendered) return;
+    if (!mounted) return;
+    final database = ref.read(tetoTvDatabaseProvider);
     final profile = await AndroidTvBridge.instance.getDeviceProfile();
-    await ref
-        .read(tetoTvDatabaseProvider)
-        .recordPlayerSuccess(profile.key, 'media3');
+    await database.recordPlayerSuccess(profile.key, 'media3');
   }
 
   Future<void> _syncResultIfThresholdReached(
@@ -668,7 +706,15 @@ class _NativeMedia3PlayerScreenState
         anilistMediaId: anilistMediaId,
         malMediaId: malMediaId,
       );
-      if (mounted) ref.invalidate(trackingHomeProvider);
+      if (mounted) {
+        ref.invalidate(
+          linkedTrackingProgressProvider((
+            anilistMediaId: anilistMediaId,
+            malMediaId: malMediaId,
+          )),
+        );
+        ref.invalidate(trackingHomeProvider);
+      }
     } catch (_) {
       // The tracking service queues/retries independently of video playback.
     }

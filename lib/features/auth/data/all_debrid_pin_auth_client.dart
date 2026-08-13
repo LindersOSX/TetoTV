@@ -26,6 +26,8 @@ class AllDebridPinAuthClient {
               baseUrl: 'https://api.alldebrid.com',
               connectTimeout: const Duration(seconds: 15),
               receiveTimeout: const Duration(seconds: 20),
+              followRedirects: false,
+              maxRedirects: 0,
               headers: const {
                 'Accept': 'application/json',
                 'User-Agent': 'TetoTV Android',
@@ -44,8 +46,7 @@ class AllDebridPinAuthClient {
     final expiresIn = _asInt(data['expires_in']);
     if (pin.isEmpty ||
         check.isEmpty ||
-        url == null ||
-        url.scheme != 'https' ||
+        !_isAllDebridVerificationUrl(url) ||
         expiresIn <= 0) {
       throw const AllDebridException(
         'AllDebrid returned an incomplete PIN authorization response.',
@@ -54,7 +55,7 @@ class AllDebridPinAuthClient {
     return AllDebridPinSession(
       pin: pin,
       check: check,
-      verificationUrl: url,
+      verificationUrl: url!,
       expiresAt: DateTime.now().add(Duration(seconds: expiresIn)),
     );
   }
@@ -78,6 +79,12 @@ class AllDebridPinAuthClient {
     }
     return token;
   }
+}
+
+bool _isAllDebridVerificationUrl(Uri? uri) {
+  if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) return false;
+  final host = uri.host.toLowerCase();
+  return host == 'alldebrid.com' || host.endsWith('.alldebrid.com');
 }
 
 Map<String, dynamic> _successData(Map<String, dynamic>? body) {

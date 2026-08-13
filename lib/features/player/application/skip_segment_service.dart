@@ -174,7 +174,11 @@ List<SkipSegment> mergeSkipSegments(
 ) {
   final result = [...embedded];
   for (final candidate in external) {
-    if (result.any((existing) => _overlapRatio(existing, candidate) >= .5)) {
+    if (result.any(
+      (existing) =>
+          existing.kind == candidate.kind &&
+          _overlapRatio(existing, candidate) >= .5,
+    )) {
       continue;
     }
     result.add(candidate);

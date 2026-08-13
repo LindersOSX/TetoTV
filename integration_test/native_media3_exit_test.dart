@@ -11,7 +11,7 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'native Media3 Back Exit returns to Home without relaunching playback',
+    'native Media3 Back Exit returns to the series without relaunching playback',
     (tester) async {
       var engineSwitches = 0;
       final router = GoRouter(
@@ -22,6 +22,17 @@ void main() {
             builder: (_, _) => const Scaffold(
               body: Center(
                 child: Text('TetoTV Home', key: ValueKey('native-exit-home')),
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/anime/:id',
+            builder: (_, state) => Scaffold(
+              body: Center(
+                child: Text(
+                  'Series ${state.pathParameters['id']}',
+                  key: const ValueKey('native-exit-series'),
+                ),
               ),
             ),
           ),
@@ -52,20 +63,20 @@ void main() {
       // The host-side smoke runner presses Back, moves focus to "Exit video",
       // and confirms it while Media3 owns the foreground Activity. This wait
       // covers the real native Activity result and the production Flutter
-      // route handler that must replace /player with Home.
+      // route handler that must return to the originating series.
       await _pumpUntil(
         tester,
         () => find
-            .byKey(const ValueKey('native-exit-home'))
+            .byKey(const ValueKey('native-exit-series'))
             .evaluate()
             .isNotEmpty,
       );
       expect(engineSwitches, 0);
       expect(tester.takeException(), isNull);
 
-      // Catch a delayed duplicate result/relaunch after Home first appears.
+      // Catch a delayed duplicate result/relaunch after the series appears.
       await tester.pump(const Duration(seconds: 5));
-      expect(find.byKey(const ValueKey('native-exit-home')), findsOneWidget);
+      expect(find.byKey(const ValueKey('native-exit-series')), findsOneWidget);
       expect(engineSwitches, 0);
       expect(tester.takeException(), isNull);
     },
@@ -81,7 +92,7 @@ Future<void> _pumpUntil(
   final stopwatch = Stopwatch()..start();
   while (!condition()) {
     if (stopwatch.elapsed > timeout) {
-      fail('Timed out waiting for native Media3 Exit to return to Home.');
+      fail('Timed out waiting for native Media3 Exit to return to the series.');
     }
     await tester.pump(const Duration(milliseconds: 250));
   }

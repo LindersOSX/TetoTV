@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/data/real_debrid_oauth_client.dart';
@@ -166,9 +167,9 @@ class _RealDebridPairingScreenState
                       ),
                       if (!compactHeader) ...[
                         const Spacer(),
-                        const Text(
+                        Text(
                           'Your Real-Debrid password never touches this TV',
-                          style: TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: context.appPalette.mutedText),
                         ),
                       ],
                     ],
@@ -207,13 +208,15 @@ class _RealDebridPairingScreenState
     }
     final session = _session;
     if (session == null) {
-      return const CircularProgressIndicator(color: AppColors.cyan);
+      return CircularProgressIndicator(
+        color: context.appPalette.secondaryAccent,
+      );
     }
     return Container(
       constraints: const BoxConstraints(maxWidth: 880),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
@@ -221,9 +224,11 @@ class _RealDebridPairingScreenState
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 620;
           final qrSize = compact ? 166.0 : 220.0;
-          final qr = Semantics(
-            label: 'QR code for ${session.verificationUrl}',
-            image: true,
+          final qrData = session.verificationUrl.toString();
+          final qr = CopyableQrInteraction(
+            data: qrData,
+            semanticsLabel: 'QR code for ${session.verificationUrl}',
+            confirmationMessage: 'Real-Debrid pairing link copied.',
             child: Container(
               key: const ValueKey('real-debrid-qr-code'),
               width: qrSize,
@@ -234,14 +239,14 @@ class _RealDebridPairingScreenState
                 borderRadius: BorderRadius.circular(16),
               ),
               child: QrImageView(
-                data: session.verificationUrl.toString(),
+                data: qrData,
                 semanticsLabel:
                     'Real-Debrid pairing link ${session.verificationUrl}',
                 backgroundColor: Colors.white,
                 errorCorrectionLevel: QrErrorCorrectLevel.Q,
                 padding: EdgeInsets.zero,
-                eyeStyle: const QrEyeStyle(color: AppColors.ink),
-                dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
+                eyeStyle: const QrEyeStyle(color: Colors.black),
+                dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
               ),
             ),
           );
@@ -334,16 +339,18 @@ class _UserCode extends StatelessWidget {
         key: const ValueKey('real-debrid-user-code'),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
         decoration: BoxDecoration(
-          color: AppColors.ink,
+          color: context.appPalette.background,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .7),
+          ),
         ),
         child: Text(
           code,
           maxLines: 1,
           textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
+          style: TextStyle(
+            color: context.appPalette.primaryText,
             fontSize: 32,
             fontWeight: FontWeight.w900,
             letterSpacing: 4,
@@ -369,18 +376,22 @@ class _WaitingPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.cyan.withValues(alpha: .12),
+        color: context.appPalette.secondaryAccent.withValues(alpha: .12),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.sync_rounded, size: 15, color: AppColors.cyan),
-          SizedBox(width: 7),
+          Icon(
+            Icons.sync_rounded,
+            size: 15,
+            color: context.appPalette.secondaryAccent,
+          ),
+          const SizedBox(width: 7),
           Text(
             'WAITING FOR APPROVAL',
             style: TextStyle(
-              color: AppColors.cyan,
+              color: context.appPalette.secondaryAccent,
               fontSize: 11,
               fontWeight: FontWeight.w800,
               letterSpacing: 1.1,
@@ -437,9 +448,9 @@ class _BackButton extends StatelessWidget {
       autofocus: true,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
-      child: const ColoredBox(
-        color: AppColors.panel,
-        child: Padding(
+      child: ColoredBox(
+        color: context.appPalette.surface,
+        child: const Padding(
           padding: EdgeInsets.all(10),
           child: Icon(Icons.arrow_back_rounded, size: 20),
         ),
@@ -461,7 +472,7 @@ class _ActionButton extends StatelessWidget {
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(10),
       child: Container(
-        color: AppColors.accent,
+        color: context.appPalette.accent,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Text(
           label,

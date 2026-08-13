@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
@@ -72,6 +73,141 @@ void main() {
     ];
 
     expect(preferredDubAudioTrack(tracks), isNull);
+  });
+
+  test('global sub preference consistently chooses Japanese audio', () {
+    const tracks = [
+      AudioTrack('1', 'English Dub', 'eng', isDefault: true),
+      AudioTrack('2', 'Japanese', 'jpn'),
+    ];
+
+    expect(
+      preferredAudioTrack(
+        tracks,
+        preference: PlaybackAudioPreference.sub,
+        allowFallback: false,
+      )?.id,
+      '2',
+    );
+  });
+
+  test('explicit series audio selects the same language next episode', () {
+    const tracks = [
+      AudioTrack('1', 'Japanese', 'jpn', isDefault: true),
+      AudioTrack('2', 'English Dub', 'eng'),
+      AudioTrack('3', 'English Commentary', 'eng'),
+    ];
+
+    expect(
+      preferredAudioTrackForLanguage(
+        tracks,
+        language: 'eng',
+        allowFallback: false,
+      )?.id,
+      '2',
+    );
+    expect(
+      preferredAudioTrackForLanguage(
+        tracks,
+        language: 'jpn',
+        allowFallback: false,
+      )?.id,
+      '1',
+    );
+  });
+
+  test('an anime track labeled only Dub persists as English', () {
+    expect(canonicalPlayerLanguage('[DUB] 5.1'), 'eng');
+    expect(
+      playbackAudioPreferenceForLanguage('eng'),
+      PlaybackAudioPreference.dub,
+    );
+  });
+
+  test('undefined container language falls back to the useful track label', () {
+    for (final placeholder in const ['und', 'zxx', 'mul']) {
+      expect(canonicalPlayerLanguage(placeholder), isEmpty);
+      expect(
+        canonicalPlayerTrackLanguage(
+          language: placeholder,
+          title: 'English Dub 5.1',
+        ),
+        'eng',
+        reason: placeholder,
+      );
+    }
+  });
+
+  test('explicit Dub and Sub survive opposite-language player fallbacks', () {
+    expect(
+      persistedPlayerAudioLanguage(
+        storedLanguage: 'eng',
+        audioPreferenceSet: true,
+        observedLanguage: 'jpn',
+        observedTitle: 'Japanese fallback',
+      ),
+      'eng',
+    );
+    expect(
+      persistedPlayerAudioLanguage(
+        storedLanguage: 'jpn',
+        audioPreferenceSet: true,
+        observedLanguage: 'eng',
+        observedTitle: 'English fallback',
+      ),
+      'jpn',
+    );
+  });
+
+  test('manual audio changes replace an explicit series choice', () {
+    expect(
+      persistedPlayerAudioLanguage(
+        storedLanguage: 'jpn',
+        audioPreferenceSet: true,
+        observedLanguage: 'und',
+        observedTitle: 'English Dub',
+        manualSelection: true,
+      ),
+      'eng',
+    );
+    expect(
+      persistedPlayerAudioLanguage(
+        storedLanguage: 'eng',
+        audioPreferenceSet: false,
+        observedLanguage: 'jpn',
+      ),
+      'jpn',
+      reason: 'automatic observations remain persistable before manual choice',
+    );
+  });
+
+  test('series Dub override wins over a global Sub release preference', () {
+    expect(
+      effectivePlaybackAudioPreference(
+        globalPreference: PlaybackAudioPreference.sub,
+        seriesAudioLanguage: 'eng',
+        seriesOverride: true,
+      ),
+      PlaybackAudioPreference.dub,
+    );
+    expect(
+      effectivePlaybackAudioPreference(
+        globalPreference: PlaybackAudioPreference.sub,
+      ),
+      PlaybackAudioPreference.sub,
+    );
+  });
+
+  test('audio preference has deterministic default-track fallback', () {
+    const tracks = [
+      AudioTrack('1', 'French', 'fra'),
+      AudioTrack('2', 'Spanish', 'spa', isDefault: true),
+    ];
+
+    expect(
+      preferredAudioTrack(tracks, preference: PlaybackAudioPreference.dub)?.id,
+      '2',
+    );
   });
 
   test(
@@ -379,6 +515,40 @@ void main() {
         preferDub: true,
       ),
       isNull,
+    );
+    expect(
+      preferredVlcTrack(
+        const {1: 'English Commentary', 2: 'Japanese Stereo'},
+        language: 'eng',
+        preferDub: true,
+      ),
+      2,
+      reason: 'a normal fallback must beat container-default commentary',
+    );
+  });
+
+  test('MPV provisional fallback never leaves default commentary selected', () {
+    const tracks = [
+      AudioTrack('1', 'English Commentary', 'eng', isDefault: true),
+      AudioTrack('2', 'Japanese Stereo', 'jpn'),
+    ];
+
+    expect(
+      preferredAudioTrackForLanguage(
+        tracks,
+        language: 'fra',
+        allowFallback: false,
+      )?.id,
+      '2',
+    );
+    expect(
+      preferredAudioTrack(
+        tracks,
+        preference: PlaybackAudioPreference.dub,
+        allowFallback: false,
+      )?.id,
+      '2',
+      reason: 'commentary is not a valid Dub match',
     );
   });
 

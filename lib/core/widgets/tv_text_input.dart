@@ -171,18 +171,18 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
           onTap: _activateDeviceKeyboard,
           onChanged: widget.onChanged,
           onSubmitted: _finishDeviceKeyboard,
-          style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-          cursorColor: AppColors.accentBright,
+          style: TextStyle(color: context.appPalette.primaryText, fontSize: 15),
+          cursorColor: context.appPalette.accentBright,
           decoration: InputDecoration(
             labelText: widget.labelText,
             hintText: widget.hintText,
-            labelStyle: const TextStyle(color: AppColors.textMuted),
-            hintStyle: const TextStyle(color: AppColors.textMuted),
+            labelStyle: TextStyle(color: context.appPalette.mutedText),
+            hintStyle: TextStyle(color: context.appPalette.mutedText),
             filled: true,
-            fillColor: AppColors.ink.withValues(alpha: .82),
-            suffixIcon: const Icon(
+            fillColor: context.appPalette.background.withValues(alpha: .82),
+            suffixIcon: Icon(
               Icons.keyboard_alt_outlined,
-              color: AppColors.cyan,
+              color: context.appPalette.secondaryAccent,
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
@@ -192,8 +192,8 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                color: AppColors.accentBright,
+              borderSide: BorderSide(
+                color: context.appPalette.accentBright,
                 width: 2,
               ),
             ),
@@ -215,7 +215,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
         constraints: const BoxConstraints(minHeight: 50),
         padding: const EdgeInsets.fromLTRB(13, 7, 10, 7),
         decoration: BoxDecoration(
-          color: AppColors.ink.withValues(alpha: .65),
+          color: context.appPalette.background.withValues(alpha: .65),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: Colors.white.withValues(alpha: .12)),
         ),
@@ -228,8 +228,8 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
                 children: [
                   Text(
                     widget.labelText,
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
@@ -243,8 +243,8 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: visibleValue.isEmpty
-                          ? AppColors.textMuted
-                          : AppColors.textPrimary,
+                          ? context.appPalette.mutedText
+                          : context.appPalette.primaryText,
                       fontSize: 15,
                     ),
                   ),
@@ -252,7 +252,11 @@ class _TvTextInputState extends ConsumerState<TvTextInput> {
               ),
             ),
             const SizedBox(width: 10),
-            const Icon(Icons.keyboard_rounded, color: AppColors.cyan, size: 22),
+            Icon(
+              Icons.keyboard_rounded,
+              color: context.appPalette.secondaryAccent,
+              size: 22,
+            ),
           ],
         ),
       ),
@@ -359,6 +363,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     final displayValue = !_reveal && _value.isNotEmpty
         ? List.filled(_value.length, '\u2022').join()
         : _value;
@@ -381,9 +386,12 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
           width: availableWidth < 600 ? availableWidth - 20 : 560,
           padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
           decoration: BoxDecoration(
-            color: const Color(0xF7080808),
+            color: Color.alphaBlend(
+              palette.surface.withValues(alpha: .40),
+              palette.background,
+            ).withValues(alpha: 247 / 255),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .32)),
+            border: Border.all(color: palette.accent.withValues(alpha: .32)),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x88000000),
@@ -401,17 +409,17 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   Expanded(
                     child: Text(
                       widget.title,
-                      style: const TextStyle(
-                        color: AppColors.textPrimary,
+                      style: TextStyle(
+                        color: palette.primaryText,
                         fontSize: 14,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
-                  const Text(
+                  Text(
                     'REMOTE  /  CONTROLLER  /  KEYBOARD',
                     style: TextStyle(
-                      color: AppColors.textMuted,
+                      color: palette.mutedText,
                       fontSize: 7,
                       fontWeight: FontWeight.w800,
                       letterSpacing: .6,
@@ -426,10 +434,10 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                 padding: const EdgeInsets.symmetric(horizontal: 9),
                 alignment: Alignment.centerLeft,
                 decoration: BoxDecoration(
-                  color: AppColors.ink,
+                  color: palette.background,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: AppColors.accentBright.withValues(alpha: .62),
+                    color: palette.accentBright.withValues(alpha: .62),
                   ),
                 ),
                 child: Text(
@@ -438,8 +446,8 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: displayValue.isEmpty
-                        ? AppColors.textMuted
-                        : AppColors.textPrimary,
+                        ? palette.mutedText
+                        : palette.primaryText,
                     fontSize: 12,
                     letterSpacing: widget.obscureText ? 1.4 : 0,
                   ),
@@ -449,10 +457,10 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    const Text(
+                    Text(
                       'AUTOFILL',
                       style: TextStyle(
-                        color: AppColors.accentBright,
+                        color: palette.accentBright,
                         fontSize: 8,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.2,
@@ -680,7 +688,7 @@ class _KeyboardKey extends StatelessWidget {
       child: Container(
         height: 26,
         alignment: Alignment.center,
-        color: AppColors.selectableSurface,
+        color: context.appPalette.selectableSurface,
         child: Text(
           label,
           style: TextStyle(
@@ -723,10 +731,10 @@ class _KeyboardAction extends StatelessWidget {
           height: 26,
           padding: const EdgeInsets.symmetric(horizontal: 5),
           color: primary
-              ? AppColors.accent
+              ? context.appPalette.accent
               : selected
-              ? AppColors.accent.withValues(alpha: .45)
-              : AppColors.selectableSurface,
+              ? context.appPalette.accent.withValues(alpha: .45)
+              : context.appPalette.selectableSurface,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
@@ -772,11 +780,11 @@ class _AutofillChip extends StatelessWidget {
         child: Container(
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 7),
-          color: AppColors.selectableSurface,
+          color: context.appPalette.selectableSurface,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 12, color: AppColors.accentBright),
+              Icon(icon, size: 12, color: context.appPalette.accentBright),
               const SizedBox(width: 5),
               Flexible(
                 child: Text(

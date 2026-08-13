@@ -6,9 +6,10 @@ the following third-party components:
 | Component | Use in TetoTV | Upstream license |
 | --- | --- | --- |
 | AndroidX Media3 1.11.0 (`media3-exoplayer`, `media3-ui`, `media3-session`, and `media3-datasource-okhttp`) | Native default player, `PlayerView`/`SurfaceView`, MediaSession, and OkHttp-backed media data source | Apache License 2.0 |
+| Google Material Icons | Rounded/outlined vector glyphs that keep the native Media3 HUD visually aligned with Flutter's Material icons | Apache License 2.0 |
 | OkHttp | HTTPS redirects, byte-range requests, retries, and debrid request headers for Media3 | Apache License 2.0 |
 | `media_kit`, `media_kit_video`, and `media_kit_libs_android_video` | MPV compatibility player and Flutter integration | MIT License for the media_kit projects; bundled native components retain their own licenses |
-| mpv, FFmpeg, and libass | Compatibility decoding and styled ASS subtitle rendering inside the media_kit Android runtime | Their respective upstream licenses apply; FFmpeg/mpv obligations depend on the exact binary build configuration |
+| mpv, FFmpeg, and libass | Compatibility decoding and styled ASS subtitle rendering inside the media_kit Android runtime | Their respective upstream licenses apply; the exact v1.1.7 binary provenance and conservative GPL/LGPL license set are recorded in `NATIVE_PLAYBACK_REDISTRIBUTION.md` |
 | `flutter_vlc_player` 7.4.4 | Flutter integration for the final VLC fallback | BSD 3-Clause License |
 | VideoLAN libVLC 3.6.3 | Final software compatibility player | GNU Lesser General Public License 2.1 or later, subject to the licenses of included modules |
 | Vendored `flutter_js` 0.8.7+tetotv.1 | Dart/Android bridge for the isolated add-on JavaScript runtime | MIT License; copyright 2019 Ábner Oliveira |
@@ -18,6 +19,8 @@ the following third-party components:
 | CryptoJS 4.2.0 | Compatibility APIs in the bundled add-on runtime | MIT License |
 | LinkeDOM 0.18.12 and its bundled dependencies | Isolated HTML parsing for installed add-ons | ISC License for LinkeDOM; bundled dependencies retain their MIT, ISC, BSD-2-Clause, and other notices |
 | Sucrase 3.35.0 and its bundled dependencies | Offline TypeScript transformation for installed add-ons | MIT License for Sucrase; bundled dependencies retain their MIT, Apache-2.0, and other notices |
+| Dart `xml` 6.6.1 | Bounded parsing of Plex Media Server XML responses | MIT License |
+| Noto Sans Regular | Bundled subtitle font used by the MPV/libass compatibility player | SIL Open Font License 1.1; copyright 2018 The Noto Project Authors |
 
 Upstream projects and license sources:
 
@@ -40,6 +43,8 @@ Upstream projects and license sources:
 - CryptoJS: <https://github.com/brix/crypto-js>
 - LinkeDOM: <https://github.com/WebReflection/linkedom>
 - Sucrase: <https://github.com/alangpierce/sucrase>
+- Dart xml: <https://github.com/renggli/dart-xml>
+- Noto Sans: <https://github.com/notofonts/noto-fonts>
 
 The exact resolved Dart package versions are recorded in `pubspec.lock`.
 Native Android versions are declared in `android/app/build.gradle.kts`, plugin
@@ -58,12 +63,16 @@ the native QuickJS source archive hash, reviewed bridge delta, and verification
 procedure. The Android JS Runtimes and QuickJS MIT notices must remain bundled
 with every redistributed APK.
 
-The Flutter license page includes the notices generated from resolved Dart and
-Android packages. A distributor must also archive the exact libmpv/FFmpeg,
-libass, and libVLC binary provenance used for the release, make any source or
-relinking materials required by the applicable LGPL terms available, and ship
-the corresponding notices with the APK or its distribution page. Do not rely
-on this summary alone as a source-code offer.
+The Flutter license page includes notices generated from resolved Dart and
+Android packages. The APK also carries complete GPL 2.0, GPL 3.0, LGPL 2.1,
+and LGPL 3.0 texts, the libmpv Android build's default-flavor MIT notice, and
+the native playback notice under
+`assets/legal/native/`. Exact binary hashes, source revisions, rebuild and
+relink instructions, and known evidence limits are in
+[`NATIVE_PLAYBACK_REDISTRIBUTION.md`](NATIVE_PLAYBACK_REDISTRIBUTION.md).
+A distributor must run the verifier, stage the corresponding-source bundle,
+and make that bundle available alongside every APK. Neither this summary nor
+the in-APK notice is, by itself, a source-code offer.
 
 ## Kasane Teto name and artwork
 

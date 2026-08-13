@@ -23,7 +23,9 @@ class AiringCalendarScreen extends ConsumerWidget {
     final tracking = ref.watch(trackingHomeProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette == AppThemePalette.defaults
+          ? Colors.black
+          : context.appPalette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding,
         child: Column(
@@ -46,9 +48,9 @@ class AiringCalendarScreen extends ConsumerWidget {
                 ),
                 const Spacer(),
                 if (!context.isCompactWidth)
-                  const Text(
+                  Text(
                     'Times use your device timezone',
-                    style: TextStyle(color: AppColors.textMuted),
+                    style: TextStyle(color: context.appPalette.mutedText),
                   ),
                 const SizedBox(width: 10),
                 TvFocusable(
@@ -74,28 +76,28 @@ class AiringCalendarScreen extends ConsumerWidget {
             const SizedBox(height: 16),
             Expanded(
               child: schedule.when(
-                loading: () => const Center(
+                loading: () => Center(
                   child: CircularProgressIndicator(
-                    color: AppColors.accentBright,
+                    color: context.appPalette.accentBright,
                   ),
                 ),
                 error: (error, _) =>
                     Center(child: Text('Could not load schedule: $error')),
                 data: (entries) {
                   if (tracking.isLoading) {
-                    return const Center(
+                    return Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.accentBright,
+                        color: context.appPalette.accentBright,
                       ),
                     );
                   }
                   if (tracking.hasError) {
-                    return const Center(
+                    return Center(
                       child: Text(
                         'Your AniList or MAL calendar could not be loaded. '
                         'Check the tracker connection in Settings, then select Refresh.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: AppColors.textMuted),
+                        style: TextStyle(color: context.appPalette.mutedText),
                       ),
                     );
                   }
@@ -110,12 +112,12 @@ class AiringCalendarScreen extends ConsumerWidget {
                     return Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 540),
-                        child: const Text(
+                        child: Text(
                           'No followed shows are airing this week. Add a show '
                           'to Watching or Planning on AniList or MAL, then '
                           'refresh your list.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: context.appPalette.mutedText),
                         ),
                       ),
                     );
@@ -131,8 +133,8 @@ class AiringCalendarScreen extends ConsumerWidget {
                       for (final group in days.entries) ...[
                         Text(
                           '${_weekdays[group.key.weekday - 1]}  ${group.key.month}/${group.key.day}',
-                          style: const TextStyle(
-                            color: AppColors.accentBright,
+                          style: TextStyle(
+                            color: context.appPalette.accentBright,
                             fontSize: 13,
                             fontWeight: FontWeight.w900,
                           ),
@@ -197,9 +199,10 @@ class AiringCalendarScreen extends ConsumerWidget {
                                                     const SizedBox(height: 6),
                                                     Text(
                                                       '$time • Episode ${entry.episode}',
-                                                      style: const TextStyle(
-                                                        color:
-                                                            AppColors.textMuted,
+                                                      style: TextStyle(
+                                                        color: context
+                                                            .appPalette
+                                                            .mutedText,
                                                         fontSize: 10,
                                                       ),
                                                     ),
@@ -241,12 +244,14 @@ class AiringCalendarScreen extends ConsumerWidget {
                                           borderRadius: BorderRadius.circular(
                                             8,
                                           ),
-                                          child: const Center(
+                                          child: Center(
                                             child: Icon(
                                               Icons
                                                   .notifications_active_outlined,
                                               size: 19,
-                                              color: AppColors.accentBright,
+                                              color: context
+                                                  .appPalette
+                                                  .accentBright,
                                             ),
                                           ),
                                         ),

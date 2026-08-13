@@ -21,9 +21,82 @@ class NetworkRequestPolicyTest {
             NetworkRequestPolicy.Origin("https", "stream.example", 8443),
             NetworkRequestPolicy.httpsOrigin("https://stream.example:8443/video.mkv"),
         )
+        assertEquals(
+            NetworkRequestPolicy.Origin("https", "2606:4700:4700::1111", 443),
+            NetworkRequestPolicy.httpsOrigin("https://[2606:4700:4700::1111]/video.mkv"),
+        )
         assertNull(NetworkRequestPolicy.httpsOrigin("http://stream.example/video.mkv"))
+        assertNull(
+            NetworkRequestPolicy.httpsOrigin("https://user:password@stream.example/video.mkv"),
+        )
         assertNull(NetworkRequestPolicy.httpsOrigin("file:///data/user/0/app/secrets"))
         assertNull(NetworkRequestPolicy.httpsOrigin("https:///missing-host"))
+    }
+
+    @Test
+    fun `trusted local media accepts private literals and public https only`() {
+        assertEquals(
+            NetworkRequestPolicy.Origin("http", "192.168.1.25", 8096),
+            NetworkRequestPolicy.trustedLocalMediaOrigin(
+                "http://192.168.1.25:8096/jellyfin/Videos/id/stream",
+            ),
+        )
+        assertEquals(
+            NetworkRequestPolicy.Origin("http", "fd12:3456::7", 8096),
+            NetworkRequestPolicy.trustedLocalMediaOrigin(
+                "http://[fd12:3456::7]:8096/Videos/id/stream",
+            ),
+        )
+        assertEquals(
+            NetworkRequestPolicy.Origin("http", "localhost", 8096),
+            NetworkRequestPolicy.trustedLocalMediaOrigin(
+                "http://localhost:8096/Videos/id/stream",
+            ),
+        )
+        assertEquals(
+            NetworkRequestPolicy.Origin("https", "media.example", 443),
+            NetworkRequestPolicy.trustedLocalMediaOrigin(
+                "https://media.example/Videos/id/stream",
+            ),
+        )
+
+        listOf(
+            "http://8.8.8.8:8096/video",
+            "http://media.example:8096/video",
+            "http://jellyfin.local:8096/video",
+            "http://user:password@192.168.1.25:8096/video",
+            "http://0.0.0.0:8096/video",
+            "http://224.0.0.1:8096/video",
+            "ftp://192.168.1.25/video",
+            "content://media/video/42",
+        ).forEach { value ->
+            assertNull(value, NetworkRequestPolicy.trustedLocalMediaOrigin(value))
+        }
+    }
+
+    @Test
+    fun `trusted local document requires a hierarchical content provider uri`() {
+        assertTrue(
+            NetworkRequestPolicy.isTrustedContentUri(
+                "content://com.android.providers.media.documents/document/video%3A42",
+            ),
+        )
+        assertTrue(
+            NetworkRequestPolicy.isTrustedContentUri(
+                "CONTENT://usb.provider/tree/root/document/movie.mkv",
+            ),
+        )
+
+        listOf(
+            "file:///storage/emulated/0/movie.mkv",
+            "https://media.example/movie.mkv",
+            "content:opaque-value",
+            "content:///missing-authority/video/42",
+            "content://user:password@provider/video/42",
+            "content://provider/video/42#fragment",
+        ).forEach { value ->
+            assertFalse(value, NetworkRequestPolicy.isTrustedContentUri(value))
+        }
     }
 
     @Test

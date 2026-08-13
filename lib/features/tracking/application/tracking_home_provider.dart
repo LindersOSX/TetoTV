@@ -83,6 +83,59 @@ Future<Map<TrackingListStatus, List<HomeTrackedAnime>>> _loadProviderHomeData({
   return Map.fromEntries(lists);
 }
 
+typedef LinkedTrackingProgressIds = ({int? anilistMediaId, int? malMediaId});
+
+/// Hydrates the exact series progress from every linked tracker.
+///
+/// This intentionally queries the individual list entry rather than relying
+/// on Home's capped shelves, so On Hold/Dropped titles and entries beyond the
+/// first twenty still resume at the correct next episode.
+final linkedTrackingProgressProvider = FutureProvider.autoDispose
+    .family<int, LinkedTrackingProgressIds>((ref, ids) async {
+      final tokenService = ref.watch(trackingTokenServiceProvider);
+      final requests = <Future<int>>[
+        if (ids.anilistMediaId case final mediaId?)
+          _loadLinkedProgress(
+            provider: TrackingProvider.anilist,
+            mediaId: mediaId,
+            tokenService: tokenService,
+          ),
+        if (ids.malMediaId case final mediaId?)
+          _loadLinkedProgress(
+            provider: TrackingProvider.myAnimeList,
+            mediaId: mediaId,
+            tokenService: tokenService,
+          ),
+      ];
+      if (requests.isEmpty) return 0;
+      final values = await Future.wait(requests);
+      return values.fold<int>(0, (highest, value) {
+        return value > highest ? value : highest;
+      });
+    });
+
+Future<int> _loadLinkedProgress({
+  required TrackingProvider provider,
+  required int mediaId,
+  required TrackingTokenService tokenService,
+}) async {
+  try {
+    final token = await tokenService.accessToken(provider);
+    if (token == null || token.isEmpty) return 0;
+    final repository = switch (provider) {
+      TrackingProvider.anilist => AniListTrackingRepository(accessToken: token),
+      TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
+        accessToken: token,
+      ),
+    };
+    return await repository.currentProgress(mediaId) ?? 0;
+  } catch (_) {
+    // One temporarily unavailable tracker must not hide the other provider's
+    // progress or the local completion fallback.
+    return 0;
+  }
+}
+
 class TrackingHomeData {
   const TrackingHomeData({
     required this.watching,
@@ -93,6 +146,25 @@ class TrackingHomeData {
   final List<HomeTrackedAnime> watching;
   final List<HomeTrackedAnime> planToWatch;
   final List<HomeTrackedAnime> completed;
+
+  /// Returns the highest known episode from either linked tracker.
+  ///
+  /// Shelf scanning is an immediate fallback while the exact linked-account
+  /// progress provider is loading.
+  int progressFor({required int anilistMediaId, int? malMediaId}) {
+    var progress = 0;
+    for (final item in [...watching, ...planToWatch, ...completed]) {
+      final matches =
+          item.anilistId == anilistMediaId ||
+          (malMediaId != null &&
+              item.provider == TrackingProvider.myAnimeList &&
+              item.tracked.mediaId == malMediaId);
+      if (matches && item.tracked.progress > progress) {
+        progress = item.tracked.progress;
+      }
+    }
+    return progress;
+  }
 }
 
 class HomeTrackedAnime {

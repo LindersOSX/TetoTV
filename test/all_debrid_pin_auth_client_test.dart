@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/auth/data/all_debrid_pin_auth_client.dart';
+import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -44,5 +45,33 @@ void main() {
     expect(session.verificationUrl.scheme, 'https');
     expect(await client.poll(session), isNull);
     expect(await client.poll(session), 'approved-api-key');
+  });
+
+  test('rejects a PIN page outside the AllDebrid service', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://alldebrid.test'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 200,
+              data: const {
+                'status': 'success',
+                'data': {
+                  'pin': 'TETO',
+                  'check': 'check-id',
+                  'expires_in': 600,
+                  'user_url': 'https://alldebrid.com.attacker.test/pin/',
+                },
+              },
+            ),
+          ),
+        ),
+      );
+
+    expect(
+      AllDebridPinAuthClient(dio: dio).start(),
+      throwsA(isA<AllDebridException>()),
+    );
   });
 }

@@ -25,7 +25,7 @@ AAR from JitPack. The engine is the official QuickJS `2026-06-04` release:
 | Archive SHA-256 | `b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a` |
 | `android-js-runtimes` bridge origin | tag `0.3.6`, commit `0f72f7409ff610b33b0e09bd9460213f0e487bf0` |
 | Original bridge SHA-256 | `54b873706d077451d843ca564f511582479c3562438d34fdb883f3639a5ed047` |
-| Reviewed local bridge SHA-256 | `237649538388578e29d0ce70c575f39aa6e0cca06ef1a85db7aabb3d075eb5b3` |
+| Reviewed local bridge SHA-256 | `8e1953548f72b5f68040421fa2919aeea2c755edb27a6fb001c4cfd66e71c03b` |
 
 The local bridge keeps the `flutter_js` FFI ABI but replaces the obsolete
 private `JS_IsPromise` call with QuickJS's public promise-state API, uses

@@ -3,6 +3,19 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('all Flutter player presentation surfaces use Theme Studio palette', () {
+    for (final path in [
+      'lib/features/player/presentation/tv_player_screen.dart',
+      'lib/features/player/presentation/vlc_tv_player_screen.dart',
+      'lib/features/player/presentation/player_control_overlay.dart',
+      'lib/features/player/presentation/player_stream_source_picker.dart',
+    ]) {
+      final source = File(path).readAsStringSync();
+      expect(source, isNot(contains('AppColors.')), reason: path);
+      expect(source, contains('context.appPalette'), reason: path);
+    }
+  });
+
   test('Flutter and Media3 HUDs keep the same control order and labels', () {
     final flutterChrome = File(
       'lib/features/player/presentation/teto_player_chrome.dart',
@@ -93,6 +106,68 @@ void main() {
     expect(media3, contains('CONTROLLER_HIDE_TIMEOUT_MS = 5_000L'));
     expect(media3, contains('KeyEvent.KEYCODE_DPAD_DOWN'));
     expect(media3, contains('playerView.hideController()'));
+    expect(media3, contains('controllerAutoShow = false'));
+    expect(
+      media3,
+      isNot(contains('controllerAutoShow = !isTelevisionDevice()')),
+    );
+  });
+
+  test('MPV and VLC render the exact same shared chrome', () {
+    final mpv = File(
+      'lib/features/player/presentation/tv_player_screen.dart',
+    ).readAsStringSync();
+    final vlc = File(
+      'lib/features/player/presentation/vlc_tv_player_screen.dart',
+    ).readAsStringSync();
+
+    expect(mpv, contains("engineKey: 'mpv'"));
+    expect(vlc, contains("engineKey: 'vlc'"));
+    expect(mpv, contains('TetoPlayerChrome('));
+    expect(vlc, contains('TetoPlayerChrome('));
+    expect(mpv, contains('onCaptionSize: _openCaptionSizePicker'));
+    expect(vlc, contains('unawaited(_openCaptionSizePicker())'));
+    expect(mpv, isNot(contains('onCaptionSize: _openPlaybackMenu')));
+    expect(
+      vlc,
+      isNot(contains('onCaptionSize: () => unawaited(_openOptions())')),
+    );
+    for (final callback in [
+      'onCaptionSize:',
+      'onPicture:',
+      'onFixVideo:',
+      'onSources:',
+      'onOptions:',
+      'onDismiss:',
+    ]) {
+      expect(mpv, contains(callback));
+      expect(vlc, contains(callback));
+    }
+  });
+
+  test('VLC and Media3 retain MPV picture and skip shortcuts', () {
+    final vlc = File(
+      'lib/features/player/presentation/vlc_tv_player_screen.dart',
+    ).readAsStringSync();
+    final media3 = File(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+      'Media3PlayerActivity.kt',
+    ).readAsStringSync();
+
+    for (final token in [
+      'LogicalKeyboardKey.keyI && _canSkip',
+      'LogicalKeyboardKey.keyA',
+      'LogicalKeyboardKey.gameButtonX',
+    ]) {
+      expect(vlc, contains(token));
+    }
+    for (final token in [
+      'KeyEvent.KEYCODE_I',
+      'KeyEvent.KEYCODE_A',
+      'KeyEvent.KEYCODE_BUTTON_X',
+    ]) {
+      expect(media3, contains(token));
+    }
   });
 
   test('Media3 shortcut cleanup and buffering intent stay coherent', () {
@@ -151,16 +226,30 @@ void main() {
     final nativePlayer = File(
       'android/app/src/main/res/layout/activity_media3_player.xml',
     ).readAsStringSync();
+    final compactDimensions = File(
+      'android/app/src/main/res/values/player_hud_dimensions.xml',
+    ).readAsStringSync();
+    final regularDimensions = File(
+      'android/app/src/main/res/values-w720dp-h480dp/'
+      'player_hud_dimensions.xml',
+    ).readAsStringSync();
     final timeBar = RegExp(
       r'<androidx\.media3\.ui\.DefaultTimeBar[\s\S]*?/>',
     ).firstMatch(nativeChrome)?.group(0);
 
     expect(timeBar, isNotNull);
     expect(timeBar, contains('android:layout_height="32dp"'));
-    // 4dp margin + 14dp centering inside the 32dp touch target keeps the
-    // visible 4dp bar exactly 18dp below the action row.
-    expect(timeBar, contains('android:layout_marginTop="4dp"'));
-    expect(timeBar, contains('app:bar_height="4dp"'));
+    expect(
+      timeBar,
+      contains(
+        'android:layout_marginTop='
+        '"@dimen/tetotv_player_progress_touch_margin_top"',
+      ),
+    );
+    expect(
+      timeBar,
+      contains('app:bar_height="@dimen/tetotv_player_progress_bar_height"'),
+    );
     expect(timeBar, contains('app:touch_target_height="32dp"'));
     expect(timeBar, contains('android:focusable="false"'));
     expect(timeBar, contains('android:clickable="false"'));
@@ -170,6 +259,12 @@ void main() {
     expect(timeBar, contains('app:scrubber_dragged_size="0dp"'));
     expect(timeBar, contains('app:scrubber_enabled_size="0dp"'));
     expect(nativePlayer, contains('app:time_bar_scrubbing_enabled="false"'));
+    for (final token in ['>3dp<', '>1dp<', '>-9dp<']) {
+      expect(compactDimensions, contains(token));
+    }
+    for (final token in ['>4dp<', '>4dp<', '>-5dp<']) {
+      expect(regularDimensions, contains(token));
+    }
     expect(flutterChrome, isNot(contains('PlayerScrubController')));
     expect(flutterChrome, isNot(contains('onSeek')));
     expect(flutterChrome, isNot(contains('player-progress-scrubber')));
@@ -210,9 +305,12 @@ void main() {
       'constraints: const BoxConstraints(maxWidth: 1280)',
       'horizontalInset = compact ? 12.0 : 28.0',
       'bottomInset = compact ? 10.0 : 24.0',
-      'color: const Color(0xD6080808)',
+      'const Color _defaultPlayerChromePanel = Color(0xD6080808)',
+      'const Color _defaultPlayerControlSurface = Color(0x8F242429)',
+      'final palette = context.appPalette',
+      'color: _playerChromePanelColor(palette)',
+      'color: primary ? palette.accent : _playerControlSurfaceColor(palette)',
       'height: 40',
-      'color: primary ? AppColors.accent : const Color(0x8F242429)',
       'minHeight: compact ? 3 : 4',
     ]) {
       expect(flutterChrome, contains(token));
@@ -225,10 +323,11 @@ void main() {
       'android:paddingStart="18dp"',
       'android:paddingTop="14dp"',
       'android:paddingBottom="12dp"',
+      'android:layout_height="wrap_content"',
       'android:textSize="24sp"',
       'android:layout_height="40dp"',
       'android:layout_marginTop="10dp"',
-      'app:bar_height="4dp"',
+      'app:bar_height="@dimen/tetotv_player_progress_bar_height"',
       'app:played_color="#FFFF496A"',
       'app:unplayed_color="#3DFFFFFF"',
       'android:textColor="#FFB7AEB1"',
@@ -249,6 +348,13 @@ void main() {
       ).hasMatch(nativeStyles),
       isTrue,
     );
+    expect(
+      RegExp(
+        r'<style name="TetoTVPlayerBadge"[\s\S]*?'
+        r'<item name="android:layout_height">wrap_content</item>',
+      ).hasMatch(nativeStyles),
+      isTrue,
+    );
     for (final token in ['#D6080808', '16dp', '1.4dp', '#C7E52B50']) {
       expect(card, contains(token));
     }
@@ -262,27 +368,30 @@ void main() {
     expect(scrim, isNot(contains('<gradient')));
   });
 
-  test('Media3 clearly disables unavailable engine track controls', () {
-    final media3 = File(
-      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
-      'Media3PlayerActivity.kt',
-    ).readAsStringSync();
+  test(
+    'Media3 keeps track controls focusable so unavailable pickers explain',
+    () {
+      final media3 = File(
+        'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+        'Media3PlayerActivity.kt',
+      ).readAsStringSync();
 
-    expect(media3, contains('audioTrackButton.isEnabled = hasAudio'));
-    expect(media3, contains('captionTrackButton.isEnabled = hasCaptions'));
-    expect(
-      media3,
-      contains('setChromeControlAvailable(audioControlContainer, hasAudio)'),
-    );
-    expect(
-      media3,
-      contains(
-        'setChromeControlAvailable(captionControlContainer, hasCaptions)',
-      ),
-    );
-    expect(media3, contains('Player.COMMAND_SEEK_BACK'));
-    expect(media3, contains('Player.COMMAND_SEEK_FORWARD'));
-  });
+      expect(media3, contains('audioTrackButton.isEnabled = true'));
+      expect(media3, contains('captionTrackButton.isEnabled = true'));
+      expect(
+        media3,
+        contains('setChromeControlAvailable(audioControlContainer, true)'),
+      );
+      expect(
+        media3,
+        contains('setChromeControlAvailable(captionControlContainer, true)'),
+      );
+      expect(media3, contains('R.string.tetotv_player_no_audio_tracks'));
+      expect(media3, contains('R.string.tetotv_player_no_caption_tracks'));
+      expect(media3, contains('Player.COMMAND_SEEK_BACK'));
+      expect(media3, contains('Player.COMMAND_SEEK_FORWARD'));
+    },
+  );
 
   test('native pill surfaces defer accessibility to labeled icon controls', () {
     final nativeStyles = File(
@@ -321,15 +430,28 @@ void main() {
       'android/app/src/main/res/drawable/'
       'tetotv_player_control_primary_background.xml',
     ).readAsStringSync();
+    final media3 = File(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+      'Media3PlayerActivity.kt',
+    ).readAsStringSync();
+    final nativeHudSource = '$nativeChrome\n$media3';
 
     expect(nativeChrome, isNot(contains('@android:drawable/ic_menu_')));
-    for (final icon in ['picture', 'player', 'options']) {
-      expect(nativeChrome, contains('@drawable/tetotv_ic_$icon'));
+    for (final icon in [
+      'replay_rounded',
+      'play_arrow_rounded',
+      'pause_rounded',
+      'forward_rounded',
+      'picture',
+      'player',
+      'options',
+    ]) {
+      expect(nativeHudSource, contains('tetotv_ic_$icon'));
       final vector = File(
         'android/app/src/main/res/drawable/tetotv_ic_$icon.xml',
       ).readAsStringSync();
       expect(vector, contains('<vector'));
-      expect(vector, contains('android:strokeLineCap="round"'));
+      expect(vector, contains('glyph used by Flutter'));
     }
     for (final focusDrawable in [normalFocus, primaryFocus]) {
       expect(focusDrawable, contains('android:state_activated="true"'));
@@ -338,12 +460,14 @@ void main() {
       expect(focusDrawable, contains('android:color="#E6000000"'));
       expect(focusDrawable, isNot(contains('android:color="#FFFFFFFF"')));
     }
-    final media3 = File(
-      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
-      'Media3PlayerActivity.kt',
-    ).readAsStringSync();
     expect(media3, contains('control.setOnFocusChangeListener'));
-    expect(media3, contains('container.isActivated = hasFocus'));
+    expect(
+      media3,
+      contains('setChromeControlHighlighted(container, hasFocus)'),
+    );
+    expect(media3, contains('CHROME_FOCUS_SCALE = 1.025f'));
+    expect(media3, contains('CHROME_FOCUS_ANIMATION_MS = 80L'));
+    expect(media3, contains('PathInterpolator(0.215f, 0.61f, 0.355f, 1f)'));
   });
 }
 

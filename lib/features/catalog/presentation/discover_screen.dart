@@ -144,7 +144,9 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     return Focus(
       onKeyEvent: _handleNavigation,
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: context.appPalette == AppThemePalette.defaults
+            ? Colors.black
+            : context.appPalette.background,
         body: SafeArea(
           minimum: context.responsiveScreenPadding.copyWith(bottom: 0),
           child: Column(
@@ -171,7 +173,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                           summary,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: context.appPalette.mutedText),
                         ),
                       ],
                     ),
@@ -200,9 +202,9 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                   future: _results,
                   builder: (context, snapshot) {
                     if (snapshot.connectionState != ConnectionState.done) {
-                      return const Center(
+                      return Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.accentBright,
+                          color: context.appPalette.accentBright,
                         ),
                       );
                     }
@@ -215,10 +217,10 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                     }
                     final items = snapshot.data ?? const <AnimeSummary>[];
                     if (items.isEmpty) {
-                      return const Center(
+                      return Center(
                         child: Text(
                           'No anime matched these filters.',
-                          style: TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: context.appPalette.mutedText),
                         ),
                       );
                     }
@@ -501,7 +503,7 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                 color: const Color(0xFF090909),
                 borderRadius: BorderRadius.circular(compact ? 14 : 20),
                 border: Border.all(
-                  color: AppColors.accent.withValues(alpha: .65),
+                  color: context.appPalette.accent.withValues(alpha: .65),
                 ),
               ),
               child: Column(
@@ -520,12 +522,14 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                           width: compact ? 38 : 44,
                           height: compact ? 38 : 44,
                           decoration: BoxDecoration(
-                            color: AppColors.accent.withValues(alpha: .14),
+                            color: context.appPalette.accent.withValues(
+                              alpha: .14,
+                            ),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.tune_rounded,
-                            color: AppColors.accentBright,
+                            color: context.appPalette.accentBright,
                           ),
                         ),
                         const SizedBox(width: 13),
@@ -542,12 +546,12 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                 ).textTheme.headlineSmall,
                               ),
                               const SizedBox(height: 2),
-                              const Text(
+                              Text(
                                 'Choose only the filters you care about.',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: AppColors.textMuted,
+                                  color: context.appPalette.mutedText,
                                   fontSize: 12,
                                 ),
                               ),
@@ -802,7 +806,8 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                       vertical: 9,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: AppColors.selectableSurface,
+                                      color:
+                                          context.appPalette.selectableSurface,
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(color: Colors.white12),
                                     ),
@@ -813,12 +818,12 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                               ? Icons.toggle_on_rounded
                                               : Icons.toggle_off_rounded,
                                           color: _includeAdult
-                                              ? AppColors.accentBright
-                                              : AppColors.textMuted,
+                                              ? context.appPalette.accentBright
+                                              : context.appPalette.mutedText,
                                           size: 36,
                                         ),
                                         const SizedBox(width: 12),
-                                        const Expanded(
+                                        Expanded(
                                           child: Column(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
@@ -835,7 +840,9 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                               Text(
                                                 'Off by default',
                                                 style: TextStyle(
-                                                  color: AppColors.textMuted,
+                                                  color: context
+                                                      .appPalette
+                                                      .mutedText,
                                                   fontSize: 11,
                                                 ),
                                               ),
@@ -902,8 +909,8 @@ class _FilterSectionTitle extends StatelessWidget {
     padding: const EdgeInsets.only(top: 4, bottom: 2),
     child: Text(
       label.toUpperCase(),
-      style: const TextStyle(
-        color: AppColors.accentBright,
+      style: TextStyle(
+        color: context.appPalette.accentBright,
         fontSize: 11,
         fontWeight: FontWeight.w900,
         letterSpacing: 1.2,
@@ -936,13 +943,13 @@ class _FilterField extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: 62),
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.selectableSurface,
+        color: context.appPalette.selectableSurface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12),
       ),
       child: Row(
         children: [
-          Icon(icon, color: AppColors.textMuted, size: 21),
+          Icon(icon, color: context.appPalette.mutedText, size: 21),
           const SizedBox(width: 13),
           Expanded(
             child: Column(
@@ -950,8 +957,8 @@ class _FilterField extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
                   ),
@@ -965,9 +972,9 @@ class _FilterField extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(
+          Icon(
             Icons.keyboard_arrow_down_rounded,
-            color: AppColors.textMuted,
+            color: context.appPalette.mutedText,
           ),
         ],
       ),
@@ -1003,7 +1010,7 @@ Future<String?> _choose(
             borderRadius: BorderRadius.circular(16),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: AppColors.panel,
+                color: context.appPalette.surface,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white12),
               ),
@@ -1082,7 +1089,9 @@ class _ChoiceTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(9),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
-        color: selected ? AppColors.accent : AppColors.panelRaised,
+        color: selected
+            ? context.appPalette.accent
+            : context.appPalette.surfaceRaised,
         child: Row(
           children: [
             Expanded(
@@ -1123,7 +1132,7 @@ class _HeaderButton extends StatelessWidget {
     child: Container(
       constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
       padding: EdgeInsets.symmetric(horizontal: label == null ? 10 : 13),
-      color: AppColors.selectableSurface,
+      color: context.appPalette.selectableSurface,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1157,7 +1166,7 @@ class _DiscoverError extends StatelessWidget {
         Text(
           _friendlyDiscoverError(message),
           textAlign: TextAlign.center,
-          style: const TextStyle(color: AppColors.textMuted),
+          style: TextStyle(color: context.appPalette.mutedText),
         ),
         const SizedBox(height: 12),
         Wrap(

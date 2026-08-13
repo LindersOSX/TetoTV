@@ -165,6 +165,8 @@ class RealDebridClient {
               baseUrl: 'https://api.real-debrid.com/rest/1.0',
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 20),
+              followRedirects: false,
+              maxRedirects: 0,
               headers: {
                 'Accept': 'application/json',
                 'Authorization': 'Bearer $token',

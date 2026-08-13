@@ -52,8 +52,9 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.appPalette;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: palette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding,
         child: Focus(
@@ -69,20 +70,23 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                     focusNode: _backFocusNode,
                     borderRadius: BorderRadius.circular(10),
                     onPressed: Navigator.of(context).pop,
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
                         horizontal: 14,
                         vertical: 10,
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.arrow_back_rounded, color: Colors.white),
-                          SizedBox(width: 8),
+                          Icon(
+                            Icons.arrow_back_rounded,
+                            color: palette.primaryText,
+                          ),
+                          const SizedBox(width: 8),
                           Text(
                             'Back',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: palette.primaryText,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -91,13 +95,13 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Privacy & data',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Colors.white,
+                        color: palette.primaryText,
                         fontSize: 24,
                         fontWeight: FontWeight.w900,
                       ),
@@ -111,17 +115,17 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                   future: _policy,
                   builder: (context, snapshot) {
                     if (snapshot.connectionState != ConnectionState.done) {
-                      return const Center(
+                      return Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.accentBright,
+                          color: palette.accentBright,
                         ),
                       );
                     }
                     if (snapshot.hasError) {
-                      return const Center(
+                      return Center(
                         child: Text(
                           'The privacy disclosure could not be loaded.',
-                          style: TextStyle(color: AppColors.textMuted),
+                          style: TextStyle(color: palette.mutedText),
                         ),
                       );
                     }
@@ -135,8 +139,8 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                           constraints: const BoxConstraints(maxWidth: 980),
                           child: SelectableText(
                             snapshot.data!,
-                            style: const TextStyle(
-                              color: Color(0xFFD6D6DC),
+                            style: TextStyle(
+                              color: palette.primaryText.withValues(alpha: .86),
                               fontSize: 15,
                               height: 1.55,
                             ),

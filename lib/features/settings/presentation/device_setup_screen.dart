@@ -33,7 +33,7 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(deviceSetupProvider);
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: context.appPalette.background,
       body: SafeArea(
         minimum: context.responsiveScreenPadding,
         child: Column(
@@ -56,9 +56,9 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
                         'Device calibration',
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
-                      const Text(
+                      Text(
                         'TetoTV scans Android’s decoders, display, audio output, and subtitle engine.',
-                        style: TextStyle(color: AppColors.textMuted),
+                        style: TextStyle(color: context.appPalette.mutedText),
                       ),
                     ],
                   ),
@@ -68,9 +68,9 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
             const SizedBox(height: 18),
             Expanded(
               child: state.loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.accentBright,
+                        color: context.appPalette.accentBright,
                       ),
                     )
                   : state.error != null
@@ -121,15 +121,15 @@ class _CalibrationReportView extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppColors.panel,
+            color: context.appPalette.surface,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white.withValues(alpha: .08)),
           ),
           child: Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.devices_other_rounded,
-                color: AppColors.accentBright,
+                color: context.appPalette.accentBright,
                 size: 34,
               ),
               const SizedBox(width: 12),
@@ -143,7 +143,7 @@ class _CalibrationReportView extends StatelessWidget {
                     ),
                     Text(
                       'Android ${report.profile.sdk} • ${report.profile.abis.join(', ')}',
-                      style: const TextStyle(color: AppColors.textMuted),
+                      style: TextStyle(color: context.appPalette.mutedText),
                     ),
                   ],
                 ),
@@ -180,11 +180,16 @@ class _CalibrationReportView extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF19070B),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.accent.withValues(alpha: .7)),
+            border: Border.all(
+              color: context.appPalette.accent.withValues(alpha: .7),
+            ),
           ),
           child: Row(
             children: [
-              const Icon(Icons.auto_awesome_rounded, color: AppColors.cyan),
+              Icon(
+                Icons.auto_awesome_rounded,
+                color: context.appPalette.secondaryAccent,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -210,7 +215,7 @@ class _CapabilityCard extends StatelessWidget {
     height: 94,
     padding: const EdgeInsets.all(13),
     decoration: BoxDecoration(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       borderRadius: BorderRadius.circular(10),
       border: Border.all(
         color: check.supported
@@ -227,7 +232,7 @@ class _CapabilityCard extends StatelessWidget {
               : Icons.info_outline_rounded,
           color: check.supported
               ? const Color(0xFF5FE0A2)
-              : AppColors.textMuted,
+              : context.appPalette.mutedText,
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -243,8 +248,8 @@ class _CapabilityCard extends StatelessWidget {
                 check.detail,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppColors.textMuted,
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
                   fontSize: 10,
                 ),
               ),
@@ -267,7 +272,10 @@ class _CalibrationError extends StatelessWidget {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.error_outline_rounded, color: AppColors.accentBright),
+        Icon(
+          Icons.error_outline_rounded,
+          color: context.appPalette.accentBright,
+        ),
         const SizedBox(height: 10),
         Text(message, textAlign: TextAlign.center),
         const SizedBox(height: 12),
@@ -309,7 +317,9 @@ class _CalibrationButton extends StatelessWidget {
           height: 42,
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: primary ? AppColors.accent : AppColors.panelRaised,
+            color: primary
+                ? context.appPalette.accent
+                : context.appPalette.surfaceRaised,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: Colors.white.withValues(alpha: .1)),
           ),

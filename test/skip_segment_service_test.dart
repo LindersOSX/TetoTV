@@ -38,6 +38,29 @@ void main() {
     expect(mergeSkipSegments([embedded], [external]), [embedded]);
   });
 
+  test('an overlapping intro never suppresses an outro marker', () {
+    const embeddedIntro = SkipSegment(
+      start: Duration(minutes: 20),
+      end: Duration(minutes: 22),
+      kind: SkipSegmentKind.opening,
+      source: SkipSegmentSource.embeddedChapter,
+    );
+    const externalOutro = SkipSegment(
+      start: Duration(minutes: 21),
+      end: Duration(minutes: 22, seconds: 30),
+      kind: SkipSegmentKind.ending,
+      source: SkipSegmentSource.aniSkip,
+    );
+
+    final merged = mergeSkipSegments([embeddedIntro], [externalOutro]);
+
+    expect(merged, hasLength(2));
+    expect(merged.map((segment) => segment.kind), [
+      SkipSegmentKind.opening,
+      SkipSegmentKind.ending,
+    ]);
+  });
+
   test('recognizes numbered OP and ED chapter labels', () {
     final segments = skipSegmentsFromChapters(const [
       MediaChapter(title: 'OP1', start: Duration(seconds: 30)),

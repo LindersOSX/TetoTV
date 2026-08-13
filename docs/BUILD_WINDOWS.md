@@ -217,11 +217,24 @@ installed app signed by a different key. Public releases use one universal ARM
 APK containing both supported application ABIs:
 
 ```powershell
-flutter build apk --release --target-platform android-arm,android-arm64
+New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
+
+# Private Beta 2.0.0
+flutter build apk --release --target-platform android-arm,android-arm64 `
+  --build-name 2.0.0 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
+  .\build\fire-tv\TetoTV-v2.0.0-universal.apk
+
+# Public 1.0.0, built from the same reviewed commit and signing key
+flutter build apk --release --target-platform android-arm,android-arm64 `
+  --build-name 1.0.0 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
+  .\build\fire-tv\TetoTV-v1.0.0-universal.apk
 ```
 
 Many Fire TV models expose a 32-bit application ABI even when their CPU is
-64-bit. Check the target before choosing a split APK:
+64-bit. The universal APK avoids making the user choose a split. These commands
+are still useful when recording a device-smoke-test inventory:
 
 ```powershell
 adb shell getprop ro.product.cpu.abilist

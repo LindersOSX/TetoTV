@@ -59,7 +59,10 @@ internal object NetworkRequestPolicy {
     fun httpsOrigin(value: String): Origin? = runCatching {
         val uri = URI(value.trim())
         if (!uri.scheme.equals("https", ignoreCase = true)) return@runCatching null
+        if (uri.rawUserInfo != null) return@runCatching null
         val host = uri.host?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            .removePrefix("[")
+            .removeSuffix("]")
         if (host.isEmpty()) return@runCatching null
         val port = when (uri.port) {
             -1 -> 443
@@ -68,6 +71,38 @@ internal object NetworkRequestPolicy {
         }
         Origin("https", host, port)
     }.getOrNull()
+
+    /**
+     * Accepts a media URL explicitly supplied by the viewer from the Local
+     * media/Jellyfin screen. Cleartext is limited to numeric private-network
+     * addresses (plus localhost), avoiding DNS rebinding and arbitrary HTTP.
+     */
+    fun trustedLocalMediaOrigin(value: String): Origin? = runCatching {
+        val uri = URI(value.trim())
+        val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
+        if (scheme !in setOf("http", "https")) return@runCatching null
+        if (uri.rawUserInfo != null || uri.host.isNullOrBlank()) return@runCatching null
+        val host = uri.host.trim().lowercase(Locale.ROOT)
+            .removePrefix("[")
+            .removeSuffix("]")
+        val port = when (uri.port) {
+            -1 -> if (scheme == "https") 443 else 80
+            in 1..65_535 -> uri.port
+            else -> return@runCatching null
+        }
+        if (scheme == "http" && !isExplicitPrivateHost(host)) {
+            return@runCatching null
+        }
+        Origin(scheme, host, port)
+    }.getOrNull()
+
+    fun isTrustedContentUri(value: String): Boolean = runCatching {
+        val uri = URI(value.trim())
+        uri.scheme.equals("content", ignoreCase = true) &&
+            !uri.rawAuthority.isNullOrBlank() &&
+            uri.rawUserInfo == null &&
+            uri.rawFragment == null
+    }.getOrDefault(false)
 
     fun origin(scheme: String, host: String, port: Int): Origin = Origin(
         scheme = scheme.lowercase(Locale.ROOT),
@@ -205,4 +240,28 @@ internal object NetworkRequestPolicy {
             else -> true
         }
     }
+
+    private fun isExplicitPrivateHost(host: String): Boolean {
+        if (host == "localhost") return true
+        // HTTP Jellyfin addresses deliberately require an IP literal. Hostname
+        // resolution here would allow a public name to rebind to the LAN.
+        val literal = host.removePrefix("[").removeSuffix("]").substringBefore('%')
+        val numericLiteral = when {
+            literal.contains(':') -> literal.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == ':' || it == '.' }
+            literal.contains('.') -> literal.all { it.isDigit() || it == '.' }
+            else -> false
+        }
+        if (!numericLiteral) return false
+        val address = runCatching { InetAddress.getByName(literal) }.getOrNull()
+            ?: return false
+        return !address.isAnyLocalAddress &&
+            !address.isMulticastAddress &&
+            (address.isLoopbackAddress ||
+                address.isLinkLocalAddress ||
+                address.isSiteLocalAddress ||
+                isUniqueLocalIpv6(address.address))
+    }
+
+    private fun isUniqueLocalIpv6(bytes: ByteArray): Boolean =
+        bytes.size == 16 && (bytes[0].toInt() and 0xFE) == 0xFC
 }

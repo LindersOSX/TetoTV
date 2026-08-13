@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/discord/application/discord_device_pairing_controller.dart';
 import 'package:anime_tv/features/discord/domain/discord_device_pairing.dart';
@@ -82,7 +83,7 @@ class _DiscordDevicePairingScreenState
         if (didPop) _controller.stop();
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: context.appPalette.background,
         body: SafeArea(
           minimum: context.responsiveScreenPadding,
           child: Column(
@@ -107,9 +108,9 @@ class _DiscordDevicePairingScreenState
                     ),
                   ),
                   if (!context.isCompactWidth)
-                    const Text(
+                    Text(
                       'Approve securely on your phone or computer',
-                      style: TextStyle(color: AppColors.textMuted),
+                      style: TextStyle(color: context.appPalette.mutedText),
                     ),
                 ],
               ),
@@ -217,7 +218,7 @@ class _WaitingForDiscord extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 900),
       padding: EdgeInsets.all(context.isCompactWidth ? 18 : 28),
       decoration: BoxDecoration(
-        color: AppColors.panel,
+        color: context.appPalette.surface,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: .08)),
       ),
@@ -225,9 +226,11 @@ class _WaitingForDiscord extends StatelessWidget {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 650;
           final qrSize = compact ? 166.0 : 220.0;
-          final qr = Semantics(
-            image: true,
-            label: 'QR code to authorize TetoTV with Discord',
+          final qrData = session.verificationUriComplete.toString();
+          final qr = CopyableQrInteraction(
+            data: qrData,
+            semanticsLabel: 'QR code to authorize TetoTV with Discord',
+            confirmationMessage: 'Discord authorization link copied.',
             child: Container(
               key: const ValueKey('discord-pairing-qr'),
               width: qrSize,
@@ -238,13 +241,13 @@ class _WaitingForDiscord extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
               ),
               child: QrImageView(
-                data: session.verificationUriComplete.toString(),
+                data: qrData,
                 semanticsLabel: 'Discord device authorization link',
                 backgroundColor: Colors.white,
                 errorCorrectionLevel: QrErrorCorrectLevel.Q,
                 padding: EdgeInsets.zero,
-                eyeStyle: const QrEyeStyle(color: AppColors.ink),
-                dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
+                eyeStyle: const QrEyeStyle(color: Colors.black),
+                dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
               ),
             ),
           );
@@ -275,8 +278,8 @@ class _WaitingForDiscord extends StatelessWidget {
                   session.userCode,
                   key: const ValueKey('discord-pairing-code'),
                   maxLines: 1,
-                  style: const TextStyle(
-                    color: AppColors.accentBright,
+                  style: TextStyle(
+                    color: context.appPalette.accentBright,
                     fontSize: 34,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 5,
@@ -284,19 +287,19 @@ class _WaitingForDiscord extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'TetoTV updates automatically after you approve the request. '
                 'Your Discord password is never entered on this device.',
                 textAlign: TextAlign.start,
-                style: TextStyle(color: AppColors.textMuted),
+                style: TextStyle(color: context.appPalette.mutedText),
               ),
               const SizedBox(height: 7),
               Text(
                 'This one-time code expires in about $expiresInMinutes '
                 '${expiresInMinutes == 1 ? 'minute' : 'minutes'}.',
                 textAlign: compact ? TextAlign.center : TextAlign.start,
-                style: const TextStyle(
-                  color: AppColors.textMuted,
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
                   fontSize: 11,
                 ),
               ),
@@ -329,18 +332,22 @@ class _WaitingPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: AppColors.cyan.withValues(alpha: .12),
+      color: context.appPalette.secondaryAccent.withValues(alpha: .12),
       borderRadius: BorderRadius.circular(999),
     ),
-    child: const Row(
+    child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.sync_rounded, size: 15, color: AppColors.cyan),
-        SizedBox(width: 7),
+        Icon(
+          Icons.sync_rounded,
+          size: 15,
+          color: context.appPalette.secondaryAccent,
+        ),
+        const SizedBox(width: 7),
         Text(
           'WAITING FOR APPROVAL',
           style: TextStyle(
-            color: AppColors.cyan,
+            color: context.appPalette.secondaryAccent,
             fontSize: 11,
             fontWeight: FontWeight.w800,
             letterSpacing: 1.1,
@@ -356,7 +363,7 @@ class _PairingStatus extends StatelessWidget {
     required this.title,
     required this.body,
     this.icon,
-    this.color = AppColors.accentBright,
+    this.color,
     this.busy = false,
     this.actionIcon = Icons.refresh_rounded,
     this.actionLabel,
@@ -365,7 +372,7 @@ class _PairingStatus extends StatelessWidget {
   });
 
   final IconData? icon;
-  final Color color;
+  final Color? color;
   final bool busy;
   final String title;
   final String body;
@@ -375,37 +382,40 @@ class _PairingStatus extends StatelessWidget {
   final FocusNode? actionFocusNode;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (busy)
-            const CircularProgressIndicator(color: AppColors.accentBright)
-          else
-            Icon(icon, size: 72, color: color),
-          const SizedBox(height: 18),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.displaySmall,
-          ),
-          const SizedBox(height: 10),
-          Text(body, textAlign: TextAlign.center),
-          if (actionLabel != null && onAction != null) ...[
-            const SizedBox(height: 24),
-            _PairingAction(
-              focusNode: actionFocusNode,
-              icon: actionIcon,
-              label: actionLabel!,
-              onPressed: onAction!,
+  Widget build(BuildContext context) {
+    final statusColor = color ?? context.appPalette.accentBright;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (busy)
+              CircularProgressIndicator(color: context.appPalette.accentBright)
+            else
+              Icon(icon, size: 72, color: statusColor),
+            const SizedBox(height: 18),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.displaySmall,
             ),
+            const SizedBox(height: 10),
+            Text(body, textAlign: TextAlign.center),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 24),
+              _PairingAction(
+                focusNode: actionFocusNode,
+                icon: actionIcon,
+                label: actionLabel!,
+                onPressed: onAction!,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _PairingAction extends StatelessWidget {
@@ -431,7 +441,7 @@ class _PairingAction extends StatelessWidget {
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(10),
     child: Container(
-      color: AppColors.panel,
+      color: context.appPalette.surface,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         mainAxisSize: MainAxisSize.min,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:flutter/material.dart';
@@ -68,7 +69,7 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
         if (didPop) _controller.stop();
       },
       child: Dialog(
-        backgroundColor: AppColors.panel,
+        backgroundColor: context.appPalette.surface,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 900, maxHeight: 700),
           child: Padding(
@@ -79,9 +80,9 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
               children: [
                 Row(
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.phone_android_rounded,
-                      color: AppColors.accentBright,
+                      color: context.appPalette.accentBright,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -197,21 +198,27 @@ class _WaitingForSources extends StatelessWidget {
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 650;
         final qrSize = compact ? 150.0 : 220.0;
-        final qr = Container(
-          width: qrSize,
-          height: qrSize,
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: QrImageView(
-            data: session.verificationUriComplete.toString(),
-            backgroundColor: Colors.white,
-            errorCorrectionLevel: QrErrorCorrectLevel.Q,
-            padding: EdgeInsets.zero,
-            eyeStyle: const QrEyeStyle(color: AppColors.ink),
-            dataModuleStyle: const QrDataModuleStyle(color: AppColors.ink),
+        final qrData = session.verificationUriComplete.toString();
+        final qr = CopyableQrInteraction(
+          data: qrData,
+          semanticsLabel: 'QR code for source pairing',
+          confirmationMessage: 'Source pairing link copied.',
+          child: Container(
+            width: qrSize,
+            height: qrSize,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: QrImageView(
+              data: qrData,
+              backgroundColor: Colors.white,
+              errorCorrectionLevel: QrErrorCorrectLevel.Q,
+              padding: EdgeInsets.zero,
+              eyeStyle: const QrEyeStyle(color: Colors.black),
+              dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
+            ),
           ),
         );
         final instructions = Column(
@@ -233,18 +240,18 @@ class _WaitingForSources extends StatelessWidget {
             const SizedBox(height: 14),
             SelectableText(
               session.userCode,
-              style: const TextStyle(
-                color: AppColors.accentBright,
+              style: TextStyle(
+                color: context.appPalette.accentBright,
                 fontSize: 30,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 4,
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               'Paste Marketplace repository and Torrent source manifest URLs on your phone. This device validates every destination before saving it.',
               textAlign: TextAlign.start,
-              style: TextStyle(color: AppColors.textMuted),
+              style: TextStyle(color: context.appPalette.mutedText),
             ),
           ],
         );
@@ -281,7 +288,7 @@ class _CenteredStatus extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (busy)
-          const CircularProgressIndicator(color: AppColors.accentBright)
+          CircularProgressIndicator(color: context.appPalette.accentBright)
         else
           const Icon(Icons.timer_off_rounded, size: 58),
         const SizedBox(height: 18),
@@ -310,7 +317,9 @@ class _CompletionStatus extends StatelessWidget {
             Icon(
               successful ? Icons.check_circle_rounded : Icons.error_rounded,
               size: 62,
-              color: successful ? const Color(0xFF67D49B) : AppColors.accent,
+              color: successful
+                  ? const Color(0xFF67D49B)
+                  : context.appPalette.accent,
             ),
             const SizedBox(height: 16),
             Text(
@@ -321,7 +330,10 @@ class _CompletionStatus extends StatelessWidget {
             Text(state.message ?? 'Try again with a new one-time code.'),
             for (final error in errors.take(3)) ...[
               const SizedBox(height: 7),
-              Text(error, style: const TextStyle(color: AppColors.textMuted)),
+              Text(
+                error,
+                style: TextStyle(color: context.appPalette.mutedText),
+              ),
             ],
           ],
         ),
