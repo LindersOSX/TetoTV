@@ -8,6 +8,8 @@
     <string name="tetotv_player_picture">Change picture size</string>
     <string name="tetotv_player_fix_short">Player</string>
     <string name="tetotv_player_fix_video">Choose video player</string>
+    <string name="tetotv_player_sources_short">Sources</string>
+    <string name="tetotv_player_sources">Choose stream source</string>
     <string name="tetotv_player_options_short">Options</string>
     <string name="tetotv_player_options">Playback options</string>
     <string name="tetotv_player_debrid_stream">Debrid stream</string>

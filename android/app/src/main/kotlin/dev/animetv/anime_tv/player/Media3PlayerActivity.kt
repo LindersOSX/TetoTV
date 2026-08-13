@@ -6,6 +6,7 @@ import android.app.Dialog
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -113,6 +114,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var captionSizeButton: ImageButton
     private lateinit var pictureModeButton: ImageButton
     private lateinit var fixVideoButton: ImageButton
+    private lateinit var sourcesButton: ImageButton
     private lateinit var optionsButton: ImageButton
     private lateinit var playPauseLabel: TextView
     private lateinit var rewindControlContainer: View
@@ -168,6 +170,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var seekForwardIncrementMs = 10_000L
     private var autoSkipIntros = false
     private var autoSkipOutros = false
+    private var hasDirectSources = false
     private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
     private var preferredSubtitleOverrideApplied = false
@@ -184,6 +187,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var skipFetchComplete = false
     private var skipFetchInFlight = false
     private var skipFetchAttempts = 0
+    private var skipDurationCandidateMs = 0L
     private var activeSkipSegment: NativeSkipSegment? = null
     private val skipSegments = mutableListOf<NativeSkipSegment>()
     private val autoFocusedSkipSegments = mutableSetOf<String>()
@@ -231,6 +235,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private val skipFetchRetryRunnable = Runnable { fetchSkipSegmentsIfReady() }
+    private val skipDurationStabilityRunnable = Runnable { fetchSkipSegmentsIfReady() }
 
     private val firstFrameWatchdog = Runnable {
         if (
@@ -303,6 +308,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getLongExtra(EXTRA_RESUME_UPDATED_AT_MS, 0L).coerceAtLeast(0L)
         malMediaId = intent.getIntExtra(EXTRA_MAL_MEDIA_ID, 0).coerceAtLeast(0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
+        hasDirectSources = intent.getBooleanExtra(EXTRA_HAS_DIRECT_SOURCES, false)
         val sourceOrigin = NetworkRequestPolicy.httpsOrigin(source)
         if (source.isBlank() || (sourceOrigin == null && source != SMOKE_VIDEO_URI)) {
             terminalError = "The native player requires an HTTPS debrid URL."
@@ -524,10 +530,23 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerView.findViewById<ImageButton>(R.id.tetotv_fix_video).apply {
                 setOnClickListener { showPlayerPicker(this) }
             }
+        sourcesButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_player_sources).apply {
+                visibility = if (hasDirectSources) View.VISIBLE else View.GONE
+                setOnClickListener { finishWithResult(STATUS_NEXT_STREAM) }
+            }
+        playerView.findViewById<View>(R.id.tetotv_sources_control).visibility =
+            if (hasDirectSources) View.VISIBLE else View.GONE
+        playerView.findViewById<View>(R.id.tetotv_sources_spacing).visibility =
+            if (hasDirectSources) View.VISIBLE else View.GONE
         optionsButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_player_options).apply {
                 setOnClickListener { showPlaybackOptions(this) }
             }
+        fixVideoButton.nextFocusRightId =
+            if (hasDirectSources) R.id.tetotv_player_sources else R.id.tetotv_player_options
+        optionsButton.nextFocusLeftId =
+            if (hasDirectSources) R.id.tetotv_player_sources else R.id.tetotv_fix_video
         rewindControlContainer = playerView.findViewById(R.id.tetotv_rewind_control)
         playPauseControlContainer = playerView.findViewById(R.id.tetotv_play_pause_control)
         fastForwardControlContainer = playerView.findViewById(R.id.tetotv_fast_forward_control)
@@ -595,6 +614,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         bindChromeControlSurface(R.id.tetotv_caption_size_control, R.id.tetotv_caption_size)
         bindChromeControlSurface(R.id.tetotv_picture_control, R.id.tetotv_picture_mode)
         bindChromeControlSurface(R.id.tetotv_player_control, R.id.tetotv_fix_video)
+        if (hasDirectSources) {
+            bindChromeControlSurface(R.id.tetotv_sources_control, R.id.tetotv_player_sources)
+        }
         bindChromeControlSurface(R.id.tetotv_options_control, R.id.tetotv_player_options)
         updateTransportControlAvailability(player.availableCommands)
         val videoSurface = playerView.videoSurfaceView
@@ -830,6 +852,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         control.setOnFocusChangeListener { view, hasFocus ->
             existingFocusListener?.onFocusChange(view, hasFocus)
             container.isActivated = hasFocus
+            if (hasFocus) {
+                container.post {
+                    val revealInset =
+                        (FOCUS_REVEAL_INSET_DP * resources.displayMetrics.density).toInt()
+                    container.requestRectangleOnScreen(
+                        Rect(-revealInset, 0, container.width + revealInset, container.height),
+                        true,
+                    )
+                }
+            }
         }
         container.isActivated = control.hasFocus()
     }
@@ -882,6 +914,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         ) return
         val durationMs = safeDurationMs()
         if (durationMs <= 0L) return
+        if (abs(durationMs - skipDurationCandidateMs) > SKIP_DURATION_STABILITY_TOLERANCE_MS) {
+            skipDurationCandidateMs = durationMs
+            handler.removeCallbacks(skipDurationStabilityRunnable)
+            if (isForeground) {
+                handler.postDelayed(
+                    skipDurationStabilityRunnable,
+                    SKIP_DURATION_STABILITY_DELAY_MS,
+                )
+            }
+            return
+        }
         skipFetchInFlight = true
         skipFetchAttempts++
         val episodeLength = durationMs / 1_000.0
@@ -941,6 +984,21 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         handler.post {
                             if (resultSent || isFinishing || isDestroyed) return@post
                             skipFetchInFlight = false
+                            if (
+                                abs(safeDurationMs() - durationMs) >
+                                SKIP_DURATION_STABILITY_TOLERANCE_MS
+                            ) {
+                                skipFetchAttempts = (skipFetchAttempts - 1).coerceAtLeast(0)
+                                skipDurationCandidateMs = safeDurationMs()
+                                handler.removeCallbacks(skipDurationStabilityRunnable)
+                                if (isForeground) {
+                                    handler.postDelayed(
+                                        skipDurationStabilityRunnable,
+                                        SKIP_DURATION_STABILITY_DELAY_MS,
+                                    )
+                                }
+                                return@post
+                            }
                             when {
                                 successful && parsed != null -> {
                                     skipFetchComplete = true
@@ -964,6 +1022,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             return
         }
         handler.removeCallbacks(skipFetchRetryRunnable)
+        handler.removeCallbacks(skipDurationStabilityRunnable)
         if (!isForeground) return
         handler.postDelayed(
             skipFetchRetryRunnable,
@@ -2045,6 +2104,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(checkpointRunnable)
         handler.removeCallbacks(skipSegmentRunnable)
         handler.removeCallbacks(skipFetchRetryRunnable)
+        handler.removeCallbacks(skipDurationStabilityRunnable)
         handler.removeCallbacks(firstFrameWatchdog)
         handler.removeCallbacks(startupWatchdog)
         handler.removeCallbacks(hideControllerRunnable)
@@ -2168,7 +2228,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         // is delivered. Release MediaCodec, SurfaceView, audio, and MediaSession
         // synchronously before setResult()/finish() can resume Flutter.
         releasePlaybackResources()
-        val switchingEngine = status == STATUS_USE_MPV || status == STATUS_USE_VLC
+        val switchingEngine =
+            status == STATUS_USE_MPV || status == STATUS_USE_VLC || status == STATUS_NEXT_STREAM
         val deliveredStatus = if (switchingEngine && !playbackResourcesReleased) {
             terminalError =
                 "Media3 could not release every playback resource safely. " +
@@ -2180,7 +2241,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
         result.putExtra(RESULT_STATUS, deliveredStatus)
         preserveDiscordPresenceForEngineHandoff =
-            deliveredStatus == STATUS_USE_MPV || deliveredStatus == STATUS_USE_VLC
+            deliveredStatus == STATUS_USE_MPV ||
+                deliveredStatus == STATUS_USE_VLC ||
+                deliveredStatus == STATUS_NEXT_STREAM
         setResult(RESULT_OK, result)
         // Normal Exit must remain reachable even if a device-specific cleanup
         // step failed. Engine switches are withheld above until every old
@@ -2262,6 +2325,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"
         const val EXTRA_MAL_MEDIA_ID = "malMediaId"
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
+        const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
 
         const val RESULT_STATUS = "status"
         const val RESULT_POSITION_MS = "positionMs"
@@ -2295,7 +2359,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val STATUS_ERROR = "error"
         const val STATUS_USE_MPV = "use_mpv"
         const val STATUS_USE_VLC = "use_vlc"
+        const val STATUS_NEXT_STREAM = "next_stream"
         const val STATUS_RELEASE_FAILED = "release_failed"
+
+        private const val SKIP_DURATION_STABILITY_DELAY_MS = 1_200L
+        private const val SKIP_DURATION_STABILITY_TOLERANCE_MS = 1_000L
+        private const val FOCUS_REVEAL_INSET_DP = 8
 
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L

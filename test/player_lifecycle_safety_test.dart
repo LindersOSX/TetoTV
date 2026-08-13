@@ -358,6 +358,40 @@ void main() {
     ]);
   });
 
+  test('web streams wait for stable duration before loading skip data', () {
+    final mpv = _read('lib/features/player/presentation/tv_player_screen.dart');
+    final vlc = _read(
+      'lib/features/player/presentation/vlc_tv_player_screen.dart',
+    );
+    final nativeFlutter = _read(
+      'lib/features/player/presentation/native_media3_player_screen.dart',
+    );
+    final media3 = _read(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+      'Media3PlayerActivity.kt',
+    );
+
+    for (final flutterPlayer in [mpv, vlc]) {
+      expect(flutterPlayer, contains('_scheduleSkipSegmentLoad'));
+      expect(
+        flutterPlayer,
+        contains('Timer(const Duration(milliseconds: 1200)'),
+      );
+      expect(flutterPlayer, contains('_resolveSkipMalMediaId'));
+      expect(flutterPlayer, contains('catalogClientProvider).details('));
+    }
+    expect(mpv, contains('_player.stream.duration.listen('));
+    expect(vlc, contains('_scheduleSkipSegmentLoad(value.duration)'));
+    expect(nativeFlutter, contains('final malMediaIdFuture ='));
+    expect(
+      nativeFlutter,
+      contains('hasDirectSources: _currentStream.isWebStream'),
+    );
+    expect(media3, contains('SKIP_DURATION_STABILITY_DELAY_MS = 1_200L'));
+    expect(media3, contains('skipDurationCandidateMs = durationMs'));
+    expect(media3, contains('skipDurationStabilityRunnable'));
+  });
+
   test('Media3 destroys network metadata resources off the main thread', () {
     final source = File(
       'android/app/src/main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt',

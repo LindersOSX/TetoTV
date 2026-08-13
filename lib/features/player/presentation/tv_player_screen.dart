@@ -493,6 +493,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Timer? _videoWatchdog;
   Timer? _performanceWatchdog;
   StreamSubscription<Duration>? _progressSubscription;
+  StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<Tracks>? _tracksSubscription;
   StreamSubscription<String>? _errorSubscription;
   bool _controlsVisible = true;
@@ -504,6 +505,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   String? _playbackError;
   StreamSubscription<void>? _completedSubscription;
   List<SkipSegment> _skips = const [];
+  Timer? _skipLoadTimer;
+  Duration? _skipDurationCandidate;
+  bool _skipLoadInFlight = false;
+  bool _skipLoadComplete = false;
+  int _skipLoadAttempts = 0;
   SkipSegment? _activeSkip;
   bool _canSkipNow = false;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
@@ -675,6 +681,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       configuration: tetoTvVideoControllerConfiguration,
     );
     _progressSubscription = _player.stream.position.listen(_onPosition);
+    _durationSubscription = _player.stream.duration.listen(
+      _scheduleSkipSegmentLoad,
+    );
     _tracksSubscription = _player.stream.tracks.listen(_selectPreferredTracks);
     _errorSubscription = _player.stream.error.listen((message) {
       if (isLikelyVideoDecodeFailure(message) &&
@@ -723,7 +732,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _handleMediaAction,
     );
     unawaited(_bootstrapPlayback());
-    unawaited(_loadSkipSegments());
+    _scheduleSkipSegmentLoad(_player.state.duration);
     unawaited(_startWebSourceDiscovery());
     _scheduleControlsHide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -831,6 +840,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       unawaited(_updateMediaSession());
     }
     final duration = _player.state.duration;
+    _scheduleSkipSegmentLoad(duration);
     if (duration.inSeconds <= 0) return;
     final ratio = position.inMilliseconds / duration.inMilliseconds;
     if (!_prewarmed && !_prewarming && ratio >= .65) {
@@ -938,34 +948,90 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     });
   }
 
-  Future<void> _loadSkipSegments() async {
+  void _scheduleSkipSegmentLoad(Duration duration) {
+    if (_skipLoadComplete ||
+        _skipLoadInFlight ||
+        _engineHandoffInProgress ||
+        duration <= Duration.zero) {
+      return;
+    }
+    final previous = _skipDurationCandidate;
+    _skipDurationCandidate = duration;
+    if (previous != null &&
+        (previous - duration).abs() <= const Duration(seconds: 1) &&
+        _skipLoadTimer?.isActive == true) {
+      return;
+    }
+    _skipLoadTimer?.cancel();
+    _skipLoadTimer = Timer(const Duration(milliseconds: 1200), () {
+      unawaited(_loadSkipSegments(duration));
+    });
+  }
+
+  Future<int?> _resolveSkipMalMediaId() async {
+    final known = widget.malMediaId ?? widget.launch.episode.malMediaId;
+    if (known != null && known > 0) return known;
+    final anilistId =
+        widget.anilistMediaId ?? widget.launch.episode.anilistMediaId;
+    if (anilistId <= 0) return null;
     try {
-      var duration = _player.state.duration;
-      if (duration <= Duration.zero) {
-        duration = await _player.stream.duration
-            .firstWhere((value) => value > Duration.zero)
-            .timeout(const Duration(seconds: 15));
-      }
-      final externalFuture = widget.malMediaId == null || widget.episode == null
+      return (await ref.read(catalogClientProvider).details(anilistId)).idMal;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadSkipSegments(Duration duration) async {
+    if (_skipLoadComplete ||
+        _skipLoadInFlight ||
+        _engineHandoffInProgress ||
+        !mounted) {
+      return;
+    }
+    _skipLoadInFlight = true;
+    _skipLoadAttempts++;
+    var externalFailed = false;
+    try {
+      final episode = widget.episode ?? widget.launch.episode.episode;
+      final malMediaId = await _resolveSkipMalMediaId();
+      final externalFuture = malMediaId == null || episode <= 0
           ? Future<List<SkipSegment>>.value(const <SkipSegment>[])
           : AniSkipClient()
                 .segments(
-                  malMediaId: widget.malMediaId!,
-                  episode: widget.episode!,
+                  malMediaId: malMediaId,
+                  episode: episode,
                   episodeDuration: duration,
                 )
-                .catchError((_) => const <SkipSegment>[]);
+                .catchError((_) {
+                  externalFailed = true;
+                  return const <SkipSegment>[];
+                });
+      if (malMediaId == null && _currentStream.isWebStream) {
+        externalFailed = true;
+      }
       final embedded = await _embeddedChapterSkipsWithRetry(duration);
-      if (mounted && embedded.isNotEmpty) {
+      if (mounted && !_engineHandoffInProgress && embedded.isNotEmpty) {
         setState(() => _skips = embedded);
         _checkSkips(_player.state.position);
       }
       final external = await externalFuture;
-      if (!mounted) return;
+      if (!mounted || _engineHandoffInProgress) return;
+      final currentDuration = _player.state.duration;
+      if ((currentDuration - duration).abs() > const Duration(seconds: 1)) {
+        _skipDurationCandidate = currentDuration;
+        return;
+      }
       setState(() => _skips = mergeSkipSegments(embedded, external));
       _checkSkips(_player.state.position);
+      _skipLoadComplete = !externalFailed || _skipLoadAttempts >= 4;
     } catch (_) {
       // Chapter and community skip data are optional playback enhancements.
+      externalFailed = true;
+    } finally {
+      _skipLoadInFlight = false;
+      if (mounted && !_skipLoadComplete && _skipLoadAttempts < 4) {
+        _scheduleSkipSegmentLoad(_player.state.duration);
+      }
     }
   }
 
@@ -1445,7 +1511,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
           _videoFrameSeen = false;
           await _openMedia(resume: position);
-          unawaited(_loadSkipSegments());
+          if (_skips.isEmpty) {
+            _skipLoadComplete = false;
+            _skipLoadAttempts = 0;
+            _skipDurationCandidate = null;
+            _scheduleSkipSegmentLoad(_player.state.duration);
+          }
           if (mounted) setState(() => _playbackError = null);
           _showTrackMessage('Switched to a compatible stream');
           return;
@@ -1590,6 +1661,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     try {
       await _progressSubscription?.cancel();
+      await _durationSubscription?.cancel();
       await _tracksSubscription?.cancel();
       await _errorSubscription?.cancel();
       await _completedSubscription?.cancel();
@@ -2695,6 +2767,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   @override
   void dispose() {
+    _skipLoadTimer?.cancel();
+    _durationSubscription?.cancel();
     if (!_engineHandoffInProgress && !_playerReleasedForHandoff) {
       unawaited(_persistPlayback(_player.state.position, force: true));
       unawaited(_saveSeriesPreferences());

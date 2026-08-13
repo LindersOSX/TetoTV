@@ -160,6 +160,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   final Set<String> _failedDirectStreamUris = {};
   int _alternativeIndex = 0;
   List<SkipSegment> _skips = const [];
+  Timer? _skipLoadTimer;
+  Duration? _skipDurationCandidate;
+  bool _skipLoadInFlight = false;
+  bool _skipLoadComplete = false;
+  int _skipLoadAttempts = 0;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   VlcDecoderMode _decoderMode = VlcDecoderMode.hardwareCopy;
   double _playbackRate = 1;
@@ -399,7 +404,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       _showMessage('Resumed at ${_formatDuration(resume)}');
     }
     _persistenceReady = true;
-    unawaited(_loadSkipSegments());
+    _scheduleSkipSegmentLoad(controller.value.duration);
     _scheduleVideoWatchdog(controller);
     if (mounted) {
       setState(() {
@@ -523,6 +528,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return;
     }
     if (_persistenceReady && value.duration > Duration.zero) {
+      _scheduleSkipSegmentLoad(value.duration);
       unawaited(_persistPlayback(value.position));
       unawaited(_updateMediaSession());
       _checkSkips(value.position);
@@ -771,28 +777,81 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
-  Future<void> _loadSkipSegments() async {
-    if (widget.malMediaId == null || widget.episode == null) return;
+  void _scheduleSkipSegmentLoad(Duration duration) {
+    if (_skipLoadComplete ||
+        _skipLoadInFlight ||
+        _engineHandoffInProgress ||
+        duration <= Duration.zero) {
+      return;
+    }
+    final previous = _skipDurationCandidate;
+    _skipDurationCandidate = duration;
+    if (previous != null &&
+        (previous - duration).abs() <= const Duration(seconds: 1) &&
+        _skipLoadTimer?.isActive == true) {
+      return;
+    }
+    _skipLoadTimer?.cancel();
+    _skipLoadTimer = Timer(const Duration(milliseconds: 1200), () {
+      unawaited(_loadSkipSegments(duration));
+    });
+  }
+
+  Future<int?> _resolveSkipMalMediaId() async {
+    final known = widget.malMediaId ?? widget.launch.episode.malMediaId;
+    if (known != null && known > 0) return known;
+    final anilistId =
+        widget.anilistMediaId ?? widget.launch.episode.anilistMediaId;
+    if (anilistId <= 0) return null;
     try {
-      var duration = _controller?.value.duration ?? Duration.zero;
-      for (
-        var attempt = 0;
-        duration <= Duration.zero && attempt < 30;
-        attempt++
-      ) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-        duration = _controller?.value.duration ?? Duration.zero;
+      return (await ref.read(catalogClientProvider).details(anilistId)).idMal;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadSkipSegments(Duration duration) async {
+    if (_skipLoadComplete ||
+        _skipLoadInFlight ||
+        _engineHandoffInProgress ||
+        !mounted) {
+      return;
+    }
+    _skipLoadInFlight = true;
+    _skipLoadAttempts++;
+    var failed = false;
+    try {
+      final episode = widget.episode ?? widget.launch.episode.episode;
+      final malMediaId = await _resolveSkipMalMediaId();
+      if (malMediaId == null || episode <= 0) {
+        failed = true;
+        return;
       }
-      if (duration <= Duration.zero) return;
       final segments = await AniSkipClient().segments(
-        malMediaId: widget.malMediaId!,
-        episode: widget.episode!,
+        malMediaId: malMediaId,
+        episode: episode,
         episodeDuration: duration,
       );
-      if (mounted) setState(() => _skips = segments);
+      final currentDuration = _controller?.value.duration ?? duration;
+      if ((currentDuration - duration).abs() > const Duration(seconds: 1)) {
+        _skipDurationCandidate = currentDuration;
+        failed = true;
+        return;
+      }
+      if (!mounted || _engineHandoffInProgress) return;
+      setState(() => _skips = segments);
       _checkSkips(_controller?.value.position ?? Duration.zero);
+      _skipLoadComplete = true;
     } catch (_) {
       // Skip data is optional.
+      failed = true;
+    } finally {
+      _skipLoadInFlight = false;
+      if (mounted && failed && _skipLoadAttempts < 4) {
+        _scheduleSkipSegmentLoad(_controller?.value.duration ?? duration);
+      } else if (_skipLoadAttempts >= 4) {
+        _skipLoadComplete = true;
+      }
     }
   }
 
@@ -1940,6 +1999,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   @override
   void dispose() {
+    _skipLoadTimer?.cancel();
     final controller = _controllerPendingRelease ?? _controller;
     if (controller != null && !_controllerReleasedForHandoff) {
       unawaited(_persistPlayback(controller.value.position, force: true));

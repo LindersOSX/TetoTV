@@ -124,6 +124,20 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Sources'), findsOneWidget);
     expect(find.byType(SingleChildScrollView), findsOneWidget);
+
+    playFocus.requestFocus();
+    await tester.pump();
+    for (var move = 0; move < 8; move++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    final optionsRect = tester.getRect(
+      find.widgetWithText(TetoPlayerControl, 'Options'),
+    );
+    expect(optionsRect.left, greaterThanOrEqualTo(0));
+    expect(optionsRect.right, lessThanOrEqualTo(320));
+    expect(tester.binding.focusManager.primaryFocus, isNotNull);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('D-pad Down dismisses the visible player HUD immediately', (

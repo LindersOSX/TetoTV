@@ -36,15 +36,15 @@ void main() {
         'finish()',
       ]);
 
-      // A normal Exit must retain the exact terminal status. Only an engine
-      // switch is allowed to become release_failed when teardown is partial.
-      expect(
-        finish,
-        contains(
-          'val switchingEngine = status == STATUS_USE_MPV || '
-          'status == STATUS_USE_VLC',
-        ),
-      );
+      // A normal Exit must retain the exact terminal status. Only an engine or
+      // direct-source handoff may become release_failed when teardown is
+      // partial, because each can immediately launch a replacement decoder.
+      _expectInOrder(finish, const [
+        'val switchingEngine =',
+        'status == STATUS_USE_MPV',
+        'status == STATUS_USE_VLC',
+        'status == STATUS_NEXT_STREAM',
+      ]);
       expect(finish, contains('else {\n            status\n        }'));
       expect(playerSource, contains('const val STATUS_STOPPED = "stopped"'));
     },
