@@ -33,6 +33,10 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  static const _homeEasterEggTapTarget = 10;
+  static const _homeEasterEggTapWindow = Duration(seconds: 5);
+  static const _homeEasterEggDisplayDuration = Duration(seconds: 5);
+
   static const _connectTracking = [
     _ShelfItem(
       'Connect your tracker',
@@ -47,9 +51,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _scrollController = ScrollController();
   bool _catalogFocusSettled = false;
   Timer? _heroTimer;
+  Timer? _homeEasterEggTimer;
   int _heroIndex = 0;
+  int _homeEasterEggTapCount = 0;
+  DateTime? _homeEasterEggSequenceStartedAt;
   DateTime? _lastHomeActivation;
   bool _homeRefreshInProgress = false;
+  bool _showHomeEasterEgg = false;
 
   @override
   void initState() {
@@ -131,6 +139,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _handleHomeActivation() {
     final now = DateTime.now();
+    if (_recordHomeEasterEggActivation(now)) {
+      _lastHomeActivation = null;
+      _revealHomeEasterEgg();
+      return;
+    }
     final previous = _lastHomeActivation;
     _lastHomeActivation = now;
     if (previous == null ||
@@ -148,6 +161,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
     _lastHomeActivation = null;
     unawaited(_refreshHome());
+  }
+
+  bool _recordHomeEasterEggActivation(DateTime now) {
+    final startedAt = _homeEasterEggSequenceStartedAt;
+    if (startedAt == null ||
+        now.difference(startedAt) > _homeEasterEggTapWindow) {
+      _homeEasterEggSequenceStartedAt = now;
+      _homeEasterEggTapCount = 1;
+      return false;
+    }
+    _homeEasterEggTapCount++;
+    if (_homeEasterEggTapCount < _homeEasterEggTapTarget) return false;
+    _homeEasterEggTapCount = 0;
+    _homeEasterEggSequenceStartedAt = null;
+    return true;
+  }
+
+  void _revealHomeEasterEgg() {
+    _homeEasterEggTimer?.cancel();
+    if (!_showHomeEasterEgg) setState(() => _showHomeEasterEgg = true);
+    unawaited(
+      AndroidTvBridge.instance.playHomeEasterEgg(
+        maximumDuration: _homeEasterEggDisplayDuration,
+      ),
+    );
+    _homeEasterEggTimer = Timer(_homeEasterEggDisplayDuration, () {
+      if (!mounted) return;
+      setState(() => _showHomeEasterEgg = false);
+      unawaited(AndroidTvBridge.instance.stopHomeEasterEgg());
+    });
   }
 
   Future<void> _refreshHome() async {
@@ -332,6 +375,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _homeNavFocus.dispose();
     _scrollController.dispose();
     _heroTimer?.cancel();
+    _homeEasterEggTimer?.cancel();
+    unawaited(AndroidTvBridge.instance.stopHomeEasterEgg());
     super.dispose();
   }
 
@@ -537,45 +582,75 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: CustomScrollView(
-          controller: _scrollController,
-          slivers: [
-            SliverPadding(
-              padding: contentHorizontalPadding,
-              sliver: SliverToBoxAdapter(
-                child: _Header(
-                  preferences: preferences,
-                  homeFocusNode: _homeNavFocus,
-                  onHomePressed: _handleHomeActivation,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                SliverPadding(
+                  padding: contentHorizontalPadding,
+                  sliver: SliverToBoxAdapter(
+                    child: _Header(
+                      preferences: preferences,
+                      homeFocusNode: _homeNavFocus,
+                      onHomePressed: _handleHomeActivation,
+                    ),
+                  ),
                 ),
-              ),
+                if (preferences.showHero)
+                  SliverPadding(
+                    padding: contentHorizontalPadding,
+                    sliver: SliverToBoxAdapter(
+                      child: _HeroPanel(
+                        anime: hero,
+                        isLoading: trendingAsync.isLoading,
+                        focusNode: _heroFocus,
+                        titlePreference: titlePreference,
+                        preferences: preferences,
+                        activeIndex: activeHeroIndex,
+                        itemCount: heroItems.length,
+                      ),
+                    ),
+                  ),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: preferences.homeLayout == HomeLayout.compact
+                        ? 10
+                        : 18,
+                  ),
+                ),
+                for (final shelfSliver in shelfSlivers)
+                  SliverPadding(
+                    padding: contentHorizontalPadding,
+                    sliver: shelfSliver,
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 42)),
+              ],
             ),
-            if (preferences.showHero)
-              SliverPadding(
-                padding: contentHorizontalPadding,
-                sliver: SliverToBoxAdapter(
-                  child: _HeroPanel(
-                    anime: hero,
-                    isLoading: trendingAsync.isLoading,
-                    focusNode: _heroFocus,
-                    titlePreference: titlePreference,
-                    preferences: preferences,
-                    activeIndex: activeHeroIndex,
-                    itemCount: heroItems.length,
+            if (_showHomeEasterEgg)
+              Positioned.fill(
+                child: IgnorePointer(
+                  key: const ValueKey('home.easter-egg.ignore-pointer'),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: FractionallySizedBox(
+                      key: const ValueKey('home.easter-egg.region'),
+                      heightFactor: 0.5,
+                      widthFactor: 1,
+                      alignment: Alignment.bottomCenter,
+                      child: Image.asset(
+                        'assets/easter_egg/teto_plush.png',
+                        key: const ValueKey('home.easter-egg.image'),
+                        alignment: Alignment.bottomCenter,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.medium,
+                        excludeFromSemantics: true,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: preferences.homeLayout == HomeLayout.compact ? 10 : 18,
-              ),
-            ),
-            for (final shelfSliver in shelfSlivers)
-              SliverPadding(
-                padding: contentHorizontalPadding,
-                sliver: shelfSliver,
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 42)),
           ],
         ),
       ),
