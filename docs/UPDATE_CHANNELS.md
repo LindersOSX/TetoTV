@@ -21,7 +21,7 @@ LindersOSX/TetoTV-Releases
 Public started at completed release `v1.0.0`; the current hotfix is `v1.0.1`.
 Attach the signed universal APK and keep the application ID and Android signing
 certificate identical to the Beta build so Android accepts an in-place update.
-Public `1.0.1` and the private test build Beta `2.0.2` use the same Android
+Public `1.0.1` and the private test build Beta `2.0.3` use the same Android
 `versionCode` (`410001`). Releases offered for in-app rollback must keep the
 same package ID, production signer, compatible SDK/ABIs, and Android
 `versionCode`; Android will not normally install a lower code. A future build
@@ -63,9 +63,9 @@ in a command, workflow log, repository file, release note, diagnostic, or URL.
 The broker never needs the raw key at rest. Rotate the credential and broker
 hash together if it is abused; older builds will then fail closed for Beta.
 
-Beta started at `v2.0.0`; the current private test build is tagged `v2.0.2` and
-its user-facing release name is **TetoTV 2.0.2 Beta**. Keep machine-readable
-tags strictly numeric (`v2.0.2`); the app adds the `Beta` channel label in its UI.
+Beta started at `v2.0.0`; the current private test build is tagged `v2.0.3` and
+its user-facing release name is **TetoTV 2.0.3 Beta**. Keep machine-readable
+tags strictly numeric (`v2.0.3`); the app adds the `Beta` channel label in its UI.
 Future private Beta versions continue on the 2.x series.
 
 Switching channels is deliberately bidirectional. When the installed app is in
@@ -96,7 +96,7 @@ The authenticated history response is bounded to 20 completed, normal Beta 2.x
 releases, newest first:
 
 ```json
-{"releases":[{"version":"2.0.2","tag_name":"v2.0.2","asset":{"download_url":"https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v2.0.2/assets/123/universal.apk"}}]}
+{"releases":[{"version":"2.0.3","tag_name":"v2.0.3","asset":{"download_url":"https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v2.0.3/assets/123/universal.apk"}}]}
 ```
 
 Each item uses the same sanitized metadata schema as `latest`. Public history

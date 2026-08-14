@@ -115,20 +115,21 @@
                     <LinearLayout
                         android:id="@+id/tetotv_rewind_control"
                         style="@style/TetoTVPlayerControlPill"
-                        android:addStatesFromChildren="true">
+                        android:layout_width="40dp"
+                        android:addStatesFromChildren="true"
+                        android:gravity="center"
+                        android:paddingEnd="0dp">
 
                         <ImageButton
                             android:id="@id/exo_rew"
                             style="@style/TetoTVPlayerControlIcon"
+                            android:layout_width="40dp"
                             android:contentDescription="@string/tetotv_player_rewind"
                             android:nextFocusLeft="@id/tetotv_skip_segment"
                             android:nextFocusRight="@id/exo_play_pause"
+                            android:paddingStart="11dp"
+                            android:paddingEnd="11dp"
                             android:src="@drawable/tetotv_ic_replay_rounded" />
-
-                        <TextView
-                            android:id="@+id/tetotv_rewind_label"
-                            style="@style/TetoTVPlayerControlLabel"
-                            android:text="@string/tetotv_player_back_default" />
                     </LinearLayout>
 
                     <Space
@@ -138,20 +139,21 @@
                     <LinearLayout
                         android:id="@+id/tetotv_play_pause_control"
                         style="@style/TetoTVPlayerControlPill.Primary"
-                        android:addStatesFromChildren="true">
+                        android:layout_width="40dp"
+                        android:addStatesFromChildren="true"
+                        android:gravity="center"
+                        android:paddingEnd="0dp">
 
                         <ImageButton
                             android:id="@id/exo_play_pause"
                             style="@style/TetoTVPlayerControlIcon"
-                            android:contentDescription="@string/tetotv_player_play_pause"
+                            android:layout_width="40dp"
+                            android:contentDescription="@string/tetotv_player_play"
                             android:nextFocusLeft="@id/exo_rew"
                             android:nextFocusRight="@id/exo_ffwd"
+                            android:paddingStart="11dp"
+                            android:paddingEnd="11dp"
                             android:src="@drawable/tetotv_ic_play_arrow_rounded" />
-
-                        <TextView
-                            android:id="@+id/tetotv_play_pause_label"
-                            style="@style/TetoTVPlayerControlLabel"
-                            android:text="@string/tetotv_player_play" />
                     </LinearLayout>
 
                     <Space
@@ -161,20 +163,21 @@
                     <LinearLayout
                         android:id="@+id/tetotv_fast_forward_control"
                         style="@style/TetoTVPlayerControlPill"
-                        android:addStatesFromChildren="true">
+                        android:layout_width="40dp"
+                        android:addStatesFromChildren="true"
+                        android:gravity="center"
+                        android:paddingEnd="0dp">
 
                         <ImageButton
                             android:id="@id/exo_ffwd"
                             style="@style/TetoTVPlayerControlIcon"
+                            android:layout_width="40dp"
                             android:contentDescription="@string/tetotv_player_fast_forward"
                             android:nextFocusLeft="@id/exo_play_pause"
                             android:nextFocusRight="@id/tetotv_audio_tracks"
+                            android:paddingStart="11dp"
+                            android:paddingEnd="11dp"
                             android:src="@drawable/tetotv_ic_forward_rounded" />
-
-                        <TextView
-                            android:id="@+id/tetotv_fast_forward_label"
-                            style="@style/TetoTVPlayerControlLabel"
-                            android:text="@string/tetotv_player_forward_default" />
                     </LinearLayout>
                 </LinearLayout>
 

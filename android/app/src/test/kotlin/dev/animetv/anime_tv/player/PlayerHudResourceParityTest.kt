@@ -7,6 +7,35 @@ import org.junit.Test
 
 class PlayerHudResourceParityTest {
     @Test
+    fun transportActionsAreIconOnlyButRemainAccessible() {
+        val layout = resource("layout/tetotv_player_controls.xml").readText()
+        val activity = activitySource()
+        val controls = listOf(
+            "tetotv_rewind_control" to "@string/tetotv_player_rewind",
+            "tetotv_play_pause_control" to "@string/tetotv_player_play",
+            "tetotv_fast_forward_control" to "@string/tetotv_player_fast_forward",
+        )
+
+        controls.forEach { (controlId, accessibilityLabel) ->
+            val control = layout.substringAfter("android:id=\"@+id/$controlId\"")
+                .substringBefore("</LinearLayout>")
+            assertTrue(control.contains("android:layout_width=\"40dp\""))
+            assertTrue(control.contains("android:contentDescription=\"$accessibilityLabel\""))
+            assertFalse(control.contains("<TextView"))
+        }
+        listOf(
+            "tetotv_rewind_label",
+            "tetotv_play_pause_label",
+            "tetotv_fast_forward_label",
+        ).forEach { assertFalse(layout.contains(it)) }
+        assertTrue(activity.contains("playPauseButton.contentDescription = getString("))
+        assertTrue(activity.contains("R.string.tetotv_player_pause"))
+        assertTrue(activity.contains("R.string.tetotv_player_play"))
+        assertTrue(activity.contains("R.string.tetotv_player_rewind_seconds"))
+        assertTrue(activity.contains("R.string.tetotv_player_fast_forward_seconds"))
+    }
+
+    @Test
     fun media3MatchesMpvChromeGeometryPaletteAndReadOnlyProgress() {
         val layout = resource("layout/tetotv_player_controls.xml").readText()
         val playerLayout = resource("layout/activity_media3_player.xml").readText()

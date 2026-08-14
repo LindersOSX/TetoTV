@@ -222,7 +222,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var sourcesButton: ImageButton
     private lateinit var optionsButton: ImageButton
     private lateinit var playPauseButton: ImageButton
-    private lateinit var playPauseLabel: TextView
     private lateinit var rewindControlContainer: View
     private lateinit var playPauseControlContainer: View
     private lateinit var fastForwardControlContainer: View
@@ -688,9 +687,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_play_pause).apply {
                 setImageResource(R.drawable.tetotv_ic_play_arrow_rounded)
             }
-        playPauseLabel = playerView.findViewById<TextView>(R.id.tetotv_play_pause_label).apply {
-            text = getString(R.string.tetotv_player_play)
-        }
         skipSegmentButton =
             findViewById<Button>(R.id.tetotv_skip_segment).apply {
                 visibility = View.GONE
@@ -744,10 +740,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             setOnClickListener { seekRelative(-seekBackIncrementMs, it) }
         }
-        playerView.findViewById<TextView>(R.id.tetotv_rewind_label).text = getString(
-            R.string.tetotv_player_back_seconds,
-            seekBackIncrementMs / 1_000,
-        )
         playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_ffwd).apply {
             setImageResource(R.drawable.tetotv_ic_forward_rounded)
             contentDescription = getString(
@@ -756,10 +748,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             setOnClickListener { seekRelative(seekForwardIncrementMs, it) }
         }
-        playerView.findViewById<TextView>(R.id.tetotv_fast_forward_label).text = getString(
-            R.string.tetotv_player_forward_seconds,
-            seekForwardIncrementMs / 1_000,
-        )
         bindChromeControlSurface(R.id.tetotv_rewind_control, androidx.media3.ui.R.id.exo_rew)
         bindChromeControlSurface(
             R.id.tetotv_play_pause_control,
@@ -907,13 +895,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (::pausedTitleView.isInitialized) {
             pausedTitleView.visibility = if (playbackIntended) View.GONE else View.VISIBLE
         }
-        if (::playPauseLabel.isInitialized) {
-            playPauseLabel.text = getString(
+        if (::playPauseButton.isInitialized) {
+            playPauseButton.contentDescription = getString(
                 if (playbackIntended) R.string.tetotv_player_pause
                 else R.string.tetotv_player_play,
             )
-        }
-        if (::playPauseButton.isInitialized) {
             val icon = if (playbackIntended) {
                 R.drawable.tetotv_ic_pause_rounded
             } else {
@@ -1307,12 +1293,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
     }
 
-    /** Let phone users tap a control label while D-pad focus stays on its icon. */
+    /** Let phone users tap the whole pill while D-pad focus stays on its icon. */
     private fun bindChromeControlSurface(containerId: Int, controlId: Int) {
         val container = playerView.findViewById<View>(containerId) ?: return
         val control = playerView.findViewById<View>(controlId) ?: return
         container.setOnClickListener { control.performClick() }
-        // The labeled pill is the visual surface, but the child icon owns
+        // The pill is the visual surface, but the child icon owns
         // accessibility and D-pad focus. Mirror that focus explicitly so the
         // parent selector always renders the Teto focus ring on Android TV.
         val existingFocusListener = control.onFocusChangeListener

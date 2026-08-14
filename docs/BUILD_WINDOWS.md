@@ -226,12 +226,12 @@ can reach the private Beta channel without asking the user for a key:
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
 $tetoReleaseDefines = 'C:\secure\TetoTV-release-defines.json'
 
-# Private Beta 2.0.2
+# Private Beta 2.0.3
 flutter build apk --release --target-platform android-arm,android-arm64 `
   --dart-define-from-file=$tetoReleaseDefines `
-  --build-name 2.0.2 --build-number 410001
+  --build-name 2.0.3 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v2.0.2-universal.apk
+  .\build\fire-tv\TetoTV-v2.0.3-universal.apk
 
 # Public 1.0.1, built from the same reviewed commit and signing key
 flutter build apk --release --target-platform android-arm,android-arm64 `

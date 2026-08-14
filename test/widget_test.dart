@@ -52,7 +52,9 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('TetoTV'), findsOneWidget);
+    expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
+    expect(find.text('Teto'), findsOneWidget);
+    expect(find.text('TV'), findsOneWidget);
     expect(find.text('Continue watching'), findsOneWidget);
     expect(find.text('Watch now'), findsOneWidget);
     expect(find.text('My List'), findsOneWidget);
@@ -603,6 +605,8 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(find.text('Set up TetoTV'), findsNothing);
-    expect(find.text('TetoTV'), findsOneWidget);
+    expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
+    expect(find.text('Teto'), findsOneWidget);
+    expect(find.text('TV'), findsOneWidget);
   });
 }
