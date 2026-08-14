@@ -80,6 +80,7 @@ class SeriesPlaybackPreferences {
     this.videoFit = 'contain',
     this.highContrastSubtitles = false,
     this.autoplayNextEpisode = true,
+    this.skipFillerEpisodes = false,
     this.preferredStreamLanguage = 'dub',
     this.preferredQuality = 'any',
     this.preferredCodec = 'any',
@@ -103,6 +104,7 @@ class SeriesPlaybackPreferences {
   final String videoFit;
   final bool highContrastSubtitles;
   final bool autoplayNextEpisode;
+  final bool skipFillerEpisodes;
   final String preferredStreamLanguage;
   final String preferredQuality;
   final String preferredCodec;
@@ -126,6 +128,7 @@ class SeriesPlaybackPreferences {
     String? videoFit,
     bool? highContrastSubtitles,
     bool? autoplayNextEpisode,
+    bool? skipFillerEpisodes,
     String? preferredStreamLanguage,
     String? preferredQuality,
     String? preferredCodec,
@@ -150,6 +153,7 @@ class SeriesPlaybackPreferences {
     videoFit: videoFit ?? this.videoFit,
     highContrastSubtitles: highContrastSubtitles ?? this.highContrastSubtitles,
     autoplayNextEpisode: autoplayNextEpisode ?? this.autoplayNextEpisode,
+    skipFillerEpisodes: skipFillerEpisodes ?? this.skipFillerEpisodes,
     preferredStreamLanguage:
         preferredStreamLanguage ?? this.preferredStreamLanguage,
     preferredQuality: preferredQuality ?? this.preferredQuality,
@@ -179,6 +183,7 @@ class SeriesPlaybackPreferences {
     'videoFit': videoFit,
     'highContrastSubtitles': highContrastSubtitles,
     'autoplayNextEpisode': autoplayNextEpisode,
+    'skipFillerEpisodes': skipFillerEpisodes,
     'preferredStreamLanguage': preferredStreamLanguage,
     'preferredQuality': preferredQuality,
     'preferredCodec': preferredCodec,
@@ -204,6 +209,7 @@ class SeriesPlaybackPreferences {
         videoFit: json['videoFit'] as String? ?? 'contain',
         highContrastSubtitles: json['highContrastSubtitles'] as bool? ?? false,
         autoplayNextEpisode: json['autoplayNextEpisode'] as bool? ?? true,
+        skipFillerEpisodes: json['skipFillerEpisodes'] as bool? ?? false,
         preferredStreamLanguage:
             json['preferredStreamLanguage'] as String? ?? 'dub',
         preferredQuality: json['preferredQuality'] as String? ?? 'any',

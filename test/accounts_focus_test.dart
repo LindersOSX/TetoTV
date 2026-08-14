@@ -5,6 +5,7 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -962,6 +963,45 @@ void main() {
       isTrue,
     );
 
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('filler labels setting is TV-focusable and updates globally', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final enabledLabel = find.text('Show filler episode labels ON');
+    expect(enabledLabel, findsOneWidget);
+    await tester.ensureVisible(enabledLabel);
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(of: enabledLabel, matching: find.byType(TvFocusable)),
+      findsOneWidget,
+    );
+
+    await tester.tap(enabledLabel);
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).showFillerIndicators,
+      isFalse,
+    );
+    expect(find.text('Show filler episode labels OFF'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

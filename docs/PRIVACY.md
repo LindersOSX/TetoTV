@@ -43,6 +43,17 @@ TetoTV makes network requests only for app features the user uses:
   episode number, and episode duration to look up community intro/outro times.
   This lookup also supports the manual Skip button when automatic skipping is
   disabled;
+- when filler labels are enabled or a user enables **Skip filler episodes** for
+  a series, Jikan may receive the public MAL title identifier and paginated
+  episode-list requests needed to read its filler flags. If AniList does not
+  provide a MAL mapping, TetoTV can send one public anime title as a bounded
+  exact-match search; the expected episode count and season year are used only
+  on the device to reject ambiguous results. TetoTV does not send Jikan an
+  account identifier, tracker list, selected stream, or playback history.
+  Public lookup metadata (MAL identifier, lookup route, fetch time, known
+  episode count, and confirmed filler episode numbers) is treated as valid for
+  24 hours; expired records are ignored and can remain in application cache
+  storage until they are overwritten or application data is cleared;
 - source repositories and extensions installed by the user receive the title,
   episode, and related request data needed to find sources;
 - voice search uses Android's selected speech-recognition service. If a

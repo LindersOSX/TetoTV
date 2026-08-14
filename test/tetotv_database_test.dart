@@ -23,6 +23,7 @@ void main() {
       subtitlePreferenceSet: true,
       subtitleSize: 42,
       autoplayNextEpisode: true,
+      skipFillerEpisodes: true,
       preferredStreamLanguage: 'sub',
       preferredQuality: 'p1080',
       preferredCodec: 'hevc',
@@ -39,6 +40,7 @@ void main() {
     expect(restored.audioPreferenceSet, isTrue);
     expect(restored.subtitlePreferenceSet, isTrue);
     expect(restored.subtitleSize, 42);
+    expect(restored.skipFillerEpisodes, isTrue);
     expect(restored.preferredStreamLanguage, 'sub');
     expect(restored.preferredQuality, 'p1080');
     expect(restored.preferredCodec, 'hevc');
@@ -47,6 +49,25 @@ void main() {
     expect(restored.streamSortMode, 'seeders');
     expect(restored.preferredReleaseProvider, 'User source');
     expect(restored.preferredReleaseGroup, 'subsplease');
+  });
+
+  test('skip filler remains off for existing per-series preferences', () {
+    final restored = SeriesPlaybackPreferences.fromJson(const {
+      'audioLanguage': 'jpn',
+    });
+
+    expect(restored.skipFillerEpisodes, isFalse);
+    expect(const SeriesPlaybackPreferences().skipFillerEpisodes, isFalse);
+  });
+
+  test('skip filler preference is isolated in each series value', () {
+    const firstSeries = SeriesPlaybackPreferences();
+    const secondSeries = SeriesPlaybackPreferences();
+
+    final updatedFirst = firstSeries.copyWith(skipFillerEpisodes: true);
+
+    expect(updatedFirst.skipFillerEpisodes, isTrue);
+    expect(secondSeries.skipFillerEpisodes, isFalse);
   });
 
   test(

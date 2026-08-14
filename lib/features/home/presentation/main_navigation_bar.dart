@@ -13,8 +13,8 @@ import 'package:go_router/go_router.dart';
 enum MainNavigationDestination { home, myList, discover, calendar }
 
 /// Keeps primary navigation stable while presenting linked tracker information
-/// as a separate, informational card. The tracker summary intentionally never
-/// participates in remote focus traversal.
+/// as a lightweight, informational part of the same row. The tracker summary
+/// intentionally never participates in remote focus traversal.
 class MainNavigationBar extends ConsumerWidget {
   const MainNavigationBar({
     required this.active,
@@ -137,7 +137,7 @@ class MainNavigationBar extends ConsumerWidget {
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, profileConstraints) {
-                      final maximumWidth = showEveryProfile ? 960.0 : 480.0;
+                      final maximumWidth = showEveryProfile ? 830.0 : 410.0;
                       return Align(
                         alignment: Alignment.centerRight,
                         child: SizedBox(
@@ -145,7 +145,7 @@ class MainNavigationBar extends ConsumerWidget {
                             profileConstraints.maxWidth,
                             showCompactProfile ? 190.0 : maximumWidth,
                           ),
-                          height: showCompactProfile ? 40 : 88,
+                          height: showCompactProfile ? 34 : 58,
                           child: showFullProfile
                               ? _TrackerIdentitySummary(
                                   profiles: profiles,
@@ -252,7 +252,7 @@ class _TrackerIdentitySummary extends StatelessWidget {
                 ),
               ),
               if (index != visibleProfiles.length - 1)
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
             ],
           ],
         ),
@@ -276,18 +276,11 @@ class _FullTrackerProfile extends StatelessWidget {
     return Container(
       key: ValueKey('main-nav-profile-$slug'),
       height: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: context.appPalette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: context.appPalette.primaryText.withValues(alpha: .16),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
       child: Row(
         children: [
-          _ProfileAvatar(profile: profile, size: 62),
-          const SizedBox(width: 12),
+          _ProfileAvatar(profile: profile, size: 44),
+          const SizedBox(width: 9),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -302,20 +295,23 @@ class _FullTrackerProfile extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: context.appPalette.primaryText,
-                          fontSize: 18,
+                          fontSize: 15,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    _ProviderBadge(provider: profile.provider),
+                    const SizedBox(width: 6),
+                    _ProviderBadge(provider: profile.provider, compact: true),
                     if (additionalProfiles.isNotEmpty) ...[
-                      const SizedBox(width: 6),
-                      _LinkedProfilesIndicator(profiles: additionalProfiles),
+                      const SizedBox(width: 5),
+                      _LinkedProfilesIndicator(
+                        profiles: additionalProfiles,
+                        compact: true,
+                      ),
                     ],
                   ],
                 ),
-                const SizedBox(height: 7),
+                const SizedBox(height: 3),
                 Row(
                   key: ValueKey('main-nav-profile-stats-$slug'),
                   children: [
@@ -378,8 +374,8 @@ class _ProfileStat extends StatelessWidget {
       padding: const EdgeInsets.only(right: 4),
       child: Row(
         children: [
-          Icon(icon, size: 14, color: context.appPalette.primaryText),
-          const SizedBox(width: 4),
+          Icon(icon, size: 12, color: context.appPalette.mutedText),
+          const SizedBox(width: 3),
           Expanded(
             child: FittedBox(
               alignment: Alignment.centerLeft,
@@ -388,9 +384,9 @@ class _ProfileStat extends StatelessWidget {
                 text,
                 maxLines: 1,
                 style: TextStyle(
-                  color: context.appPalette.primaryText,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
+                  color: context.appPalette.mutedText,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -420,14 +416,8 @@ class _CompactTrackerIdentitySummary extends StatelessWidget {
         label: 'Linked tracker profiles: $label',
         excludeSemantics: true,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          decoration: BoxDecoration(
-            color: context.appPalette.surface,
-            borderRadius: BorderRadius.circular(11),
-            border: Border.all(
-              color: context.appPalette.primaryText.withValues(alpha: .12),
-            ),
-          ),
+          key: const ValueKey('main-nav-profile-compact-shell'),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
           child: LayoutBuilder(
             builder: (context, constraints) {
               if (constraints.maxWidth < 120) {
@@ -525,13 +515,6 @@ class _LinkedProfilesIndicator extends StatelessWidget {
         horizontal: compact ? 4 : 6,
         vertical: compact ? 2 : 3,
       ),
-      decoration: BoxDecoration(
-        color: context.appPalette.surfaceRaised,
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(
-          color: context.appPalette.primaryText.withValues(alpha: .10),
-        ),
-      ),
       child: Text(
         compact
             ? '+${profiles.length} $providers'
@@ -607,10 +590,6 @@ class _ProfileAvatar extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: context.appPalette.surfaceRaised,
-        border: Border.all(
-          color: context.appPalette.accentBright.withValues(alpha: .72),
-          width: 1.5,
-        ),
       ),
       child: NetworkArtwork(
         url: profile.avatarUrl,

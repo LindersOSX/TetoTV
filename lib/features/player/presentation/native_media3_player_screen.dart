@@ -6,7 +6,11 @@ import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
+import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
+import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
@@ -739,12 +743,49 @@ class _NativeMedia3PlayerScreenState
     try {
       if (!mounted) return;
       final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
+      final unavailableNoticeController = ref.read(
+        fillerUnavailableNotifiedSeriesProvider.notifier,
+      );
+      final skipFillerEpisodes = _preferences.skipFillerEpisodes;
       final details = await catalog.details(_mediaId);
-      final nextEpisode = _episodeNumber + 1;
-      if (details.episodes != null && nextEpisode > details.episodes!) {
+      if (!mounted) return;
+      final requestedEpisode = _episodeNumber + 1;
+      if (details.episodes != null && requestedEpisode > details.episodes!) {
         if (mounted && context.canPop()) context.pop();
         return;
       }
+      final totalEpisodes = episodeNavigationCeiling(
+        requestedEpisode: requestedEpisode,
+        declaredTotalEpisodes: details.episodes,
+        nextAiringEpisode: details.nextAiringEpisode,
+      );
+      final decision = await resolveFillerEpisodeNavigation(
+        repository: fillerRepository,
+        identity: FillerSeriesIdentity.fromAnime(details),
+        requestedEpisode: requestedEpisode,
+        totalEpisodes: totalEpisodes,
+        skipEnabled: skipFillerEpisodes,
+      );
+      if (!mounted) return;
+      if (decision.dataUnavailable &&
+          consumeFillerUnavailableNotice(
+            unavailableNoticeController,
+            _mediaId,
+          )) {
+        showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+      }
+      await showFillerSkipNotification(context, decision);
+      if (!mounted) return;
+      if (decision.episode == null) {
+        setState(() {
+          _status = 'No non-filler episodes remain';
+          _diagnostic =
+              'Turn off Skip filler episodes on the series page to play them.';
+        });
+        return;
+      }
+      final nextEpisode = decision.episode!;
       if (!mounted) return;
       context.pushReplacement(
         Uri(

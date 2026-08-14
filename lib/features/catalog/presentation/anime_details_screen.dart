@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -5,13 +7,25 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
+import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
+import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+final _fillerLookupForAnimeProvider = FutureProvider.autoDispose
+    .family<FillerEpisodeLookup, AnimeSummary>((ref, anime) {
+      return ref
+          .watch(fillerEpisodeRepositoryProvider)
+          .lookup(FillerSeriesIdentity.fromAnime(anime));
+    });
 
 int effectiveCompletedEpisodeProgress({
   required int trackedProgress,
@@ -59,6 +73,7 @@ class _DetailsContent extends ConsumerStatefulWidget {
 
 class _DetailsContentState extends ConsumerState<_DetailsContent> {
   int? _selectedEpisode;
+  bool _savingSkipFiller = false;
 
   AnimeSummary get anime => widget.anime;
 
@@ -82,6 +97,19 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     final localPlayback = ref
         .watch(latestPlaybackProvider(anime.id))
         .valueOrNull;
+    final seriesPreferences = ref.watch(
+      seriesPlaybackPreferencesProvider(anime.id),
+    );
+    final skipFillerEpisodes =
+        seriesPreferences.valueOrNull?.skipFillerEpisodes ?? false;
+    final settings = ref.watch(settingsPreferencesProvider);
+    final fillerIndicatorLookup =
+        seriesPreferences.hasValue &&
+            !skipFillerEpisodes &&
+            settings.showFillerIndicators
+        ? ref.watch(_fillerLookupForAnimeProvider(anime)).valueOrNull
+        : null;
+    final canShowFillerIndicators = fillerIndicatorLookup?.canAutoSkip == true;
     final shelfProgress =
         tracking?.progressFor(
           anilistMediaId: anime.id,
@@ -119,6 +147,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       totalEpisodes: knownEpisodes,
       hasProgress: progress > 0 || localResume,
       resumePosition: localResume ? localPlayback.position : null,
+      resumeIsFiller:
+          canShowFillerIndicators &&
+          fillerIndicatorLookup!.isConfirmedFiller(targetEpisode),
+      selectedIsFiller:
+          canShowFillerIndicators &&
+          fillerIndicatorLookup!.isConfirmedFiller(selectedEpisode),
       onDecrease: !isUnreleased && selectedEpisode > 1
           ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
           : null,
@@ -127,15 +161,35 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           : null,
       onPlayFromBeginning: isUnreleased
           ? null
-          : () => _openEpisode(context, anime, selectedEpisode, restart: true),
+          : () => unawaited(
+              _openEpisodeWithFillerCheck(
+                anime,
+                selectedEpisode,
+                knownEpisodes,
+                restart: true,
+              ),
+            ),
       onResume: isUnreleased
           ? null
-          : () => _openEpisode(context, anime, targetEpisode),
+          : () => unawaited(
+              _openEpisodeWithFillerCheck(anime, targetEpisode, knownEpisodes),
+            ),
       onPlaySelected: isUnreleased
           ? null
-          : () => _openEpisode(context, anime, selectedEpisode),
+          : () => unawaited(
+              _openEpisodeWithFillerCheck(
+                anime,
+                selectedEpisode,
+                knownEpisodes,
+              ),
+            ),
       onManageList: () =>
           manageCatalogTrackingStatus(context: context, ref: ref, anime: anime),
+      skipFillerEpisodes: skipFillerEpisodes,
+      onToggleSkipFiller:
+          !isUnreleased && !_savingSkipFiller && seriesPreferences.hasValue
+          ? () => unawaited(_setSkipFillerEpisodes(!skipFillerEpisodes))
+          : null,
     );
     final onFranchise = anime.relatedAnime.isEmpty
         ? null
@@ -449,6 +503,74 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       ],
     );
   }
+
+  Future<void> _setSkipFillerEpisodes(bool enabled) async {
+    if (_savingSkipFiller) return;
+    setState(() => _savingSkipFiller = true);
+    final preferences = ref
+        .read(seriesPlaybackPreferencesProvider(anime.id))
+        .valueOrNull;
+    final writePreferences = ref.read(seriesPlaybackPreferencesWriterProvider);
+    try {
+      if (preferences == null) {
+        throw StateError('Series preferences are not ready.');
+      }
+      await writePreferences(
+        anime.id,
+        preferences.copyWith(skipFillerEpisodes: enabled),
+      );
+      if (!mounted) return;
+      ref.invalidate(seriesPlaybackPreferencesProvider(anime.id));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Skip filler preference could not be saved.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingSkipFiller = false);
+    }
+  }
+
+  Future<void> _openEpisodeWithFillerCheck(
+    AnimeSummary anime,
+    int requestedEpisode,
+    int totalEpisodes, {
+    bool restart = false,
+  }) async {
+    var skipEnabled = false;
+    final preferencesFuture = ref.read(
+      seriesPlaybackPreferencesProvider(anime.id).future,
+    );
+    final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
+    final unavailableNoticeController = ref.read(
+      fillerUnavailableNotifiedSeriesProvider.notifier,
+    );
+    try {
+      skipEnabled = (await preferencesFuture).skipFillerEpisodes;
+    } catch (_) {
+      // Persistence errors must not prevent an explicitly requested episode
+      // from playing. The default is deliberately fail-open.
+    }
+    if (!mounted) return;
+    final decision = await resolveFillerEpisodeNavigation(
+      repository: fillerRepository,
+      identity: FillerSeriesIdentity.fromAnime(anime),
+      requestedEpisode: requestedEpisode,
+      totalEpisodes: totalEpisodes,
+      skipEnabled: skipEnabled,
+    );
+    if (!mounted) return;
+    if (decision.dataUnavailable &&
+        consumeFillerUnavailableNotice(unavailableNoticeController, anime.id)) {
+      showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+    }
+    await showFillerSkipNotification(context, decision);
+    if (!mounted || decision.episode == null) return;
+    _openEpisode(context, anime, decision.episode!, restart: restart);
+  }
 }
 
 class _MetadataRow extends StatelessWidget {
@@ -696,12 +818,16 @@ class _EpisodeActions extends StatelessWidget {
     required this.totalEpisodes,
     required this.hasProgress,
     required this.resumePosition,
+    required this.resumeIsFiller,
+    required this.selectedIsFiller,
     required this.onDecrease,
     required this.onIncrease,
     required this.onPlayFromBeginning,
     required this.onResume,
     required this.onPlaySelected,
     required this.onManageList,
+    required this.skipFillerEpisodes,
+    required this.onToggleSkipFiller,
   });
 
   final bool isAvailable;
@@ -711,12 +837,16 @@ class _EpisodeActions extends StatelessWidget {
   final int totalEpisodes;
   final bool hasProgress;
   final Duration? resumePosition;
+  final bool resumeIsFiller;
+  final bool selectedIsFiller;
   final VoidCallback? onDecrease;
   final VoidCallback? onIncrease;
   final VoidCallback? onPlayFromBeginning;
   final VoidCallback? onResume;
   final VoidCallback? onPlaySelected;
   final VoidCallback onManageList;
+  final bool skipFillerEpisodes;
+  final VoidCallback? onToggleSkipFiller;
 
   @override
   Widget build(BuildContext context) {
@@ -741,6 +871,7 @@ class _EpisodeActions extends StatelessWidget {
                 ? (hasProgress ? 'Resume' : 'Start watching')
                 : 'Resume at ${_formatDuration(resumePosition!)}',
             trailing: isAvailable ? 'EP-$resumeEpisode' : null,
+            badge: resumeIsFiller ? 'FILLER' : null,
             icon: Icons.play_arrow_rounded,
             primary: true,
             autofocus: isAvailable && autofocusPrimary,
@@ -760,6 +891,7 @@ class _EpisodeActions extends StatelessWidget {
             key: const ValueKey('episode-action-selected'),
             label: 'Play selected',
             trailing: 'EP-$selectedEpisode',
+            badge: selectedIsFiller ? 'FILLER' : null,
             icon: Icons.skip_next_rounded,
             onPressed: onPlaySelected,
             large: large,
@@ -771,6 +903,13 @@ class _EpisodeActions extends StatelessWidget {
             icon: Icons.playlist_add_check_rounded,
             trailingIcon: Icons.arrow_drop_down_rounded,
             onPressed: onManageList,
+            large: large,
+          ),
+          SizedBox(height: large ? 14 : 6),
+          _EpisodeToggleButton(
+            key: const ValueKey('episode-action-skip-filler'),
+            value: skipFillerEpisodes,
+            onPressed: onToggleSkipFiller,
             large: large,
           ),
           SizedBox(height: large ? 22 : 7),
@@ -829,6 +968,79 @@ class _EpisodeActions extends StatelessWidget {
   }
 }
 
+class _EpisodeToggleButton extends StatelessWidget {
+  const _EpisodeToggleButton({
+    super.key,
+    required this.value,
+    required this.onPressed,
+    required this.large,
+  });
+
+  final bool value;
+  final VoidCallback? onPressed;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final content = Container(
+      height: large ? 76 : 42,
+      padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
+      color: const Color(0xFF1B1B1B),
+      child: Row(
+        children: [
+          Icon(Icons.fast_forward_rounded, size: large ? 29 : 19),
+          SizedBox(width: large ? 16 : 8),
+          Expanded(
+            child: Text(
+              'Skip filler episodes',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: context.appPalette.primaryText,
+                fontSize: large ? 18 : 14,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Text(
+            value ? 'ON' : 'OFF',
+            style: TextStyle(
+              color: value
+                  ? context.appPalette.accentBright
+                  : context.appPalette.mutedText,
+              fontSize: large ? 14 : 11,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(width: large ? 12 : 7),
+          Icon(
+            value ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+            color: value
+                ? context.appPalette.accentBright
+                : context.appPalette.mutedText,
+            size: large ? 36 : 27,
+          ),
+        ],
+      ),
+    );
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      toggled: value,
+      label: 'Skip filler episodes',
+      child: enabled
+          ? TvFocusable(
+              focusScale: 1.025,
+              borderRadius: BorderRadius.circular(10),
+              onPressed: onPressed!,
+              child: content,
+            )
+          : Opacity(opacity: .52, child: content),
+    );
+  }
+}
+
 class _EpisodeActionButton extends StatelessWidget {
   const _EpisodeActionButton({
     super.key,
@@ -836,6 +1048,7 @@ class _EpisodeActionButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.trailing,
+    this.badge,
     this.trailingIcon,
     this.primary = false,
     this.autofocus = false,
@@ -844,6 +1057,7 @@ class _EpisodeActionButton extends StatelessWidget {
 
   final String label;
   final String? trailing;
+  final String? badge;
   final IconData? trailingIcon;
   final IconData icon;
   final VoidCallback? onPressed;
@@ -874,6 +1088,28 @@ class _EpisodeActionButton extends StatelessWidget {
               ),
             ),
           ),
+          if (badge case final value?) ...[
+            Container(
+              margin: EdgeInsets.only(right: large ? 12 : 7),
+              padding: EdgeInsets.symmetric(
+                horizontal: large ? 9 : 6,
+                vertical: large ? 5 : 3,
+              ),
+              decoration: BoxDecoration(
+                color: context.appPalette.accent.withValues(alpha: .24),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                value,
+                style: TextStyle(
+                  color: context.appPalette.accentBright,
+                  fontSize: large ? 11 : 9,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .7,
+                ),
+              ),
+            ),
+          ],
           if (trailing case final value?)
             Text(
               value,

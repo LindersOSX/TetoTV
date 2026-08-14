@@ -1934,6 +1934,16 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
+          _PreferenceRow(
+            label: 'Episode information',
+            children: [
+              toggle(
+                label: 'Show filler episode labels',
+                value: preferences.showFillerIndicators,
+                onChanged: controller.setShowFillerIndicators,
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerRight,

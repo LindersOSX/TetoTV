@@ -22,6 +22,13 @@ the following third-party components:
 | Dart `xml` 6.6.1 | Bounded parsing of Plex Media Server XML responses | MIT License |
 | Noto Sans Regular | Bundled subtitle font used by the MPV/libass compatibility player | SIL Open Font License 1.1; copyright 2018 The Noto Project Authors |
 
+TetoTV's optional filler labels and per-series filler skipping read episode
+metadata from the public Jikan REST API. Jikan is a network service rather than
+code bundled in the APK; its server implementation is MIT licensed, while the
+episode metadata it exposes originates from MyAnimeList and remains subject to
+the applicable upstream service terms. TetoTV does not scrape Anime Filler
+List or MyAnimeList directly.
+
 Upstream projects and license sources:
 
 - AndroidX Media3: <https://github.com/androidx/media>
@@ -45,6 +52,7 @@ Upstream projects and license sources:
 - Sucrase: <https://github.com/alangpierce/sucrase>
 - Dart xml: <https://github.com/renggli/dart-xml>
 - Noto Sans: <https://github.com/notofonts/noto-fonts>
+- Jikan REST API: <https://github.com/jikan-me/jikan-rest>
 
 The exact resolved Dart package versions are recorded in `pubspec.lock`.
 Native Android versions are declared in `android/app/build.gradle.kts`, plugin

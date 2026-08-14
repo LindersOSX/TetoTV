@@ -21,6 +21,7 @@ const _debridStreamsEnabledKey = 'streaming_debrid_enabled';
 const _webStreamsEnabledKey = 'streaming_web_enabled';
 const _autoSkipIntrosKey = 'player_auto_skip_intros';
 const _autoSkipOutrosKey = 'player_auto_skip_outros';
+const _showFillerIndicatorsKey = 'player_show_filler_indicators';
 const _homeLayoutKey = 'appearance_home_layout';
 const _showSearchKey = 'navigation_show_search';
 const _showMyListKey = 'navigation_show_my_list';
@@ -191,6 +192,7 @@ class SettingsPreferences {
     this.webStreamsEnabled = true,
     this.autoSkipIntros = false,
     this.autoSkipOutros = false,
+    this.showFillerIndicators = true,
     this.homeLayout = HomeLayout.cinematic,
     this.showSearch = true,
     this.showMyList = true,
@@ -226,6 +228,7 @@ class SettingsPreferences {
   final bool webStreamsEnabled;
   final bool autoSkipIntros;
   final bool autoSkipOutros;
+  final bool showFillerIndicators;
   final HomeLayout homeLayout;
   final bool showSearch;
   final bool showMyList;
@@ -261,6 +264,7 @@ class SettingsPreferences {
     bool? webStreamsEnabled,
     bool? autoSkipIntros,
     bool? autoSkipOutros,
+    bool? showFillerIndicators,
     HomeLayout? homeLayout,
     bool? showSearch,
     bool? showMyList,
@@ -296,6 +300,7 @@ class SettingsPreferences {
     webStreamsEnabled: webStreamsEnabled ?? this.webStreamsEnabled,
     autoSkipIntros: autoSkipIntros ?? this.autoSkipIntros,
     autoSkipOutros: autoSkipOutros ?? this.autoSkipOutros,
+    showFillerIndicators: showFillerIndicators ?? this.showFillerIndicators,
     homeLayout: homeLayout ?? this.homeLayout,
     showSearch: showSearch ?? this.showSearch,
     showMyList: showMyList ?? this.showMyList,
@@ -404,6 +409,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_anonymousCrashReportingKey),
       _safeRead(_preferredAudioKey),
       _safeRead(initialSetupCompletedStorageKey),
+      _safeRead(_showFillerIndicatorsKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -578,6 +584,13 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         preferredAudio: PlaybackAudioPreferenceLabel.fromStorage(valueAt(31)),
       );
     }
+    if (canRestore(_showFillerIndicatorsKey, 33)) {
+      // Existing installations have no saved value, so absence migrates to
+      // the enabled default while an explicit opt-out remains permanent.
+      restored = restored.copyWith(
+        showFillerIndicators: valueAt(33) != 'false',
+      );
+    }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
@@ -672,6 +685,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setAutoSkipOutros(bool value) => _update(
     state.copyWith(autoSkipOutros: value),
     {_autoSkipOutrosKey: value.toString()},
+  );
+
+  Future<void> setShowFillerIndicators(bool value) => _update(
+    state.copyWith(showFillerIndicators: value),
+    {_showFillerIndicatorsKey: value.toString()},
   );
 
   Future<void> setHomeLayout(HomeLayout value) =>
@@ -815,6 +833,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _seekForwardSecondsKey,
       _preferredPlayerKey,
       _preferredAudioKey,
+      _showFillerIndicatorsKey,
     ];
     _markMutated(keys);
     state = state.copyWith(
@@ -829,6 +848,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekForwardSeconds: defaults.seekForwardSeconds,
       preferredPlayer: defaults.preferredPlayer,
       preferredAudio: defaults.preferredAudio,
+      showFillerIndicators: defaults.showFillerIndicators,
     );
     return _enqueueStorage(() async {
       for (final key in keys) {
