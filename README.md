@@ -8,11 +8,11 @@
 
 **Start simple, then customize TetoTV to fit the way you watch.**
 
-> 🧪 **This repository contains TetoTV Beta builds.** Beta releases may include newer features and changes that have not yet reached the stable channel and may be less thoroughly tested.
+> 🧪 **This repository contains TetoTV Beta builds and the public TetoTV source code.** Beta releases may include newer features and changes that have not yet reached the stable channel and may be less thoroughly tested.
 >
 > Looking for the recommended stable release? **[View official TetoTV builds here →](https://github.com/LindersOSX/TetoTV-Releases)**
 
-[**🧪 Beta Releases**](https://github.com/LindersOSX/TetoTV/releases) • [**✅ Official Builds**](https://github.com/LindersOSX/TetoTV-Releases) • [**💬 Discord**](https://discord.gg/X4pXyzdBpQ) • [**▶️ YouTube**](https://www.youtube.com/@TetoTVApp)
+[**🧪 Beta Releases**](https://github.com/LindersOSX/TetoTV/releases) • [**✅ Official Builds**](https://github.com/LindersOSX/TetoTV-Releases) • [**💻 View Source Code**](https://github.com/LindersOSX/TetoTV) • [**⬇️ Download Source**](https://github.com/LindersOSX/TetoTV/archive/refs/heads/main.zip) • [**💬 Discord**](https://discord.gg/X4pXyzdBpQ) • [**▶️ YouTube**](https://www.youtube.com/@TetoTVApp)
 
 </div>
 
@@ -52,6 +52,17 @@ Use Beta if you want to try newer TetoTV changes before they reach the official 
 For the normal recommended TetoTV experience, use the official release repository.
 
 **[View official TetoTV builds →](https://github.com/LindersOSX/TetoTV-Releases)**
+
+---
+
+## 💻 Source Code & AI Assistance
+
+The TetoTV source code is public and can be viewed directly in this repository.
+
+- **[Browse the source code →](https://github.com/LindersOSX/TetoTV)**
+- **[Download the current source code as a ZIP →](https://github.com/LindersOSX/TetoTV/archive/refs/heads/main.zip)**
+
+TetoTV has been developed with **assistance from AI tools, including OpenAI Codex**. AI has been used to assist with coding, debugging, review, and development tasks. AI-generated or AI-assisted changes are incorporated into the project as part of the normal development process.
 
 ---
 
@@ -279,6 +290,6 @@ TetoTV is an independent project and is not affiliated with AniList, MyAnimeList
 
 **Simple to use. Powerful to customize.**
 
-[**🧪 Beta Releases**](https://github.com/LindersOSX/TetoTV/releases) • [**✅ Official Stable Builds**](https://github.com/LindersOSX/TetoTV-Releases) • [**💬 Discord**](https://discord.gg/X4pXyzdBpQ) • [**▶️ YouTube**](https://www.youtube.com/@TetoTVApp)
+[**🧪 Beta Releases**](https://github.com/LindersOSX/TetoTV/releases) • [**✅ Official Stable Builds**](https://github.com/LindersOSX/TetoTV-Releases) • [**💻 Source Code**](https://github.com/LindersOSX/TetoTV) • [**⬇️ Download Source**](https://github.com/LindersOSX/TetoTV/archive/refs/heads/main.zip) • [**💬 Discord**](https://discord.gg/X4pXyzdBpQ) • [**▶️ YouTube**](https://www.youtube.com/@TetoTVApp)
 
 </div>
