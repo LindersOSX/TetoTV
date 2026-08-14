@@ -19,7 +19,16 @@ class ThemeStudioScreen extends ConsumerStatefulWidget {
 class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
   late AppThemePalette _draft;
   late bool _contrastGuardEnabled;
+  final _backFocusNode = FocusNode(debugLabel: 'theme-studio.back');
+  final _contrastFocusNode = FocusNode(debugLabel: 'theme-studio.contrast');
+  final _applyFocusNode = FocusNode(debugLabel: 'theme-studio.apply');
+  final _resetFocusNode = FocusNode(debugLabel: 'theme-studio.reset');
+  late final Map<AppThemeColorRole, FocusNode> _roleFocusNodes = {
+    for (final role in AppThemeColorRole.values)
+      role: FocusNode(debugLabel: 'theme-studio.${role.name}'),
+  };
   bool _dirty = false;
+  bool _editorOpen = false;
   bool _restoredSavedTheme = false;
   bool _saving = false;
 
@@ -30,6 +39,131 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
     _draft = saved.palette;
     _contrastGuardEnabled = saved.contrastGuardEnabled;
     _restoredSavedTheme = saved.loaded;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus(_roleFocusNodes[AppThemeColorRole.background]!);
+    });
+  }
+
+  @override
+  void dispose() {
+    _backFocusNode.dispose();
+    _contrastFocusNode.dispose();
+    _applyFocusNode.dispose();
+    _resetFocusNode.dispose();
+    for (final node in _roleFocusNodes.values) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _focus(FocusNode node) {
+    if (!node.canRequestFocus) return;
+    node.requestFocus();
+    final targetContext = node.context;
+    if (targetContext != null) {
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: .5,
+        duration: const Duration(milliseconds: 120),
+      );
+    }
+  }
+
+  bool _isDirectionalPress(KeyEvent event) =>
+      event is KeyDownEvent || event is KeyRepeatEvent;
+
+  KeyEventResult _handleRoleKey(AppThemeColorRole role, KeyEvent event) {
+    if (!_isDirectionalPress(event)) return KeyEventResult.ignored;
+    final roles = AppThemeColorRole.values;
+    final index = roles.indexOf(role);
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(index == 0 ? _backFocusNode : _roleFocusNodes[roles[index - 1]]!);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _focus(
+        index == roles.length - 1
+            ? _contrastFocusNode
+            : _roleFocusNodes[roles[index + 1]]!,
+      );
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      // The preview is informational. Keep horizontal D-pad presses in the
+      // editable color column instead of allowing geometry-based jumps.
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleBackKey(FocusNode _, KeyEvent event) {
+    if (!_isDirectionalPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _focus(_roleFocusNodes[AppThemeColorRole.background]!);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
+        event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleContrastKey(FocusNode _, KeyEvent event) {
+    if (!_isDirectionalPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_roleFocusNodes[AppThemeColorRole.values.last]!);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _focus(
+        _applyFocusNode.canRequestFocus ? _applyFocusNode : _resetFocusNode,
+      );
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleApplyKey(FocusNode _, KeyEvent event) {
+    if (!_isDirectionalPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_contrastFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _focus(_resetFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleResetKey(FocusNode _, KeyEvent event) {
+    if (!_isDirectionalPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_contrastFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft &&
+        _applyFocusNode.canRequestFocus) {
+      _focus(_applyFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   void _adoptSavedTheme(ThemeStudioState next) {
@@ -46,6 +180,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
 
   Future<void> _editColor(AppThemeColorRole role) async {
     final initial = _draft.colorFor(role);
+    setState(() => _editorOpen = true);
     final selected = await showDialog<Color>(
       context: context,
       barrierDismissible: false,
@@ -55,7 +190,12 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
         previewPalette: _draft,
       ),
     );
-    if (selected == null || !mounted || selected == initial) return;
+    if (!mounted) return;
+    setState(() => _editorOpen = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus(_roleFocusNodes[role]!);
+    });
+    if (selected == null || selected == initial) return;
     setState(() {
       _draft = _draft.withRole(role, selected);
       _dirty = true;
@@ -111,148 +251,190 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
     final report = ThemeContrastReport.forPalette(_draft);
     final applyBlocked = _contrastGuardEnabled && report.hasIssues;
 
-    return Theme(
-      data: AppTheme.darkFor(_draft),
-      child: Builder(
-        builder: (context) {
-          final palette = context.appPalette;
-          return Scaffold(
-            key: const ValueKey('theme-studio-screen'),
-            backgroundColor: palette.background,
-            body: SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 760;
-                  final horizontalPadding = compact ? 18.0 : 36.0;
-                  return CustomScrollView(
-                    slivers: [
-                      SliverPadding(
-                        padding: EdgeInsets.fromLTRB(
-                          horizontalPadding,
-                          20,
-                          horizontalPadding,
-                          40,
-                        ),
-                        sliver: SliverToBoxAdapter(
-                          child: Center(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 1180),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _Header(
-                                    onBack: () => Navigator.maybePop(context),
-                                  ),
-                                  const SizedBox(height: 24),
-                                  Text(
-                                    'Make TetoTV yours',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.displaySmall,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Change the app canvas, panels, focus color '
-                                    'and text. Your saved theme is shared by '
-                                    'phone and TV layouts.',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
-                                  ),
-                                  const SizedBox(height: 26),
-                                  if (compact) ...[
-                                    _ColorRolesPanel(
-                                      palette: _draft,
-                                      onEdit: _editColor,
+    return PopScope(
+      canPop: !_editorOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _editorOpen) {
+          Navigator.of(context, rootNavigator: true).maybePop();
+        }
+      },
+      child: Theme(
+        data: AppTheme.darkFor(_draft),
+        child: Builder(
+          builder: (context) {
+            final palette = context.appPalette;
+            return Scaffold(
+              key: const ValueKey('theme-studio-screen'),
+              backgroundColor: palette.background,
+              body: SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 760;
+                    final horizontalPadding = compact ? 18.0 : 36.0;
+                    return CustomScrollView(
+                      slivers: [
+                        SliverPadding(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            20,
+                            horizontalPadding,
+                            40,
+                          ),
+                          sliver: SliverToBoxAdapter(
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 1180,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _Header(
+                                      onBack: () => Navigator.maybePop(context),
+                                      focusNode: _backFocusNode,
+                                      onKeyEvent: _handleBackKey,
                                     ),
+                                    const SizedBox(height: 24),
+                                    Text(
+                                      'Make TetoTV yours',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.displaySmall,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Change the app canvas, panels, focus color '
+                                      'and text. Your saved theme is shared by '
+                                      'phone and TV layouts.',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodyLarge,
+                                    ),
+                                    const SizedBox(height: 26),
+                                    if (compact) ...[
+                                      _ColorRolesPanel(
+                                        palette: _draft,
+                                        onEdit: _editColor,
+                                        focusNodes: _roleFocusNodes,
+                                        onKeyEvent: _handleRoleKey,
+                                      ),
+                                      const SizedBox(height: 18),
+                                      _ThemePreview(palette: _draft),
+                                    ] else
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            flex: 5,
+                                            child: _ColorRolesPanel(
+                                              palette: _draft,
+                                              onEdit: _editColor,
+                                              focusNodes: _roleFocusNodes,
+                                              onKeyEvent: _handleRoleKey,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 22),
+                                          Expanded(
+                                            flex: 4,
+                                            child: _ThemePreview(
+                                              palette: _draft,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     const SizedBox(height: 18),
-                                    _ThemePreview(palette: _draft),
-                                  ] else
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                    Focus(
+                                      canRequestFocus: false,
+                                      onKeyEvent: _handleContrastKey,
+                                      child: _ContrastGuardCard(
+                                        enabled: _contrastGuardEnabled,
+                                        report: report,
+                                        focusNode: _contrastFocusNode,
+                                        onChanged: (value) => setState(() {
+                                          _contrastGuardEnabled = value;
+                                          _dirty = true;
+                                        }),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 22),
+                                    Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
                                       children: [
-                                        Expanded(
-                                          flex: 5,
-                                          child: _ColorRolesPanel(
-                                            palette: _draft,
-                                            onEdit: _editColor,
+                                        Focus(
+                                          canRequestFocus: false,
+                                          onKeyEvent: _handleApplyKey,
+                                          child: FilledButton.icon(
+                                            key: const ValueKey(
+                                              'theme-studio-apply',
+                                            ),
+                                            focusNode: _applyFocusNode,
+                                            onPressed: _saving || applyBlocked
+                                                ? null
+                                                : _apply,
+                                            icon: _saving
+                                                ? const SizedBox.square(
+                                                    dimension: 18,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                        ),
+                                                  )
+                                                : const Icon(
+                                                    Icons.check_rounded,
+                                                  ),
+                                            label: Text(
+                                              _saving
+                                                  ? 'Applying…'
+                                                  : 'Apply theme',
+                                            ),
                                           ),
                                         ),
-                                        const SizedBox(width: 22),
-                                        Expanded(
-                                          flex: 4,
-                                          child: _ThemePreview(palette: _draft),
+                                        Focus(
+                                          canRequestFocus: false,
+                                          onKeyEvent: _handleResetKey,
+                                          child: OutlinedButton.icon(
+                                            key: const ValueKey(
+                                              'theme-studio-reset',
+                                            ),
+                                            focusNode: _resetFocusNode,
+                                            onPressed: _reset,
+                                            icon: const Icon(Icons.restart_alt),
+                                            label: const Text('Reset defaults'),
+                                          ),
                                         ),
                                       ],
                                     ),
-                                  const SizedBox(height: 18),
-                                  _ContrastGuardCard(
-                                    enabled: _contrastGuardEnabled,
-                                    report: report,
-                                    onChanged: (value) => setState(() {
-                                      _contrastGuardEnabled = value;
-                                      _dirty = true;
-                                    }),
-                                  ),
-                                  const SizedBox(height: 22),
-                                  Wrap(
-                                    spacing: 12,
-                                    runSpacing: 12,
-                                    children: [
-                                      FilledButton.icon(
-                                        key: const ValueKey(
-                                          'theme-studio-apply',
-                                        ),
-                                        autofocus: true,
-                                        onPressed: _saving || applyBlocked
-                                            ? null
-                                            : _apply,
-                                        icon: _saving
-                                            ? const SizedBox.square(
-                                                dimension: 18,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              )
-                                            : const Icon(Icons.check_rounded),
-                                        label: Text(
-                                          _saving ? 'Applying…' : 'Apply theme',
-                                        ),
-                                      ),
-                                      OutlinedButton.icon(
-                                        key: const ValueKey(
-                                          'theme-studio-reset',
-                                        ),
-                                        onPressed: _reset,
-                                        icon: const Icon(Icons.restart_alt),
-                                        label: const Text('Reset defaults'),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onBack});
+  const _Header({
+    required this.onBack,
+    required this.focusNode,
+    required this.onKeyEvent,
+  });
 
   final VoidCallback onBack;
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
@@ -261,6 +443,8 @@ class _Header extends StatelessWidget {
       children: [
         TvFocusable(
           onPressed: onBack,
+          focusNode: focusNode,
+          onKeyEvent: onKeyEvent,
           borderRadius: BorderRadius.circular(12),
           child: Container(
             key: const ValueKey('theme-studio-back'),
@@ -287,10 +471,18 @@ class _Header extends StatelessWidget {
 }
 
 class _ColorRolesPanel extends StatelessWidget {
-  const _ColorRolesPanel({required this.palette, required this.onEdit});
+  const _ColorRolesPanel({
+    required this.palette,
+    required this.onEdit,
+    required this.focusNodes,
+    required this.onKeyEvent,
+  });
 
   final AppThemePalette palette;
   final ValueChanged<AppThemeColorRole> onEdit;
+  final Map<AppThemeColorRole, FocusNode> focusNodes;
+  final KeyEventResult Function(AppThemeColorRole role, KeyEvent event)
+  onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
@@ -311,6 +503,9 @@ class _ColorRolesPanel extends StatelessWidget {
             _ColorRoleTile(
               role: role,
               color: palette.colorFor(role),
+              autofocus: role == AppThemeColorRole.background,
+              focusNode: focusNodes[role]!,
+              onKeyEvent: (_, event) => onKeyEvent(role, event),
               onPressed: () => onEdit(role),
             ),
             if (role != AppThemeColorRole.values.last)
@@ -326,11 +521,17 @@ class _ColorRoleTile extends StatelessWidget {
   const _ColorRoleTile({
     required this.role,
     required this.color,
+    required this.autofocus,
+    required this.focusNode,
+    required this.onKeyEvent,
     required this.onPressed,
   });
 
   final AppThemeColorRole role;
   final Color color;
+  final bool autofocus;
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
   final VoidCallback onPressed;
 
   @override
@@ -338,6 +539,9 @@ class _ColorRoleTile extends StatelessWidget {
     final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
+      autofocus: autofocus,
+      focusNode: focusNode,
+      onKeyEvent: onKeyEvent,
       borderRadius: BorderRadius.circular(13),
       child: Container(
         key: ValueKey('theme-color-${role.name}'),
@@ -585,11 +789,13 @@ class _ContrastGuardCard extends StatelessWidget {
   const _ContrastGuardCard({
     required this.enabled,
     required this.report,
+    required this.focusNode,
     required this.onChanged,
   });
 
   final bool enabled;
   final ThemeContrastReport report;
+  final FocusNode focusNode;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -614,6 +820,7 @@ class _ContrastGuardCard extends StatelessWidget {
           children: [
             SwitchListTile(
               key: const ValueKey('theme-contrast-guard'),
+              focusNode: focusNode,
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Protect readable contrast',
@@ -687,7 +894,12 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
   late Color _color;
   late final TextEditingController _hexController;
   late final FocusNode _hexFocusNode;
+  final _pickerKey = GlobalKey<_BuiltInColorPickerState>();
+  final _hexToggleFocusNode = FocusNode(debugLabel: 'theme-studio.hex-toggle');
+  final _cancelFocusNode = FocusNode(debugLabel: 'theme-studio.cancel');
+  final _useColorFocusNode = FocusNode(debugLabel: 'theme-studio.use-color');
   bool _showHexEntry = false;
+  bool _closing = false;
   String? _hexError;
 
   @override
@@ -702,22 +914,32 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
   void dispose() {
     _hexController.dispose();
     _hexFocusNode.dispose();
+    _hexToggleFocusNode.dispose();
+    _cancelFocusNode.dispose();
+    _useColorFocusNode.dispose();
     super.dispose();
   }
 
-  void _setChannel(AppThemeColorChannel channel, double value) {
-    final byte = value.round().clamp(0, 255);
-    final current = _color.toARGB32();
-    final next = switch (channel) {
-      AppThemeColorChannel.red => (current & 0xFF00FFFF) | (byte << 16),
-      AppThemeColorChannel.green => (current & 0xFFFF00FF) | (byte << 8),
-      AppThemeColorChannel.blue => (current & 0xFFFFFF00) | byte,
-    };
-    setState(() {
-      _color = Color(next);
-      _hexController.text = formatOpaqueHexColor(_color);
-      _hexError = null;
-    });
+  bool _isNavigationPress(KeyEvent event) =>
+      event is KeyDownEvent || event is KeyRepeatEvent;
+
+  void _focus(FocusNode node) {
+    if (!node.canRequestFocus) return;
+    node.requestFocus();
+    final targetContext = node.context;
+    if (targetContext != null) {
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: .5,
+        duration: const Duration(milliseconds: 120),
+      );
+    }
+  }
+
+  void _close([Color? result]) {
+    if (_closing || !mounted) return;
+    _closing = true;
+    Navigator.of(context, rootNavigator: true).pop(result);
   }
 
   void _setColor(Color color) {
@@ -757,7 +979,71 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
             event.logicalKey == LogicalKeyboardKey.goBack)) {
-      Navigator.pop(context);
+      _close();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleHexToggleKey(FocusNode _, KeyEvent event) {
+    if (!_isNavigationPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _pickerKey.currentState?.focusSelected();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _focus(_showHexEntry ? _hexFocusNode : _cancelFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleHexFieldKey(FocusNode _, KeyEvent event) {
+    if (!_isNavigationPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_hexToggleFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _focus(_cancelFocusNode);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleCancelKey(FocusNode _, KeyEvent event) {
+    if (!_isNavigationPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_showHexEntry ? _hexFocusNode : _hexToggleFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _focus(_useColorFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleUseColorKey(FocusNode _, KeyEvent event) {
+    if (!_isNavigationPress(event)) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _focus(_showHexEntry ? _hexFocusNode : _hexToggleFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _focus(_cancelFocusNode);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -796,8 +1082,8 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Choose a built-in color with the D-pad, then use RGB '
-                        'for fine adjustments. Exact hex entry is optional.',
+                        'Choose a built-in color with the D-pad. Exact hex '
+                        'entry is available as an optional advanced choice.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
@@ -853,89 +1139,63 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 10),
-                      _BuiltInColorPicker(color: _color, onChanged: _setColor),
+                      _BuiltInColorPicker(
+                        key: _pickerKey,
+                        color: _color,
+                        nextFocusNode: _hexToggleFocusNode,
+                        onChanged: _setColor,
+                      ),
                       const SizedBox(height: 18),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Fine adjustments',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ),
-                          Text(
-                            'Use ← / → on each channel',
-                            style: TextStyle(
-                              color: palette.mutedText,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      _ColorChannelSlider(
-                        label: 'Red',
-                        color: const Color(0xFFFF5A67),
-                        value: (_color.toARGB32() >> 16) & 0xFF,
-                        onChanged: (value) =>
-                            _setChannel(AppThemeColorChannel.red, value),
-                      ),
-                      _ColorChannelSlider(
-                        label: 'Green',
-                        color: const Color(0xFF65D58A),
-                        value: (_color.toARGB32() >> 8) & 0xFF,
-                        onChanged: (value) =>
-                            _setChannel(AppThemeColorChannel.green, value),
-                      ),
-                      _ColorChannelSlider(
-                        label: 'Blue',
-                        color: const Color(0xFF6D92FF),
-                        value: _color.toARGB32() & 0xFF,
-                        onChanged: (value) =>
-                            _setChannel(AppThemeColorChannel.blue, value),
-                      ),
-                      const SizedBox(height: 10),
                       Align(
                         alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          key: const ValueKey('theme-editor-toggle-hex'),
-                          onPressed: _toggleHexEntry,
-                          icon: Icon(
-                            _showHexEntry
-                                ? Icons.expand_less_rounded
-                                : Icons.tag_rounded,
-                          ),
-                          label: Text(
-                            _showHexEntry
-                                ? 'Hide exact hex'
-                                : 'Enter exact hex',
+                        child: Focus(
+                          canRequestFocus: false,
+                          onKeyEvent: _handleHexToggleKey,
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('theme-editor-toggle-hex'),
+                            focusNode: _hexToggleFocusNode,
+                            onPressed: _toggleHexEntry,
+                            icon: Icon(
+                              _showHexEntry
+                                  ? Icons.expand_less_rounded
+                                  : Icons.tag_rounded,
+                            ),
+                            label: Text(
+                              _showHexEntry
+                                  ? 'Hide exact hex'
+                                  : 'Enter exact hex',
+                            ),
                           ),
                         ),
                       ),
                       if (_showHexEntry) ...[
                         const SizedBox(height: 10),
-                        TextField(
-                          key: const ValueKey('theme-editor-hex'),
-                          controller: _hexController,
-                          focusNode: _hexFocusNode,
-                          maxLength: 7,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'[#0-9a-fA-F]'),
+                        Focus(
+                          canRequestFocus: false,
+                          onKeyEvent: _handleHexFieldKey,
+                          child: TextField(
+                            key: const ValueKey('theme-editor-hex'),
+                            controller: _hexController,
+                            focusNode: _hexFocusNode,
+                            maxLength: 7,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[#0-9a-fA-F]'),
+                              ),
+                            ],
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: InputDecoration(
+                              labelText: 'Exact hex color',
+                              counterText: '',
+                              errorText: _hexError,
+                              helperText: 'Example: #E52B50',
                             ),
-                          ],
-                          textCapitalization: TextCapitalization.characters,
-                          decoration: InputDecoration(
-                            labelText: 'Exact hex color',
-                            counterText: '',
-                            errorText: _hexError,
-                            helperText: 'Example: #E52B50',
+                            onChanged: (value) {
+                              final parsed = parseOpaqueHexColor(value);
+                              if (parsed != null) _setColor(parsed);
+                            },
+                            onSubmitted: _applyHex,
                           ),
-                          onChanged: (value) {
-                            final parsed = parseOpaqueHexColor(value);
-                            if (parsed != null) _setColor(parsed);
-                          },
-                          onSubmitted: _applyHex,
                         ),
                       ],
                       const SizedBox(height: 16),
@@ -944,27 +1204,37 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                         runSpacing: 10,
                         alignment: WrapAlignment.end,
                         children: [
-                          OutlinedButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Cancel'),
+                          Focus(
+                            canRequestFocus: false,
+                            onKeyEvent: _handleCancelKey,
+                            child: OutlinedButton(
+                              focusNode: _cancelFocusNode,
+                              onPressed: _close,
+                              child: const Text('Cancel'),
+                            ),
                           ),
-                          FilledButton(
-                            key: const ValueKey('theme-editor-use-color'),
-                            onPressed: () {
-                              if (_showHexEntry) {
-                                final parsed = parseOpaqueHexColor(
-                                  _hexController.text,
-                                );
-                                if (parsed == null) {
-                                  _applyHex(_hexController.text);
-                                  return;
+                          Focus(
+                            canRequestFocus: false,
+                            onKeyEvent: _handleUseColorKey,
+                            child: FilledButton(
+                              key: const ValueKey('theme-editor-use-color'),
+                              focusNode: _useColorFocusNode,
+                              onPressed: () {
+                                if (_showHexEntry) {
+                                  final parsed = parseOpaqueHexColor(
+                                    _hexController.text,
+                                  );
+                                  if (parsed == null) {
+                                    _applyHex(_hexController.text);
+                                    return;
+                                  }
+                                  _close(parsed);
+                                } else {
+                                  _close(_color);
                                 }
-                                Navigator.pop(context, parsed);
-                              } else {
-                                Navigator.pop(context, _color);
-                              }
-                            },
-                            child: const Text('Use color'),
+                              },
+                              child: const Text('Use color'),
+                            ),
                           ),
                         ],
                       ),
@@ -980,10 +1250,16 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
   }
 }
 
-class _BuiltInColorPicker extends StatelessWidget {
-  const _BuiltInColorPicker({required this.color, required this.onChanged});
+class _BuiltInColorPicker extends StatefulWidget {
+  const _BuiltInColorPicker({
+    required this.color,
+    required this.nextFocusNode,
+    required this.onChanged,
+    super.key,
+  });
 
   final Color color;
+  final FocusNode nextFocusNode;
   final ValueChanged<Color> onChanged;
 
   static const colors = <(String, Color)>[
@@ -1014,30 +1290,119 @@ class _BuiltInColorPicker extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
-    final hasBuiltInMatch = colors.any((choice) => choice.$2 == color);
-    final choices = <(String, Color)>[
-      if (!hasBuiltInMatch) ('Current custom color', color),
-      ...colors,
+  State<_BuiltInColorPicker> createState() => _BuiltInColorPickerState();
+}
+
+class _BuiltInColorPickerState extends State<_BuiltInColorPicker> {
+  final Map<int, FocusNode> _focusNodes = {};
+
+  List<(String, Color)> get _choices {
+    final hasBuiltInMatch = _BuiltInColorPicker.colors.any(
+      (choice) => choice.$2 == widget.color,
+    );
+    return <(String, Color)>[
+      if (!hasBuiltInMatch) ('Current custom color', widget.color),
+      ..._BuiltInColorPicker.colors,
     ];
-    return Semantics(
-      container: true,
-      label: 'Built-in remote color picker',
-      child: Wrap(
-        key: const ValueKey('theme-editor-built-in-colors'),
-        spacing: 9,
-        runSpacing: 9,
-        children: [
-          for (var index = 0; index < choices.length; index++)
-            _BuiltInColorSwatch(
-              label: choices[index].$1,
-              color: choices[index].$2,
-              selected: choices[index].$2 == color,
-              autofocus: choices[index].$2 == color,
-              onPressed: () => onChanged(choices[index].$2),
-            ),
-        ],
-      ),
+  }
+
+  FocusNode _nodeFor(Color color) => _focusNodes.putIfAbsent(
+    color.toARGB32(),
+    () => FocusNode(
+      debugLabel:
+          'theme-studio.preset-${formatOpaqueHexColor(color).substring(1)}',
+    ),
+  );
+
+  @override
+  void dispose() {
+    for (final node in _focusNodes.values) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _focus(FocusNode node) {
+    if (!node.canRequestFocus) return;
+    node.requestFocus();
+    final targetContext = node.context;
+    if (targetContext != null) {
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: .5,
+        duration: const Duration(milliseconds: 120),
+      );
+    }
+  }
+
+  void focusSelected() => _focus(_nodeFor(widget.color));
+
+  KeyEventResult _handleKey(
+    int index,
+    int columns,
+    List<(String, Color)> choices,
+    KeyEvent event,
+  ) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final column = index % columns;
+    int? target;
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      target = column == 0 ? null : index - 1;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      target = column == columns - 1 || index + 1 >= choices.length
+          ? null
+          : index + 1;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      target = index - columns >= 0 ? index - columns : null;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      target = index + columns < choices.length ? index + columns : -1;
+    } else {
+      return KeyEventResult.ignored;
+    }
+    if (target == -1) {
+      _focus(widget.nextFocusNode);
+    } else if (target != null) {
+      _focus(_nodeFor(choices[target].$2));
+    }
+    // Edge presses deliberately stay in place instead of falling through to
+    // Flutter's geometry-dependent spatial traversal.
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final choices = _choices;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 680.0;
+        final columns = ((availableWidth + 9) / 57).floor().clamp(1, 12);
+        return Semantics(
+          container: true,
+          label: 'Built-in remote color picker',
+          child: Wrap(
+            key: const ValueKey('theme-editor-built-in-colors'),
+            spacing: 9,
+            runSpacing: 9,
+            children: [
+              for (var index = 0; index < choices.length; index++)
+                _BuiltInColorSwatch(
+                  label: choices[index].$1,
+                  color: choices[index].$2,
+                  selected: choices[index].$2 == widget.color,
+                  autofocus: choices[index].$2 == widget.color,
+                  focusNode: _nodeFor(choices[index].$2),
+                  onKeyEvent: (_, event) =>
+                      _handleKey(index, columns, choices, event),
+                  onPressed: () => widget.onChanged(choices[index].$2),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1048,6 +1413,8 @@ class _BuiltInColorSwatch extends StatelessWidget {
     required this.color,
     required this.selected,
     required this.autofocus,
+    required this.focusNode,
+    required this.onKeyEvent,
     required this.onPressed,
   });
 
@@ -1055,6 +1422,8 @@ class _BuiltInColorSwatch extends StatelessWidget {
   final Color color;
   final bool selected;
   final bool autofocus;
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
   final VoidCallback onPressed;
 
   @override
@@ -1066,6 +1435,8 @@ class _BuiltInColorSwatch extends StatelessWidget {
       child: TvFocusable(
         key: ValueKey('theme-editor-preset-$hex'),
         autofocus: autofocus,
+        focusNode: focusNode,
+        onKeyEvent: onKeyEvent,
         onPressed: onPressed,
         borderRadius: BorderRadius.circular(12),
         focusScale: 1.08,
@@ -1092,59 +1463,6 @@ class _BuiltInColorSwatch extends StatelessWidget {
               : null,
         ),
       ),
-    );
-  }
-}
-
-enum AppThemeColorChannel { red, green, blue }
-
-class _ColorChannelSlider extends StatelessWidget {
-  const _ColorChannelSlider({
-    required this.label,
-    required this.color,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String label;
-  final Color color;
-  final int value;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return Row(
-      children: [
-        SizedBox(
-          width: 54,
-          child: Text(label, style: TextStyle(color: palette.primaryText)),
-        ),
-        Expanded(
-          child: SliderTheme(
-            data: Theme.of(
-              context,
-            ).sliderTheme.copyWith(activeTrackColor: color, thumbColor: color),
-            child: Slider(
-              key: ValueKey('theme-slider-${label.toLowerCase()}'),
-              value: value.toDouble(),
-              min: 0,
-              max: 255,
-              divisions: 255,
-              label: value.toString(),
-              onChanged: onChanged,
-            ),
-          ),
-        ),
-        SizedBox(
-          width: 36,
-          child: Text(
-            value.toString(),
-            textAlign: TextAlign.right,
-            style: TextStyle(color: palette.mutedText),
-          ),
-        ),
-      ],
     );
   }
 }

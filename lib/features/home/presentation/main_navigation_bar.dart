@@ -11,8 +11,8 @@ import 'package:go_router/go_router.dart';
 enum MainNavigationDestination { home, myList, discover, calendar }
 
 /// Keeps the primary destinations and linked tracker identity in one stable
-/// row on every main screen. The identity collapses to avatars when a smaller
-/// viewport no longer has room for profile text.
+/// row on every main screen. Tracker identity always carries a text label when
+/// it is visible, so a linked account never turns into an unexplained avatar.
 class MainNavigationBar extends ConsumerWidget {
   const MainNavigationBar({
     required this.active,
@@ -39,11 +39,24 @@ class MainNavigationBar extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 760;
+        // A 1080p TV commonly exposes a 960 logical-pixel canvas. Keep the
+        // icon-only navigation tier until the labelled row and full profile
+        // card can fit together without pushing Settings off-screen.
+        final compact = constraints.maxWidth < 940;
         final showLogo = constraints.maxWidth >= 430;
         final showBrandName = constraints.maxWidth >= 520;
-        final showProfileDetails = constraints.maxWidth >= 1030;
+        final showProfileDetails = constraints.maxWidth >= 940;
         final showEveryProfile = constraints.maxWidth >= 1200;
+        final showProfiles = profiles.isNotEmpty && constraints.maxWidth >= 282;
+        final profileWidth = showProfileDetails
+            ? showEveryProfile
+                  ? 500.0
+                  : 278.0
+            : constraints.maxWidth < 340
+            ? 64.0
+            : constraints.maxWidth < 430
+            ? 120.0
+            : 164.0;
         return SizedBox(
           key: const ValueKey('main-navigation'),
           height: compact ? 62 : 70,
@@ -72,6 +85,7 @@ class MainNavigationBar extends ConsumerWidget {
               SizedBox(width: compact ? 4 : 14),
               if (preferences.showSearch) ...[
                 _NavigationAction(
+                  key: const ValueKey('main-nav-search'),
                   icon: Icons.search_rounded,
                   label: 'Search',
                   compact: true,
@@ -80,6 +94,7 @@ class MainNavigationBar extends ConsumerWidget {
                 SizedBox(width: compact ? 2 : 6),
               ],
               _NavigationAction(
+                key: const ValueKey('main-nav-home'),
                 icon: Icons.home_rounded,
                 label: 'Home',
                 compact: true,
@@ -92,6 +107,7 @@ class MainNavigationBar extends ConsumerWidget {
               if (preferences.showMyList) ...[
                 SizedBox(width: compact ? 2 : 6),
                 _NavigationAction(
+                  key: const ValueKey('main-nav-my-list'),
                   icon: Icons.video_library_rounded,
                   label: 'My List',
                   compact: compact,
@@ -107,6 +123,7 @@ class MainNavigationBar extends ConsumerWidget {
               if (preferences.showDiscover) ...[
                 SizedBox(width: compact ? 2 : 6),
                 _NavigationAction(
+                  key: const ValueKey('main-nav-discover'),
                   icon: Icons.explore_rounded,
                   label: 'Discover',
                   compact: true,
@@ -122,6 +139,7 @@ class MainNavigationBar extends ConsumerWidget {
               if (preferences.showCalendar) ...[
                 SizedBox(width: compact ? 2 : 6),
                 _NavigationAction(
+                  key: const ValueKey('main-nav-calendar'),
                   icon: Icons.calendar_month_rounded,
                   label: 'Calendar',
                   compact: true,
@@ -135,8 +153,9 @@ class MainNavigationBar extends ConsumerWidget {
                 ),
               ],
               const Spacer(),
-              if (profiles.isNotEmpty) ...[
-                Flexible(
+              if (showProfiles) ...[
+                SizedBox(
+                  width: profileWidth,
                   child: _TrackerIdentitySummary(
                     profiles: profiles,
                     showDetails: showProfileDetails,
@@ -147,6 +166,7 @@ class MainNavigationBar extends ConsumerWidget {
                 SizedBox(width: compact ? 2 : 6),
               ],
               _NavigationAction(
+                key: const ValueKey('main-nav-settings'),
                 icon: Icons.settings_rounded,
                 label: 'Settings',
                 compact: compact,
@@ -191,12 +211,10 @@ class _TrackerIdentitySummary extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         focusScale: 1.02,
         child: Container(
-          constraints: BoxConstraints(
-            maxWidth: showDetails ? (showEveryProfile ? 430 : 230) : 66,
-          ),
-          height: 46,
+          width: double.infinity,
+          height: showDetails ? 54 : 46,
           padding: EdgeInsets.symmetric(
-            horizontal: showDetails ? 7 : 3,
+            horizontal: showDetails ? 8 : 7,
             vertical: 5,
           ),
           decoration: BoxDecoration(
@@ -208,10 +226,9 @@ class _TrackerIdentitySummary extends StatelessWidget {
           ),
           child: showDetails
               ? Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     for (var index = 0; index < visible.length; index++) ...[
-                      Flexible(
+                      Expanded(
                         child: _ProfileIdentity(profile: visible[index]),
                       ),
                       if (index != visible.length - 1)
@@ -237,7 +254,10 @@ class _TrackerIdentitySummary extends StatelessWidget {
                     ],
                   ],
                 )
-              : _CompactProfileAvatars(profiles: profiles),
+              : _CompactProfileIdentity(
+                  profile: profiles.first,
+                  hiddenCount: hiddenCount,
+                ),
         ),
       ),
     );
@@ -251,44 +271,46 @@ class _ProfileIdentity extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statistics = <String>[
-      if (profile.animeCount case final count?) '$count titles',
-      if (profile.episodesWatched case final episodes?) '$episodes eps',
-      if (profile.meanScore case final score?)
-        'Mean ${score.toStringAsFixed(1)}'
-            '/${profile.provider == TrackingProvider.anilist ? 100 : 10}',
-    ];
-    final summary = statistics.isEmpty
-        ? profile.provider.displayName
-        : statistics.take(2).join(' · ');
+    final statistics = _profileStatistics(profile);
     return Row(
       key: ValueKey('main-nav-profile-${profile.provider.slug}'),
-      mainAxisSize: MainAxisSize.min,
       children: [
-        _ProfileAvatar(profile: profile, size: 34),
+        _ProfileAvatar(profile: profile, size: 38),
         const SizedBox(width: 8),
-        Flexible(
+        Expanded(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                profile.username,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: context.appPalette.primaryText,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                ),
+              Row(
+                children: [
+                  _ProviderBadge(provider: profile.provider),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      profile.username,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: context.appPalette.primaryText,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 3),
               Text(
-                '${profile.provider.displayName} · $summary',
+                statistics.isEmpty ? 'Linked account' : statistics.join(' · '),
+                key: ValueKey(
+                  'main-nav-profile-stats-${profile.provider.slug}',
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: context.appPalette.mutedText,
-                  fontSize: 9,
+                  fontSize: 9.5,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -300,27 +322,130 @@ class _ProfileIdentity extends StatelessWidget {
   }
 }
 
-class _CompactProfileAvatars extends StatelessWidget {
-  const _CompactProfileAvatars({required this.profiles});
+class _CompactProfileIdentity extends StatelessWidget {
+  const _CompactProfileIdentity({
+    required this.profile,
+    required this.hiddenCount,
+  });
 
-  final List<TrackingAccountProfile> profiles;
+  final TrackingAccountProfile profile;
+  final int hiddenCount;
 
   @override
   Widget build(BuildContext context) {
-    final visible = profiles.take(2).toList(growable: false);
-    return SizedBox(
-      width: visible.length == 1 ? 30 : 47,
-      child: Stack(
-        children: [
-          for (var index = 0; index < visible.length; index++)
-            Positioned(
-              left: index * 17,
-              child: _ProfileAvatar(profile: visible[index], size: 30),
+    final statistics = _profileStatistics(profile);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tiny = constraints.maxWidth < 74;
+        return Column(
+          key: ValueKey('main-nav-profile-${profile.provider.slug}'),
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (!tiny) ...[
+                  _ProviderBadge(provider: profile.provider, compact: true),
+                  const SizedBox(width: 5),
+                ],
+                Expanded(
+                  child: Text(
+                    tiny ? profile.provider.displayName : profile.username,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: context.appPalette.primaryText,
+                      fontSize: tiny ? 9 : 10.5,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                if (hiddenCount > 0) ...[
+                  const SizedBox(width: 3),
+                  Text(
+                    '+$hiddenCount',
+                    style: TextStyle(
+                      color: context.appPalette.accentBright,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ],
             ),
-        ],
+            const SizedBox(height: 2),
+            Text(
+              tiny
+                  ? profile.username
+                  : statistics.firstOrNull ?? 'Linked account',
+              key: ValueKey('main-nav-profile-stats-${profile.provider.slug}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: tiny ? 8 : 8.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ProviderBadge extends StatelessWidget {
+  const _ProviderBadge({required this.provider, this.compact = false});
+
+  final TrackingProvider provider;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 4 : 5,
+        vertical: compact ? 1.5 : 2,
+      ),
+      decoration: BoxDecoration(
+        color: context.appPalette.accent.withValues(alpha: .18),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        provider.displayName,
+        style: TextStyle(
+          color: context.appPalette.accentBright,
+          fontSize: compact ? 7 : 8,
+          fontWeight: FontWeight.w900,
+        ),
       ),
     );
   }
+}
+
+List<String> _profileStatistics(TrackingAccountProfile profile) => [
+  if (profile.animeCount case final count?) '${_compactCount(count)} titles',
+  if (profile.episodesWatched case final episodes?)
+    '${_compactCount(episodes)} eps',
+  if (profile.minutesWatched case final minutes?) _watchedDuration(minutes),
+  if (profile.meanScore case final score?)
+    '${score.toStringAsFixed(1)}'
+        '/${profile.provider == TrackingProvider.anilist ? 100 : 10} mean',
+];
+
+String _compactCount(int value) {
+  if (value < 1000) return '$value';
+  if (value < 1000000) {
+    final digits = value >= 10000 ? 0 : 1;
+    return '${(value / 1000).toStringAsFixed(digits)}K';
+  }
+  final digits = value >= 10000000 ? 0 : 1;
+  return '${(value / 1000000).toStringAsFixed(digits)}M';
+}
+
+String _watchedDuration(int minutes) {
+  if (minutes < 60) return '${minutes}m watched';
+  return '${(minutes / 60).round()}h watched';
 }
 
 class _ProfileAvatar extends StatelessWidget {
@@ -361,6 +486,7 @@ class _NavigationAction extends StatelessWidget {
     this.compact = false,
     this.autofocus = false,
     this.focusNode,
+    super.key,
   });
 
   final IconData icon;

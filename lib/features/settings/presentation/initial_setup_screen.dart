@@ -5,6 +5,7 @@ import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
@@ -250,6 +251,22 @@ class _CustomizationStep extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           _SetupChoiceRow(
+            label: 'Text input keyboard',
+            children: [
+              _SetupChoice(
+                label: 'TetoTV keyboard',
+                selected: preferences.useBuiltInKeyboard,
+                onPressed: () => controller.setUseBuiltInKeyboard(true),
+              ),
+              _SetupChoice(
+                label: 'Device keyboard',
+                selected: !preferences.useBuiltInKeyboard,
+                onPressed: () => controller.setUseBuiltInKeyboard(false),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _SetupChoiceRow(
             label: 'Preferred anime audio',
             children: [
               for (final audio in PlaybackAudioPreference.values)
@@ -377,11 +394,18 @@ class _PrivacyCommunityStep extends ConsumerWidget {
               primary: !discord.linked,
               onPressed: discord.linked
                   ? () => discordController.setEnabled(!discord.enabled)
-                  : () {
-                      if (isTelevision) {
-                        context.push('/pair/discord');
+                  : () async {
+                      final resolver = ref.read(
+                        discordAccountLinkResolverProvider,
+                      );
+                      final flow = await resolver.resolve(
+                        startupTelevision: isTelevision,
+                      );
+                      if (!context.mounted) return;
+                      if (flow == DiscordAccountLinkFlow.deviceQr) {
+                        await context.push('/pair/discord');
                       } else {
-                        discordController.linkAccount();
+                        await discordController.linkAccount();
                       }
                     },
             ),

@@ -7,6 +7,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
@@ -1127,15 +1128,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         state: discordPresence,
                         primaryFocusNode: _discordPresenceFocus,
                         unlinkFocusNode: _discordDisconnectFocus,
-                        onLink: () {
-                          if (isTelevision) {
-                            context.push('/pair/discord');
+                        onLink: () async {
+                          final resolver = ref.read(
+                            discordAccountLinkResolverProvider,
+                          );
+                          final controller = ref.read(
+                            discordPresenceControllerProvider.notifier,
+                          );
+                          final flow = await resolver.resolve(
+                            startupTelevision: isTelevision,
+                          );
+                          if (!context.mounted) return;
+                          if (flow == DiscordAccountLinkFlow.deviceQr) {
+                            await context.push('/pair/discord');
                           } else {
-                            ref
-                                .read(
-                                  discordPresenceControllerProvider.notifier,
-                                )
-                                .linkAccount();
+                            await controller.linkAccount();
                           }
                         },
                         onToggle: () => ref

@@ -9,4 +9,10 @@ internal object DiscordAuthFlowPolicy {
      * supported mobile PKCE `Authorize` flow just like Android phones.
      */
     fun shouldUseDeviceFlow(uiMode: Int, hasLeanback: Boolean): Boolean = false
+
+    /**
+     * The Android Social SDK opens a browser/custom tab. TV linking is owned
+     * by Flutter's in-app QR device flow and must never enter that SDK path.
+     */
+    fun allowsMobileOAuth(isTelevision: Boolean): Boolean = !isTelevision
 }

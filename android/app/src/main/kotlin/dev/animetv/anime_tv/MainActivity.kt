@@ -208,15 +208,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun isTelevision(): Boolean =
-        TelevisionDevicePolicy.isTelevision(
-            uiMode = resources.configuration.uiMode,
-            hasLeanback = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK),
-            hasTelevisionFeature =
-                packageManager.hasSystemFeature(PackageManager.FEATURE_TELEVISION),
-            manufacturer = Build.MANUFACTURER.orEmpty(),
-            model = Build.MODEL.orEmpty(),
-        )
+    private fun isTelevision(): Boolean = TelevisionDevicePolicy.isTelevision(this)
 
     /**
      * Lets Android's Storage Access Framework expose only the video selected

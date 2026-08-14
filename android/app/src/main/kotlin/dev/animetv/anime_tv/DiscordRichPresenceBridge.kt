@@ -27,6 +27,7 @@ object DiscordRichPresenceBridge {
     private var nativeLoaded = false
     private var initialized = false
     private var useDeviceAuthFlow = false
+    private var allowsMobileOAuth = true
     private var canLaunchAuthorization = false
     private var connectionState = "disconnected"
     private var pendingAuth: MethodChannel.Result? = null
@@ -36,6 +37,9 @@ object DiscordRichPresenceBridge {
 
     fun attach(activity: Activity, channel: MethodChannel) {
         this.channel = channel
+        allowsMobileOAuth = DiscordAuthFlowPolicy.allowsMobileOAuth(
+            TelevisionDevicePolicy.isTelevision(activity),
+        )
         useDeviceAuthFlow = DiscordAuthFlowPolicy.shouldUseDeviceFlow(
             uiMode = activity.resources.configuration.uiMode,
             hasLeanback = activity.packageManager.hasSystemFeature("android.software.leanback"),
@@ -70,7 +74,13 @@ object DiscordRichPresenceBridge {
                 true
             }
             "discordAuthenticate" -> {
-                if (!canLaunchAuthorization) {
+                if (!allowsMobileOAuth) {
+                    result.error(
+                        "DISCORD_DEVICE_AUTH_REQUIRED",
+                        "Discord linking on TV uses TetoTV's QR code screen.",
+                        null,
+                    )
+                } else if (!canLaunchAuthorization) {
                     result.error(
                         "DISCORD_AUTH_UNAVAILABLE",
                         "Discord linking requires a secure web browser on this device.",

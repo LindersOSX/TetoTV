@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -75,7 +76,7 @@ void main() {
 
     expect(controller.state.debridStreamsEnabled, isTrue);
     expect(controller.state.webStreamsEnabled, isTrue);
-    expect(controller.state.useBuiltInKeyboard, isFalse);
+    expect(controller.state.useBuiltInKeyboard, isTrue);
     expect(controller.state.autoSkipIntros, isFalse);
     expect(controller.state.autoSkipOutros, isFalse);
     expect(controller.state.homeLayout, HomeLayout.cinematic);
@@ -97,9 +98,11 @@ void main() {
   });
 
   test(
-    'legacy installs without a keyboard choice migrate to device input',
+    'completed legacy installs without a keyboard choice keep device input',
     () async {
-      FlutterSecureStorage.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
       final controller = SettingsPreferencesController(
         const FlutterSecureStorage(),
       );
@@ -121,6 +124,20 @@ void main() {
     await controller.load();
 
     expect(controller.state.useBuiltInKeyboard, isTrue);
+  });
+
+  test('explicit device keyboard choice is preserved', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'false',
+      initialSetupCompletedStorageKey: 'true',
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(controller.state.useBuiltInKeyboard, isFalse);
   });
 
   test('anonymous live counting persists only after explicit opt in', () async {
@@ -225,7 +242,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 32, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 33, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

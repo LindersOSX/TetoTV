@@ -171,6 +171,11 @@ class DiscordBridgeEvent {
   final Map<Object?, Object?> data;
 }
 
+/// A tri-state result keeps a missing or slow native bridge from being
+/// mistaken for a phone. Discord may open browser OAuth only after Android
+/// explicitly reports [mobile].
+enum AndroidDeviceCategory { television, mobile, unknown }
+
 class DiscordTokenBundle {
   const DiscordTokenBundle({
     required this.accessToken,
@@ -397,7 +402,7 @@ class AndroidTvBridge {
   final _mediaActions = StreamController<MediaAction>.broadcast();
   final _discordEvents = StreamController<DiscordBridgeEvent>.broadcast();
   TvDeviceProfile? _cachedProfile;
-  bool? _cachedIsTelevision;
+  AndroidDeviceCategory? _cachedDeviceCategory;
 
   Stream<MediaAction> get mediaActions => _mediaActions.stream;
   Stream<DiscordBridgeEvent> get discordEvents => _discordEvents.stream;
@@ -428,20 +433,31 @@ class AndroidTvBridge {
     }
   }
 
-  Future<bool> isTelevision({bool refresh = false}) async {
-    if (!refresh && _cachedIsTelevision != null) {
-      return _cachedIsTelevision!;
+  Future<AndroidDeviceCategory> getDeviceCategory({
+    bool refresh = false,
+  }) async {
+    if (!refresh && _cachedDeviceCategory != null) {
+      return _cachedDeviceCategory!;
     }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
-      return false;
+      return AndroidDeviceCategory.mobile;
     }
     try {
-      return _cachedIsTelevision =
-          await _channel.invokeMethod<bool>('isTelevision') ?? false;
+      final television = await _channel.invokeMethod<bool>('isTelevision');
+      if (television == null) return AndroidDeviceCategory.unknown;
+      return _cachedDeviceCategory = television
+          ? AndroidDeviceCategory.television
+          : AndroidDeviceCategory.mobile;
     } on PlatformException {
-      return false;
+      return AndroidDeviceCategory.unknown;
+    } on MissingPluginException {
+      return AndroidDeviceCategory.unknown;
     }
   }
+
+  Future<bool> isTelevision({bool refresh = false}) async =>
+      await getDeviceCategory(refresh: refresh) ==
+      AndroidDeviceCategory.television;
 
   Future<dynamic> _handleMethod(MethodCall call) async {
     final args = (call.arguments as Map?)?.cast<Object?, Object?>();
