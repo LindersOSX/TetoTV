@@ -108,8 +108,8 @@ flutter build apk --debug
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
 $tetoReleaseDefines = 'C:\secure\TetoTV-release-defines.json'
 # Private Beta artifact (the pubspec carries the 2.x Beta version).
-flutter build apk --release --target-platform android-arm,android-arm64 --dart-define-from-file=$tetoReleaseDefines --build-name 2.0.3 --build-number 410001
-Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v2.0.3-universal.apk
+flutter build apk --release --target-platform android-arm,android-arm64 --dart-define-from-file=$tetoReleaseDefines --build-name 2.0.4 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v2.0.4-universal.apk
 # Public artifact from the same commit/signing key.
 flutter build apk --release --target-platform android-arm,android-arm64 --dart-define-from-file=$tetoReleaseDefines --build-name 1.0.1 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v1.0.1-universal.apk
@@ -186,7 +186,7 @@ default Public update channel anonymously checks the releases-only
 `LindersOSX/TetoTV-Releases` repository. Activating **Settings > System** ten
 times reveals Developer mode, where testers can switch to the Beta channel.
 The current public release remains `1.0.1`; the newer private test build is
-`2.0.3 Beta`. Both signed APKs intentionally keep Android `versionCode`
+`2.0.4 Beta`. Both signed APKs intentionally keep Android `versionCode`
 `410001`, the package ID, and production signer so Developer mode can replace
 them with another compatible completed release from their Public 1.x or Beta
 2.x history. Android rejects lower build codes; raising this code creates a

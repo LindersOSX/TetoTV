@@ -9,11 +9,15 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
+import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
+import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
@@ -1507,17 +1511,50 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       barrierDismissible: false,
       builder: (_) => const _VlcNextEpisodeDialog(),
     );
+    if (!mounted) return;
     if (play == true) await _playNextEpisode();
   }
 
   Future<void> _playNextEpisode() async {
-    if (widget.anilistMediaId == null || widget.episode == null) return;
+    if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
+      return;
+    }
     try {
-      final details = await ref
-          .read(catalogClientProvider)
-          .details(widget.anilistMediaId!);
-      final nextEpisode = widget.episode! + 1;
-      if (details.episodes != null && nextEpisode > details.episodes!) return;
+      final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
+      final unavailableNoticeController = ref.read(
+        fillerUnavailableNotifiedSeriesProvider.notifier,
+      );
+      final skipFillerEpisodes = _preferences.skipFillerEpisodes;
+      final details = await catalog.details(widget.anilistMediaId!);
+      if (!mounted) return;
+      final requestedEpisode = widget.episode! + 1;
+      if (details.episodes != null && requestedEpisode > details.episodes!) {
+        return;
+      }
+      final totalEpisodes = episodeNavigationCeiling(
+        requestedEpisode: requestedEpisode,
+        declaredTotalEpisodes: details.episodes,
+        nextAiringEpisode: details.nextAiringEpisode,
+      );
+      final decision = await resolveFillerEpisodeNavigation(
+        repository: fillerRepository,
+        identity: FillerSeriesIdentity.fromAnime(details),
+        requestedEpisode: requestedEpisode,
+        totalEpisodes: totalEpisodes,
+        skipEnabled: skipFillerEpisodes,
+      );
+      if (!mounted) return;
+      if (decision.dataUnavailable &&
+          consumeFillerUnavailableNotice(
+            unavailableNoticeController,
+            widget.anilistMediaId!,
+          )) {
+        showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+      }
+      await showFillerSkipNotification(context, decision);
+      if (!mounted || decision.episode == null) return;
+      final nextEpisode = decision.episode!;
       if (!mounted) return;
       final route = Uri(
         path: '/resolve',

@@ -10,7 +10,11 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
+import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
+import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
+import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
@@ -1113,15 +1117,45 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _playNextEpisode() async {
-    if (widget.anilistMediaId == null || widget.episode == null) return;
+    if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
+      return;
+    }
     try {
-      final details = await ref
-          .read(catalogClientProvider)
-          .details(widget.anilistMediaId!);
-      final nextEp = widget.episode! + 1;
-      if (details.episodes != null && nextEp > details.episodes!) {
+      final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
+      final unavailableNoticeController = ref.read(
+        fillerUnavailableNotifiedSeriesProvider.notifier,
+      );
+      final skipFillerEpisodes = _seriesPreferences.skipFillerEpisodes;
+      final details = await catalog.details(widget.anilistMediaId!);
+      if (!mounted) return;
+      final requestedEpisode = widget.episode! + 1;
+      if (details.episodes != null && requestedEpisode > details.episodes!) {
         return; // No more episodes
       }
+      final totalEpisodes = episodeNavigationCeiling(
+        requestedEpisode: requestedEpisode,
+        declaredTotalEpisodes: details.episodes,
+        nextAiringEpisode: details.nextAiringEpisode,
+      );
+      final decision = await resolveFillerEpisodeNavigation(
+        repository: fillerRepository,
+        identity: FillerSeriesIdentity.fromAnime(details),
+        requestedEpisode: requestedEpisode,
+        totalEpisodes: totalEpisodes,
+        skipEnabled: skipFillerEpisodes,
+      );
+      if (!mounted) return;
+      if (decision.dataUnavailable &&
+          consumeFillerUnavailableNotice(
+            unavailableNoticeController,
+            widget.anilistMediaId!,
+          )) {
+        showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+      }
+      await showFillerSkipNotification(context, decision);
+      if (!mounted || decision.episode == null) return;
+      final nextEp = decision.episode!;
       if (!mounted) return;
       final query = {
         'anilistId': widget.anilistMediaId.toString(),
@@ -1932,6 +1966,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       barrierDismissible: false,
       builder: (_) => const _NextEpisodeDialog(seconds: 8),
     );
+    if (!mounted) return;
     if (play == true) await _playNextEpisode();
   }
 

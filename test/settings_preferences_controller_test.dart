@@ -19,6 +19,7 @@ void main() {
     await controller.setUseBuiltInKeyboard(false);
     await controller.setAutoSkipIntros(true);
     await controller.setAutoSkipOutros(true);
+    await controller.setShowFillerIndicators(false);
     await controller.setHomeLayout(HomeLayout.compact);
     await controller.setShowMyList(false);
     await controller.setShowDiscover(false);
@@ -44,6 +45,7 @@ void main() {
     expect(restored.state.useBuiltInKeyboard, isFalse);
     expect(restored.state.autoSkipIntros, isTrue);
     expect(restored.state.autoSkipOutros, isTrue);
+    expect(restored.state.showFillerIndicators, isFalse);
     expect(restored.state.homeLayout, HomeLayout.compact);
     expect(restored.state.showMyList, isFalse);
     expect(restored.state.showDiscover, isFalse);
@@ -79,6 +81,7 @@ void main() {
     expect(controller.state.useBuiltInKeyboard, isTrue);
     expect(controller.state.autoSkipIntros, isFalse);
     expect(controller.state.autoSkipOutros, isFalse);
+    expect(controller.state.showFillerIndicators, isTrue);
     expect(controller.state.homeLayout, HomeLayout.cinematic);
     expect(controller.state.interfaceMode, InterfaceMode.automatic);
     expect(controller.state.navigationSounds, isTrue);
@@ -112,6 +115,35 @@ void main() {
       expect(controller.state.useBuiltInKeyboard, isFalse);
     },
   );
+
+  test('legacy installs migrate to visible filler indicators', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+      'player_auto_skip_intros': 'true',
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(controller.state.showFillerIndicators, isTrue);
+  });
+
+  test('reset appearance restores visible filler indicators', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setShowFillerIndicators(false);
+    expect(controller.state.showFillerIndicators, isFalse);
+    await controller.resetAppearance();
+    expect(controller.state.showFillerIndicators, isTrue);
+
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.showFillerIndicators, isTrue);
+  });
 
   test('explicit built-in keyboard choice is preserved', () async {
     FlutterSecureStorage.setMockInitialValues({
@@ -242,7 +274,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 33, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 34, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

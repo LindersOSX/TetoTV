@@ -161,6 +161,7 @@ void main() {
 
     final card = find.byKey(const ValueKey('main-nav-profile-anilist'));
     expect(card, findsOneWidget);
+    expect(tester.widget<Container>(card).decoration, isNull);
     expect(
       find.byKey(const ValueKey('main-nav-profile-summary')),
       findsOneWidget,
@@ -168,7 +169,15 @@ void main() {
     expect(find.text('TetoFan'), findsOneWidget);
     expect(find.text('MALFan'), findsNothing);
     expect(find.text('AniList'), findsOneWidget);
-    expect(find.text('+1 linked · MAL'), findsOneWidget);
+    expect(find.text('+1 MAL'), findsOneWidget);
+    expect(
+      tester
+          .widget<Container>(
+            find.byKey(const ValueKey('main-nav-profile-additional')),
+          )
+          .decoration,
+      isNull,
+    );
     final anilistStats = find.byKey(
       const ValueKey('main-nav-profile-stats-anilist'),
     );
@@ -251,6 +260,14 @@ void main() {
     );
     expect(find.textContaining('AniList'), findsOneWidget);
     expect(find.textContaining('TetoFan'), findsOneWidget);
+    expect(
+      tester
+          .widget<Container>(
+            find.byKey(const ValueKey('main-nav-profile-compact-shell')),
+          )
+          .decoration,
+      isNull,
+    );
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-profile-summary')),
@@ -360,7 +377,7 @@ void main() {
         );
       }
       if (width == 960 || width == 1200) {
-        expect(find.text('+1 linked · MAL'), findsOneWidget);
+        expect(find.text('+1 MAL'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('main-nav-profile-myanimelist')),
           findsNothing,
@@ -442,13 +459,26 @@ void main() {
       find.descendant(of: stats, matching: find.text('Mean 78.6/100')),
       findsOneWidget,
     );
-    expect(tester.getSize(profile).width, inInclusiveRange(420, 480));
+    expect(tester.getSize(profile).width, inInclusiveRange(360, 410));
+    expect(tester.getSize(profile).height, 58);
     expect(
       tester.getSize(
         find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
       ),
-      const Size(62, 62),
+      const Size(44, 44),
     );
+    final profileContainer = tester.widget<Container>(
+      find.byKey(const ValueKey('main-nav-profile-anilist')),
+    );
+    expect(profileContainer.decoration, isNull);
+    final avatarDecoration =
+        tester
+                .widget<Container>(
+                  find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
+                )
+                .decoration!
+            as BoxDecoration;
+    expect(avatarDecoration.border, isNull);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-my-list')),
