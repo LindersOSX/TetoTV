@@ -7,8 +7,8 @@ import org.junit.Test
 
 class HomeEasterEggAudioContractTest {
     @Test
-    fun `audio lifetime is capped at five seconds`() {
-        assertEquals(5_000L, HomeEasterEggAudio.MAXIMUM_DURATION_MS)
+    fun `audio lifetime is capped at ten seconds`() {
+        assertEquals(10_000L, HomeEasterEggAudio.MAXIMUM_DURATION_MS)
     }
 
     @Test

@@ -470,6 +470,55 @@ void main() {
     },
   );
 
+  testWidgets('late web preflight completion never reads a disposed ref', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final preflight = Completer<ValidatedWebStream>();
+    final stream = _webStream('1080p');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(null),
+          addonStoreProvider.overrideWithValue(_NoopAddonStore()),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([stream]),
+          ),
+          webStreamPreflightProvider.overrideWithValue(
+            (uri, headers) => preflight.future,
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 424243,
+              title: 'Disposed Resolver',
+              episode: 1,
+              autoPlay: true,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.textContaining('Checking Provider'));
+    // Simulate backing out while the provider preflight request is in flight.
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    preflight.complete(
+      ValidatedWebStream(
+        uri: stream.uri,
+        headers: stream.headers,
+        contentType: 'application/vnd.apple.mpegurl',
+      ),
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'release-specific failures continue through the fifth unique candidate',
     (tester) async {

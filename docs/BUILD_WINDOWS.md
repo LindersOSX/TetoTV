@@ -214,22 +214,31 @@ values, and keep the real properties and keystore outside source control. Back
 up both files securely before installing the first distributed build. The
 release task intentionally fails without them, and Android cannot update an
 installed app signed by a different key. Public releases use one universal ARM
-APK containing both supported application ABIs:
+APK containing both supported application ABIs.
+
+Before either release build, create a protected JSON file outside the
+repository containing `TETOTV_BETA_UPDATE_ACCESS_KEY`. Do not put its raw value
+on the command line or in build logs. Point `$tetoReleaseDefines` at that file;
+the same reviewed value is injected into Public and Beta APKs so Developer Mode
+can reach the private Beta channel without asking the user for a key:
 
 ```powershell
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
+$tetoReleaseDefines = 'C:\secure\TetoTV-release-defines.json'
 
-# Private Beta 2.0.0
+# Private Beta 2.0.1
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.0 --build-number 410001
+  --dart-define-from-file=$tetoReleaseDefines `
+  --build-name 2.0.1 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v2.0.0-universal.apk
+  .\build\fire-tv\TetoTV-v2.0.1-universal.apk
 
-# Public 1.0.0, built from the same reviewed commit and signing key
+# Public 1.0.1, built from the same reviewed commit and signing key
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 1.0.0 --build-number 410001
+  --dart-define-from-file=$tetoReleaseDefines `
+  --build-name 1.0.1 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v1.0.0-universal.apk
+  .\build\fire-tv\TetoTV-v1.0.1-universal.apk
 ```
 
 Many Fire TV models expose a 32-bit application ABI even when their CPU is

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 const double _playerControlMaxTextScale = 1.35;
+const double _playerControlFocusGutter = 20;
 const Color _defaultPlayerChromePanel = Color(0xD6080808);
 const Color _defaultPlayerChromeShadow = Color(0xA8000000);
 const Color _defaultPlayerControlSurface = Color(0x8F242429);
@@ -192,11 +193,19 @@ class TetoPlayerChrome extends StatelessWidget {
                     key: ValueKey('$engineKey-player-controls-scroll'),
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
+                    // TvFocusable paints a scaled focus ring and glow outside
+                    // the pill's layout bounds. Keep an equal reserve at both
+                    // scroll limits so MPV and VLC never paint their first or
+                    // last focused control beyond the HUD card.
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: _playerControlFocusGutter,
+                    ),
                     child: Row(
                       children: [
                         TetoPlayerControl(
                           icon: Icons.replay_rounded,
                           label: 'Back ${seekBackSeconds}s',
+                          revealScrollStart: true,
                           onPressed: onRewind,
                           onDismiss: onDismiss,
                         ),
@@ -270,9 +279,6 @@ class TetoPlayerChrome extends StatelessWidget {
                           onPressed: onOptions,
                           onDismiss: onDismiss,
                         ),
-                        // Keep the focused ring and glow inside the horizontal
-                        // viewport on narrow TVs and phones.
-                        const SizedBox(width: 20),
                       ],
                     ),
                   ),
@@ -396,6 +402,7 @@ class TetoPlayerControl extends StatelessWidget {
     required this.onPressed,
     this.focusNode,
     this.primary = false,
+    this.revealScrollStart = false,
     this.revealScrollEnd = false,
     this.onDismiss,
     super.key,
@@ -406,6 +413,7 @@ class TetoPlayerControl extends StatelessWidget {
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final bool primary;
+  final bool revealScrollStart;
   final bool revealScrollEnd;
   final VoidCallback? onDismiss;
 
@@ -422,6 +430,17 @@ class TetoPlayerControl extends StatelessWidget {
         if (!focused) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!context.mounted) return;
+          if (revealScrollStart) {
+            final position = Scrollable.maybeOf(context)?.position;
+            if (position != null) {
+              position.animateTo(
+                position.minScrollExtent,
+                duration: const Duration(milliseconds: 100),
+                curve: Curves.easeOutCubic,
+              );
+              return;
+            }
+          }
           if (revealScrollEnd) {
             final position = Scrollable.maybeOf(context)?.position;
             if (position != null) {

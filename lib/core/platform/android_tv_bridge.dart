@@ -403,7 +403,7 @@ class AndroidTvBridge {
   Stream<DiscordBridgeEvent> get discordEvents => _discordEvents.stream;
 
   Future<void> playHomeEasterEgg({
-    Duration maximumDuration = const Duration(seconds: 5),
+    Duration maximumDuration = const Duration(seconds: 10),
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {

@@ -68,6 +68,13 @@ const forwardedForMode = selfTest
       : "none";
 const githubReleaseRepository =
   process.env.GITHUB_RELEASE_REPOSITORY || "LindersOSX/TetoTV";
+// Existing 1.11.x clients only know this broker and compare user-facing
+// SemVer. Keep a narrow, anonymous one-way bridge to the public release-only
+// repository so they can cross the 1.11.x -> 1.0.x numbering reset. Current
+// Public clients read GitHub directly; authenticated requests remain Beta.
+const legacyPublicReleaseRepository = "LindersOSX/TetoTV-Releases";
+const legacyPublicAliasTag = "v1.11.34";
+const legacyPublicAliasVersion = "1.11.34";
 const githubReleaseToken =
   process.env.GITHUB_RELEASE_TOKEN ||
   (selfTest ? "self-test-github-release-token" : "");
@@ -108,6 +115,10 @@ const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
 let cachedLatestRelease = null;
 let latestReleaseRequest = null;
+let cachedReleaseHistory = null;
+let releaseHistoryRequest = null;
+let cachedLegacyPublicRelease = null;
+let legacyPublicReleaseRequest = null;
 let activeUpdateDownloads = 0;
 let updateDownloadWindowStartedAt = 0;
 let updateDownloadsInWindow = 0;
@@ -254,7 +265,7 @@ function privacyPage(response) {
      <h2>Pairing and update broker</h2>
      <p>OAuth pairing keeps one-time state, a device-code hash, PKCE data, and token material in process memory for at most ten minutes. A successful authenticated device poll deletes the complete pairing immediately.</p>
      <p>Phone-assisted source entry keeps submitted URLs in volatile memory for at most ten minutes after submission. The URLs are deleted when the authenticated app acknowledges local processing or the session expires. A count-only confirmation can remain for at most another ten minutes.</p>
-     <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app. Private Beta users enter a separately issued tester key; its raw value is stored only in Android Keystore-backed secure storage and sent only to the fixed TetoTV update broker. The broker stores only configured SHA-256 hashes for access checks and never returns tester keys or hashes from its health endpoint.</p>
+     <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. The update proxy caches sanitized release metadata briefly and streams the signed universal APK without persisting it. The server-only GitHub credential is never sent to the app. Signed builds contain a shared, revocable Beta-channel credential and send it only to the fixed TetoTV update broker; it is not displayed or stored as an editable account secret. Because it is present in the public APK, it is not a confidentiality boundary. The broker stores only configured SHA-256 hashes for access checks and never returns keys or hashes from its health endpoint. A narrow anonymous migration endpoint lets legacy 1.11.x clients download only the latest signed APK from the public 1.x repository.</p>
      <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
 
      <h2>Anonymous live activity count</h2>
@@ -1436,6 +1447,14 @@ function githubRepositoryApiPath() {
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
 }
 
+function repositoryApiPath(repository) {
+  if (!repositoryPattern.test(repository)) {
+    throw new UpdateProxyError(503, "updates_not_configured");
+  }
+  const [owner, name] = repository.split("/");
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+}
+
 function githubHeaders({ accept = "application/vnd.github+json", token = true } = {}) {
   return {
     Accept: accept,
@@ -1515,6 +1534,143 @@ async function selfTestGithubFetch(url, options = {}) {
     authorization,
   });
   const repositoryPath = githubRepositoryApiPath();
+  const publicRepositoryPath = repositoryApiPath(legacyPublicReleaseRepository);
+  if (
+    parsed.origin === "https://api.github.com" &&
+    parsed.pathname === `${publicRepositoryPath}/releases/latest`
+  ) {
+    return new Response(
+      JSON.stringify({
+        id: 117,
+        tag_name: "v1.0.0",
+        name: "TetoTV 1.0.0",
+        body: "Public migration release notes",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-08-13T00:00:00Z",
+        assets: [
+          {
+            id: 117001,
+            name: "TetoTV-v1.0.0-universal.apk",
+            state: "uploaded",
+            size: selfTestApk.length,
+            content_type: "application/vnd.android.package-archive",
+            digest:
+              "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+  if (
+    parsed.origin === "https://api.github.com" &&
+    parsed.pathname === `${repositoryPath}/releases` &&
+    parsed.searchParams.get("per_page") === "20" &&
+    parsed.searchParams.get("page") === "1"
+  ) {
+    return new Response(
+      JSON.stringify([
+        {
+          id: 116,
+          tag_name: "v2.0.1",
+          name: "TetoTV 2.0.1 Beta",
+          body: "Current private release notes",
+          draft: false,
+          prerelease: false,
+          published_at: "2026-08-13T02:00:00Z",
+          assets: [
+            {
+              id: 116001,
+              name: "TetoTV-v2.0.1-universal.apk",
+              state: "uploaded",
+              size: selfTestApk.length,
+              content_type: "application/octet-stream",
+              digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+          ],
+        },
+        {
+          id: 115,
+          tag_name: "v2.0.0",
+          name: "TetoTV 2.0.0 Beta",
+          body: "Previous private release notes",
+          draft: false,
+          prerelease: false,
+          published_at: "2026-08-13T01:00:00Z",
+          assets: [
+            {
+              id: 115001,
+              name: "TetoTV-v2.0.0-universal.apk",
+              state: "uploaded",
+              size: selfTestApk.length,
+              content_type: "application/octet-stream",
+              digest:
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            },
+          ],
+        },
+        {
+          id: 114,
+          tag_name: "v1.11.33",
+          name: "Legacy Beta",
+          body: "Must not be exposed in the v2 history.",
+          draft: false,
+          prerelease: false,
+          published_at: "2026-08-12T01:00:00Z",
+          assets: [],
+        },
+      ]),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+  if (
+    parsed.origin === "https://api.github.com" &&
+    (parsed.pathname === `${repositoryPath}/releases/tags/v2.0.0` ||
+      parsed.pathname === `${repositoryPath}/releases/tags/v2.0.1`)
+  ) {
+    const previous = parsed.pathname.endsWith("/v2.0.0");
+    return new Response(
+      JSON.stringify({
+        id: previous ? 115 : 116,
+        tag_name: previous ? "v2.0.0" : "v2.0.1",
+        name: previous ? "TetoTV 2.0.0 Beta" : "TetoTV 2.0.1 Beta",
+        body: previous
+          ? "Previous private release notes"
+          : "Current private release notes",
+        draft: false,
+        prerelease: false,
+        published_at: previous
+          ? "2026-08-13T01:00:00Z"
+          : "2026-08-13T02:00:00Z",
+        assets: [
+          {
+            id: previous ? 115001 : 116001,
+            name: previous
+              ? "TetoTV-v2.0.0-universal.apk"
+              : "TetoTV-v2.0.1-universal.apk",
+            state: "uploaded",
+            size: selfTestApk.length,
+            content_type: "application/octet-stream",
+            digest: previous
+              ? "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              : "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
   if (
     parsed.origin === "https://api.github.com" &&
     parsed.pathname === `${repositoryPath}/releases/latest`
@@ -1522,8 +1678,8 @@ async function selfTestGithubFetch(url, options = {}) {
     return new Response(
       JSON.stringify({
         id: 116,
-        tag_name: "v1.11.6",
-        name: "TetoTV v1.11.6",
+        tag_name: "v2.0.1",
+        name: "TetoTV 2.0.1 Beta",
         body: "Private release notes",
         draft: false,
         prerelease: false,
@@ -1531,7 +1687,7 @@ async function selfTestGithubFetch(url, options = {}) {
         assets: [
           {
             id: 116001,
-            name: "TetoTV-v1.11.6-universal.apk",
+            name: "TetoTV-v2.0.1-universal.apk",
             state: "uploaded",
             size: selfTestApk.length,
             content_type: "application/octet-stream",
@@ -1548,18 +1704,36 @@ async function selfTestGithubFetch(url, options = {}) {
   }
   if (
     parsed.origin === "https://api.github.com" &&
-    parsed.pathname === `${repositoryPath}/releases/assets/116001`
+    (parsed.pathname === `${repositoryPath}/releases/assets/116001` ||
+      parsed.pathname === `${repositoryPath}/releases/assets/115001`)
   ) {
     return new Response(null, {
       status: 302,
       headers: {
-        Location: "https://release-assets.githubusercontent.com/tetotv/latest.apk?signature=hidden",
+        Location:
+          parsed.pathname.endsWith("/115001")
+            ? "https://release-assets.githubusercontent.com/tetotv/previous.apk?signature=hidden"
+            : "https://release-assets.githubusercontent.com/tetotv/latest.apk?signature=hidden",
+      },
+    });
+  }
+  if (
+    parsed.origin === "https://api.github.com" &&
+    parsed.pathname === `${publicRepositoryPath}/releases/assets/117001`
+  ) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location:
+          "https://release-assets.githubusercontent.com/tetotv/public.apk?signature=hidden",
       },
     });
   }
   if (
     parsed.origin === "https://release-assets.githubusercontent.com" &&
-    parsed.pathname === "/tetotv/latest.apk"
+    (parsed.pathname === "/tetotv/latest.apk" ||
+      parsed.pathname === "/tetotv/previous.apk" ||
+      parsed.pathname === "/tetotv/public.apk")
   ) {
     const requestedRange = new Headers(options.headers).get("range");
     const parsedRange = requestedRange
@@ -1589,7 +1763,7 @@ async function selfTestGithubFetch(url, options = {}) {
 
 const githubFetch = selfTest ? selfTestGithubFetch : fetch;
 
-async function requestGithubRelease(path) {
+async function requestGithubJson(path) {
   if (!updateProxyConfigured()) {
     throw new UpdateProxyError(503, "updates_not_configured");
   }
@@ -1618,7 +1792,87 @@ async function requestGithubRelease(path) {
   } catch {
     throw new UpdateProxyError(502, "invalid_release_metadata");
   }
-  return sanitizeLatestRelease(body);
+  return body;
+}
+
+async function requestGithubRelease(path) {
+  return sanitizeLatestRelease(await requestGithubJson(path));
+}
+
+async function requestGithubReleaseHistory() {
+  const body = await requestGithubJson("/releases?per_page=20&page=1");
+  if (!Array.isArray(body)) {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  const releases = body
+    .filter(
+      (value) =>
+        value &&
+        typeof value === "object" &&
+        !value.draft &&
+        !value.prerelease &&
+        /^v2\.\d+\.\d+$/.test(String(value.tag_name || "")),
+    )
+    .map(sanitizeLatestRelease);
+  if (releases.length === 0) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  return releases;
+}
+
+async function requestLegacyPublicRelease() {
+  let result;
+  try {
+    result = await githubFetch(
+      `https://api.github.com${repositoryApiPath(legacyPublicReleaseRepository)}` +
+        "/releases/latest",
+      {
+        headers: githubHeaders({ token: false }),
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+  } catch {
+    throw new UpdateProxyError(502, "update_service_unavailable");
+  }
+  if (result.status === 404) {
+    throw new UpdateProxyError(404, "update_not_found");
+  }
+  if (!result.ok) {
+    throw new UpdateProxyError(502, "update_service_unavailable");
+  }
+  let body;
+  try {
+    body = await result.json();
+  } catch {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  const release = sanitizeLatestRelease(body);
+  if (!/^1\.\d+\.\d+$/.test(release.version)) {
+    throw new UpdateProxyError(502, "invalid_release_metadata");
+  }
+  return release;
+}
+
+async function fetchLegacyPublicRelease() {
+  const now = Date.now();
+  if (cachedLegacyPublicRelease?.expiresAt > now) {
+    return cachedLegacyPublicRelease.release;
+  }
+  if (legacyPublicReleaseRequest) return legacyPublicReleaseRequest;
+  legacyPublicReleaseRequest = (async () => {
+    const release = await requestLegacyPublicRelease();
+    cachedLegacyPublicRelease = {
+      release,
+      expiresAt: Date.now() + releaseMetadataTtlMs,
+    };
+    return release;
+  })();
+  try {
+    return await legacyPublicReleaseRequest;
+  } finally {
+    legacyPublicReleaseRequest = null;
+  }
 }
 
 function cacheVersionedRelease(release, now = Date.now()) {
@@ -1657,20 +1911,45 @@ async function fetchLatestRelease() {
   }
 }
 
+async function fetchReleaseHistory() {
+  const now = Date.now();
+  if (cachedReleaseHistory?.expiresAt > now) {
+    return cachedReleaseHistory.releases;
+  }
+  if (releaseHistoryRequest) return releaseHistoryRequest;
+  releaseHistoryRequest = (async () => {
+    const releases = await requestGithubReleaseHistory();
+    const receivedAt = Date.now();
+    for (const release of releases) cacheVersionedRelease(release, receivedAt);
+    cachedReleaseHistory = {
+      releases,
+      expiresAt: receivedAt + releaseMetadataTtlMs,
+    };
+    return releases;
+  })();
+  try {
+    return await releaseHistoryRequest;
+  } finally {
+    releaseHistoryRequest = null;
+  }
+}
+
 async function fetchReleaseByTag(tagName) {
-  if (!releaseTagPattern.test(tagName)) {
+  if (!/^v2\.\d+\.\d+$/.test(tagName)) {
     throw new UpdateProxyError(404, "update_not_found");
   }
   const now = Date.now();
   const cached = cachedVersionedReleases.get(tagName);
   if (cached?.expiresAt > now) return cached.release;
   if (cached) cachedVersionedReleases.delete(tagName);
-  const latest = await fetchLatestRelease();
-  if (latest.tagName !== tagName) {
+  const release = await requestGithubRelease(
+    `/releases/tags/${encodeURIComponent(tagName)}`,
+  );
+  if (release.tagName !== tagName) {
     throw new UpdateProxyError(404, "update_not_found");
   }
-  cacheVersionedRelease(latest);
-  return latest;
+  cacheVersionedRelease(release);
+  return release;
 }
 
 function publicReleaseMetadata(release) {
@@ -1692,9 +1971,41 @@ function publicReleaseMetadata(release) {
   };
 }
 
+function legacyPublicReleaseMetadata(release) {
+  return {
+    version: legacyPublicAliasVersion,
+    tag_name: legacyPublicAliasTag,
+    name: "TetoTV Public migration",
+    release_notes:
+      "One-time migration from legacy TetoTV 1.11.x to the Public release channel.",
+    published_at: release.publishedAt,
+    asset: {
+      name: `TetoTV-${legacyPublicAliasTag}-universal.apk`,
+      size: release.asset.size,
+      content_type: release.asset.contentType,
+      download_url:
+        `${publicBaseUrl}/v1/app-updates/releases/${legacyPublicAliasTag}` +
+        `/assets/${release.asset.id}/universal.apk`,
+      ...(release.asset.digest ? { digest: release.asset.digest } : {}),
+    },
+  };
+}
+
 async function latestReleaseMetadata(response) {
   const release = await fetchLatestRelease();
   return json(response, 200, publicReleaseMetadata(release));
+}
+
+async function releaseHistoryMetadata(response) {
+  const releases = await fetchReleaseHistory();
+  return json(response, 200, {
+    releases: releases.map(publicReleaseMetadata),
+  });
+}
+
+async function legacyPublicReleaseMetadataResponse(response) {
+  const release = await fetchLegacyPublicRelease();
+  return json(response, 200, legacyPublicReleaseMetadata(release));
 }
 
 function parseSingleRange(value, size) {
@@ -1734,9 +2045,15 @@ function allowedGithubDownloadUrl(url) {
   );
 }
 
-async function fetchGithubAsset(release, range, signal) {
+async function fetchGithubAsset(
+  release,
+  range,
+  signal,
+  repository = githubReleaseRepository,
+  includeToken = true,
+) {
   let currentUrl = new URL(
-    `https://api.github.com${githubRepositoryApiPath()}/releases/assets/${release.asset.id}`,
+    `https://api.github.com${repositoryApiPath(repository)}/releases/assets/${release.asset.id}`,
   );
   let firstRequest = true;
   for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
@@ -1746,7 +2063,7 @@ async function fetchGithubAsset(release, range, signal) {
         headers: {
           ...githubHeaders({
             accept: "application/octet-stream",
-            token: firstRequest,
+            token: firstRequest && includeToken,
           }),
           ...(range ? { Range: range.header } : {}),
         },
@@ -1804,8 +2121,16 @@ function apkHeaders(release, range = null) {
   };
 }
 
-async function downloadRelease(request, response, tagName, assetId) {
-  const release = await fetchReleaseByTag(tagName);
+async function downloadRelease(
+  request,
+  response,
+  tagName,
+  assetId,
+  { legacyPublic = false } = {},
+) {
+  const release = legacyPublic
+    ? await fetchLegacyPublicRelease()
+    : await fetchReleaseByTag(tagName);
   if (release.asset.id !== assetId) {
     throw new UpdateProxyError(404, "update_not_found");
   }
@@ -1843,6 +2168,8 @@ async function downloadRelease(request, response, tagName, assetId) {
       release,
       range,
       abortController.signal,
+      legacyPublic ? legacyPublicReleaseRepository : githubReleaseRepository,
+      !legacyPublic,
     );
     const contentType = String(upstream.headers.get("content-type") || "")
       .split(";", 1)[0]
@@ -2018,7 +2345,6 @@ const server = createServer(
       request.method === "GET" &&
       url.pathname === "/v1/app-updates/latest"
     ) {
-      if (!requireBetaUpdateAccess(request, response)) return;
       if (rateLimited(request, 60, "update-metadata")) {
         return json(
           response,
@@ -2027,7 +2353,26 @@ const server = createServer(
           { "Retry-After": "60" },
         );
       }
+      if (!request.headers.authorization) {
+        return await legacyPublicReleaseMetadataResponse(response);
+      }
+      if (!requireBetaUpdateAccess(request, response)) return;
       return await latestReleaseMetadata(response);
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/v1/app-updates/releases"
+    ) {
+      if (!requireBetaUpdateAccess(request, response)) return;
+      if (rateLimited(request, 30, "update-history")) {
+        return json(
+          response,
+          429,
+          { error: "rate_limited" },
+          { "Retry-After": "60" },
+        );
+      }
+      return await releaseHistoryMetadata(response);
     }
     const updateDownloadMatch = url.pathname.match(
       /^\/v1\/app-updates\/releases\/(v\d+\.\d+\.\d+)\/assets\/([1-9]\d*)\/universal\.apk$/,
@@ -2036,6 +2381,64 @@ const server = createServer(
       (request.method === "GET" || request.method === "HEAD") &&
       updateDownloadMatch
     ) {
+      const isLegacyPublicRequest =
+        !request.headers.authorization &&
+        updateDownloadMatch[1] === legacyPublicAliasTag;
+      if (isLegacyPublicRequest) {
+        if (
+          request.method === "GET" &&
+          rateLimited(request, 4, "legacy-update-download")
+        ) {
+          return json(
+            response,
+            429,
+            { error: "rate_limited" },
+            { "Retry-After": "60" },
+          );
+        }
+        const legacyRelease = await fetchLegacyPublicRelease();
+        const assetId = Number(updateDownloadMatch[2]);
+        if (legacyRelease.asset.id !== assetId) {
+          return json(response, 404, { error: "update_not_found" });
+        }
+        if (request.method === "GET") {
+          if (globallyRateLimitedUpdateDownload()) {
+            return json(
+              response,
+              429,
+              { error: "rate_limited" },
+              { "Retry-After": "60" },
+            );
+          }
+          if (activeUpdateDownloads >= maxConcurrentUpdateDownloads) {
+            return json(
+              response,
+              503,
+              { error: "update_download_busy" },
+              { "Retry-After": "10" },
+            );
+          }
+          activeUpdateDownloads += 1;
+          try {
+            return await downloadRelease(
+              request,
+              response,
+              legacyPublicAliasTag,
+              assetId,
+              { legacyPublic: true },
+            );
+          } finally {
+            activeUpdateDownloads -= 1;
+          }
+        }
+        return await downloadRelease(
+          request,
+          response,
+          legacyPublicAliasTag,
+          assetId,
+          { legacyPublic: true },
+        );
+      }
       if (!requireBetaUpdateAccess(request, response)) return;
       if (
         request.method === "GET" &&
@@ -2323,6 +2726,25 @@ server.listen(port, async () => {
       const anonymousUpdateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
       );
+      const legacyUpdateMetadata = await anonymousUpdateMetadataResponse.json();
+      const legacyAdvertisedUrl = new URL(
+        legacyUpdateMetadata.asset.download_url,
+      );
+      const localLegacyUpdateUrl =
+        `http://127.0.0.1:${port}${legacyAdvertisedUrl.pathname}`;
+      const legacyUpdateHead = await fetch(localLegacyUpdateUrl, {
+        method: "HEAD",
+      });
+      const legacyUpdateDownload = await fetch(localLegacyUpdateUrl);
+      const legacyUpdateDownloadBody = Buffer.from(
+        await legacyUpdateDownload.arrayBuffer(),
+      );
+      const legacyUpdateRange = await fetch(localLegacyUpdateUrl, {
+        headers: { Range: "bytes=16-31" },
+      });
+      const legacyUpdateRangeBody = Buffer.from(
+        await legacyUpdateRange.arrayBuffer(),
+      );
       const invalidUpdateMetadataResponse = await fetch(
         `http://127.0.0.1:${port}/v1/app-updates/latest`,
         { headers: { Authorization: `Beta ${"C".repeat(43)}` } },
@@ -2346,6 +2768,11 @@ server.listen(port, async () => {
         { headers: betaAuthorization },
       );
       const updateMetadata = await updateMetadataResponse.json();
+      const updateHistoryResponse = await fetch(
+        `http://127.0.0.1:${port}/v1/app-updates/releases`,
+        { headers: betaAuthorization },
+      );
+      const updateHistory = await updateHistoryResponse.json();
       const advertisedUpdateUrl = new URL(updateMetadata.asset.download_url);
       const localUpdateUrl =
         `http://127.0.0.1:${port}${advertisedUpdateUrl.pathname}`;
@@ -2389,6 +2816,22 @@ server.listen(port, async () => {
         { headers: betaAuthorization },
       );
       const wrongAssetBody = await wrongAssetDownload.text();
+      const previousUpdateUrl = new URL(
+        updateHistory.releases?.[1]?.asset?.download_url || "https://invalid/",
+      );
+      cachedVersionedReleases.clear();
+      const previousUpdateDownload = await fetch(
+        `http://127.0.0.1:${port}${previousUpdateUrl.pathname}`,
+        {
+          headers: {
+            ...betaAuthorization,
+            "X-Forwarded-For": "self-test-beta-history-download",
+          },
+        },
+      );
+      const previousUpdateDownloadBody = Buffer.from(
+        await previousUpdateDownload.arrayBuffer(),
+      );
       const pairing = await fetch(
         `http://127.0.0.1:${port}/v1/anilist/pairings`,
         { method: "POST" },
@@ -2817,7 +3260,8 @@ server.listen(port, async () => {
         !privacyBody.includes("Anonymous crash reporting is disabled by default") ||
         !privacyBody.includes("unexpected handled app errors") ||
         !privacyBody.includes("designated crash-report channel") ||
-        !privacyBody.includes("Private Beta users") ||
+        !privacyBody.includes("shared, revocable Beta-channel credential") ||
+        !privacyBody.includes("legacy 1.11.x clients") ||
         !privacyBody.includes("SHA-256 hashes for access checks") ||
         privacyBody.includes(githubReleaseToken) ||
         privacyBody.includes(selfTestBetaAccessKey) ||
@@ -2864,9 +3308,26 @@ server.listen(port, async () => {
         Object.hasOwn(health, "app_updates") ||
         updateProxyConfigured({ token: "" }) !== false ||
         betaUpdatesConfigured({ hashes: [] }) !== false ||
-        anonymousUpdateMetadataResponse.status !== 401 ||
-        anonymousUpdateMetadataResponse.headers.get("www-authenticate") !==
-          'Beta realm="TetoTV Beta Updates"' ||
+        anonymousUpdateMetadataResponse.status !== 200 ||
+        anonymousUpdateMetadataResponse.headers.get("cache-control") !==
+          "no-store" ||
+        legacyUpdateMetadata.version !== legacyPublicAliasVersion ||
+        legacyUpdateMetadata.tag_name !== legacyPublicAliasTag ||
+        legacyUpdateMetadata.asset?.name !==
+          `TetoTV-${legacyPublicAliasTag}-universal.apk` ||
+        legacyUpdateMetadata.asset?.download_url !==
+          `https://auth.example.com/v1/app-updates/releases/${legacyPublicAliasTag}/assets/117001/universal.apk` ||
+        legacyAdvertisedUrl.search ||
+        legacyAdvertisedUrl.hash ||
+        legacyUpdateHead.status !== 200 ||
+        legacyUpdateHead.headers.get("content-length") !==
+          String(selfTestApk.length) ||
+        legacyUpdateDownload.status !== 200 ||
+        legacyUpdateDownloadBody.length !== selfTestApk.length ||
+        legacyUpdateRange.status !== 206 ||
+        legacyUpdateRange.headers.get("content-range") !==
+          `bytes 16-31/${selfTestApk.length}` ||
+        legacyUpdateRangeBody.length !== 16 ||
         invalidUpdateMetadataResponse.status !== 401 ||
         betaAuthRateResponses.slice(0, 8).some(
           (response) => response.status !== 401,
@@ -2876,11 +3337,23 @@ server.listen(port, async () => {
         updateMetadataResponse.headers.get("cache-control") !== "no-store" ||
         updateMetadataResponse.headers.get("strict-transport-security") !==
           "max-age=31536000" ||
-        updateMetadata.version !== "1.11.6" ||
-        updateMetadata.tag_name !== "v1.11.6" ||
-        updateMetadata.asset?.name !== "TetoTV-v1.11.6-universal.apk" ||
+        updateMetadata.version !== "2.0.1" ||
+        updateMetadata.tag_name !== "v2.0.1" ||
+        updateMetadata.asset?.name !== "TetoTV-v2.0.1-universal.apk" ||
         updateMetadata.asset?.download_url !==
-          "https://auth.example.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk" ||
+          "https://auth.example.com/v1/app-updates/releases/v2.0.1/assets/116001/universal.apk" ||
+        updateHistoryResponse.status !== 200 ||
+        !Array.isArray(updateHistory.releases) ||
+        updateHistory.releases.length !== 2 ||
+        updateHistory.releases[0]?.version !== "2.0.1" ||
+        updateHistory.releases[1]?.version !== "2.0.0" ||
+        updateHistory.releases.some(
+          (release) => !/^2\.\d+\.\d+$/.test(String(release.version || "")),
+        ) ||
+        previousUpdateUrl.search ||
+        previousUpdateUrl.hash ||
+        previousUpdateDownload.status !== 200 ||
+        previousUpdateDownloadBody.length !== selfTestApk.length ||
         advertisedUpdateUrl.search ||
         advertisedUpdateUrl.hash ||
         JSON.stringify(updateMetadata).includes(githubReleaseToken) ||
@@ -2914,6 +3387,13 @@ server.listen(port, async () => {
             entry.hostname === "api.github.com" &&
             entry.pathname.endsWith("/releases/latest") &&
             entry.authorization === `Bearer ${githubReleaseToken}`,
+        ) ||
+        !selfTestGithubRequests.some(
+          (entry) =>
+            entry.hostname === "api.github.com" &&
+            entry.pathname ===
+              `${repositoryApiPath(legacyPublicReleaseRepository)}/releases/latest` &&
+            entry.authorization === null,
         ) ||
         !selfTestGithubRequests.some(
           (entry) =>

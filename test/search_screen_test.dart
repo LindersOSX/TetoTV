@@ -21,6 +21,13 @@ import 'package:go_router/go_router.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    // These tests exercise the optional app-owned keyboard explicitly. Fresh
+    // production installs now prefer the Android/Fire OS device keyboard.
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+  });
 
   testWidgets('a stale search cannot replace the latest results', (
     tester,
@@ -114,6 +121,7 @@ void main() {
         child: const MaterialApp(home: SearchScreen()),
       ),
     );
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byType(TvTextInput));
     await tester.pumpAndSettle();
@@ -164,6 +172,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byType(TvTextInput));
       await tester.pumpAndSettle();

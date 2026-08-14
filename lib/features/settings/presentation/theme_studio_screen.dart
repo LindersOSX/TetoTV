@@ -687,6 +687,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
   late Color _color;
   late final TextEditingController _hexController;
   late final FocusNode _hexFocusNode;
+  bool _showHexEntry = false;
   String? _hexError;
 
   @override
@@ -717,6 +718,26 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
       _hexController.text = formatOpaqueHexColor(_color);
       _hexError = null;
     });
+  }
+
+  void _setColor(Color color) {
+    setState(() {
+      _color = color;
+      _hexController.text = formatOpaqueHexColor(color);
+      _hexError = null;
+    });
+  }
+
+  void _toggleHexEntry() {
+    setState(() {
+      _showHexEntry = !_showHexEntry;
+      _hexError = null;
+    });
+    if (_showHexEntry) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _hexFocusNode.requestFocus();
+      });
+    }
   }
 
   void _applyHex(String value) {
@@ -757,8 +778,13 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
               backgroundColor: palette.surface,
               insetPadding: const EdgeInsets.all(20),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 620),
-                child: Padding(
+                constraints: BoxConstraints(
+                  maxWidth: 720,
+                  maxHeight: (MediaQuery.sizeOf(context).height - 40)
+                      .clamp(240, 760)
+                      .toDouble(),
+                ),
+                child: SingleChildScrollView(
                   padding: const EdgeInsets.all(22),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -770,8 +796,8 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Adjust RGB with a remote, controller, mouse, or enter '
-                        'an exact hex color.',
+                        'Choose a built-in color with the D-pad, then use RGB '
+                        'for fine adjustments. Exact hex entry is optional.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
@@ -793,29 +819,60 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                           ),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: TextField(
-                              key: const ValueKey('theme-editor-hex'),
-                              controller: _hexController,
-                              focusNode: _hexFocusNode,
-                              autofocus: true,
-                              maxLength: 7,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(
-                                  RegExp(r'[#0-9a-fA-F]'),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Selected color',
+                                  style: TextStyle(
+                                    color: palette.mutedText,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  formatOpaqueHexColor(_color),
+                                  key: const ValueKey(
+                                    'theme-editor-selected-hex',
+                                  ),
+                                  style: TextStyle(
+                                    color: palette.primaryText,
+                                    fontFamily: 'monospace',
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w800,
+                                  ),
                                 ),
                               ],
-                              textCapitalization: TextCapitalization.characters,
-                              decoration: InputDecoration(
-                                labelText: 'Hex color',
-                                counterText: '',
-                                errorText: _hexError,
-                              ),
-                              onSubmitted: _applyHex,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Built-in colors',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 10),
+                      _BuiltInColorPicker(color: _color, onChanged: _setColor),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Fine adjustments',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          Text(
+                            'Use ← / → on each channel',
+                            style: TextStyle(
+                              color: palette.mutedText,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
                       _ColorChannelSlider(
                         label: 'Red',
                         color: const Color(0xFFFF5A67),
@@ -837,6 +894,50 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                         onChanged: (value) =>
                             _setChannel(AppThemeColorChannel.blue, value),
                       ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          key: const ValueKey('theme-editor-toggle-hex'),
+                          onPressed: _toggleHexEntry,
+                          icon: Icon(
+                            _showHexEntry
+                                ? Icons.expand_less_rounded
+                                : Icons.tag_rounded,
+                          ),
+                          label: Text(
+                            _showHexEntry
+                                ? 'Hide exact hex'
+                                : 'Enter exact hex',
+                          ),
+                        ),
+                      ),
+                      if (_showHexEntry) ...[
+                        const SizedBox(height: 10),
+                        TextField(
+                          key: const ValueKey('theme-editor-hex'),
+                          controller: _hexController,
+                          focusNode: _hexFocusNode,
+                          maxLength: 7,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[#0-9a-fA-F]'),
+                            ),
+                          ],
+                          textCapitalization: TextCapitalization.characters,
+                          decoration: InputDecoration(
+                            labelText: 'Exact hex color',
+                            counterText: '',
+                            errorText: _hexError,
+                            helperText: 'Example: #E52B50',
+                          ),
+                          onChanged: (value) {
+                            final parsed = parseOpaqueHexColor(value);
+                            if (parsed != null) _setColor(parsed);
+                          },
+                          onSubmitted: _applyHex,
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       Wrap(
                         spacing: 10,
@@ -850,14 +951,18 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                           FilledButton(
                             key: const ValueKey('theme-editor-use-color'),
                             onPressed: () {
-                              final parsed = parseOpaqueHexColor(
-                                _hexController.text,
-                              );
-                              if (parsed == null) {
-                                _applyHex(_hexController.text);
-                                return;
+                              if (_showHexEntry) {
+                                final parsed = parseOpaqueHexColor(
+                                  _hexController.text,
+                                );
+                                if (parsed == null) {
+                                  _applyHex(_hexController.text);
+                                  return;
+                                }
+                                Navigator.pop(context, parsed);
+                              } else {
+                                Navigator.pop(context, _color);
                               }
-                              Navigator.pop(context, parsed);
                             },
                             child: const Text('Use color'),
                           ),
@@ -870,6 +975,122 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _BuiltInColorPicker extends StatelessWidget {
+  const _BuiltInColorPicker({required this.color, required this.onChanged});
+
+  final Color color;
+  final ValueChanged<Color> onChanged;
+
+  static const colors = <(String, Color)>[
+    ('Black', Color(0xFF000000)),
+    ('Charcoal', Color(0xFF101010)),
+    ('Graphite', Color(0xFF242424)),
+    ('Slate', Color(0xFF607D8B)),
+    ('Silver', Color(0xFFB0BEC5)),
+    ('White', Color(0xFFFFFFFF)),
+    ('Teto red', Color(0xFFE52B50)),
+    ('Crimson', Color(0xFFFF1744)),
+    ('Coral', Color(0xFFFF5A67)),
+    ('Orange', Color(0xFFFF7A00)),
+    ('Amber', Color(0xFFFFC107)),
+    ('Yellow', Color(0xFFFFEB3B)),
+    ('Lime', Color(0xFF8BC34A)),
+    ('Green', Color(0xFF2ECC71)),
+    ('Mint', Color(0xFF65D58A)),
+    ('Teal', Color(0xFF00BFA5)),
+    ('Cyan', Color(0xFF00BCD4)),
+    ('Sky', Color(0xFF29B6F6)),
+    ('Blue', Color(0xFF2979FF)),
+    ('Indigo', Color(0xFF536DFE)),
+    ('Violet', Color(0xFF7C4DFF)),
+    ('Purple', Color(0xFFAB47BC)),
+    ('Magenta', Color(0xFFEC407A)),
+    ('Rose', Color(0xFFFF5A8A)),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final hasBuiltInMatch = colors.any((choice) => choice.$2 == color);
+    final choices = <(String, Color)>[
+      if (!hasBuiltInMatch) ('Current custom color', color),
+      ...colors,
+    ];
+    return Semantics(
+      container: true,
+      label: 'Built-in remote color picker',
+      child: Wrap(
+        key: const ValueKey('theme-editor-built-in-colors'),
+        spacing: 9,
+        runSpacing: 9,
+        children: [
+          for (var index = 0; index < choices.length; index++)
+            _BuiltInColorSwatch(
+              label: choices[index].$1,
+              color: choices[index].$2,
+              selected: choices[index].$2 == color,
+              autofocus: choices[index].$2 == color,
+              onPressed: () => onChanged(choices[index].$2),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BuiltInColorSwatch extends StatelessWidget {
+  const _BuiltInColorSwatch({
+    required this.label,
+    required this.color,
+    required this.selected,
+    required this.autofocus,
+    required this.onPressed,
+  });
+
+  final String label;
+  final Color color;
+  final bool selected;
+  final bool autofocus;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final hex = formatOpaqueHexColor(color).substring(1);
+    return Tooltip(
+      message: label,
+      child: TvFocusable(
+        key: ValueKey('theme-editor-preset-$hex'),
+        autofocus: autofocus,
+        onPressed: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        focusScale: 1.08,
+        child: Container(
+          width: 48,
+          height: 48,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? palette.focusRing
+                  : contrastForeground(color).withValues(alpha: .32),
+              width: selected ? 3 : 1,
+            ),
+          ),
+          child: selected
+              ? Icon(
+                  Icons.check_rounded,
+                  color: contrastForeground(color),
+                  size: 22,
+                )
+              : null,
+        ),
       ),
     );
   }

@@ -4,13 +4,12 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
-import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -164,7 +163,6 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final sort = ref.watch(myListSortProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
-    final accounts = ref.watch(trackingAccountsControllerProvider);
     return Scaffold(
       backgroundColor: context.appPalette == AppThemePalette.defaults
           ? Colors.black
@@ -174,11 +172,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _MyListHeader(preferences: preferences),
-            if (accounts.profiles.isNotEmpty) ...[
-              _TrackingProfileStrip(profiles: accounts.profiles),
-              const SizedBox(height: 12),
-            ],
+            MainNavigationBar(
+              active: MainNavigationDestination.myList,
+              preferences: preferences,
+              autofocusActive: true,
+            ),
             LayoutBuilder(
               builder: (context, constraints) {
                 final tabs = Row(
@@ -341,327 +339,6 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TrackingProfileStrip extends StatelessWidget {
-  const _TrackingProfileStrip({required this.profiles});
-
-  final Map<TrackingProvider, TrackingAccountProfile> profiles;
-
-  @override
-  Widget build(BuildContext context) {
-    final ordered = [
-      for (final provider in TrackingProvider.values) ?profiles[provider],
-    ];
-    return Semantics(
-      container: true,
-      label: 'Connected anime tracker profiles',
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = ordered.length == 1
-              ? constraints.maxWidth.clamp(0, 560).toDouble()
-              : ((constraints.maxWidth - 10) / 2).clamp(280, 560).toDouble();
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (var index = 0; index < ordered.length; index++) ...[
-                  SizedBox(
-                    width: width,
-                    child: _TrackingProfileCard(profile: ordered[index]),
-                  ),
-                  if (index != ordered.length - 1) const SizedBox(width: 10),
-                ],
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _TrackingProfileCard extends StatelessWidget {
-  const _TrackingProfileCard({required this.profile});
-
-  final TrackingAccountProfile profile;
-
-  @override
-  Widget build(BuildContext context) {
-    final stats = <Widget>[
-      if (profile.animeCount case final count?)
-        _ProfileStat(
-          icon: Icons.video_collection_rounded,
-          label: '$count titles',
-        ),
-      if (profile.episodesWatched case final episodes?)
-        _ProfileStat(
-          icon: Icons.play_circle_rounded,
-          label: '$episodes episodes',
-        ),
-      if (profile.minutesWatched case final minutes?)
-        _ProfileStat(
-          icon: Icons.schedule_rounded,
-          label: minutes >= 60
-              ? '${(minutes / 60).toStringAsFixed(minutes >= 600 ? 0 : 1)}h watched'
-              : '${minutes}m watched',
-        ),
-      if (profile.meanScore case final score?)
-        _ProfileStat(
-          icon: Icons.star_rounded,
-          label:
-              'Mean ${score.toStringAsFixed(1)}'
-              '/${profile.provider == TrackingProvider.anilist ? 100 : 10}',
-        ),
-    ];
-    return Container(
-      key: ValueKey('my-list-profile-${profile.provider.slug}'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: context.appPalette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: .09)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 54,
-            height: 54,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: context.appPalette.accentBright.withValues(alpha: .65),
-                width: 2,
-              ),
-            ),
-            child: NetworkArtwork(
-              url: profile.avatarUrl,
-              cacheWidth: 108,
-              icon: Icons.person_rounded,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        profile.username,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w900),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: context.appPalette.accent.withValues(alpha: .18),
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                      child: Text(
-                        profile.provider.displayName,
-                        style: TextStyle(
-                          color: context.appPalette.accentBright,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (stats.isNotEmpty) ...[
-                  const SizedBox(height: 7),
-                  Wrap(spacing: 11, runSpacing: 5, children: stats),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileStat extends StatelessWidget {
-  const _ProfileStat({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: context.appPalette.mutedText),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(
-            color: context.appPalette.mutedText,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _MyListHeader extends StatelessWidget {
-  const _MyListHeader({required this.preferences});
-
-  final SettingsPreferences preferences;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = context.isCompactWidth;
-    return SizedBox(
-      height: compact ? 62 : 70,
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(9)),
-            child: Image.asset(
-              'assets/branding/tetotv_icon.png',
-              cacheWidth: 72,
-              cacheHeight: 72,
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.low,
-            ),
-          ),
-          SizedBox(width: compact ? 7 : 10),
-          if (!compact || MediaQuery.sizeOf(context).width >= 420)
-            Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
-          SizedBox(width: compact ? 4 : 14),
-          if (preferences.showSearch) ...[
-            _NavButton(
-              icon: Icons.search_rounded,
-              label: 'Search',
-              compact: true,
-              onPressed: () => context.push('/search'),
-            ),
-            SizedBox(width: compact ? 2 : 6),
-          ],
-          _NavButton(
-            icon: Icons.home_rounded,
-            label: 'Home',
-            compact: true,
-            onPressed: () => context.go('/'),
-          ),
-          SizedBox(width: compact ? 2 : 6),
-          _NavButton(
-            icon: Icons.video_library_rounded,
-            label: 'My List',
-            compact: compact,
-            active: true,
-            autofocus: true,
-            onPressed: () {},
-          ),
-          if (preferences.showDiscover) ...[
-            SizedBox(width: compact ? 2 : 6),
-            _NavButton(
-              icon: Icons.explore_rounded,
-              label: 'Discover',
-              compact: true,
-              onPressed: () => context.push('/discover'),
-            ),
-          ],
-          if (preferences.showCalendar) ...[
-            SizedBox(width: compact ? 2 : 6),
-            _NavButton(
-              icon: Icons.calendar_month_rounded,
-              label: 'Calendar',
-              compact: true,
-              onPressed: () => context.push('/calendar'),
-            ),
-          ],
-          const Spacer(),
-          _NavButton(
-            icon: Icons.settings_rounded,
-            label: 'Settings',
-            compact: compact,
-            onPressed: () => context.push('/settings/accounts'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavButton extends StatelessWidget {
-  const _NavButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.active = false,
-    this.compact = false,
-    this.autofocus = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-  final bool active;
-  final bool compact;
-  final bool autofocus;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      autofocus: autofocus,
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(7),
-      focusScale: 1.02,
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 8 : 11,
-          vertical: 8,
-        ),
-        decoration: BoxDecoration(
-          color: active
-              ? context.appPalette.accent.withValues(alpha: .13)
-              : Colors.transparent,
-          border: Border(
-            bottom: BorderSide(
-              color: active
-                  ? context.appPalette.accentBright
-                  : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: active
-                  ? context.appPalette.accentBright
-                  : context.appPalette.primaryText,
-            ),
-            if (!compact) ...[
-              const SizedBox(width: 6),
-              Text(label, style: Theme.of(context).textTheme.labelLarge),
-            ],
           ],
         ),
       ),

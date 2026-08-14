@@ -8,7 +8,9 @@ import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -140,6 +142,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     final summary = _filterSummary(_filters);
     return Focus(
       onKeyEvent: _handleNavigation,
@@ -152,6 +155,11 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              MainNavigationBar(
+                active: MainNavigationDestination.discover,
+                preferences: preferences,
+              ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   _HeaderButton(

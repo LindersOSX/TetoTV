@@ -142,7 +142,7 @@ void main() {
   });
 
   testWidgets(
-    'ten rapid Home activations reveal the bottom decoration for five seconds',
+    'ten rapid Home activations drop, shake, and hold for ten seconds',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({
         initialSetupCompletedStorageKey: 'true',
@@ -193,7 +193,7 @@ void main() {
         ),
       );
       expect(tester.getSize(region), const Size(1280, 360));
-      expect(tester.getBottomRight(region).dy, 720);
+      expect(tester.getBottomRight(region).dy, lessThan(0));
       expect(
         tester
             .widget<IgnorePointer>(
@@ -203,14 +203,21 @@ void main() {
         isTrue,
       );
 
-      await tester.pump(const Duration(milliseconds: 4999));
+      await tester.pump(const Duration(milliseconds: 850));
+      final impactMotion = tester.widget<FractionalTranslation>(
+        find.byKey(const ValueKey('home.easter-egg-motion')),
+      );
+      expect(impactMotion.translation.dx.abs(), greaterThan(0));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(tester.getBottomRight(region).dy, 720);
+      await tester.pump(const Duration(milliseconds: 8649));
       expect(image, findsOneWidget);
       await tester.pump(const Duration(milliseconds: 1));
       expect(image, findsNothing);
     },
   );
 
-  testWidgets('Android bridge bounds the decoration audio to five seconds', (
+  testWidgets('Android bridge bounds the decoration audio to ten seconds', (
     tester,
   ) async {
     final calls = <MethodCall>[];
@@ -232,7 +239,7 @@ void main() {
       ]);
       expect(
         (calls.first.arguments as Map<Object?, Object?>)['maximumDurationMs'],
-        5000,
+        10000,
       );
     } finally {
       debugDefaultTargetPlatformOverride = null;

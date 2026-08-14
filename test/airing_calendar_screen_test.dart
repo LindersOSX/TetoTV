@@ -73,13 +73,18 @@ void main() {
 
     expect(find.text('Followed anime'), findsOneWidget);
     expect(find.text('Unrelated anime'), findsNothing);
-    final controls = find.byType(TvFocusable);
     final backDetector = find.descendant(
-      of: controls.at(0),
+      of: find.ancestor(
+        of: find.byIcon(Icons.arrow_back_rounded),
+        matching: find.byType(TvFocusable),
+      ),
       matching: find.byType(FocusableActionDetector),
     );
     final refreshDetector = find.descendant(
-      of: controls.at(1),
+      of: find.ancestor(
+        of: find.byIcon(Icons.refresh_rounded),
+        matching: find.byType(TvFocusable),
+      ),
       matching: find.byType(FocusableActionDetector),
     );
     expect(

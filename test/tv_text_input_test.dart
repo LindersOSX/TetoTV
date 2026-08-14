@@ -9,6 +9,9 @@ void main() {
   testWidgets('opens an app-owned keyboard without an EditableText', (
     tester,
   ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
     final controller = TextEditingController();
     addTearDown(controller.dispose);
 
@@ -26,6 +29,7 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Search'));
     await tester.pumpAndSettle();
@@ -44,6 +48,9 @@ void main() {
   });
 
   testWidgets('physical Enter commits the TV keyboard value', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
     final controller = TextEditingController(text: 'Naruto');
     addTearDown(controller.dispose);
     String? submitted;
@@ -61,6 +68,7 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Naruto'));
     await tester.pumpAndSettle();

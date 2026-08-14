@@ -9,7 +9,9 @@ void main() {
   testWidgets('built-in keyboard opens only after explicit Select', (
     tester,
   ) async {
-    FlutterSecureStorage.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
     final controller = TextEditingController();
     final focusNode = FocusNode(debugLabel: 'test.input.navigation');
     addTearDown(controller.dispose);

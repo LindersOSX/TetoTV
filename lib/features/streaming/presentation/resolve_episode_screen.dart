@@ -802,7 +802,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _openWebStream(WebStreamResult stream) async {
-    if (_resolving) return;
+    if (!mounted || _resolving) return;
+    // WidgetRef belongs to this route and becomes invalid as soon as the
+    // resolver is replaced. Capture the long-lived dependencies before the
+    // asynchronous preflight so a late completion never reads a disposed ref.
+    final preflight = ref.read(webStreamPreflightProvider);
+    final addonStore = ref.read(addonStoreProvider);
     setState(() {
       _resolving = true;
       _status = 'Checking ${stream.providerName} stream…';
@@ -810,13 +815,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     });
     late final ValidatedWebStream validated;
     try {
-      validated = await ref.read(webStreamPreflightProvider)(
-        stream.uri,
-        stream.headers,
-      );
-      await ref
-          .read(addonStoreProvider)
-          .recordProviderSuccess(stream.providerId);
+      validated = await preflight(stream.uri, stream.headers);
+      await addonStore.recordProviderSuccess(stream.providerId);
     } catch (error, stackTrace) {
       unawaited(
         recordAnonymousHandledError(
@@ -825,9 +825,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           stack: stackTrace,
         ),
       );
-      await ref
-          .read(addonStoreProvider)
-          .recordProviderFailure(stream.providerId, error);
+      await addonStore.recordProviderFailure(stream.providerId, error);
       await TetoTvDatabase.instance.recordDiagnosticEvent(
         category: 'stream-preflight',
         message: '${stream.providerName}: $error',
@@ -841,6 +839,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       }
       return;
     }
+    if (!mounted) return;
     final release = _releaseForWebStream(stream);
     await _rememberStreamSelection(release);
     if (!mounted) return;

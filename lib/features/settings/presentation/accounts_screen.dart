@@ -104,11 +104,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _checkUpdatesFocus = FocusNode(debugLabel: 'accounts.updates.check');
   final _updateChannelFocus = FocusNode(debugLabel: 'accounts.updates.channel');
-  final _betaAccessFocus = FocusNode(
-    debugLabel: 'accounts.updates.beta-access',
-  );
-  final _betaAccessClearFocus = FocusNode(
-    debugLabel: 'accounts.updates.beta-access-clear',
+  final _releaseHistoryFocus = FocusNode(
+    debugLabel: 'accounts.updates.release-history',
   );
   final _discordFocus = FocusNode(debugLabel: 'accounts.system.discord');
   final _discordQrFocus = FocusNode(debugLabel: 'accounts.system.discord-qr');
@@ -173,8 +170,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _automaticUpdatesFocus.dispose();
     _checkUpdatesFocus.dispose();
     _updateChannelFocus.dispose();
-    _betaAccessFocus.dispose();
-    _betaAccessClearFocus.dispose();
+    _releaseHistoryFocus.dispose();
     _discordFocus.dispose();
     _discordQrFocus.dispose();
     _discordPresenceFocus.dispose();
@@ -192,22 +188,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       node.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _setOrReplaceBetaAccessKey() async {
-    final value = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const TvKeyboardDialog(
-        title: 'Enter private Beta access key',
-        initialValue: '',
-        obscureText: true,
-      ),
-    );
-    if (!mounted || value == null) return;
-    await ref
-        .read(appUpdateControllerProvider.notifier)
-        .setBetaAccessKey(value);
   }
 
   KeyEventResult _handleKey(FocusNode _, KeyEvent event) {
@@ -334,7 +314,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _marketplaceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
+      if (key == LogicalKeyboardKey.arrowDown &&
+          ref.read(appUpdateControllerProvider).developerMode) {
+        target = _localMediaFocus;
+      }
     } else if (current == _localMediaFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _marketplaceFocus;
       // Streaming is the end of this tab. Keep focus here instead of pointing
@@ -433,22 +416,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _updateChannelFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _betaAccessFocus;
-    } else if (current == _betaAccessFocus) {
+      if (key == LogicalKeyboardKey.arrowDown) target = _releaseHistoryFocus;
+    } else if (current == _releaseHistoryFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _updateChannelFocus;
-      if (key == LogicalKeyboardKey.arrowRight &&
-          ref.read(appUpdateControllerProvider).hasBetaAccessKey) {
-        target = _betaAccessClearFocus;
-      }
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
-    } else if (current == _betaAccessClearFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _updateChannelFocus;
-      if (key == LogicalKeyboardKey.arrowLeft) target = _betaAccessFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _discordPresenceFocus;
     } else if (current == _discordPresenceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = ref.read(appUpdateControllerProvider).developerMode
-            ? _betaAccessFocus
+            ? _releaseHistoryFocus
             : _checkUpdatesFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight &&
@@ -909,44 +884,46 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         onMarketplace: () =>
                             context.push('/settings/marketplace'),
                       ),
-                      const SizedBox(height: 8),
-                      _Panel(
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Local media, Jellyfin & Plex',
-                                    style: TextStyle(
-                                      color: context.appPalette.primaryText,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w800,
+                      if (appUpdate.developerMode) ...[
+                        const SizedBox(height: 8),
+                        _Panel(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Local media, Jellyfin & Plex',
+                                      style: TextStyle(
+                                        color: context.appPalette.primaryText,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                      ),
                                     ),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    'Play from USB/internal storage, Jellyfin, or Plex.',
-                                    style: TextStyle(
-                                      color: context.appPalette.mutedText,
-                                      fontSize: 11,
+                                    SizedBox(height: 3),
+                                    Text(
+                                      'Play from USB/internal storage, Jellyfin, or Plex.',
+                                      style: TextStyle(
+                                        color: context.appPalette.mutedText,
+                                        fontSize: 11,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            _TvTextButton(
-                              label: 'Open media',
-                              icon: Icons.video_library_rounded,
-                              focusNode: _localMediaFocus,
-                              onPressed: () =>
-                                  context.push('/settings/local-media'),
-                            ),
-                          ],
+                              const SizedBox(width: 12),
+                              _TvTextButton(
+                                label: 'Open media',
+                                icon: Icons.video_library_rounded,
+                                focusNode: _localMediaFocus,
+                                onPressed: () =>
+                                    context.push('/settings/local-media'),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                      ],
                       const SizedBox(height: 14),
                       const _DebridOnlyPanel(),
                       const SizedBox(height: 10),
@@ -1126,15 +1103,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         _DeveloperUpdatePanel(
                           state: appUpdate,
                           channelFocusNode: _updateChannelFocus,
-                          betaAccessFocusNode: _betaAccessFocus,
-                          betaAccessClearFocusNode: _betaAccessClearFocus,
+                          releaseHistoryFocusNode: _releaseHistoryFocus,
                           onChannelSelected: ref
                               .read(appUpdateControllerProvider.notifier)
                               .setUpdateChannel,
-                          onSetBetaAccessKey: _setOrReplaceBetaAccessKey,
-                          onClearBetaAccessKey: ref
+                          onRefreshHistory: ref
                               .read(appUpdateControllerProvider.notifier)
-                              .clearBetaAccessKey,
+                              .refreshReleaseHistory,
+                          onReleaseSelected: ref
+                              .read(appUpdateControllerProvider.notifier)
+                              .installReleaseFromHistory,
                         ),
                       ],
                       const SizedBox(height: 12),
@@ -2190,20 +2168,18 @@ class _DeveloperUpdatePanel extends StatelessWidget {
   const _DeveloperUpdatePanel({
     required this.state,
     required this.channelFocusNode,
-    required this.betaAccessFocusNode,
-    required this.betaAccessClearFocusNode,
+    required this.releaseHistoryFocusNode,
     required this.onChannelSelected,
-    required this.onSetBetaAccessKey,
-    required this.onClearBetaAccessKey,
+    required this.onRefreshHistory,
+    required this.onReleaseSelected,
   });
 
   final AppUpdateState state;
   final FocusNode channelFocusNode;
-  final FocusNode betaAccessFocusNode;
-  final FocusNode betaAccessClearFocusNode;
+  final FocusNode releaseHistoryFocusNode;
   final ValueChanged<AppUpdateChannel> onChannelSelected;
-  final VoidCallback onSetBetaAccessKey;
-  final VoidCallback onClearBetaAccessKey;
+  final VoidCallback onRefreshHistory;
+  final ValueChanged<AppReleaseInfo> onReleaseSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -2263,63 +2239,51 @@ class _DeveloperUpdatePanel extends StatelessWidget {
           const SizedBox(height: 10),
           Divider(color: _settingsBorderColor(context, .08), height: 1),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Private Beta access',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      state.hasBetaAccessKey
-                          ? 'A tester key is stored securely. Its value is never displayed.'
-                          : 'A tester key is required before the private Beta channel can be selected.',
-                      style: TextStyle(
-                        color: context.appPalette.mutedText,
-                        fontSize: 10,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              _StatusPill(
-                connected: state.hasBetaAccessKey,
-                label: state.hasBetaAccessKey ? 'KEY SAVED' : 'KEY REQUIRED',
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Wrap(
-              spacing: 7,
-              runSpacing: 7,
-              children: [
-                _TvTextButton(
-                  key: const ValueKey('beta-access-set'),
-                  label: state.hasBetaAccessKey
-                      ? 'Replace Beta key'
-                      : 'Set Beta key',
-                  icon: Icons.key_rounded,
-                  focusNode: betaAccessFocusNode,
-                  onPressed: state.isBusy ? null : onSetBetaAccessKey,
-                ),
-                _TvTextButton(
-                  key: const ValueKey('beta-access-clear'),
-                  label: 'Clear Beta key',
-                  icon: Icons.key_off_rounded,
-                  focusNode: betaAccessClearFocusNode,
-                  onPressed: state.isBusy || !state.hasBetaAccessKey
-                      ? null
-                      : onClearBetaAccessKey,
-                ),
+          if (state.releaseHistory.isNotEmpty)
+            _SettingsSelection<AppReleaseInfo>(
+              label: 'Choose a release to install',
+              value: state.releaseHistory.first,
+              focusNode: releaseHistoryFocusNode,
+              options: [
+                for (final release in state.releaseHistory)
+                  _SettingsOption(
+                    value: release,
+                    label: state.updateChannel.versionLabel(release.version),
+                    detail:
+                        normalizeAppVersion(
+                              state.currentVersion,
+                            ).split('+').first ==
+                            release.version
+                        ? 'Currently installed'
+                        : compareAppVersions(
+                                release.version,
+                                state.currentVersion,
+                              ) <
+                              0
+                        ? 'Previous release • compatibility checked before install'
+                        : 'Newer release • compatibility checked before install',
+                  ),
               ],
+              onSelected: onReleaseSelected,
+            )
+          else
+            _TvTextButton(
+              key: const ValueKey('release-history-refresh'),
+              label: state.releaseHistoryLoading
+                  ? 'Loading releases…'
+                  : 'Load release history',
+              icon: Icons.history_rounded,
+              focusNode: releaseHistoryFocusNode,
+              onPressed: state.isBusy || state.releaseHistoryLoading
+                  ? null
+                  : onRefreshHistory,
             ),
+          const SizedBox(height: 7),
+          Text(
+            'Previous versions are available only when their signed APK is '
+            'package-compatible with this installation. Android will reject '
+            'a lower build code, wrong signer, unsupported ABI, or newer SDK requirement.',
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           const SizedBox(height: 10),
           Wrap(

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
@@ -41,22 +42,27 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
 
   Future<void> _setStep(int step) async {
     final next = step.clamp(0, _stepCount - 1);
+    final shouldScan =
+        next == 2 && ref.read(deviceSetupProvider).report == null;
+    final deviceSetup = shouldScan
+        ? ref.read(deviceSetupProvider.notifier)
+        : null;
     setState(() => _step = next);
     await _pages.animateToPage(
       next,
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
     );
-    if (next == 2 && ref.read(deviceSetupProvider).report == null) {
-      unawaited(ref.read(deviceSetupProvider.notifier).scan());
-    }
+    if (!mounted) return;
+    if (shouldScan) unawaited(deviceSetup!.scan());
   }
 
   Future<void> _finish() async {
-    if (ref.read(deviceSetupProvider).report != null) {
-      await ref.read(deviceSetupProvider.notifier).markCompleted();
-    }
-    await ref.read(setupProgressProvider.notifier).complete();
+    final deviceSetup = ref.read(deviceSetupProvider.notifier);
+    final setupProgress = ref.read(setupProgressProvider.notifier);
+    final hasDeviceReport = ref.read(deviceSetupProvider).report != null;
+    if (hasDeviceReport) await deviceSetup.markCompleted();
+    await setupProgress.complete();
     if (!mounted) return;
     if (context.canPop()) {
       context.pop();
@@ -241,6 +247,42 @@ class _CustomizationStep extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          _SetupChoiceRow(
+            label: 'Preferred anime audio',
+            children: [
+              for (final audio in PlaybackAudioPreference.values)
+                _SetupChoice(
+                  label: audio.displayName,
+                  selected: preferences.preferredAudio == audio,
+                  onPressed: () => controller.setPreferredAudio(audio),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _SetupChoiceRow(
+            label: 'Automatic intro and outro skipping',
+            children: [
+              _SetupChoice(
+                label: 'Skip intros',
+                selected: preferences.autoSkipIntros,
+                onPressed: () =>
+                    controller.setAutoSkipIntros(!preferences.autoSkipIntros),
+              ),
+              _SetupChoice(
+                label: 'Skip outros',
+                selected: preferences.autoSkipOutros,
+                onPressed: () =>
+                    controller.setAutoSkipOutros(!preferences.autoSkipOutros),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Automatic skipping only runs when reliable timestamps are available. You can always use the on-screen skip button instead.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
         ],
       ),
