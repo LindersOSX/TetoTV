@@ -1,101 +1,68 @@
-import 'dart:convert';
-import 'dart:io';
+// ignore_for_file: prefer_initializing_formals
 
-import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
+import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 
 class ValidatedWebStream {
   const ValidatedWebStream({
     required this.uri,
     required this.headers,
     required this.contentType,
+    this.subtitleUri,
+    this.subtitleContentType,
+    this.subtitleRejected = false,
+    this.session,
   });
 
   final Uri uri;
   final Map<String, String> headers;
   final String contentType;
+  final Uri? subtitleUri;
+  final String? subtitleContentType;
+  final bool subtitleRejected;
+  final WebPlaybackSession? session;
 }
 
 typedef WebStreamPreflight =
-    Future<ValidatedWebStream> Function(Uri uri, Map<String, String> headers);
+    Future<ValidatedWebStream> Function(
+      Uri uri,
+      Map<String, String> headers, {
+      Uri? subtitleUri,
+    });
 
+/// Prepares an engine-safe, app-owned loopback playback session.
+///
+/// Native engines receive only opaque loopback URLs. The proxy performs public
+/// HTTPS validation, DNS pinning, redirect enforcement, manifest rewriting,
+/// and credential scoping again for every actual upstream request.
 class WebStreamValidator {
-  const WebStreamValidator();
+  const WebStreamValidator({WebPlaybackProxy? proxy}) : _proxy = proxy;
+
+  final WebPlaybackProxy? _proxy;
 
   Future<ValidatedWebStream> validate(
     Uri uri,
-    Map<String, String> headers,
-  ) async {
-    var sanitized = sanitizeWebStreamHeaders(headers);
-    var target = uri;
-    for (var redirect = 0; redirect <= 4; redirect++) {
-      await validatePublicNetworkTarget(target);
-      final client = createPinnedPublicHttpsClient()
-        ..connectionTimeout = const Duration(seconds: 7)
-        ..idleTimeout = const Duration(seconds: 8);
-      try {
-        final request = await client.getUrl(target);
-        request.followRedirects = false;
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-2047');
-        request.headers.set(HttpHeaders.acceptHeader, '*/*');
-        sanitized.forEach(request.headers.set);
-        final response = await request.close().timeout(
-          const Duration(seconds: 10),
+    Map<String, String> headers, {
+    Uri? subtitleUri,
+  }) async {
+    final proxy = _proxy ?? WebPlaybackProxy.instance;
+    final retained = proxy.retainSessionForUri(uri);
+    final session =
+        retained ??
+        await proxy.prepare(
+          uri: uri,
+          headers: sanitizeWebStreamHeaders(headers),
+          subtitleUri: subtitleUri,
         );
-        if (response.isRedirect) {
-          final location = response.headers.value(HttpHeaders.locationHeader);
-          if (location == null || redirect == 4) {
-            throw const FormatException(
-              'The provider returned too many redirects.',
-            );
-          }
-          final redirected = target.resolve(location);
-          if (!_sameOrigin(target, redirected)) {
-            sanitized = sanitizeWebStreamHeaders(
-              sanitized,
-              stripCredentials: true,
-            );
-          }
-          target = redirected;
-          continue;
-        }
-        if (response.statusCode == HttpStatus.unauthorized ||
-            response.statusCode == HttpStatus.forbidden) {
-          throw FormatException(
-            'The provider denied access (HTTP ${response.statusCode}).',
-          );
-        }
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw FormatException(
-            'The provider returned HTTP ${response.statusCode}.',
-          );
-        }
-        final bytes = await response
-            .take(1)
-            .fold<List<int>>(
-              <int>[],
-              (all, chunk) => all..addAll(chunk.take(2048)),
-            );
-        final contentType =
-            response.headers.contentType?.mimeType.toLowerCase() ?? '';
-        final sample = utf8.decode(bytes, allowMalformed: true).trimLeft();
-        if (!isPlayableWebResponse(target, contentType, sample)) {
-          throw FormatException(
-            contentType.contains('html')
-                ? 'The provider returned a web page instead of video.'
-                : 'The provider response is not a supported video stream ($contentType).',
-          );
-        }
-        return ValidatedWebStream(
-          uri: target,
-          headers: sanitized,
-          contentType: contentType,
-        );
-      } finally {
-        client.close(force: true);
-      }
-    }
-    throw const FormatException('The provider stream could not be verified.');
+    return ValidatedWebStream(
+      uri: session.playbackUri,
+      headers: const {},
+      contentType: session.contentType,
+      subtitleUri: session.subtitleUri,
+      subtitleContentType: session.subtitleContentType,
+      subtitleRejected: session.subtitleRejected,
+      session: session,
+    );
   }
 }
 
@@ -104,27 +71,22 @@ Map<String, String> sanitizeWebStreamHeaders(
   bool stripCredentials = false,
 }) => sanitizeAddonHeaders(headers, stripCredentials: stripCredentials);
 
-bool _sameOrigin(Uri left, Uri right) =>
-    left.scheme == right.scheme &&
-    left.host.toLowerCase() == right.host.toLowerCase() &&
-    left.port == right.port;
-
 bool isPlayableWebResponse(Uri uri, String contentType, String sample) {
   final mime = contentType.toLowerCase().split(';').first.trim();
+  final trimmedSample = sample.trimLeft();
   if (mime == 'text/html' ||
-      sample.toLowerCase().startsWith('<!doctype html')) {
+      trimmedSample.toLowerCase().startsWith('<!doctype html')) {
     return false;
   }
   if (mime.startsWith('video/') ||
       const {
         'application/vnd.apple.mpegurl',
         'application/x-mpegurl',
-        'application/dash+xml',
         'application/octet-stream',
       }.contains(mime)) {
     return true;
   }
-  if (sample.startsWith('#EXTM3U') || sample.toLowerCase().contains('<mpd')) {
+  if (trimmedSample.startsWith('#EXTM3U')) {
     return true;
   }
   final path = uri.path.toLowerCase();

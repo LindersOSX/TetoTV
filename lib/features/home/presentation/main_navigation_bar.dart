@@ -132,6 +132,14 @@ class MainNavigationBar extends ConsumerWidget {
                       : () => context.go('/calendar'),
                 ),
               ],
+              SizedBox(width: normalTvLayout ? 4 : 2),
+              _NavigationAction(
+                key: const ValueKey('main-nav-settings'),
+                icon: Icons.settings_rounded,
+                label: 'Settings',
+                compact: width < 1200,
+                onPressed: () => context.push('/settings/accounts'),
+              ),
               if (showFullProfile || showCompactProfile) ...[
                 SizedBox(width: normalTvLayout ? 8 : 4),
                 Expanded(
@@ -162,14 +170,6 @@ class MainNavigationBar extends ConsumerWidget {
               ] else ...[
                 const Spacer(),
               ],
-              SizedBox(width: normalTvLayout ? 8 : 2),
-              _NavigationAction(
-                key: const ValueKey('main-nav-settings'),
-                icon: Icons.settings_rounded,
-                label: 'Settings',
-                compact: width < 1200,
-                onPressed: () => context.push('/settings/accounts'),
-              ),
             ],
           ),
         );

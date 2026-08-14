@@ -333,6 +333,7 @@ void main() {
       await tester.pump();
 
       final navigation = find.byKey(const ValueKey('main-navigation'));
+      final calendar = find.byKey(const ValueKey('main-nav-calendar'));
       final settings = find.byKey(const ValueKey('main-nav-settings'));
       expect(settings, findsOneWidget, reason: 'width $width');
       expect(
@@ -344,9 +345,9 @@ void main() {
         reason: 'My List must stay visibly labelled at width $width',
       );
       expect(
-        tester.getRect(settings).right,
-        closeTo(tester.getRect(navigation).right, .01),
-        reason: 'Settings must remain at the far-right at width $width',
+        tester.getRect(settings).left - tester.getRect(calendar).right,
+        inInclusiveRange(2, 4),
+        reason: 'Settings must sit immediately after Calendar at width $width',
       );
       expect(
         tester.getSize(navigation).height,
@@ -359,9 +360,14 @@ void main() {
       } else {
         expect(profile, findsOneWidget, reason: 'width $width');
         expect(
+          tester.getRect(profile).left,
+          greaterThanOrEqualTo(tester.getRect(settings).right),
+          reason: 'Profile must fill the space after Settings at width $width',
+        );
+        expect(
           tester.getRect(profile).right,
-          lessThanOrEqualTo(tester.getRect(settings).left),
-          reason: 'Profile must remain before Settings at width $width',
+          closeTo(tester.getRect(navigation).right, .01),
+          reason: 'Profile must use the right-side gap at width $width',
         );
         expect(
           tester.getCenter(profile).dy,
@@ -434,6 +440,7 @@ void main() {
     await tester.pump();
 
     final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+    final calendar = find.byKey(const ValueKey('main-nav-calendar'));
     final settings = find.byKey(const ValueKey('main-nav-settings'));
     final navigation = find.byKey(const ValueKey('main-navigation'));
     expect(find.text('AniList'), findsOneWidget);
@@ -487,8 +494,8 @@ void main() {
       findsOneWidget,
     );
     expect(
-      tester.getRect(settings).right,
-      closeTo(tester.getRect(navigation).right, .01),
+      tester.getRect(settings).left - tester.getRect(calendar).right,
+      inInclusiveRange(2, 4),
     );
     expect(tester.getSize(navigation).height, 96);
     expect(
@@ -496,8 +503,12 @@ void main() {
       closeTo(tester.getCenter(settings).dy, .01),
     );
     expect(
+      tester.getRect(profile).left,
+      greaterThanOrEqualTo(tester.getRect(settings).right),
+    );
+    expect(
       tester.getRect(profile).right,
-      lessThanOrEqualTo(tester.getRect(settings).left),
+      closeTo(tester.getRect(navigation).right, .01),
     );
     expect(tester.takeException(), isNull);
   });
@@ -724,6 +735,60 @@ void main() {
       tester.getRect(find.byKey(const ValueKey('main-nav-settings'))),
       settingsBefore,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('focusing and pressing primary navigation keeps padding stable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: TvShortcuts(
+            child: Scaffold(
+              body: Column(
+                children: [
+                  MainNavigationBar(
+                    active: MainNavigationDestination.myList,
+                    preferences: SettingsPreferences(),
+                  ),
+                  Expanded(
+                    child: SizedBox(key: ValueKey('stable-nav-content')),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final navigation = find.byKey(const ValueKey('main-navigation'));
+    final content = find.byKey(const ValueKey('stable-nav-content'));
+    final myListDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-my-list')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    final navigationBefore = tester.getRect(navigation);
+    final contentTopBefore = tester.getRect(content).top;
+
+    myListDetector.focusNode!.requestFocus();
+    await tester.pump();
+    expect(tester.getRect(navigation), navigationBefore);
+    expect(tester.getRect(content).top, contentTopBefore);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(tester.getRect(navigation), navigationBefore);
+    expect(tester.getRect(content).top, contentTopBefore);
     expect(tester.takeException(), isNull);
   });
 

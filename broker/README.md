@@ -1,4 +1,4 @@
-# TetoTV OAuth broker
+# TetoTV pairing and companion-services broker
 
 This Node 20 service completes TV-friendly AniList and MyAnimeList pairing
 without embedding provider secrets in the APK.
@@ -38,15 +38,16 @@ not copy either provider client secret into Flutter configuration.
 
 The current production app deliberately uses two deployments of this broker:
 `https://tetotv-auth.onrender.com` remains the AniList/MyAnimeList OAuth origin,
-while `https://tetotv-updates-lindows.onrender.com` handles source pairing and
-private app updates. Keep tracker callback registrations pointed at the auth
-origin.
+while `https://tetotv-updates-lindows.onrender.com` handles source pairing,
+optional anonymous presence, and optional crash-report relay. App updates do
+not pass through either deployment. Keep tracker callback registrations pointed
+at the auth origin.
 
 ## Anonymous crash-report relay
 
-The update-broker deployment can accept the app's optional, anonymous crash
+The companion-services deployment can accept the app's optional, anonymous crash
 reports and relay them to the separately hosted Discord bot. Configure these
-server-only values on the update broker:
+server-only values on that deployment:
 
 ```text
 CRASH_REPORT_BOT_URL=https://<bot-host>/crash-reports
@@ -59,7 +60,7 @@ an APK, a repository secret visible to clients, or a public URL. The broker
 validates a fixed bounded schema, applies per-address rate limits, strips
 credentials/URLs again, and signs the exact forwarded body with HMAC-SHA256.
 It does not persist report bodies. Keep the bot endpoint HTTPS-only and verify
-`crash_reporting: true` on the update broker's `/health` before publishing an
+`crash_reporting: true` on the broker's `/health` before publishing an
 APK that advertises this option.
 
 Deploy behind HTTPS on a single Node instance. For horizontally scaled
@@ -117,7 +118,7 @@ broker protocol before publishing an APK that depends on saved receipts. A
 valid browser submission starts a fresh bounded ten-minute processing window;
 completion starts a fresh ten-minute window for the sanitized receipt.
 
-Saved TetoTV account, tracker, debrid, and updater tokens are never uploaded by
+Saved TetoTV account, tracker, and debrid tokens are never uploaded by
 this flow. A source URL pasted by the user may itself contain provider
 configuration, so it is kept only in the broker's in-memory session until the
 TV acknowledges persistence or the session expires. Authenticated redelivery
@@ -139,7 +140,7 @@ pairing pages additionally use a restrictive Content Security Policy. Set
 fragments, and HTTP origins are rejected.
 
 The application process deliberately logs no request URLs, bodies, submitted
-source URLs, OAuth codes, tokens, provider response details, or GitHub token.
+source URLs, OAuth codes, tokens, or provider response details.
 It logs only startup and bounded error classes. Hosting-platform access logs
 are outside this process and may still contain request metadata, opaque pairing
 IDs, receipt IDs, and OAuth callback query parameters; configure and disclose
@@ -156,9 +157,6 @@ The process keeps the following transient data only in memory:
 - Namespace-and-address SHA-256 rate-limit keys for roughly one minute. The
   raw address is not retained in the application map, though the hosting
   provider may process it independently.
-- Sanitized GitHub release metadata for one minute (and the advertised latest
-  version for up to 24 hours). APK bytes are streamed and not persisted by the
-  broker.
 
 A public, unauthenticated disclosure is served at `/privacy`; `/health`
 advertises its canonical HTTPS URL. The page uses the same no-store, CSP,
@@ -168,103 +166,22 @@ broker's other public HTML. Keep its human-reviewed content synchronized with
 choices. Re-review the public community contact and hosting-provider retention
 before broad public or app-store distribution.
 
-## Private GitHub release updates
+## App updates bypass this broker
 
-This endpoint now serves only the in-app **Beta** channel. The default Public
-channel reads completed releases anonymously from the dedicated public
-`LindersOSX/TetoTV-Releases` repository and does not pass through this broker.
-Private-repository Beta routes remain broker-only and require the access-hash
-environment configuration described below. A narrow anonymous migration alias
-is retained for legacy 1.11.x clients: it advertises a synthetic newer 1.11.x
-version while delivering only the latest signed 1.x APK from the public release
-repository. Current Public clients never use that alias.
-
-The broker can publish a deliberately narrow view of the latest private
-TetoTV release without putting a GitHub credential in the APK. Add these
-server-side environment variables in Render:
+TetoTV reads both update channels anonymously from their public GitHub
+repositories:
 
 ```text
-GITHUB_RELEASE_TOKEN=<fine-grained token>
-GITHUB_RELEASE_REPOSITORY=LindersOSX/TetoTV
-BETA_ACCESS_KEY_SHA256_HASHES=<comma-separated lowercase SHA-256 hashes>
+Public: https://api.github.com/repos/LindersOSX/TetoTV-Releases/releases/latest
+Beta:   https://api.github.com/repos/LindersOSX/TetoTV/releases/latest
 ```
 
-Restrict the fine-grained token to only the TetoTV repository and grant only
-`Contents: Read-only`. Prefer an expiration date. For the current private
-deployment, `No expiration` is acceptable only while that one-repository,
-read-only scope remains enforced and there is a documented plan to revoke the
-token immediately if Render or GitHub access is compromised or no longer
-needed. Never pass this value as a Flutter build define, commit it to `.env`,
-or expose it in a client settings field.
-
-Generate a separate 32-128 character opaque channel key and store only its
-lowercase SHA-256 hash in `BETA_ACCESS_KEY_SHA256_HASHES`. The matching raw key
-is supplied to signed release builds through a protected compile-time define;
-it is not committed, shown, or stored in an editable app setting. Because the
-same credential is present in the public APK, it is an extractable, revocable
-channel gate—not a confidentiality boundary. The private source repository and
-server-only GitHub token remain the actual private resources. Multiple hashes
-support rotation. `/health` reports only `beta_updates_configured`.
-
-The Android app uses the following broker contract and sends no GitHub
-credential:
-
-```text
-GET /v1/app-updates/latest
-GET /v1/app-updates/releases
-GET /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
-HEAD /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
-```
-
-All private Beta metadata, history, and APK requests require
-`Authorization: Beta <opaque channel key>`. Anonymous, malformed, and invalid
-credentials receive no private release metadata or APK bytes and failed
-authentication is separately rate-limited. The app sends the build-injected
-key only to the fixed broker origin. Broker routes do not redirect.
-
-The only anonymous exceptions are `GET /v1/app-updates/latest` without an
-Authorization header and the exact download URL it returns. They form the
-legacy migration alias described above and contain only public 1.x release
-metadata/APK bytes. Supplying an invalid Authorization header never falls back
-to that alias.
-
-The metadata endpoint returns only the version, tag, title, release notes,
-publication time, and a single sanitized universal-APK descriptor. The
-descriptor's `download_url` points back to an immutable tag-and-asset-ID path
-on the broker. The APK endpoint accepts one standard `Range`, returns `206`
-when requested, and emits an asset-specific `ETag`, allowing interrupted
-downloads to resume without combining bytes from different releases.
-
-The proxy will serve only a non-draft, non-prerelease `vX.Y.Z` release and the
-exact `TetoTV-vX.Y.Z-universal.apk` asset from the configured repository. It
-does not accept repository or upstream URL parameters from the client. The
-strict tag and numeric asset-ID path segments must match a broker-allowlisted
-release. GitHub redirects are followed only a bounded number of times to HTTPS
-GitHub download hosts, and the Authorization header is removed before the
-redirected request. Metadata and binary size/type are validated, responses use
-`no-store`, and metadata/download calls have separate per-address rate limits.
-Metadata cache misses are coalesced. APK delivery is capped at four concurrent
-streams, twelve starts per minute process-wide, and four starts per minute per
-address for this private/friends deployment. Move binary delivery to dedicated
-object storage or a CDN before using the updater at public scale.
-Beta history is bounded to the newest 20 completed, non-prerelease 2.x releases.
-Versioned paths accept only strict 2.x tags and exact sanitized assets; arbitrary
-tags and asset IDs are not a GitHub download oracle.
-
-Example sanitized metadata:
-
-```json
-{
-  "version": "2.0.1",
-  "tag_name": "v2.0.1",
-  "name": "TetoTV 2.0.1 Beta",
-  "release_notes": "...",
-  "published_at": "2026-08-10T00:00:00.000Z",
-  "asset": {
-    "name": "TetoTV-v2.0.1-universal.apk",
-    "size": 113650688,
-    "content_type": "application/vnd.android.package-archive",
-    "download_url": "https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v2.0.1/assets/116001/universal.apk"
-  }
-}
-```
+The app sends no GitHub token or shared Beta credential, prefers the release
+asset ending in `-universal.apk`, and downloads it directly from the asset's
+`browser_download_url`. This source tree contains no update-specific GitHub
+credentials, Beta access hashes, or `/v1/app-updates/*` routes. An older live
+deployment may remain temporarily as a one-release migration bridge for app
+versions that predate the direct-GitHub updater; deploy this cleanup after that
+migration window closes. See
+[`docs/UPDATE_CHANNELS.md`](../docs/UPDATE_CHANNELS.md) for the client and
+publishing contract.

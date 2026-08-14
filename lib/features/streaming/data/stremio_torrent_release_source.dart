@@ -148,7 +148,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       try {
         final body = await _getAddonJson(streamUri, responseKind: 'stream');
         completedRequest = true;
-        final releases = parseStreams(body);
+        final releases = parseStreams(body, sourceId: id);
         if (releases.isNotEmpty) {
           return _StremioRouteOutcome(
             releases: releases,
@@ -383,7 +383,10 @@ class StremioTorrentReleaseSource implements ReleaseSource {
     return kitsuId;
   }
 
-  static List<ReleaseCandidate> parseStreams(Map<String, dynamic> body) {
+  static List<ReleaseCandidate> parseStreams(
+    Map<String, dynamic> body, {
+    String sourceId = 'stremio',
+  }) {
     final values = body['streams'];
     if (values is! List<dynamic>) return const [];
     final candidates = <ReleaseCandidate>[];
@@ -438,9 +441,11 @@ class StremioTorrentReleaseSource implements ReleaseSource {
           magnetUri: 'magnet:?xt=urn:btih:${infoHash.toLowerCase()}',
           releaseName: title,
           seeders: seeders,
-          sourceId: provider == null
-              ? 'stremio:${infoHash.toLowerCase()}'
-              : 'stremio:$provider',
+          // [provider] describes the release/uploader named by the add-on,
+          // while sourceId identifies the installed manifest that supplied
+          // it. A torrent hash changes every episode and cannot preserve
+          // same-source affinity across a series.
+          sourceId: sourceId,
           isBatch:
               lower.contains('batch') ||
               RegExp(r'\b\d{1,3}\s*-\s*\d{1,3}\b').hasMatch(lower),

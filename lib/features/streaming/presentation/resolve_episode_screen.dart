@@ -55,6 +55,13 @@ final webStreamPreflightProvider = Provider<WebStreamPreflight>(
   (_) => const WebStreamValidator().validate,
 );
 
+typedef SeriesPreferencesWriter =
+    Future<void> Function(int mediaId, SeriesPlaybackPreferences preferences);
+
+final seriesPreferencesWriterProvider = Provider<SeriesPreferencesWriter>(
+  (_) => TetoTvDatabase.instance.saveSeriesPreferences,
+);
+
 int tvPlaybackCompatibilityRank(
   ReleaseCandidate release, {
   TvDeviceProfile? device,
@@ -236,6 +243,137 @@ int compareWebStreamsByAudioAndQuality(
   return audio != 0 ? audio : compareWebStreamsByQuality(left, right);
 }
 
+/// Ranks automatic next-episode web candidates without changing the manual
+/// picker order. The viewer's audio choice remains authoritative; within the
+/// matching audio class, the exact provider used by the previous episode wins.
+int compareAutoplayWebStreams(
+  WebStreamResult left,
+  WebStreamResult right, {
+  required PlaybackAudioPreference preferredAudio,
+  String? preferredWebProviderId,
+}) {
+  final leftAudio = preferredAudio == PlaybackAudioPreference.dub
+      ? (left.isDubbed ? 0 : 1)
+      : (left.isDubbed ? 1 : 0);
+  final rightAudio = preferredAudio == PlaybackAudioPreference.dub
+      ? (right.isDubbed ? 0 : 1)
+      : (right.isDubbed ? 1 : 0);
+  final audio = leftAudio.compareTo(rightAudio);
+  if (audio != 0) return audio;
+
+  final preferredId = _boundedHint(preferredWebProviderId, maxLength: 160);
+  if (preferredId != null) {
+    final provider = (left.providerId == preferredId ? 0 : 1).compareTo(
+      right.providerId == preferredId ? 0 : 1,
+    );
+    if (provider != 0) return provider;
+  }
+  final quality = compareWebStreamsByQuality(left, right);
+  if (quality != 0) return quality;
+  final providerId = left.providerId.compareTo(right.providerId);
+  if (providerId != 0) return providerId;
+  return left.uri.toString().compareTo(right.uri.toString());
+}
+
+/// Automatic next-episode release affinity is deliberately stricter than the
+/// manual picker preference: same provider or stable source + author/group,
+/// then provider/source, author-only, and finally the existing global rank.
+int compareAutoplayReleases(
+  ReleaseCandidate left,
+  ReleaseCandidate right, {
+  TvDeviceProfile? device,
+  Map<String, int> failureCounts = const {},
+  String sortMode = 'compatibility',
+  String? preferredProvider,
+  String? preferredAuthor,
+  String? preferredSourceId,
+  String? existingPreferredProvider,
+  String? existingPreferredReleaseGroup,
+  PlaybackAudioPreference? preferredAudio,
+}) {
+  if (preferredAudio != null) {
+    final audio = releaseAudioPreferenceRank(
+      left,
+      preferredAudio,
+    ).compareTo(releaseAudioPreferenceRank(right, preferredAudio));
+    if (audio != 0) return audio;
+  }
+
+  final affinity =
+      _autoplayReleaseAffinityRank(
+        left,
+        preferredProvider: preferredProvider,
+        preferredAuthor: preferredAuthor,
+        preferredSourceId: preferredSourceId,
+      ).compareTo(
+        _autoplayReleaseAffinityRank(
+          right,
+          preferredProvider: preferredProvider,
+          preferredAuthor: preferredAuthor,
+          preferredSourceId: preferredSourceId,
+        ),
+      );
+  if (affinity != 0) return affinity;
+
+  final global = compareStreamReleases(
+    left,
+    right,
+    device: device,
+    failureCounts: failureCounts,
+    sortMode: sortMode,
+    preferredProvider: existingPreferredProvider,
+    preferredReleaseGroup: existingPreferredReleaseGroup,
+    preferredAudio: preferredAudio,
+  );
+  if (global != 0) return global;
+  return left.infoHash.compareTo(right.infoHash);
+}
+
+int _autoplayReleaseAffinityRank(
+  ReleaseCandidate release, {
+  required String? preferredProvider,
+  required String? preferredAuthor,
+  required String? preferredSourceId,
+}) {
+  final provider = _normalizedProviderHint(preferredProvider);
+  final sourceId = _boundedHint(preferredSourceId, maxLength: 160);
+  final sameProvider =
+      provider != null && _normalizedProviderHint(release.provider) == provider;
+  final author = _normalizedAuthorHint(preferredAuthor);
+  final sameSource = sourceId != null && release.sourceId == sourceId;
+  final sameAuthor =
+      author != null && releaseGroupKey(release.releaseName) == author;
+  if ((sameProvider || sameSource) && sameAuthor) {
+    return 0;
+  }
+  if (sameProvider || sameSource) return 1;
+  if (sameAuthor) return 2;
+  return 3;
+}
+
+String? _normalizedProviderHint(String? value) =>
+    _boundedHint(value, maxLength: 160)?.toLowerCase();
+
+String? _normalizedAuthorHint(String? value) {
+  final hint = _boundedHint(value, maxLength: 96);
+  if (hint == null) return null;
+  final extracted = releaseGroupKey(hint);
+  if (extracted != null) return extracted;
+  final normalized = hint
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .trim();
+  return normalized.isEmpty ? null : normalized;
+}
+
+String? _boundedHint(String? value, {required int maxLength}) {
+  final trimmed = value?.trim();
+  if (trimmed == null || trimmed.isEmpty || trimmed.length > maxLength) {
+    return null;
+  }
+  return trimmed;
+}
+
 int _providerRank(ReleaseCandidate release, String? preferredProvider) {
   if (preferredProvider == null || preferredProvider.isEmpty) return 1;
   return release.provider?.toLowerCase() == preferredProvider.toLowerCase()
@@ -267,9 +405,22 @@ T _enumByName<T extends Enum>(List<T> values, String name, T fallback) {
 }
 
 class ResolveEpisodeScreen extends ConsumerStatefulWidget {
-  const ResolveEpisodeScreen({required this.episode, super.key});
+  const ResolveEpisodeScreen({
+    required this.episode,
+    this.preferredProvider,
+    this.preferredAuthor,
+    this.preferredSourceId,
+    this.preferredWebProviderId,
+    this.clock = DateTime.now,
+    super.key,
+  });
 
   final EpisodeReference episode;
+  final String? preferredProvider;
+  final String? preferredAuthor;
+  final String? preferredSourceId;
+  final String? preferredWebProviderId;
+  final DateTime Function() clock;
 
   @override
   ConsumerState<ResolveEpisodeScreen> createState() =>
@@ -312,11 +463,21 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   ReleaseCandidate? _lastAttemptedRelease;
   int _resolveAttempt = 0;
   final Set<String> _failedResolveHashes = {};
+  final Set<String> _failedAutoplayWebStreams = {};
   DateTime? _automaticResolveDeadline;
   bool _autoPlayStarted = false;
+  bool _webSearchFinished = false;
+  bool _webSearchEnabled = false;
+  bool _debridSearchFinished = false;
+  bool _debridSearchEnabled = false;
+  bool _autoplayDebridExhausted = false;
+  bool _autoplayBudgetExhausted = false;
+  bool _preferredWebWaitExpired = false;
+  Timer? _preferredWebWaitTimer;
 
   static const _maxAutomaticResolveCandidates = 8;
   static const _automaticResolveTimeBudget = Duration(seconds: 45);
+  static const _preferredWebProviderWaitBudget = Duration(seconds: 12);
 
   bool get _hasDebrid =>
       ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
@@ -434,8 +595,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     await _initialize();
   }
 
-  Future<void> _loadConfiguredReleases() async {
+  Future<void> _loadConfiguredReleases({bool refreshWeb = false}) async {
     if (_loadingReleases) return;
+    _preferredWebWaitTimer?.cancel();
+    _preferredWebWaitTimer = null;
     final preferences = ref.read(settingsPreferencesProvider);
     final source = ref.read(configuredReleaseSourceProvider);
     final shouldSearchDebrid =
@@ -456,7 +619,53 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _webProvidersTotal = 0;
       _pendingDebridSources = const [];
       _pendingWebProviders = const [];
+      _debridSearchEnabled = shouldSearchDebrid;
+      _debridSearchFinished = !shouldSearchDebrid;
+      _webSearchEnabled = preferences.webStreamsEnabled;
+      _webSearchFinished = !preferences.webStreamsEnabled;
+      _autoplayDebridExhausted = false;
+      _autoplayBudgetExhausted = false;
+      _preferredWebWaitExpired = false;
+      _autoPlayStarted = false;
+      _automaticResolveDeadline = null;
+      _failedResolveHashes.clear();
+      _failedAutoplayWebStreams.clear();
     });
+    if (widget.episode.autoPlay &&
+        preferences.webStreamsEnabled &&
+        _boundedHint(widget.preferredWebProviderId, maxLength: 160) != null) {
+      _preferredWebWaitTimer = Timer(_preferredWebProviderWaitBudget, () {
+        if (!mounted || generation != _releaseSearchGeneration) return;
+        _preferredWebWaitExpired = true;
+        if (_autoPlayStarted || _resolving) return;
+        _tryStartAutoPlay(
+          generation: generation,
+          allowWebFallback: _debridSearchFinished,
+        );
+      });
+    }
+
+    void finishVisibleSearchIfReady() {
+      if (!mounted ||
+          generation != _releaseSearchGeneration ||
+          (_debridSearchEnabled && !_debridSearchFinished) ||
+          (_webSearchEnabled && !_webSearchFinished)) {
+        return;
+      }
+      setState(() {
+        _loadingReleases = false;
+        if (_releases.isEmpty && _webStreams.isEmpty) {
+          if (!preferences.debridStreamsEnabled &&
+              !preferences.webStreamsEnabled) {
+            _error = 'Both Debrid Streams and Web Streams are disabled.';
+          } else if (_releaseFailures.isNotEmpty && _webFailures.isNotEmpty) {
+            _error = 'No enabled source completed successfully.';
+          } else {
+            _error = 'No playable streams were returned for this episode.';
+          }
+        }
+      });
+    }
 
     Future<void> loadDebridSources() async {
       if (!shouldSearchDebrid) return;
@@ -472,7 +681,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _debridSourcesCompleted = progress.completedSources;
             _debridSourcesTotal = progress.totalSources;
             _pendingDebridSources = progress.pendingSourceIds;
+            if (progress.isComplete) {
+              debridSearchFinished = true;
+              _debridSearchFinished = true;
+            }
           });
+          finishVisibleSearchIfReady();
+          _tryStartAutoPlay(
+            generation: generation,
+            allowWebFallback: debridSearchFinished,
+          );
           // Wait for all configured sources to finish their concurrent search
           // before starting cache checks. This avoids spending debrid requests
           // on the first source's result while better-ranked duplicates are
@@ -480,6 +698,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         }
       } finally {
         debridSearchFinished = true;
+        _debridSearchFinished = true;
+        finishVisibleSearchIfReady();
         _tryStartAutoPlay(generation: generation, allowWebFallback: true);
       }
     }
@@ -490,7 +710,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         await for (final progress
             in ref
                 .read(webStreamAggregatorProvider)
-                .watchSearchIncrementally(widget.episode)) {
+                .watchSearchIncrementally(
+                  widget.episode,
+                  refresh: refreshWeb,
+                )) {
           if (!mounted || generation != _releaseSearchGeneration) return;
           setState(() {
             _webStreams = progress.aggregation.streams;
@@ -498,7 +721,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _webProvidersCompleted = progress.completedProviders;
             _webProvidersTotal = progress.totalProviders;
             _pendingWebProviders = progress.pendingProviderNames;
+            if (progress.isComplete) _webSearchFinished = true;
           });
+          finishVisibleSearchIfReady();
           _tryStartAutoPlay(
             generation: generation,
             allowWebFallback: debridSearchFinished,
@@ -514,6 +739,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ),
           ];
         });
+      } finally {
+        if (mounted && generation == _releaseSearchGeneration) {
+          _webSearchFinished = true;
+          finishVisibleSearchIfReady();
+          _tryStartAutoPlay(
+            generation: generation,
+            allowWebFallback: debridSearchFinished,
+          );
+        }
       }
     }
 
@@ -615,20 +849,43 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   'debrid': state.debridService!.slug,
               },
             );
-            final alternatives = [..._releases]
-              ..removeWhere((item) => item.infoHash == selected.infoHash)
-              ..sort((left, right) {
-                return compareStreamReleases(
-                  left,
-                  right,
-                  device: _deviceProfile,
-                  failureCounts: _failureCounts,
-                  sortMode: 'compatibility',
-                  preferredProvider: selected.provider,
-                  preferredReleaseGroup: releaseGroupKey(selected.releaseName),
-                  preferredAudio: _preferredAudio,
-                );
-              });
+            final seenAlternativeHashes = <String>{
+              selected.infoHash.toLowerCase(),
+            };
+            final alternatives =
+                _releases
+                    .where(
+                      (item) => seenAlternativeHashes.add(
+                        item.infoHash.toLowerCase(),
+                      ),
+                    )
+                    .toList(growable: false)
+                  ..sort((left, right) {
+                    return compareAutoplayReleases(
+                      left,
+                      right,
+                      device: _deviceProfile,
+                      failureCounts: _failureCounts,
+                      sortMode: 'compatibility',
+                      preferredProvider: selected.provider,
+                      preferredAuthor: releaseGroupKey(selected.releaseName),
+                      preferredSourceId: selected.sourceId,
+                      existingPreferredProvider:
+                          _seriesPreferences.preferredReleaseProvider,
+                      existingPreferredReleaseGroup:
+                          _seriesPreferences.preferredReleaseGroup,
+                      preferredAudio: _preferredAudio,
+                    );
+                  });
+            final directAlternatives = _autoplayWebCandidates(_webStreams)
+                .where((stream) => stream.uri != state.uri)
+                .map(
+                  (stream) => PlaybackStreamOption(
+                    stream: _readyForWebStream(stream),
+                    release: _releaseForWebStream(stream),
+                  ),
+                )
+                .toList(growable: false);
             context.pushReplacement(
               playerUri.toString(),
               extra: PlaybackLaunch(
@@ -636,6 +893,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                 episode: widget.episode,
                 selectedRelease: selected,
                 alternatives: alternatives,
+                directAlternatives: directAlternatives,
               ),
             );
             return;
@@ -649,11 +907,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _recordRealDebridFailure(realDebridError, selected.sourceId),
           );
         }
-        final preferred = _filteredAndSortedReleases(_releases);
-        final recoveryPool = <ReleaseCandidate>[
-          ...preferred,
-          ..._releases.where((item) => !preferred.contains(item)),
-        ];
+        final manuallyRanked = _filteredAndSortedReleases(_releases);
+        final recoveryPool = widget.episode.autoPlay
+            ? _autoplayReleaseCandidates(_releases)
+            : <ReleaseCandidate>[
+                ...manuallyRanked,
+                ..._releases.where((item) => !manuallyRanked.contains(item)),
+              ];
         final next = recoveryPool
             .where(
               (item) =>
@@ -664,7 +924,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         final withinFailoverBudget =
             _failedResolveHashes.length < _maxAutomaticResolveCandidates &&
             (_automaticResolveDeadline == null ||
-                DateTime.now().isBefore(_automaticResolveDeadline!));
+                widget.clock().isBefore(_automaticResolveDeadline!));
         if (!terminalProviderFailure && next != null && withinFailoverBudget) {
           setState(() {
             _resolving = false;
@@ -676,6 +936,44 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ),
           );
           return;
+        }
+        if (widget.episode.autoPlay &&
+            !terminalProviderFailure &&
+            !_debridSearchFinished &&
+            withinFailoverBudget) {
+          setState(() {
+            _resolving = false;
+            _autoPlayStarted = false;
+            _status = 'That release failed. Waiting for other sources…';
+            _error = null;
+          });
+          return;
+        }
+        if (widget.episode.autoPlay) {
+          _autoplayDebridExhausted = true;
+          final webCandidates = _webSearchEnabled
+              ? _autoplayWebCandidates(_webStreams)
+              : const <WebStreamResult>[];
+          if (_webSearchEnabled &&
+              (!_webSearchFinished || webCandidates.isNotEmpty)) {
+            setState(() {
+              _resolving = false;
+              _autoPlayStarted = false;
+              _status = _webSearchFinished
+                  ? 'Debrid releases failed. Trying a web stream…'
+                  : 'Debrid releases failed. Waiting for web providers…';
+              _error = null;
+            });
+            if (_webSearchFinished) {
+              Future<void>.microtask(
+                () => _tryStartAutoPlay(
+                  generation: _releaseSearchGeneration,
+                  allowWebFallback: true,
+                ),
+              );
+            }
+            return;
+          }
         }
         unawaited(
           recordAnonymousHandledError(
@@ -720,26 +1018,171 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         _resolving) {
       return;
     }
-    if (_hasDebrid && _releases.isNotEmpty) {
-      final filtered = _filteredAndSortedReleases(_releases);
-      final candidates = filtered.isNotEmpty
-          ? filtered
-          : _filteredAndSortedReleases(_releases, ignoreOptionalFilters: true);
-      if (candidates.isNotEmpty) {
+
+    final preferredWebProviderId = _boundedHint(
+      widget.preferredWebProviderId,
+      maxLength: 160,
+    );
+    if (preferredWebProviderId != null) {
+      final exactWebCandidates = _autoplayWebCandidates(
+        _webStreams.where(
+          (stream) =>
+              stream.providerId == preferredWebProviderId &&
+              (_preferredAudio == PlaybackAudioPreference.dub
+                  ? stream.isDubbed
+                  : !stream.isDubbed),
+        ),
+      );
+      if (exactWebCandidates.isNotEmpty) {
+        // The matching provider may finish before the rest of discovery. Try
+        // only its streams now; if preflight rejects all of them, wait for the
+        // full provider set before choosing a different source.
+        _startAutoplayWeb(exactWebCandidates);
+        return;
+      }
+      if (!_webSearchFinished && !_preferredWebWaitExpired) return;
+    }
+
+    final allowNonPreferredFallback =
+        allowWebFallback || _preferredWebWaitExpired;
+
+    if (!allowWebFallback && !_autoplayDebridExhausted && _hasDebrid) {
+      final exactReleaseCandidates = _exactAutoplayReleaseCandidates(_releases);
+      if (exactReleaseCandidates.isNotEmpty) {
         _autoPlayStarted = true;
-        unawaited(_resolveCandidate(candidates.first));
+        unawaited(
+          _resolveCandidate(
+            exactReleaseCandidates.first,
+            continueAutomaticSequence: _failedResolveHashes.isNotEmpty,
+          ),
+        );
         return;
       }
     }
-    if (!allowWebFallback || _webStreams.isEmpty) return;
-    final filtered = _filteredWebStreams(_webStreams);
-    final candidates = filtered.isNotEmpty
-        ? filtered
-        : _filteredWebStreams(_webStreams, ignoreOptionalFilters: true);
+
+    if (allowNonPreferredFallback &&
+        !_autoplayDebridExhausted &&
+        _hasDebrid &&
+        _releases.isNotEmpty) {
+      final candidates = _autoplayReleaseCandidates(_releases);
+      final unfailedCandidates = candidates
+          .where(
+            (release) =>
+                !_failedResolveHashes.contains(release.infoHash.toLowerCase()),
+          )
+          .toList(growable: false);
+      if (unfailedCandidates.isNotEmpty) {
+        _autoPlayStarted = true;
+        unawaited(
+          _resolveCandidate(
+            unfailedCandidates.first,
+            continueAutomaticSequence: _failedResolveHashes.isNotEmpty,
+          ),
+        );
+        return;
+      }
+    }
+    if (!allowNonPreferredFallback ||
+        (!_webSearchFinished && !_preferredWebWaitExpired) ||
+        _webStreams.isEmpty) {
+      return;
+    }
+    final candidates = _autoplayWebCandidates(_webStreams);
     if (candidates.isEmpty) return;
-    _autoPlayStarted = true;
-    unawaited(_openWebStream(candidates.first));
+    _startAutoplayWeb(candidates);
   }
+
+  void _startAutoplayWeb(List<WebStreamResult> candidates) {
+    _autoPlayStarted = true;
+    _automaticResolveDeadline ??= widget.clock().add(
+      _automaticResolveTimeBudget,
+    );
+    unawaited(_openWebStream(candidates.first, autoplayCandidates: candidates));
+  }
+
+  List<ReleaseCandidate> _autoplayReleaseCandidates(
+    Iterable<ReleaseCandidate> input,
+  ) {
+    final preferred = _filteredAndSortedReleases(input);
+    final fallback = _filteredAndSortedReleases(
+      input,
+      ignoreOptionalFilters: true,
+    );
+    final combined = <ReleaseCandidate>[
+      ...preferred,
+      ...fallback.where(
+        (candidate) => !preferred.any(
+          (item) =>
+              item.infoHash.toLowerCase() == candidate.infoHash.toLowerCase(),
+        ),
+      ),
+    ];
+    combined.sort(
+      (left, right) => compareAutoplayReleases(
+        left,
+        right,
+        device: _deviceProfile,
+        failureCounts: _failureCounts,
+        sortMode: _sortMode.name,
+        preferredProvider: widget.preferredProvider,
+        preferredAuthor: widget.preferredAuthor,
+        preferredSourceId: widget.preferredSourceId,
+        existingPreferredProvider: _seriesPreferences.preferredReleaseProvider,
+        existingPreferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
+        preferredAudio: _preferredAudio,
+      ),
+    );
+    return combined;
+  }
+
+  List<ReleaseCandidate> _exactAutoplayReleaseCandidates(
+    Iterable<ReleaseCandidate> input,
+  ) {
+    final provider = _normalizedProviderHint(widget.preferredProvider);
+    final sourceId = _boundedHint(widget.preferredSourceId, maxLength: 160);
+    final author = _normalizedAuthorHint(widget.preferredAuthor);
+    if (provider == null && sourceId == null) return const [];
+    final identityMatches = _autoplayReleaseCandidates(input)
+        .where(
+          (release) =>
+              !_failedResolveHashes.contains(release.infoHash.toLowerCase()) &&
+              ((provider != null &&
+                      _normalizedProviderHint(release.provider) == provider) ||
+                  (sourceId != null && release.sourceId == sourceId)) &&
+              releaseAudioPreferenceRank(release, _preferredAudio) == 0,
+        )
+        .toList(growable: false);
+    if (author == null) return identityMatches;
+    return identityMatches
+        .where((release) => releaseGroupKey(release.releaseName) == author)
+        .toList(growable: false);
+  }
+
+  List<WebStreamResult> _autoplayWebCandidates(
+    Iterable<WebStreamResult> input,
+  ) {
+    final preferred = _filteredWebStreams(input);
+    final fallback = _filteredWebStreams(input, ignoreOptionalFilters: true);
+    final seen = <String>{};
+    final combined = <WebStreamResult>[];
+    for (final stream in [...preferred, ...fallback]) {
+      final key = _webStreamKey(stream);
+      if (_failedAutoplayWebStreams.contains(key)) continue;
+      if (seen.add(key)) combined.add(stream);
+    }
+    combined.sort(
+      (left, right) => compareAutoplayWebStreams(
+        left,
+        right,
+        preferredAudio: _preferredAudio,
+        preferredWebProviderId: widget.preferredWebProviderId,
+      ),
+    );
+    return combined;
+  }
+
+  String _webStreamKey(WebStreamResult stream) =>
+      '${stream.providerId}\u0000${stream.uri}';
 
   List<WebStreamResult> _filteredWebStreams(
     Iterable<WebStreamResult> input, {
@@ -789,104 +1232,276 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     WebStreamResult stream, {
     Uri? validatedUri,
     Map<String, String>? validatedHeaders,
+    Uri? validatedSubtitleUri,
+    String? mediaContentType,
+    String? subtitleContentType,
+    bool externalSubtitleRejected = false,
+    PlaybackResourceLease? playbackLease,
   }) {
     final release = _releaseForWebStream(stream);
     return StreamReady(
       uri: validatedUri ?? stream.uri,
       displayName: release.releaseName,
       headers: validatedHeaders ?? stream.headers,
-      externalSubtitle: stream.subtitleUri,
+      externalSubtitle: validatedUri == null
+          ? stream.subtitleUri
+          : validatedSubtitleUri,
+      mediaContentType: mediaContentType,
+      subtitleContentType: subtitleContentType,
+      externalSubtitleRejected: externalSubtitleRejected,
+      playbackLease: playbackLease,
       providerId: stream.providerId,
       providerName: '${stream.providerName} web stream',
     );
   }
 
-  Future<void> _openWebStream(WebStreamResult stream) async {
+  Future<void> _openWebStream(
+    WebStreamResult stream, {
+    List<WebStreamResult>? autoplayCandidates,
+  }) async {
     if (!mounted || _resolving) return;
     // WidgetRef belongs to this route and becomes invalid as soon as the
     // resolver is replaced. Capture the long-lived dependencies before the
     // asynchronous preflight so a late completion never reads a disposed ref.
     final preflight = ref.read(webStreamPreflightProvider);
     final addonStore = ref.read(addonStoreProvider);
+    final preferredAudio = _preferredAudio;
+    final hasConnectedDebrid = _hasDebrid;
+    final fallbackDebridService = _debridService;
+    final episode = widget.episode;
+    final generation = _releaseSearchGeneration;
+    final automatic = autoplayCandidates != null;
+    final availableBudget = automatic
+        ? (_maxAutomaticResolveCandidates - _failedAutoplayWebStreams.length)
+              .clamp(0, _maxAutomaticResolveCandidates)
+        : 1;
+    if (automatic && availableBudget <= 0) {
+      setState(() {
+        _resolving = false;
+        _loadingReleases = false;
+        _autoPlayStarted = true;
+        _autoplayBudgetExhausted = true;
+        _status = 'Automatic stream checks exhausted';
+        _error = 'No playable stream passed the bounded preflight checks.';
+      });
+      return;
+    }
+    final seen = <String>{};
+    final candidates = <WebStreamResult>[];
+    for (final candidate in autoplayCandidates ?? [stream]) {
+      final key = _webStreamKey(candidate);
+      if (_failedAutoplayWebStreams.contains(key) || !seen.add(key)) continue;
+      candidates.add(candidate);
+      if (candidates.length >= availableBudget) break;
+    }
+    if (candidates.isEmpty) {
+      if (automatic) _autoPlayStarted = false;
+      return;
+    }
+    final discoveredStreams = [..._webStreams];
     setState(() {
       _resolving = true;
       _status = 'Checking ${stream.providerName} stream…';
       _error = null;
     });
-    late final ValidatedWebStream validated;
-    try {
-      validated = await preflight(stream.uri, stream.headers);
-      await addonStore.recordProviderSuccess(stream.providerId);
-    } catch (error, stackTrace) {
-      unawaited(
-        recordAnonymousHandledError(
-          area: AnonymousErrorArea.playback,
-          error: error,
-          stack: stackTrace,
-        ),
-      );
-      await addonStore.recordProviderFailure(stream.providerId, error);
-      await TetoTvDatabase.instance.recordDiagnosticEvent(
-        category: 'stream-preflight',
-        message: '${stream.providerName}: $error',
-      );
-      if (mounted) {
-        setState(() {
-          _resolving = false;
-          _status = 'Stream check failed';
-          _error = error.toString().replaceFirst('FormatException: ', '');
-        });
+    Object? lastError;
+    for (final candidate in candidates) {
+      if (!mounted || generation != _releaseSearchGeneration) return;
+      if (automatic &&
+          _automaticResolveDeadline != null &&
+          !widget.clock().isBefore(_automaticResolveDeadline!)) {
+        break;
       }
+      setState(() => _status = 'Checking ${candidate.providerName} stream…');
+      ValidatedWebStream? validated;
+      var leaseTransferred = false;
+      try {
+        validated = await preflight(
+          candidate.uri,
+          candidate.headers,
+          subtitleUri: candidate.subtitleUri,
+        );
+        try {
+          await addonStore.recordProviderSuccess(candidate.providerId);
+        } catch (_) {
+          // Provider health accounting is best-effort and never gates play.
+        }
+        if (!mounted || generation != _releaseSearchGeneration) {
+          await validated.session?.close();
+          return;
+        }
+        final release = _releaseForWebStream(candidate);
+        final alternativeHashes = <String>{release.infoHash.toLowerCase()};
+        final debridAlternatives = hasConnectedDebrid
+            ? _autoplayReleaseCandidates(_releases)
+                  .where(
+                    (alternative) =>
+                        !_failedResolveHashes.contains(
+                          alternative.infoHash.toLowerCase(),
+                        ) &&
+                        alternativeHashes.add(
+                          alternative.infoHash.toLowerCase(),
+                        ),
+                  )
+                  .toList(growable: false)
+            : const <ReleaseCandidate>[];
+        await _rememberStreamSelection(release);
+        if (!mounted || generation != _releaseSearchGeneration) {
+          await validated.session?.close();
+          return;
+        }
+        final ready = _readyForWebStream(
+          candidate,
+          validatedUri: validated.uri,
+          validatedHeaders: validated.headers,
+          validatedSubtitleUri: validated.subtitleUri,
+          mediaContentType: validated.contentType,
+          subtitleContentType: validated.subtitleContentType,
+          externalSubtitleRejected: validated.subtitleRejected,
+          playbackLease: validated.session,
+        );
+        final alternativeSeen = <String>{};
+        final directAlternatives = <WebStreamResult>[];
+        for (final alternative in [...discoveredStreams, ...candidates]) {
+          final key = _webStreamKey(alternative);
+          if (alternative.uri == candidate.uri || !alternativeSeen.add(key)) {
+            continue;
+          }
+          directAlternatives.add(alternative);
+        }
+        directAlternatives.sort(
+          (left, right) => compareAutoplayWebStreams(
+            left,
+            right,
+            preferredAudio: preferredAudio,
+            preferredWebProviderId: candidate.providerId,
+          ),
+        );
+        final playerUri = Uri(
+          path: '/player',
+          queryParameters: {
+            'source': validated.uri.toString(),
+            'title': '${episode.title} / Episode ${episode.episode}',
+            'anilistId': '${episode.anilistMediaId}',
+            if (episode.malMediaId != null) 'malId': '${episode.malMediaId}',
+            'episode': '${episode.episode}',
+            if (debridAlternatives.isNotEmpty)
+              'debrid': fallbackDebridService.slug,
+          },
+        );
+        setState(() => _resolving = false);
+        context.pushReplacement(
+          playerUri.toString(),
+          extra: PlaybackLaunch(
+            stream: ready,
+            episode: episode,
+            selectedRelease: release,
+            alternatives: debridAlternatives,
+            directAlternatives: directAlternatives
+                .map(
+                  (alternative) => PlaybackStreamOption(
+                    stream: _readyForWebStream(alternative),
+                    release: _releaseForWebStream(alternative),
+                  ),
+                )
+                .toList(growable: false),
+          ),
+        );
+        leaseTransferred = true;
+        return;
+      } catch (error, stackTrace) {
+        if (!leaseTransferred) {
+          await validated?.session?.close();
+        }
+        lastError = error;
+        if (automatic) {
+          _failedAutoplayWebStreams.add(_webStreamKey(candidate));
+        }
+        unawaited(
+          recordAnonymousHandledError(
+            area: AnonymousErrorArea.playback,
+            error: error,
+            stack: stackTrace,
+          ),
+        );
+        try {
+          await addonStore.recordProviderFailure(candidate.providerId, error);
+        } catch (_) {
+          // Provider health accounting is best-effort.
+        }
+        try {
+          await TetoTvDatabase.instance.recordDiagnosticEvent(
+            category: 'stream-preflight',
+            message: '${candidate.providerName}: $error',
+          );
+        } catch (_) {
+          // Local diagnostics must never stop deterministic failover.
+        }
+      }
+    }
+    if (!mounted || generation != _releaseSearchGeneration) return;
+    final automaticBudgetExpired =
+        automatic &&
+        ((_automaticResolveDeadline != null &&
+                !widget.clock().isBefore(_automaticResolveDeadline!)) ||
+            _failedAutoplayWebStreams.length >= _maxAutomaticResolveCandidates);
+    if (automaticBudgetExpired) {
+      setState(() {
+        _resolving = false;
+        _loadingReleases = false;
+        _autoPlayStarted = true;
+        _autoplayBudgetExhausted = true;
+        _status = 'Automatic stream checks timed out';
+        _error = (lastError ?? 'No playable stream passed preflight in time.')
+            .toString()
+            .replaceFirst('FormatException: ', '');
+      });
       return;
     }
-    if (!mounted) return;
-    final release = _releaseForWebStream(stream);
-    await _rememberStreamSelection(release);
-    if (!mounted) return;
-    final ready = _readyForWebStream(
-      stream,
-      validatedUri: validated.uri,
-      validatedHeaders: validated.headers,
-    );
-    final directAlternatives =
-        _webStreams
-            .where((candidate) => candidate.uri != stream.uri)
-            .toList(growable: false)
-          ..sort(
-            (left, right) => compareWebStreamsByAudioAndQuality(
-              left,
-              right,
-              _preferredAudio,
-            ),
-          );
-    final playerUri = Uri(
-      path: '/player',
-      queryParameters: {
-        'source': validated.uri.toString(),
-        'title': '${widget.episode.title} / Episode ${widget.episode.episode}',
-        'anilistId': '${widget.episode.anilistMediaId}',
-        if (widget.episode.malMediaId != null)
-          'malId': '${widget.episode.malMediaId}',
-        'episode': '${widget.episode.episode}',
-      },
-    );
-    setState(() => _resolving = false);
-    context.pushReplacement(
-      playerUri.toString(),
-      extra: PlaybackLaunch(
-        stream: ready,
-        episode: widget.episode,
-        selectedRelease: release,
-        directAlternatives: directAlternatives
-            .map(
-              (candidate) => PlaybackStreamOption(
-                stream: _readyForWebStream(candidate),
-                release: _releaseForWebStream(candidate),
-              ),
-            )
-            .toList(growable: false),
-      ),
-    );
+    if (automatic && !_webSearchFinished && !_preferredWebWaitExpired) {
+      setState(() {
+        _resolving = false;
+        _autoPlayStarted = false;
+        _status = 'Waiting for the remaining web providers…';
+        _error = null;
+      });
+      return;
+    }
+    final canRetryDebrid =
+        !_autoplayDebridExhausted &&
+        _releases.any(
+          (release) =>
+              !_failedResolveHashes.contains(release.infoHash.toLowerCase()),
+        );
+    if (automatic &&
+        (canRetryDebrid || _autoplayWebCandidates(_webStreams).isNotEmpty)) {
+      setState(() {
+        _resolving = false;
+        _autoPlayStarted = false;
+        _status = 'Trying another stream…';
+        _error = null;
+      });
+      Future<void>.microtask(
+        () => _tryStartAutoPlay(generation: generation, allowWebFallback: true),
+      );
+      return;
+    }
+    setState(() {
+      _resolving = false;
+      if (automatic) {
+        // Once the preferred-provider discovery window has elapsed, an
+        // exhausted candidate set is terminal even if unrelated providers
+        // remain hung. Keep autoplay out of the manual picker and make Retry
+        // start a genuinely fresh provider session.
+        _loadingReleases = false;
+        _autoplayBudgetExhausted = true;
+        _autoPlayStarted = true;
+      }
+      _status = 'Stream check failed';
+      _error = (lastError ?? 'No playable web stream passed preflight.')
+          .toString()
+          .replaceFirst('FormatException: ', '');
+    });
   }
 
   void _resolveManual() {
@@ -900,20 +1515,25 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     _resolve(source, selected: source.candidate(widget.episode));
   }
 
-  Future<void> _resolveCandidate(ReleaseCandidate candidate) async {
+  Future<void> _resolveCandidate(
+    ReleaseCandidate candidate, {
+    bool continueAutomaticSequence = false,
+  }) async {
     if (!_hasDebrid) {
       await context.push('/settings/accounts');
+      if (!mounted) return;
       await _initialize();
       return;
     }
-    _beginResolveSequence();
+    if (!continueAutomaticSequence) _beginResolveSequence();
     await _rememberStreamSelection(candidate);
+    if (!mounted) return;
     await _resolve(_SelectedReleaseSource(candidate), selected: candidate);
   }
 
   void _beginResolveSequence() {
     _failedResolveHashes.clear();
-    _automaticResolveDeadline = DateTime.now().add(_automaticResolveTimeBudget);
+    _automaticResolveDeadline = widget.clock().add(_automaticResolveTimeBudget);
   }
 
   String _exhaustedReleaseMessage(int attempted) {
@@ -985,6 +1605,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   Future<void> _rememberPickerPreferences() async {
+    final writePreferences = ref.read(seriesPreferencesWriterProvider);
     if (_languageFilter != _StreamLanguageFilter.all) {
       unawaited(
         ref
@@ -1005,16 +1626,14 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       streamSortMode: _sortMode.name,
     );
     try {
-      await TetoTvDatabase.instance.saveSeriesPreferences(
-        widget.episode.anilistMediaId,
-        _seriesPreferences,
-      );
+      await writePreferences(widget.episode.anilistMediaId, _seriesPreferences);
     } catch (_) {
       // A local preference write must never block stream selection.
     }
   }
 
   Future<void> _rememberStreamSelection(ReleaseCandidate candidate) async {
+    final writePreferences = ref.read(seriesPreferencesWriterProvider);
     _seriesPreferences = _seriesPreferences.copyWith(
       preferredReleaseProvider: candidate.provider,
       clearPreferredReleaseProvider: candidate.provider == null,
@@ -1023,10 +1642,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           releaseGroupKey(candidate.releaseName) == null,
     );
     try {
-      await TetoTvDatabase.instance.saveSeriesPreferences(
-        widget.episode.anilistMediaId,
-        _seriesPreferences,
-      );
+      await writePreferences(widget.episode.anilistMediaId, _seriesPreferences);
     } catch (_) {
       // A local preference write must never block playback.
     }
@@ -1057,6 +1673,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   @override
   void dispose() {
     _releaseSearchGeneration++;
+    _preferredWebWaitTimer?.cancel();
     _magnetController.dispose();
     super.dispose();
   }
@@ -1098,7 +1715,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         color: context.appPalette.secondaryAccent,
       );
     }
-    if (_loadingReleases && _releases.isEmpty && _webStreams.isEmpty) {
+    if (_loadingReleases &&
+        ((_releases.isEmpty && _webStreams.isEmpty) ||
+            (widget.episode.autoPlay && !_autoPlayStarted))) {
       return SizedBox(
         width: 620,
         child: Column(
@@ -1165,6 +1784,71 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         ),
       );
     }
+    final everyDiscoveredWebStreamFailed =
+        _webStreams.isNotEmpty &&
+        _webStreams.every(
+          (stream) => _failedAutoplayWebStreams.contains(_webStreamKey(stream)),
+        );
+    final autoplayFallbacksExhausted =
+        _autoplayBudgetExhausted ||
+        (_autoplayDebridExhausted &&
+            (!_webSearchEnabled ||
+                (_webSearchFinished &&
+                    (_webStreams.isEmpty || everyDiscoveredWebStreamFailed))));
+    final autoplayHasNoResult =
+        widget.episode.autoPlay &&
+        !_loadingReleases &&
+        !_resolving &&
+        ((_releases.isEmpty && _webStreams.isEmpty) ||
+            autoplayFallbacksExhausted ||
+            (_webSearchFinished &&
+                everyDiscoveredWebStreamFailed &&
+                _releases.isEmpty));
+    if (autoplayHasNoResult) {
+      return _Message(
+        icon: Icons.error_outline_rounded,
+        title: 'No playable stream found',
+        body:
+            _error ??
+            'Automatic playback checked every available source. Try the '
+                'search again or go back to the episode page.',
+        action: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ActionButton(
+              label: 'Back',
+              icon: Icons.arrow_back_rounded,
+              onPressed: context.pop,
+            ),
+            const SizedBox(width: 12),
+            _ActionButton(
+              label: 'Retry',
+              icon: Icons.refresh_rounded,
+              onPressed: () => _loadConfiguredReleases(refreshWeb: true),
+            ),
+          ],
+        ),
+      );
+    }
+    if (widget.episode.autoPlay && _autoPlayStarted) {
+      return SizedBox(
+        width: 620,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+              color: context.appPalette.secondaryAccent,
+            ),
+            const SizedBox(height: 22),
+            Text(
+              'Opening the selected stream…',
+              style: Theme.of(context).textTheme.headlineSmall,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
     if ((_releases.isNotEmpty || _webStreams.isNotEmpty) && !_showManual) {
       final filtered = _filteredAndSortedReleases(_releases);
       final filteredWeb = _filteredWebStreams(_webStreams);
@@ -1208,7 +1892,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         onRetry: _lastAttemptedRelease == null
             ? null
             : () => _resolveCandidate(_lastAttemptedRelease!),
-        onRefresh: _loadConfiguredReleases,
+        onRefresh: () => _loadConfiguredReleases(refreshWeb: true),
         onManual: () => setState(() => _showManual = true),
       );
     }

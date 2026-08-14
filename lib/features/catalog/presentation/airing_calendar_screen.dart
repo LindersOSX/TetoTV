@@ -30,7 +30,7 @@ class AiringCalendarScreen extends ConsumerWidget {
           ? Colors.black
           : context.appPalette.background,
       body: SafeArea(
-        minimum: context.responsiveScreenPadding,
+        minimum: context.responsiveScreenPadding.copyWith(top: 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

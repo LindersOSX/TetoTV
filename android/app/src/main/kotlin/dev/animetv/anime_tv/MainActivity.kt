@@ -364,6 +364,10 @@ class MainActivity : FlutterActivity() {
                 data["subtitleMimeType"] as? String,
             )
             putExtra(Media3PlayerActivity.EXTRA_SUBTITLE_LABEL, data["subtitleLabel"] as? String)
+            putExtra(
+                Media3PlayerActivity.EXTRA_SUBTITLE_REJECTED,
+                data["externalSubtitleRejected"] as? Boolean ?: false,
+            )
             putExtra(Media3PlayerActivity.EXTRA_MIME_TYPE, data["mimeType"] as? String)
             putExtra(
                 Media3PlayerActivity.EXTRA_FILE_NAME,
@@ -458,6 +462,10 @@ class MainActivity : FlutterActivity() {
             putExtra(
                 Media3PlayerActivity.EXTRA_TRUSTED_LOCAL_SOURCE,
                 data["trustedLocalSource"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_TRUSTED_PLAYBACK_PROXY,
+                data["trustedPlaybackProxy"] as? Boolean ?: false,
             )
             putExtra(
                 Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,

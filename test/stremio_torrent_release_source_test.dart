@@ -74,6 +74,31 @@ void main() {
     expect(releases.map((release) => release.isDubbed), [true, true, false]);
   });
 
+  test('keeps the installed manifest source stable across episode hashes', () {
+    const sourceId = 'stremio:example.com/addon/manifest.json';
+    final first = StremioTorrentReleaseSource.parseStreams({
+      'streams': [
+        {
+          'name': 'Example Episode 01',
+          'infoHash': '1111111111111111111111111111111111111111',
+        },
+      ],
+    }, sourceId: sourceId);
+    final second = StremioTorrentReleaseSource.parseStreams({
+      'streams': [
+        {
+          'name': 'Example Episode 02',
+          'infoHash': '2222222222222222222222222222222222222222',
+        },
+      ],
+    }, sourceId: sourceId);
+
+    expect(first.single.provider, isNull);
+    expect(second.single.provider, isNull);
+    expect(first.single.sourceId, sourceId);
+    expect(second.single.sourceId, sourceId);
+  });
+
   test('rejects redirects instead of following them to another host', () async {
     final addonDio = Dio()
       ..interceptors.add(

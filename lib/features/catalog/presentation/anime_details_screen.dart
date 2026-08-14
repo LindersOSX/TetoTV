@@ -993,7 +993,7 @@ class _EpisodeToggleButton extends StatelessWidget {
           SizedBox(width: large ? 16 : 8),
           Expanded(
             child: Text(
-              'Skip filler episodes',
+              'Skip filler',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -1028,7 +1028,7 @@ class _EpisodeToggleButton extends StatelessWidget {
       button: true,
       enabled: enabled,
       toggled: value,
-      label: 'Skip filler episodes',
+      label: 'Skip filler',
       child: enabled
           ? TvFocusable(
               focusScale: 1.025,

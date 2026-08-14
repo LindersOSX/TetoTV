@@ -238,6 +238,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         .build()
 
     private var source = ""
+    private var playbackProxyOrigin: NetworkRequestPolicy.Origin? = null
     private var displayTitle = "TetoTV"
     private var artworkUrl = ""
     private var checkpointKey = ""
@@ -404,6 +405,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterImmersiveMode()
         readNativePlayerTheme()
+        if (intent.getBooleanExtra(EXTRA_SUBTITLE_REJECTED, false)) {
+            Toast.makeText(
+                this,
+                "Playing without unsafe or unsupported external subtitles.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
 
         source = normalizeMediaUri(intent.getStringExtra(EXTRA_SOURCE).orEmpty())
         displayTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
@@ -417,6 +425,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
         hasDirectSources = intent.getBooleanExtra(EXTRA_HAS_DIRECT_SOURCES, false)
         val trustedLocalSource = intent.getBooleanExtra(EXTRA_TRUSTED_LOCAL_SOURCE, false)
+        val trustedPlaybackProxy =
+            intent.getBooleanExtra(EXTRA_TRUSTED_PLAYBACK_PROXY, false)
         suppressDiscordPresence = trustedLocalSource
         if (suppressDiscordPresence) {
             // Local filenames and private media-server titles are not part of
@@ -430,9 +440,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         } else {
             null
         }
+        playbackProxyOrigin = if (trustedPlaybackProxy) {
+            NetworkRequestPolicy.trustedPlaybackProxyOrigin(source)
+        } else {
+            null
+        }
         val trustedContentSource = trustedLocalSource &&
             NetworkRequestPolicy.isTrustedContentUri(source)
-        val sourceOrigin = localSourceOrigin ?: publicSourceOrigin
+        val sourceOrigin = playbackProxyOrigin ?: localSourceOrigin ?: publicSourceOrigin
         if (
             source.isBlank() ||
             (sourceOrigin == null && !trustedContentSource && source != SMOKE_VIDEO_URI)
@@ -525,7 +540,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         // Public add-on/debrid URLs must never resolve to the LAN. A Jellyfin
         // URL entered by the viewer is explicitly marked trusted and uses
         // system DNS only for HTTPS; cleartext HTTP is numeric-private-only.
-        if (localSourceOrigin == null) {
+        if (localSourceOrigin == null && playbackProxyOrigin == null) {
             httpClientBuilder.dns(PublicNetworkDns())
         }
         if (sourceOrigin != null && suppliedHeaders.isNotEmpty()) {
@@ -833,7 +848,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
         val subtitleUrl = intent.getStringExtra(EXTRA_SUBTITLE_URL)?.let(::normalizeMediaUri)
         val allowedSubtitleUrl = subtitleUrl?.takeIf {
-            it == SMOKE_SUBTITLE_URI || NetworkRequestPolicy.httpsOrigin(it) != null
+            it == SMOKE_SUBTITLE_URI ||
+                NetworkRequestPolicy.httpsOrigin(it) != null ||
+                (playbackProxyOrigin != null &&
+                    NetworkRequestPolicy.trustedPlaybackProxyOrigin(it) == playbackProxyOrigin)
         }
         if (!allowedSubtitleUrl.isNullOrBlank()) {
             val subtitleMime = inferSubtitleMimeType(
@@ -2964,6 +2982,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_SUBTITLE_MIME_TYPE = "subtitleMimeType"
         const val EXTRA_SUBTITLE_LANGUAGE = "subtitleLanguage"
         const val EXTRA_SUBTITLE_LABEL = "subtitleLabel"
+        const val EXTRA_SUBTITLE_REJECTED = "externalSubtitleRejected"
         const val EXTRA_MIME_TYPE = "mimeType"
         const val EXTRA_FILE_NAME = "fileName"
         const val EXTRA_HEADERS = "headers"
@@ -2989,6 +3008,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
         const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
         const val EXTRA_TRUSTED_LOCAL_SOURCE = "trustedLocalSource"
+        const val EXTRA_TRUSTED_PLAYBACK_PROXY = "trustedPlaybackProxy"
         const val EXTRA_THEME_BACKGROUND_COLOR = "themeBackgroundColor"
         const val EXTRA_THEME_SURFACE_COLOR = "themeSurfaceColor"
         const val EXTRA_THEME_ACCENT_COLOR = "themeAccentColor"
