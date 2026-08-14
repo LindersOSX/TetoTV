@@ -1,6 +1,7 @@
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -183,10 +184,9 @@ class SettingsPreferences {
     this.contentDensity = ContentDensity.standard,
     this.seekBackSeconds = 10,
     this.seekForwardSeconds = 10,
-    // Prefer Android/Fire OS input out of the box. The app-owned remote
-    // keyboard remains available as an explicit accessibility/fallback
-    // choice in Settings.
-    this.useBuiltInKeyboard = false,
+    // Fresh installs start with TetoTV's D-pad keyboard. First-time setup asks
+    // explicitly, and existing installations keep their saved/migrated choice.
+    this.useBuiltInKeyboard = true,
     this.debridStreamsEnabled = true,
     this.webStreamsEnabled = true,
     this.autoSkipIntros = false,
@@ -403,6 +403,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_anonymousUsageCountKey),
       _safeRead(_anonymousCrashReportingKey),
       _safeRead(_preferredAudioKey),
+      _safeRead(initialSetupCompletedStorageKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -467,10 +468,19 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       restored = restored.copyWith(seekForwardSeconds: _seekValue(valueAt(9)));
     }
     if (canRestore(_builtInKeyboardKey, 10)) {
-      // Missing values are fresh/legacy installs that never made a keyboard
-      // choice, so migrate them to the system keyboard. Preserve an explicit
-      // saved opt-in to TetoTV's built-in keyboard.
-      restored = restored.copyWith(useBuiltInKeyboard: valueAt(10) == 'true');
+      final savedKeyboard = valueAt(10);
+      final completedLegacySetup =
+          canRestore(initialSetupCompletedStorageKey, 32) &&
+          valueAt(32) == 'true';
+      // The previous release migrated an existing installation with no saved
+      // keyboard key to device input. Keep that behavior once onboarding was
+      // already completed, while a genuinely empty install gets the new
+      // TetoTV-keyboard default and can choose on the Customize step.
+      restored = restored.copyWith(
+        useBuiltInKeyboard: savedKeyboard == null
+            ? !completedLegacySetup
+            : savedKeyboard == 'true',
+      );
     }
     if (canRestore(_debridStreamsEnabledKey, 11)) {
       restored = restored.copyWith(

@@ -24,44 +24,47 @@ void main() {
       expect(find.byKey(ValueKey('theme-color-${role.name}')), findsOneWidget);
       expect(find.text(role.displayName), findsOneWidget);
     }
+    expect(find.text('Fine adjustments'), findsNothing);
+    expect(find.byType(Slider), findsNothing);
   });
 
-  testWidgets('TV focus starts on Apply and D-pad reaches editable colors', (
-    tester,
-  ) async {
-    final harness = await _pumpStudio(tester);
-    addTearDown(harness.dispose);
+  testWidgets(
+    'TV focus starts on Background and follows the color role graph',
+    (tester) async {
+      final harness = await _pumpStudio(tester);
+      addTearDown(harness.dispose);
 
-    final apply = tester.widget<FilledButton>(
-      find.byKey(const ValueKey('theme-studio-apply')),
-    );
-    expect(apply.autofocus, isTrue);
-    final focusedButton = FocusManager.instance.primaryFocus?.context
-        ?.findAncestorWidgetOfExactType<FilledButton>();
-    expect(focusedButton?.key, const ValueKey('theme-studio-apply'));
+      final background = find.byKey(const ValueKey('theme-color-background'));
+      final surface = find.byKey(const ValueKey('theme-color-surface'));
+      final accent = find.byKey(const ValueKey('theme-color-accent'));
+      expect(_focusNode(tester, background).hasFocus, isTrue);
 
-    final accentTile = find.byKey(const ValueKey('theme-color-accent'));
-    await tester.ensureVisible(accentTile);
-    await tester.pumpAndSettle();
-    final accentFocusable = find.ancestor(
-      of: accentTile,
-      matching: find.byType(FocusableActionDetector),
-    );
-    final accentFocusNode = tester
-        .widget<FocusableActionDetector>(accentFocusable)
-        .focusNode!;
-    accentFocusNode.requestFocus();
-    await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(_focusNode(tester, surface).hasFocus, isTrue);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.select);
-    await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(_focusNode(tester, accent).hasFocus, isTrue);
 
-    expect(
-      find.byKey(const ValueKey('theme-editor-built-in-colors')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
-  });
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(_focusNode(tester, surface).hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('theme-editor-built-in-colors')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
+      expect(find.byType(EditableText), findsNothing);
+      expect(tester.testTextInput.isVisible, isFalse);
+    },
+  );
 
   testWidgets('built-in picker owns initial D-pad focus and Back cancels', (
     tester,
@@ -95,9 +98,8 @@ void main() {
       isTrue,
     );
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
-    expect(FocusManager.instance.primaryFocus, isNotNull);
     expect(
       tester
           .widget<FocusableActionDetector>(selectedDetector)
@@ -105,10 +107,66 @@ void main() {
           ?.hasFocus,
       isFalse,
     );
+    expect(
+      _focusNode(
+        tester,
+        find.byKey(const ValueKey('theme-editor-preset-FF1744')),
+      ).hasFocus,
+      isTrue,
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('theme-editor-swatch')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('theme-editor-built-in-colors')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('theme-studio-screen')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-customize-screen')),
+      findsNothing,
+    );
+    expect(
+      harness.router.routerDelegate.state.uri.path,
+      ThemeStudioScreen.routePath,
+    );
+    expect(_focusNode(tester, accentTile).hasFocus, isTrue);
+  });
+
+  testWidgets('Back from exact hex returns to Theme Studio, not Settings', (
+    tester,
+  ) async {
+    final harness = await _pumpStudio(tester);
+    addTearDown(harness.dispose);
+    final background = find.byKey(const ValueKey('theme-color-background'));
+    await tester.tap(background);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EditableText), findsNothing);
+    expect(tester.testTextInput.isVisible, isFalse);
+    final hexToggle = find.byKey(const ValueKey('theme-editor-toggle-hex'));
+    await tester.ensureVisible(hexToggle);
+    await tester.tap(hexToggle);
+    await tester.pumpAndSettle();
+    expect(find.byType(EditableText), findsOneWidget);
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
     expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
+    expect(find.byKey(const ValueKey('theme-editor-swatch')), findsNothing);
+    expect(find.byKey(const ValueKey('theme-studio-screen')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-customize-screen')),
+      findsNothing,
+    );
+    expect(
+      harness.router.routerDelegate.state.uri.path,
+      ThemeStudioScreen.routePath,
+    );
+    expect(_focusNode(tester, background).hasFocus, isTrue);
   });
 
   testWidgets('built-in picker changes a role without opening hex entry', (
@@ -259,8 +317,21 @@ Future<_StudioHarness> _pumpStudio(
   );
   await controller.load();
   final router = GoRouter(
-    initialLocation: ThemeStudioScreen.routePath,
+    initialLocation: '/settings/customize',
     routes: [
+      GoRoute(
+        path: '/settings/customize',
+        builder: (context, state) => Scaffold(
+          key: const ValueKey('settings-customize-screen'),
+          body: Center(
+            child: FilledButton(
+              key: const ValueKey('open-theme-studio'),
+              onPressed: () => context.push(ThemeStudioScreen.routePath),
+              child: const Text('Open Theme Studio'),
+            ),
+          ),
+        ),
+      ),
       GoRoute(
         path: ThemeStudioScreen.routePath,
         builder: (context, state) => const ThemeStudioScreen(),
@@ -284,7 +355,23 @@ Future<_StudioHarness> _pumpStudio(
     ),
   );
   await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('open-theme-studio')));
+  await tester.pumpAndSettle();
   return _StudioHarness(controller, router);
+}
+
+FocusNode _focusNode(WidgetTester tester, Finder child) {
+  final descendant = find.descendant(
+    of: child,
+    matching: find.byType(FocusableActionDetector),
+  );
+  final detector = descendant.evaluate().isNotEmpty
+      ? descendant
+      : find.ancestor(
+          of: child,
+          matching: find.byType(FocusableActionDetector),
+        );
+  return tester.widget<FocusableActionDetector>(detector).focusNode!;
 }
 
 class _StudioHarness {

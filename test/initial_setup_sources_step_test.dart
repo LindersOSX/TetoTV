@@ -6,6 +6,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
+import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
@@ -34,6 +35,8 @@ void main() {
     expect(find.text('Preferred anime audio'), findsOneWidget);
     expect(find.text('Automatic intro and outro skipping'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('Subtitled'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Subtitled'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Skip intros'));
@@ -54,6 +57,35 @@ void main() {
     expect(preferences.autoSkipOutros, isTrue);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'fresh setup defaults to TetoTV keyboard and saves D-pad choice',
+    (tester) async {
+      await _pumpSetup(tester, const Size(1280, 720));
+
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.text('Text input keyboard'), findsOneWidget);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(InitialSetupScreen)),
+      );
+      expect(
+        container.read(settingsPreferencesProvider).useBuiltInKeyboard,
+        isTrue,
+      );
+
+      await tester.ensureVisible(find.text('Device keyboard'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Device keyboard'));
+      await tester.pumpAndSettle();
+
+      expect(
+        container.read(settingsPreferencesProvider).useBuiltInKeyboard,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('setup asks before enabling anonymous choices or Discord', (
     tester,
@@ -143,6 +175,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('setup repairs a stale Fire TV flag before Discord linking', (
+    tester,
+  ) async {
+    final router = GoRouter(
+      initialLocation: '/setup',
+      routes: [
+        GoRoute(
+          path: '/setup',
+          builder: (context, state) => const InitialSetupScreen(),
+        ),
+        GoRoute(
+          path: '/pair/discord',
+          builder: (context, state) =>
+              const Scaffold(body: Center(child: Text('TV DISCORD PAIRING'))),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    final discord = await _pumpSetup(
+      tester,
+      const Size(1280, 720),
+      isTelevision: false,
+      nativeCategory: AndroidDeviceCategory.television,
+      router: router,
+    );
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Link Discord (optional)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('TV DISCORD PAIRING'), findsOneWidget);
+    expect(discord.authenticateCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('TV setup places Sources between Debrid and tracking', (
     tester,
   ) async {
@@ -189,6 +259,7 @@ Future<_SetupDiscordPlatform> _pumpSetup(
   WidgetTester tester,
   Size size, {
   bool isTelevision = false,
+  AndroidDeviceCategory? nativeCategory,
   GoRouter? router,
 }) async {
   FlutterSecureStorage.setMockInitialValues({
@@ -229,6 +300,15 @@ Future<_SetupDiscordPlatform> _pumpSetup(
         deviceSetupProvider.overrideWith((_) => deviceSetup),
         discordPresencePlatformProvider.overrideWithValue(discord),
         isTelevisionProvider.overrideWithValue(isTelevision),
+        discordAccountLinkResolverProvider.overrideWithValue(
+          DiscordAccountLinkResolver(
+            () async =>
+                nativeCategory ??
+                (isTelevision
+                    ? AndroidDeviceCategory.television
+                    : AndroidDeviceCategory.mobile),
+          ),
+        ),
       ],
       child: router == null
           ? const MaterialApp(home: InitialSetupScreen())

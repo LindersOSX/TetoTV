@@ -2,6 +2,7 @@ package dev.animetv.anime_tv
 
 import android.content.res.Configuration
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscordAuthFlowPolicyTest {
@@ -33,5 +34,11 @@ class DiscordAuthFlowPolicyTest {
                 hasLeanback = false,
             ),
         )
+    }
+
+    @Test
+    fun nativeMobileOauthIsBlockedOnTelevisions() {
+        assertFalse(DiscordAuthFlowPolicy.allowsMobileOAuth(isTelevision = true))
+        assertTrue(DiscordAuthFlowPolicy.allowsMobileOAuth(isTelevision = false))
     }
 }

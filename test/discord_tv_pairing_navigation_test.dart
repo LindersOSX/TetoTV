@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:flutter/material.dart';
@@ -31,11 +32,43 @@ void main() {
     expect(discord.authenticateCalls, 1);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'late Fire TV detection repairs stale startup flag without mobile OAuth',
+    (tester) async {
+      final discord = await _pumpAccounts(
+        tester,
+        isTelevision: false,
+        nativeCategory: AndroidDeviceCategory.television,
+      );
+      await _tapConnectDiscord(tester);
+
+      expect(find.text('TV DISCORD PAIRING'), findsOneWidget);
+      expect(discord.authenticateCalls, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('unknown native classification fails closed to TV QR', (
+    tester,
+  ) async {
+    final discord = await _pumpAccounts(
+      tester,
+      isTelevision: false,
+      nativeCategory: AndroidDeviceCategory.unknown,
+    );
+    await _tapConnectDiscord(tester);
+
+    expect(find.text('TV DISCORD PAIRING'), findsOneWidget);
+    expect(discord.authenticateCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<_SettingsDiscordPlatform> _pumpAccounts(
   WidgetTester tester, {
   required bool isTelevision,
+  AndroidDeviceCategory? nativeCategory,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1280, 720);
@@ -65,6 +98,15 @@ Future<_SettingsDiscordPlatform> _pumpAccounts(
       overrides: [
         isTelevisionProvider.overrideWithValue(isTelevision),
         discordPresencePlatformProvider.overrideWithValue(discord),
+        discordAccountLinkResolverProvider.overrideWithValue(
+          DiscordAccountLinkResolver(
+            () async =>
+                nativeCategory ??
+                (isTelevision
+                    ? AndroidDeviceCategory.television
+                    : AndroidDeviceCategory.mobile),
+          ),
+        ),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),

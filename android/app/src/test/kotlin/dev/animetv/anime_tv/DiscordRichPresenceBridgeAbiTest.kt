@@ -95,4 +95,31 @@ class DiscordRichPresenceBridgeAbiTest {
             clearIndex >= 0 && nativeCancelIndex > clearIndex,
         )
     }
+
+    @Test
+    fun `TV authentication is rejected before native browser authorization`() {
+        val relativeSource =
+            "src/main/kotlin/dev/animetv/anime_tv/DiscordRichPresenceBridge.kt"
+        val workingDirectory = System.getProperty("user.dir") ?: "."
+        val sourceFile = generateSequence(File(workingDirectory)) { it.parentFile }
+            .take(6)
+            .flatMap { directory ->
+                sequenceOf(
+                    File(directory, relativeSource),
+                    File(directory, "app/$relativeSource"),
+                    File(directory, "android/app/$relativeSource"),
+                )
+            }
+            .firstOrNull(File::isFile)
+        assertTrue("Discord bridge source must be available to the contract test", sourceFile != null)
+        val branch = sourceFile!!.readText()
+            .substringAfter("\"discordAuthenticate\" -> {", "")
+            .substringBefore("\"discordCancelAuthentication\" -> {")
+        val guardIndex = branch.indexOf("if (!allowsMobileOAuth)")
+        val nativeIndex = branch.indexOf("nativeAuthenticate(useDeviceAuthFlow)")
+        assertTrue(
+            "TV guard must run before the browser-opening native authorization call",
+            guardIndex >= 0 && nativeIndex > guardIndex,
+        )
+    }
 }

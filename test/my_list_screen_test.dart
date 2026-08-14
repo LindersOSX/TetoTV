@@ -11,6 +11,7 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -165,8 +166,23 @@ void main() {
     );
     expect(find.text('TetoFan'), findsOneWidget);
     expect(find.text('MALFan'), findsOneWidget);
-    expect(find.text('AniList · 120 titles · 2400 eps'), findsOneWidget);
-    expect(find.text('MAL · Mean 8.1/10'), findsOneWidget);
+    expect(find.text('AniList'), findsOneWidget);
+    expect(find.text('MAL'), findsOneWidget);
+    final anilistStats = tester.widget<Text>(
+      find.byKey(const ValueKey('main-nav-profile-stats-anilist')),
+    );
+    expect(anilistStats.data, contains('120 titles'));
+    expect(anilistStats.data, contains('2.4K eps'));
+    expect(anilistStats.data, contains('800h watched'));
+    expect(anilistStats.data, contains('82.4/100 mean'));
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('main-nav-profile-stats-myanimelist')),
+          )
+          .data,
+      '8.1/10 mean',
+    );
     expect(
       tester.getTopLeft(card).dy,
       lessThan(tester.getTopLeft(find.text('Watching').first).dy),
@@ -178,7 +194,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('linked profiles collapse to avatars on a narrow screen', (
+  testWidgets('linked profiles stay labelled on a narrow screen', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -223,14 +239,229 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-summary')),
       findsOneWidget,
     );
-    expect(find.text('TetoFan'), findsNothing);
+    expect(find.text('AniList'), findsOneWidget);
+    expect(find.text('TetoFan'), findsOneWidget);
+    expect(find.text('Linked account'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-profile-summary')),
         matching: find.byType(NetworkArtwork),
       ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('tracker header fits every responsive breakpoint', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(330, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const profiles = {
+      TrackingProvider.anilist: TrackingAccountProfile(
+        provider: TrackingProvider.anilist,
+        username: 'TetoFan',
+        avatarUrl: 'https://img.anili.st/avatar.png',
+        animeCount: 120,
+        episodesWatched: 2400,
+        minutesWatched: 48000,
+        meanScore: 82.4,
+      ),
+      TrackingProvider.myAnimeList: TrackingAccountProfile(
+        provider: TrackingProvider.myAnimeList,
+        username: 'MALFan',
+        animeCount: 94,
+        meanScore: 8.1,
+      ),
+    };
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(profiles: profiles),
+            ),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: MainNavigationBar(
+              active: MainNavigationDestination.home,
+              preferences: SettingsPreferences(),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    for (final width in <double>[330, 430, 820, 1200]) {
+      tester.view.physicalSize = Size(width, 720);
+      await tester.pump();
+
+      final navigation = find.byKey(const ValueKey('main-navigation'));
+      final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+      final settings = find.byKey(const ValueKey('main-nav-settings'));
+      expect(profile, findsOneWidget, reason: 'width $width');
+      expect(settings, findsOneWidget, reason: 'width $width');
+      expect(
+        tester.getRect(settings).right,
+        closeTo(tester.getRect(navigation).right, .01),
+        reason: 'Settings must remain at the far-right at width $width',
+      );
+      expect(
+        tester.getRect(profile).right,
+        lessThanOrEqualTo(tester.getRect(settings).left),
+        reason: 'Profile and Settings must not overlap at width $width',
+      );
+      expect(tester.takeException(), isNull, reason: 'width $width');
+    }
+
+    expect(find.text('MALFan'), findsOneWidget);
+  });
+
+  testWidgets('1080p TV header shows avatar identity and useful stats', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                profiles: {
+                  TrackingProvider.anilist: TrackingAccountProfile(
+                    provider: TrackingProvider.anilist,
+                    username: 'LivingRoomFan',
+                    avatarUrl: 'https://img.anili.st/avatar.png',
+                    animeCount: 71,
+                    episodesWatched: 804,
+                    minutesWatched: 24120,
+                    meanScore: 78.6,
+                  ),
+                },
+              ),
+            ),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: MainNavigationBar(
+              active: MainNavigationDestination.home,
+              preferences: SettingsPreferences(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+    final settings = find.byKey(const ValueKey('main-nav-settings'));
+    final navigation = find.byKey(const ValueKey('main-navigation'));
+    expect(find.text('AniList'), findsOneWidget);
+    expect(find.text('LivingRoomFan'), findsOneWidget);
+    expect(
+      find.descendant(of: profile, matching: find.byType(NetworkArtwork)),
       findsOneWidget,
     );
+    final stats = tester.widget<Text>(
+      find.byKey(const ValueKey('main-nav-profile-stats-anilist')),
+    );
+    expect(stats.data, contains('71 titles'));
+    expect(stats.data, contains('804 eps'));
+    expect(stats.data, contains('402h watched'));
+    expect(
+      tester.getRect(settings).right,
+      closeTo(tester.getRect(navigation).right, .01),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('profile insertion keeps Settings focus and D-pad order stable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final accounts = _StaticTrackingAccountsController(
+      const TrackingAccountsState(),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith((_) => accounts),
+        ],
+        child: const MaterialApp(
+          home: TvShortcuts(
+            child: Scaffold(
+              body: MainNavigationBar(
+                active: MainNavigationDestination.home,
+                preferences: SettingsPreferences(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    FocusableActionDetector settingsDetector() =>
+        tester.widget<FocusableActionDetector>(
+          find.descendant(
+            of: find.byKey(const ValueKey('main-nav-settings')),
+            matching: find.byType(FocusableActionDetector),
+          ),
+        );
+
+    settingsDetector().focusNode!.requestFocus();
+    await tester.pump();
+    expect(settingsDetector().focusNode!.hasFocus, isTrue);
+
+    accounts.replace(
+      const TrackingAccountsState(
+        profiles: {
+          TrackingProvider.anilist: TrackingAccountProfile(
+            provider: TrackingProvider.anilist,
+            username: 'TetoFan',
+            animeCount: 120,
+          ),
+        },
+      ),
+    );
+    await tester.pump();
+    expect(settingsDetector().focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    final profileDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-profile-summary')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(profileDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(settingsDetector().focusNode!.hasFocus, isTrue);
+
+    accounts.replace(const TrackingAccountsState());
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-summary')),
+      findsNothing,
+    );
+    expect(settingsDetector().focusNode!.hasFocus, isTrue);
     expect(tester.takeException(), isNull);
   });
 
@@ -499,6 +730,8 @@ class _StaticTrackingAccountsController extends TrackingAccountsController {
 
   @override
   Future<void> load() async {}
+
+  void replace(TrackingAccountsState next) => state = next;
 }
 
 class _TrackingAccountsRef extends Fake implements Ref {}
