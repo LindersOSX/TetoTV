@@ -47,6 +47,7 @@ class _VlcSmokeApp extends StatelessWidget {
         debridService: DebridService.realDebrid,
         launch: launch,
         onUseMpv: (_, _, _, _) {},
+        onStreamAdopted: (_, _) async {},
       ),
     );
   }

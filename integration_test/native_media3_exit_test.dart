@@ -45,6 +45,7 @@ void main() {
               launch: _launch,
               onUseMpv: (_, _, _) => engineSwitches++,
               onUseVlc: (_, _, _) => engineSwitches++,
+              onStreamAdopted: (_, _) async {},
             ),
           ),
         ],

@@ -392,6 +392,13 @@ bool _isNonPublicAddress(InternetAddress address) {
       bytes.sublist(4, 12).every((byte) => byte == 0);
   final nat64MapsNonPublic =
       isNat64WellKnown && _isNonPublicIpv4(bytes.sublist(12));
+  final isNat64LocalUse =
+      bytes[0] == 0x00 &&
+      bytes[1] == 0x64 &&
+      bytes[2] == 0xff &&
+      bytes[3] == 0x9b &&
+      bytes[4] == 0x00 &&
+      bytes[5] == 0x01; // 64:ff9b:1::/48 (RFC 8215 local-use translation)
   final is6to4 = bytes[0] == 0x20 && bytes[1] == 0x02;
   final sixToFourMapsNonPublic =
       is6to4 && _isNonPublicIpv4(bytes.sublist(2, 6));
@@ -404,6 +411,7 @@ bool _isNonPublicAddress(InternetAddress address) {
       isMulticast ||
       isDocumentation ||
       nat64MapsNonPublic ||
+      isNat64LocalUse ||
       sixToFourMapsNonPublic;
 }
 

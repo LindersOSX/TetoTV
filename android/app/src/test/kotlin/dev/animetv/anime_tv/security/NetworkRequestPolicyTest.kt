@@ -75,6 +75,28 @@ class NetworkRequestPolicyTest {
     }
 
     @Test
+    fun `playback proxy trust accepts only opaque ipv4 loopback capabilities`() {
+        val session = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        val resource = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assertEquals(
+            NetworkRequestPolicy.Origin("http", "127.0.0.1", 43123),
+            NetworkRequestPolicy.trustedPlaybackProxyOrigin(
+                "http://127.0.0.1:43123/tetotv-web/v1/$session/$resource",
+            ),
+        )
+        listOf(
+            "http://localhost:43123/tetotv-web/v1/$session/$resource",
+            "http://192.168.1.2:43123/tetotv-web/v1/$session/$resource",
+            "https://127.0.0.1:43123/tetotv-web/v1/$session/$resource",
+            "http://127.0.0.1:43123/tetotv-web/v1/short/$resource",
+            "http://127.0.0.1:43123/tetotv-web/v1/$session/$resource?url=https://evil.example",
+            "http://127.0.0.1:43123/video.mp4",
+        ).forEach { value ->
+            assertNull(value, NetworkRequestPolicy.trustedPlaybackProxyOrigin(value))
+        }
+    }
+
+    @Test
     fun `trusted local document requires a hierarchical content provider uri`() {
         assertTrue(
             NetworkRequestPolicy.isTrustedContentUri(
@@ -176,6 +198,7 @@ class NetworkRequestPolicyTest {
             "fe80::1",
             "fec0::1",
             "ff02::1",
+            "64:ff9b:1::1",
         ).forEach { value ->
             assertFalse(value, NetworkRequestPolicy.isPublicNetworkAddress(numericAddress(value)))
         }

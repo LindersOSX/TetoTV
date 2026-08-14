@@ -17,6 +17,7 @@ import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
@@ -218,7 +219,35 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
     // Riverpod invalidates ConsumerState.ref before State.dispose is invoked.
     // Use the dependency captured while mounted instead of reading ref here.
     _usageReporter?.setStreaming(false);
+    unawaited(_activeLaunch.stream.playbackLease?.close());
     super.dispose();
+  }
+
+  Future<void> _adoptPlaybackStream(
+    StreamReady stream,
+    ReleaseCandidate release,
+  ) async {
+    final previous = _activeLaunch.stream;
+    _activeSource = stream.uri.toString();
+    _activeLaunch = PlaybackLaunch(
+      stream: stream,
+      episode: _activeLaunch.episode,
+      selectedRelease: release,
+      alternatives: _activeLaunch.alternatives
+          .where((candidate) => candidate.infoHash != release.infoHash)
+          .toList(growable: false),
+      directAlternatives: _activeLaunch.directAlternatives
+          .where((option) => option.stream.uri != stream.uri)
+          .toList(growable: false),
+    );
+    if (!identical(previous.playbackLease, stream.playbackLease)) {
+      try {
+        await previous.playbackLease?.close();
+      } catch (_) {
+        // The new stream already owns playback. Expiry remains a safe
+        // backstop if a platform request prevents immediate proxy teardown.
+      }
+    }
   }
 
   Future<void> _loadDevicePreference() async {
@@ -259,8 +288,12 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           : preferMpvForInitialStream(widget.launch.stream)
           ? _TvPlaybackEngine.mpv
           : _TvPlaybackEngine.nativeMedia3;
+      final previousLease = _activeLaunch.stream.playbackLease;
       _activeSource = widget.source;
       _activeLaunch = widget.launch;
+      if (!identical(previousLease, _activeLaunch.stream.playbackLease)) {
+        unawaited(previousLease?.close());
+      }
       _resumeOverride = null;
       _manualEngineSelection = false;
       _profileReady =
@@ -289,6 +322,10 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           debridService: previousStream.debridService,
           headers: previousStream.headers,
           externalSubtitle: previousStream.externalSubtitle,
+          mediaContentType: previousStream.mediaContentType,
+          subtitleContentType: previousStream.subtitleContentType,
+          externalSubtitleRejected: previousStream.externalSubtitleRejected,
+          playbackLease: previousStream.playbackLease,
           providerId: previousStream.providerId,
           providerName: previousStream.providerName,
         );
@@ -358,6 +395,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           selectedStream: stream,
           discoveredDirectStreams: directStreams,
         ),
+        onStreamAdopted: _adoptPlaybackStream,
         onSelectEngine: (player, position, stream, release, directStreams) =>
             _switchEngine(
               _engineForPreference(player),
@@ -392,6 +430,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           selectedStream: stream,
           discoveredDirectStreams: directStreams,
         ),
+        onStreamAdopted: _adoptPlaybackStream,
         onSelectEngine: (player, position, stream, release, directStreams) =>
             _switchEngine(
               _engineForPreference(player),
@@ -431,6 +470,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
         resume: position,
         selectedStream: stream,
       ),
+      onStreamAdopted: _adoptPlaybackStream,
     );
   }
 }
@@ -451,6 +491,7 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
     required this.debridService,
     required this.launch,
     required this.onUseVlc,
+    required this.onStreamAdopted,
     this.onSelectEngine,
     this.initialPosition,
     this.subtitle,
@@ -472,6 +513,8 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
     List<PlaybackStreamOption> directStreams,
   )
   onUseVlc;
+  final Future<void> Function(StreamReady stream, ReleaseCandidate release)
+  onStreamAdopted;
   final void Function(
     PreferredPlayer player,
     Duration position,
@@ -514,6 +557,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   bool _controlsVisible = true;
   bool _progressHandled = false;
   bool _completionHandled = false;
+  final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
   bool _preferredAudioSelected = false;
   bool _preferredSubtitleSelected = false;
   String? _trackMessage;
@@ -551,7 +595,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   List<PlaybackStreamOption> _directStreamOptions = const [];
   StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
   final Set<String> _failedDirectStreamUris = {};
-  int _alternativeIndex = 0;
+  final Set<ReleaseCandidate> _attemptedReleaseAlternatives = {};
   bool _failingOver = false;
   bool _prewarming = false;
   bool _prewarmed = false;
@@ -599,6 +643,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     options: _directStreamOptions,
     failedUris: _failedDirectStreamUris,
   );
+  PlaybackAudioPreference get _effectiveAudioPreference =>
+      _seriesPreferences.audioPreferenceSet
+      ? playbackAudioPreferenceForLanguage(_seriesPreferences.audioLanguage) ??
+            _audioPreference
+      : _audioPreference;
 
   Future<void> _bootstrapPlayback() async {
     Duration? resume = widget.initialPosition;
@@ -763,7 +812,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     unawaited(_startWebSourceDiscovery());
     _scheduleControlsHide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _playControlFocus.requestFocus();
+      if (!mounted) return;
+      _playControlFocus.requestFocus();
+      if (_currentStream.externalSubtitleRejected) {
+        _showTrackMessage(
+          'External subtitles were blocked because they were unsafe or unsupported.',
+        );
+      }
     });
   }
 
@@ -1120,6 +1175,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
+    if (!_nextEpisodeHandoff.tryEnter()) return;
     try {
       final catalog = ref.read(catalogClientProvider);
       final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
@@ -1157,12 +1213,24 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (!mounted || decision.episode == null) return;
       final nextEp = decision.episode!;
       if (!mounted) return;
+      final preferredProvider = _currentRelease.provider?.trim();
+      final preferredSourceId = _currentRelease.sourceId.trim();
+      final preferredAuthor = releaseGroupKey(_currentRelease.releaseName);
+      final preferredWebProviderId = _currentStream.providerId?.trim();
       final query = {
         'anilistId': widget.anilistMediaId.toString(),
         'title': details.title,
         'synonyms': details.synonyms.join('|'),
         'episode': nextEp.toString(),
         'autoplay': '1',
+        if (preferredProvider != null && preferredProvider.isNotEmpty)
+          'preferredProvider': preferredProvider,
+        if (preferredSourceId.isNotEmpty)
+          'preferredSourceId': preferredSourceId,
+        if (preferredAuthor != null && preferredAuthor.isNotEmpty)
+          'preferredAuthor': preferredAuthor,
+        if (preferredWebProviderId != null && preferredWebProviderId.isNotEmpty)
+          'preferredWebProviderId': preferredWebProviderId,
         if (details.seasonYear != null) 'year': details.seasonYear.toString(),
         if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
         if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
@@ -1189,7 +1257,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         // pop instead of leaving a hidden, non-interactive screen behind.
         if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
       }
-    } catch (_) {}
+    } catch (_) {
+      // Completion remains on the current player when the next episode cannot
+      // be prepared. A later manual Next action may retry the handoff.
+    } finally {
+      if (!_engineHandoffInProgress) {
+        _nextEpisodeHandoff.leave();
+      }
+    }
   }
 
   Future<void> _syncProgress() async {
@@ -1215,35 +1290,40 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     } catch (_) {}
   }
 
-  Future<void> _openMedia({Duration? resume}) => _trackPlayerMutation(() async {
-    _completionHandled = false;
-    final persistenceWasReady = _playbackPersistenceReady;
-    if (resume != null) _playbackPersistenceReady = false;
-    try {
-      await _configureNativePlayback();
-      await _player.open(Media(_source, httpHeaders: _httpHeaders), play: true);
-      await _applySubtitle();
-      if (resume != null) {
-        _lastResumeSeekSucceeded = await _restoreResumePosition(resume);
-      }
-      if (_engineHandoffInProgress) return;
-      _startVideoWatchdog();
-      _startPerformanceWatchdog();
-    } catch (error, stackTrace) {
-      if (mounted && !_engineHandoffInProgress) {
-        unawaited(
-          recordAnonymousHandledError(
-            area: AnonymousErrorArea.playback,
-            error: error,
-            stack: stackTrace,
-          ),
-        );
-        setState(() => _playbackError = error.toString());
-      }
-    } finally {
-      if (persistenceWasReady) _playbackPersistenceReady = true;
-    }
-  });
+  Future<void> _openMedia({Duration? resume, bool propagateFailure = false}) =>
+      _trackPlayerMutation(() async {
+        _completionHandled = false;
+        final persistenceWasReady = _playbackPersistenceReady;
+        if (resume != null) _playbackPersistenceReady = false;
+        try {
+          await _configureNativePlayback();
+          await _player.open(
+            Media(_source, httpHeaders: _httpHeaders),
+            play: true,
+          );
+          await _applySubtitle();
+          if (resume != null) {
+            _lastResumeSeekSucceeded = await _restoreResumePosition(resume);
+          }
+          if (_engineHandoffInProgress) return;
+          _startVideoWatchdog();
+          _startPerformanceWatchdog();
+        } catch (error, stackTrace) {
+          if (propagateFailure) rethrow;
+          if (mounted && !_engineHandoffInProgress) {
+            unawaited(
+              recordAnonymousHandledError(
+                area: AnonymousErrorArea.playback,
+                error: error,
+                stack: stackTrace,
+              ),
+            );
+            setState(() => _playbackError = error.toString());
+          }
+        } finally {
+          if (persistenceWasReady) _playbackPersistenceReady = true;
+        }
+      });
 
   Future<void> _trackPlayerMutation(Future<void> Function() action) async {
     if (_engineHandoffInProgress) return;
@@ -1526,13 +1606,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   Future<StreamReady?> _resolveRelease(
     ReleaseCandidate release,
-    EpisodeReference episode,
-  ) async {
+    EpisodeReference episode, {
+    DebridTokenService? tokenService,
+  }) async {
+    if (!mounted || _engineHandoffInProgress) return null;
+    final DebridTokenService capturedTokenService =
+        tokenService ?? ref.read(debridTokenServiceProvider);
     String? token;
     try {
-      token = await ref
-          .read(debridTokenServiceProvider)
-          .accessToken(widget.debridService);
+      token = await capturedTokenService.accessToken(widget.debridService);
     } catch (_) {
       throw DebridProviderAccessException(
         widget.debridService,
@@ -1541,6 +1623,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             'refreshed. Reconnect it in Accounts, then try again.',
       );
     }
+    if (!mounted || _engineHandoffInProgress) return null;
     if (token == null || token.isEmpty) {
       throw DebridProviderAccessException(widget.debridService);
     }
@@ -1551,29 +1634,55 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       source: source,
     );
     await for (final resolution in resolver.resolve(episode)) {
+      if (!mounted || _engineHandoffInProgress) return null;
       if (resolution is StreamReady) return resolution;
     }
     return null;
   }
 
   Future<void> _tryNextStream(String reason) async {
-    if (_failingOver) return;
+    if (!mounted || _engineHandoffInProgress || _failingOver) return;
     _failingOver = true;
     final position = _player.state.position;
+    final tokenService = ref.read(debridTokenServiceProvider);
     Object? terminalFailure;
     try {
+      final classOrder = playerFailoverClassOrder(
+        currentIsWeb: _currentStream.isWebStream,
+      );
+      final directFirst = classOrder.first == PlayerFailoverClass.directWeb;
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
+      if (!mounted || _engineHandoffInProgress) return;
       await _database.recordStreamFailure(
         deviceKey: profile.key,
         infoHash: _currentRelease.infoHash,
         reason: reason,
       );
-      if (await _switchToNextDirectStream(position)) return;
-      while (_alternativeIndex < widget.launch.alternatives.length) {
-        final candidate = widget.launch.alternatives[_alternativeIndex++];
-        _showTrackMessage('Trying another compatible stream…');
+      if (!mounted || _engineHandoffInProgress) return;
+      if (directFirst) {
+        await _waitForInFlightDirectDiscovery();
+        if (!mounted || _engineHandoffInProgress) return;
+        if (await _switchToNextDirectStream(position)) return;
+      }
+      if (!mounted || _engineHandoffInProgress) return;
+      for (final candidate in _remainingReleaseFailoverCandidates().take(12)) {
+        _attemptedReleaseAlternatives.add(candidate);
+        final previousSource = _source;
+        final previousRelease = _currentRelease;
+        final previousStream = _currentStream;
+        final previousPreferences = _seriesPreferences;
+        final previousAudioSelected = _preferredAudioSelected;
+        final previousSubtitleSelected = _preferredSubtitleSelected;
+        final previousSoftwareFallbackUsed = _softwareFallbackUsed;
+        final previousDecoderMode = _decoderMode;
+        final previousVideoFrameSeen = _videoFrameSeen;
         try {
-          final ready = await _resolveRelease(candidate, widget.launch.episode);
+          final ready = await _resolveRelease(
+            candidate,
+            widget.launch.episode,
+            tokenService: tokenService,
+          );
+          if (!mounted || _engineHandoffInProgress) return;
           if (ready == null) continue;
           _source = ready.uri.toString();
           _currentRelease = candidate;
@@ -1592,17 +1701,28 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
               : PlaybackDecoderMode.hardwareSafe;
           _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
           _videoFrameSeen = false;
-          await _openMedia(resume: position);
+          await _openMedia(resume: position, propagateFailure: true);
+          if (!mounted || _engineHandoffInProgress) return;
+          await widget.onStreamAdopted(ready, candidate);
           if (_skips.isEmpty) {
             _skipLoadComplete = false;
             _skipLoadAttempts = 0;
             _skipDurationCandidate = null;
             _scheduleSkipSegmentLoad(_player.state.duration);
           }
-          if (mounted) setState(() => _playbackError = null);
-          _showTrackMessage('Switched to a compatible stream');
+          setState(() => _playbackError = null);
           return;
         } catch (error) {
+          if (!mounted || _engineHandoffInProgress) return;
+          _source = previousSource;
+          _currentRelease = previousRelease;
+          _currentStream = previousStream;
+          _seriesPreferences = previousPreferences;
+          _preferredAudioSelected = previousAudioSelected;
+          _preferredSubtitleSelected = previousSubtitleSelected;
+          _softwareFallbackUsed = previousSoftwareFallbackUsed;
+          _decoderMode = previousDecoderMode;
+          _videoFrameSeen = previousVideoFrameSeen;
           if (isTerminalDebridFailoverFailure(error)) {
             terminalFailure = error;
             break;
@@ -1610,7 +1730,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           // Continue only through candidate-specific/cache-miss failures.
         }
       }
-      if (mounted) {
+      if (!directFirst) {
+        if (!mounted || _engineHandoffInProgress) return;
+        await _waitForInFlightDirectDiscovery();
+        if (!mounted || _engineHandoffInProgress) return;
+        if (await _switchToNextDirectStream(position)) return;
+      }
+      if (mounted && !_engineHandoffInProgress) {
         await _fallbackToVlc(
           terminalFailure?.toString() ??
               'Every compatible debrid stream failed. $reason',
@@ -1622,44 +1748,153 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<bool> _switchToNextDirectStream(Duration position) async {
-    if (!_currentStream.isWebStream) return false;
-    _failedDirectStreamUris.add(_currentStream.uri.toString());
-    final candidates = _directStreamOptions.where(
-      (option) =>
-          option.stream.isWebStream &&
-          !_failedDirectStreamUris.contains(option.stream.uri.toString()),
-    );
-    for (final candidate in candidates) {
-      final requestedUri = candidate.stream.uri;
-      _failedDirectStreamUris.add(requestedUri.toString());
-      final option = await _preflightDirectStream(candidate);
-      if (option == null) continue;
-      if (validatedRedirectWasAlreadyAttempted(
-        requestedUri: requestedUri,
-        validatedUri: option.stream.uri,
-        attemptedUris: _failedDirectStreamUris,
-      )) {
-        continue;
-      }
-      _failedDirectStreamUris.add(option.stream.uri.toString());
-      _currentStream = option.stream;
-      _currentRelease = option.release;
-      _source = option.stream.uri.toString();
-      _preferredAudioSelected = false;
-      _preferredSubtitleSelected = false;
-      _softwareFallbackUsed = false;
-      _decoderMode = releaseRequiresSoftwareDecoder(option.release)
-          ? PlaybackDecoderMode.software
-          : PlaybackDecoderMode.hardwareSafe;
-      _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
-      _videoFrameSeen = false;
-      await _openMedia(resume: position);
-      if (!mounted) return true;
-      setState(() => _playbackError = null);
-      _showTrackMessage('Recovered with ${playbackStreamOptionLabel(option)}');
-      return true;
+    if (!mounted || _engineHandoffInProgress) {
+      return false;
     }
-    return false;
+    if (_currentStream.isWebStream) {
+      _failedDirectStreamUris.add(_currentStream.uri.toString());
+    }
+    final opened = await openFirstViablePlayerCandidate(
+      candidates: _remainingDirectFailoverCandidates(),
+      resumePosition: position,
+      isActive: () => mounted && !_engineHandoffInProgress,
+      attempt: (candidate, resumePosition) async {
+        final requestedUri = candidate.stream.uri;
+        _failedDirectStreamUris.add(requestedUri.toString());
+        final previousSource = _source;
+        final previousRelease = _currentRelease;
+        final previousStream = _currentStream;
+        final previousAudioSelected = _preferredAudioSelected;
+        final previousSubtitleSelected = _preferredSubtitleSelected;
+        final previousSoftwareFallbackUsed = _softwareFallbackUsed;
+        final previousDecoderMode = _decoderMode;
+        final previousVideoFrameSeen = _videoFrameSeen;
+        PlaybackStreamOption? preparedOption;
+        try {
+          final option = await _preflightDirectStream(candidate, silent: true);
+          preparedOption = option;
+          if (!mounted || _engineHandoffInProgress) {
+            await option?.stream.playbackLease?.close();
+            return false;
+          }
+          if (option == null) return false;
+          if (validatedRedirectWasAlreadyAttempted(
+            requestedUri: requestedUri,
+            validatedUri: option.stream.uri,
+            attemptedUris: _failedDirectStreamUris,
+          )) {
+            await option.stream.playbackLease?.close();
+            return false;
+          }
+          _failedDirectStreamUris.add(option.stream.uri.toString());
+          _currentStream = option.stream;
+          _currentRelease = option.release;
+          _source = option.stream.uri.toString();
+          _preferredAudioSelected = false;
+          _preferredSubtitleSelected = false;
+          _softwareFallbackUsed = false;
+          _decoderMode = releaseRequiresSoftwareDecoder(option.release)
+              ? PlaybackDecoderMode.software
+              : PlaybackDecoderMode.hardwareSafe;
+          _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
+          _videoFrameSeen = false;
+          await _openMedia(resume: resumePosition, propagateFailure: true);
+          if (!mounted || _engineHandoffInProgress) {
+            await option.stream.playbackLease?.close();
+            return false;
+          }
+          await widget.onStreamAdopted(option.stream, option.release);
+          preparedOption = null;
+          setState(() => _playbackError = null);
+          return true;
+        } catch (_) {
+          await preparedOption?.stream.playbackLease?.close();
+          if (!mounted || _engineHandoffInProgress) rethrow;
+          _source = previousSource;
+          _currentRelease = previousRelease;
+          _currentStream = previousStream;
+          _preferredAudioSelected = previousAudioSelected;
+          _preferredSubtitleSelected = previousSubtitleSelected;
+          _softwareFallbackUsed = previousSoftwareFallbackUsed;
+          _decoderMode = previousDecoderMode;
+          _videoFrameSeen = previousVideoFrameSeen;
+          rethrow;
+        }
+      },
+    );
+    return opened != null;
+  }
+
+  Future<void> _waitForInFlightDirectDiscovery() async {
+    if (_remainingDirectFailoverCandidates().isNotEmpty) {
+      return;
+    }
+    await _startWebSourceDiscovery();
+    if (!mounted || _engineHandoffInProgress) return;
+    await waitForPlayerFailoverCandidates(
+      snapshot: _remainingDirectFailoverCandidates,
+      isActive: () => mounted && !_engineHandoffInProgress,
+    );
+  }
+
+  List<ReleaseCandidate> _remainingReleaseFailoverCandidates() {
+    final candidates = widget.launch.alternatives
+        .where(
+          (candidate) => !_attemptedReleaseAlternatives.contains(candidate),
+        )
+        .toList();
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (candidate) =>
+          releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      affinityRank: _releaseFailoverAffinity,
+    );
+  }
+
+  List<PlaybackStreamOption> _remainingDirectFailoverCandidates() {
+    final candidates = _directStreamOptions
+        .where(
+          (option) =>
+              option.stream.isWebStream &&
+              !_failedDirectStreamUris.contains(option.stream.uri.toString()),
+        )
+        .toList();
+    final currentProvider = _currentStream.providerId?.trim().toLowerCase();
+    int affinityRank(PlaybackStreamOption option) {
+      final provider = option.stream.providerId?.trim().toLowerCase();
+      final providerRank =
+          provider != null && provider.isNotEmpty && provider == currentProvider
+          ? 0
+          : 1;
+      return (providerRank * 4) + _releaseFailoverAffinity(option.release);
+    }
+
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (option) =>
+          releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+      affinityRank: affinityRank,
+    );
+  }
+
+  int _releaseFailoverAffinity(ReleaseCandidate candidate) {
+    final currentProvider = _currentRelease.provider?.trim().toLowerCase();
+    final candidateProvider = candidate.provider?.trim().toLowerCase();
+    final sameProvider =
+        currentProvider != null &&
+        currentProvider.isNotEmpty &&
+        candidateProvider == currentProvider;
+    final sameSource =
+        _currentRelease.sourceId.trim().toLowerCase() ==
+        candidate.sourceId.trim().toLowerCase();
+    final currentAuthor = releaseGroupKey(_currentRelease.releaseName);
+    final sameAuthor =
+        currentAuthor != null &&
+        releaseGroupKey(candidate.releaseName) == currentAuthor;
+    if ((sameProvider || sameSource) && sameAuthor) return 0;
+    if (sameProvider || sameSource) return 1;
+    if (sameAuthor) return 2;
+    return 3;
   }
 
   Future<void> _retryCurrentStream() async {
@@ -1838,13 +2073,33 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _prewarmNextEpisode() async {
-    if (_prewarming || _prewarmed || widget.episode == null) return;
+    if (!mounted ||
+        _engineHandoffInProgress ||
+        _prewarming ||
+        _prewarmed ||
+        widget.episode == null) {
+      return;
+    }
     _prewarming = true;
+    final userSourcesController = ref.read(
+      userTorrentSourcesControllerProvider.notifier,
+    );
+    final userSourcesSubscription = ref.listenManual(
+      userTorrentSourcesControllerProvider,
+      (_, _) {},
+    );
+    final tokenService = ref.read(debridTokenServiceProvider);
+    final launchEpisode = widget.launch.episode;
+    final nextEpisodeNumber = widget.episode! + 1;
+    final currentRelease = _currentRelease;
+    final audioPreference = _audioPreference;
     try {
-      await ref.read(userTorrentSourcesControllerProvider.notifier).load();
-      final userManifests = ref
-          .read(userTorrentSourcesControllerProvider)
-          .manifestUrls;
+      final userManifests = await loadPlayerPrewarmSnapshot(
+        load: userSourcesController.load,
+        snapshot: () => userSourcesSubscription.read().manifestUrls,
+        isActive: () => mounted && !_engineHandoffInProgress,
+      );
+      if (!mounted || _engineHandoffInProgress || userManifests == null) return;
       final sources = <ReleaseSource>[
         for (final manifestUrl in userManifests)
           StremioTorrentReleaseSource(manifestUrl: manifestUrl),
@@ -1853,18 +2108,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       ];
       if (sources.isEmpty) return;
       final next = EpisodeReference(
-        anilistMediaId: widget.launch.episode.anilistMediaId,
-        malMediaId: widget.launch.episode.malMediaId,
-        year: widget.launch.episode.year,
-        title: widget.launch.episode.title,
-        alternativeTitles: widget.launch.episode.alternativeTitles,
-        coverImageUrl: widget.launch.episode.coverImageUrl,
-        episode: widget.episode! + 1,
+        anilistMediaId: launchEpisode.anilistMediaId,
+        malMediaId: launchEpisode.malMediaId,
+        year: launchEpisode.year,
+        title: launchEpisode.title,
+        alternativeTitles: launchEpisode.alternativeTitles,
+        coverImageUrl: launchEpisode.coverImageUrl,
+        episode: nextEpisodeNumber,
       );
       final releases = await CompositeReleaseSource(sources).search(next);
+      if (!mounted || _engineHandoffInProgress) return;
       if (releases.isEmpty) return;
-      final currentGroup = releaseGroupKey(_currentRelease.releaseName);
-      final currentProvider = _currentRelease.provider?.toLowerCase();
+      final currentGroup = releaseGroupKey(currentRelease.releaseName);
+      final currentProvider = currentRelease.provider?.toLowerCase();
       releases.sort((a, b) {
         final group = (releaseGroupKey(a.releaseName) == currentGroup ? 0 : 1)
             .compareTo(releaseGroupKey(b.releaseName) == currentGroup ? 0 : 1);
@@ -1874,17 +2130,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         if (provider != 0 && currentProvider != null) return provider;
         final audio = releaseAudioPreferenceRank(
           a,
-          _audioPreference,
-        ).compareTo(releaseAudioPreferenceRank(b, _audioPreference));
+          audioPreference,
+        ).compareTo(releaseAudioPreferenceRank(b, audioPreference));
         if (audio != 0) return audio;
         return b.seeders.compareTo(a.seeders);
       });
-      await _resolveRelease(releases.first, next);
+      await _resolveRelease(releases.first, next, tokenService: tokenService);
+      if (!mounted || _engineHandoffInProgress) return;
       _prewarmed = true;
     } catch (_) {
       // Prewarming is intentionally invisible and never blocks playback.
     } finally {
-      _prewarming = false;
+      userSourcesSubscription.close();
+      if (mounted) _prewarming = false;
     }
   }
 
@@ -1961,13 +2219,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       // platform watch-next provider is temporarily unavailable.
     }
     if (!mounted || _engineHandoffInProgress) return;
-    final play = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const _NextEpisodeDialog(seconds: 8),
-    );
-    if (!mounted) return;
-    if (play == true) await _playNextEpisode();
+    if (!_seriesPreferences.autoplayNextEpisode) return;
+    await _playNextEpisode();
   }
 
   void _startVideoWatchdog() {
@@ -2182,18 +2435,24 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           .watchSearchIncrementally(widget.launch.episode, refresh: refresh);
 
   Future<void> _startWebSourceDiscovery({bool restart = false}) async {
-    if (!_currentStream.isWebStream ||
-        !ref.read(settingsPreferencesProvider).webStreamsEnabled) {
-      return;
-    }
+    if (!mounted || _engineHandoffInProgress) return;
+    final webStreamsEnabled = ref
+        .read(settingsPreferencesProvider)
+        .webStreamsEnabled;
+    final aggregator = ref.read(webStreamAggregatorProvider);
+    final episode = widget.launch.episode;
+    if (!webStreamsEnabled) return;
     if (_sourceDiscoverySubscription != null && !restart) return;
     await _sourceDiscoverySubscription?.cancel();
-    _sourceDiscoverySubscription = _webSourceSearch().listen((progress) {
-      if (!mounted) return;
-      _mergeDirectStreamOptions(
-        progress.aggregation.streams.map(playbackOptionForWebStream),
-      );
-    }, onError: (_) {});
+    if (!mounted || _engineHandoffInProgress) return;
+    _sourceDiscoverySubscription = aggregator
+        .watchSearchIncrementally(episode)
+        .listen((progress) {
+          if (!mounted || _engineHandoffInProgress) return;
+          _mergeDirectStreamOptions(
+            progress.aggregation.streams.map(playbackOptionForWebStream),
+          );
+        }, onError: (_) {});
   }
 
   void _mergeDirectStreamOptions(Iterable<PlaybackStreamOption> options) {
@@ -2209,38 +2468,49 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<PlaybackStreamOption?> _preflightDirectStream(
-    PlaybackStreamOption option,
-  ) async {
+    PlaybackStreamOption option, {
+    bool silent = false,
+  }) async {
+    if (!mounted || _engineHandoffInProgress) return null;
     if (!option.stream.isWebStream) return option;
-    _showTrackMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    if (!silent) {
+      _showTrackMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    }
     try {
       final validated = await const WebStreamValidator().validate(
         option.stream.uri,
         option.stream.headers,
+        subtitleUri: option.stream.externalSubtitle,
       );
+      if (!mounted || _engineHandoffInProgress) {
+        await validated.session?.close();
+        return null;
+      }
       final validatedOption = PlaybackStreamOption(
         stream: StreamReady(
           uri: validated.uri,
           displayName: option.stream.displayName,
           headers: validated.headers,
-          externalSubtitle: option.stream.externalSubtitle,
+          externalSubtitle: validated.subtitleUri,
+          mediaContentType: validated.contentType,
+          subtitleContentType: validated.subtitleContentType,
+          externalSubtitleRejected: validated.subtitleRejected,
+          playbackLease: validated.session,
           providerId: option.stream.providerId,
           providerName: option.stream.providerName,
         ),
         release: option.release,
       );
-      _directStreamOptions = replaceValidatedPlaybackStreamOption(
-        options: _directStreamOptions,
-        requestedUri: option.stream.uri,
-        validated: validatedOption,
-      );
       return validatedOption;
     } catch (error) {
+      if (!mounted || _engineHandoffInProgress) return null;
       _failedDirectStreamUris.add(option.stream.uri.toString());
-      _showTrackMessage(
-        'That source is unavailable: '
-        "${error.toString().replaceFirst('FormatException: ', '')}",
-      );
+      if (!silent) {
+        _showTrackMessage(
+          'That source is unavailable: '
+          "${error.toString().replaceFirst('FormatException: ', '')}",
+        );
+      }
       return null;
     }
   }
@@ -2267,11 +2537,22 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
 
     final option = await _preflightDirectStream(selected);
-    if (!mounted || option == null) {
+    if (!mounted) {
+      await option?.stream.playbackLease?.close();
+      return;
+    }
+    if (option == null) {
       _showControls();
       return;
     }
     final resume = _player.state.position;
+    final previousSource = _source;
+    final previousStream = _currentStream;
+    final previousRelease = _currentRelease;
+    final previousDirectStreamOptions = _directStreamOptions;
+    final previousDecoderMode = _decoderMode;
+    final previousSoftwareFallbackUsed = _softwareFallbackUsed;
+    final previousVideoFrameSeen = _videoFrameSeen;
     _failedDirectStreamUris.clear();
     _currentStream = option.stream;
     _source = option.stream.uri.toString();
@@ -2279,7 +2560,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _directStreamOptions = mergePlaybackStreamOptions(
       [option],
       _directStreamOptions.where(
-        (candidate) => candidate.stream.uri != selected.stream.uri,
+        (candidate) =>
+            candidate.stream.uri != selected.stream.uri &&
+            candidate.stream.uri != previousStream.uri,
       ),
     );
     _preferredAudioSelected = false;
@@ -2291,8 +2574,35 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
     _videoFrameSeen = false;
     if (mounted) setState(() => _playbackError = null);
-    await _openMedia(resume: resume);
-    if (!mounted) return;
+    try {
+      await _openMedia(resume: resume, propagateFailure: true);
+      if (!mounted || _engineHandoffInProgress) {
+        await option.stream.playbackLease?.close();
+        return;
+      }
+      await widget.onStreamAdopted(option.stream, option.release);
+    } catch (_) {
+      await option.stream.playbackLease?.close();
+      _source = previousSource;
+      _currentStream = previousStream;
+      _currentRelease = previousRelease;
+      _directStreamOptions = previousDirectStreamOptions;
+      _decoderMode = previousDecoderMode;
+      _softwareFallbackUsed = previousSoftwareFallbackUsed;
+      _videoFrameSeen = previousVideoFrameSeen;
+      if (mounted && !_engineHandoffInProgress) {
+        await _openMedia(resume: resume);
+        _showTrackMessage(
+          'That source could not start. Restored the previous stream.',
+        );
+      }
+      return;
+    }
+    if (option.stream.externalSubtitleRejected) {
+      _showTrackMessage(
+        'Playing without the unsafe or unsupported external subtitles.',
+      );
+    }
     _showTrackMessage('Playing ${playbackStreamOptionLabel(option)}');
     _showControls();
   }
@@ -2349,8 +2659,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         subtitleDelayMs: _subtitleDelayMs,
         audioDelayMs: _audioDelayMs,
         highContrastSubtitles: _highContrastSubtitles,
-        hasAlternateStreams:
-            _alternativeIndex < widget.launch.alternatives.length,
+        hasAlternateStreams: widget.launch.alternatives.any(
+          (candidate) => !_attemptedReleaseAlternatives.contains(candidate),
+        ),
         hasDirectSources: _currentStream.isWebStream,
       ),
     );
@@ -3566,90 +3877,6 @@ class _OptionChip extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NextEpisodeDialog extends StatefulWidget {
-  const _NextEpisodeDialog({required this.seconds});
-
-  final int seconds;
-
-  @override
-  State<_NextEpisodeDialog> createState() => _NextEpisodeDialogState();
-}
-
-class _NextEpisodeDialogState extends State<_NextEpisodeDialog> {
-  Timer? _timer;
-  late int _remaining;
-
-  @override
-  void initState() {
-    super.initState();
-    _remaining = widget.seconds;
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      if (_remaining <= 1) {
-        Navigator.of(context).pop(true);
-      } else {
-        setState(() => _remaining--);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      child: Container(
-        width: 520,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: palette.playerSurface(),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: palette.accent.withValues(alpha: .6)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.skip_next_rounded,
-              color: palette.accentBright,
-              size: 42,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Next episode in $_remaining',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 18),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _OptionChip(
-                  label: 'Cancel',
-                  onPressed: () => Navigator.of(context).pop(false),
-                ),
-                const SizedBox(width: 10),
-                _OptionChip(
-                  label: 'Play now',
-                  icon: Icons.play_arrow_rounded,
-                  selected: true,
-                  autofocus: true,
-                  onPressed: () => Navigator.of(context).pop(true),
-                ),
-              ],
             ),
           ],
         ),

@@ -1,11 +1,11 @@
 # TetoTV privacy disclosure
 
-Effective date: August 13, 2026
+Effective date: August 14, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
 This disclosure describes the data handled by the app and by the optional
-TetoTV pairing/update broker.
+TetoTV pairing and companion-services broker.
 
 ## Data kept on the device
 
@@ -43,7 +43,7 @@ TetoTV makes network requests only for app features the user uses:
   episode number, and episode duration to look up community intro/outro times.
   This lookup also supports the manual Skip button when automatic skipping is
   disabled;
-- when filler labels are enabled or a user enables **Skip filler episodes** for
+- when filler labels are enabled or a user enables **Skip filler** for
   a series, Jikan may receive the public MAL title identifier and paginated
   episode-list requests needed to read its filler flags. If AniList does not
   provide a MAL mapping, TetoTV can send one public anime title as a bounded
@@ -111,25 +111,20 @@ Those independent services can see normal connection metadata such as the
 device's IP address and user agent, and their own privacy policies and terms
 apply. TetoTV does not bundle or recommend a streaming-source repository.
 
-## Pairing and update broker
+## Pairing broker
 
-The TetoTV HTTPS broker adapts TV-friendly OAuth, phone-assisted source entry,
-and signed APK update delivery:
+The TetoTV HTTPS broker adapts TV-friendly OAuth and phone-assisted source
+entry:
 
 - OAuth pairing holds the minimum one-time state and token material needed to
   deliver a completed login to the requesting device.
 - Phone-assisted source entry holds submitted URLs in volatile memory for up
   to ten minutes. They are deleted after the authenticated device confirms
   local processing or when the session expires.
-- The update proxy reads private Beta release metadata with a server-only
-  credential and streams the signed universal APK. The GitHub credential is
-  never sent to the app. Signed builds contain a shared, revocable Beta-channel
-  access credential and send it only to the fixed TetoTV update broker; it is
-  not displayed or stored as an editable account secret. Because it is present
-  in the public APK, it is not a confidentiality boundary. The broker stores
-  only configured SHA-256 hashes for access checks and returns no key or hash
-  from `/health`. A narrow anonymous migration endpoint lets legacy 1.11.x
-  clients download only the latest signed APK from the public 1.x repository.
+- App updates do not pass through this broker. Public and Beta release metadata
+  are requested anonymously from their respective public GitHub repositories,
+  and the signed universal APK is downloaded directly from GitHub's release
+  asset URL. TetoTV sends no GitHub token or shared Beta credential.
 - The host may process ordinary connection metadata for security, rate
   limiting, and operational logs. TetoTV does not use it for advertising or
   cross-service tracking.
@@ -167,7 +162,7 @@ technical error/stack trace. It does not intentionally include the show,
 episode, account, device or installation identifier, source/provider, URL,
 credential, playback history, or full diagnostics database.
 
-The update broker validates and rate-limits the report, adds a random
+The companion-services broker validates and rate-limits the report, adds a random
 per-incident reference, and forwards it over an authenticated server-to-server
 connection to the TetoTV Discord bot. The bot posts it to the designated crash
 report channel. Reports remain in Discord according to that channel's access

@@ -736,6 +736,9 @@ class AndroidTvBridge {
     required bool startFromBeginning,
     DateTime? resumeUpdatedAt,
     String? externalSubtitle,
+    String? mediaContentType,
+    String? subtitleContentType,
+    bool externalSubtitleRejected = false,
     String audioLanguage = 'eng',
     String subtitleLanguage = 'eng',
     bool subtitlesEnabled = true,
@@ -755,6 +758,7 @@ class AndroidTvBridge {
     bool hasDirectSources = false,
     Map<String, String> headers = const {},
     bool trustedLocalSource = false,
+    bool trustedPlaybackProxy = false,
     Map<String, Object> theme = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -782,6 +786,11 @@ class AndroidTvBridge {
           'startFromBeginning': startFromBeginning,
           if (externalSubtitle != null && externalSubtitle.isNotEmpty)
             'externalSubtitle': externalSubtitle,
+          if (mediaContentType != null && mediaContentType.isNotEmpty)
+            'mimeType': mediaContentType,
+          if (subtitleContentType != null && subtitleContentType.isNotEmpty)
+            'subtitleMimeType': subtitleContentType,
+          if (externalSubtitleRejected) 'externalSubtitleRejected': true,
           'audioLanguage': audioLanguage,
           'subtitleLanguage': subtitleLanguage,
           'subtitlesEnabled': subtitlesEnabled,
@@ -802,6 +811,7 @@ class AndroidTvBridge {
             'artworkUrl': artworkUrl,
           if (headers.isNotEmpty) 'headers': headers,
           if (trustedLocalSource) 'trustedLocalSource': true,
+          if (trustedPlaybackProxy) 'trustedPlaybackProxy': true,
           for (final key in const [
             'themeBackgroundColor',
             'themeSurfaceColor',

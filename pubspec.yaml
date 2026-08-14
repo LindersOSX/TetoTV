@@ -2,9 +2,9 @@ name: anime_tv
 description: A TV-first anime tracking and playback client.
 publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
-# increasing Android versionCode. The private source branch carries the Beta
-# display version; the public universal APK overrides the build name to 1.x.
-version: 2.0.4+410001
+# increasing Android versionCode. The project default carries the Beta display
+# version; the Public universal APK overrides the build name to the 1.x line.
+version: 2.0.5+410001
 
 environment:
   sdk: ^3.12.2

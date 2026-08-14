@@ -17,7 +17,7 @@ void main() {
         'text/plain',
         '<MPD type="static">',
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       isPlayableWebResponse(Uri.parse('https://cdn.example/video.mkv'), '', ''),

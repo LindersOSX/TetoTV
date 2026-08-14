@@ -16,10 +16,6 @@ services:
         sync: false
       - key: MAL_CLIENT_SECRET
         sync: false
-      - key: GITHUB_RELEASE_TOKEN
-        sync: false
-      - key: BETA_ACCESS_KEY_SHA256_HASHES
-        sync: false
       - key: CRASH_REPORT_BOT_URL
         sync: false
       - key: CRASH_REPORT_SHARED_SECRET

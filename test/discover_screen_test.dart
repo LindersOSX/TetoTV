@@ -33,6 +33,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'initial screen');
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('main-navigation'))).dy,
+      0,
+      reason: 'Primary navigation must not gain extra top padding',
+    );
 
     await tester.tap(find.byIcon(Icons.tune_rounded));
     await tester.pumpAndSettle();

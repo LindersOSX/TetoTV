@@ -13,6 +13,7 @@ internal object NetworkRequestPolicy {
     private const val MAX_HEADER_NAME_LENGTH = 100
     private const val MAX_HEADER_VALUE_LENGTH = 8_192
     private const val MAX_DIAGNOSTIC_LENGTH = 800
+    private val OPAQUE_PLAYBACK_CAPABILITY = Regex("^[A-Za-z0-9_-]{32}$")
 
     private val blockedRequestHeaders = setOf(
         "accept-encoding",
@@ -94,6 +95,34 @@ internal object NetworkRequestPolicy {
             return@runCatching null
         }
         Origin(scheme, host, port)
+    }.getOrNull()
+
+    /**
+     * Accepts only the opaque loopback capability shape issued by TetoTV's
+     * in-process web playback proxy. The Flutter bridge sets the matching
+     * trust bit only after checking that the capability is currently active.
+     */
+    fun trustedPlaybackProxyOrigin(value: String): Origin? = runCatching {
+        val uri = URI(value.trim())
+        if (!uri.scheme.equals("http", ignoreCase = true) ||
+            uri.rawUserInfo != null ||
+            uri.host != "127.0.0.1" ||
+            uri.port !in 1..65_535 ||
+            uri.rawQuery != null ||
+            uri.rawFragment != null
+        ) {
+            return@runCatching null
+        }
+        val segments = uri.path.split('/').filter(String::isNotEmpty)
+        if (segments.size != 4 ||
+            segments[0] != "tetotv-web" ||
+            segments[1] != "v1" ||
+            !OPAQUE_PLAYBACK_CAPABILITY.matches(segments[2]) ||
+            !OPAQUE_PLAYBACK_CAPABILITY.matches(segments[3])
+        ) {
+            return@runCatching null
+        }
+        Origin("http", "127.0.0.1", uri.port)
     }.getOrNull()
 
     fun isTrustedContentUri(value: String): Boolean = runCatching {
@@ -228,6 +257,18 @@ internal object NetworkRequestPolicy {
             val compatible = bytes[10] == 0.toByte() && bytes[11] == 0.toByte()
             if (mapped || compatible) return false
         }
+
+        // RFC 8215 reserves 64:ff9b:1::/48 for local-use NAT64. A DNS answer
+        // in this range can translate to a LAN IPv4 target on networks that
+        // route the prefix, so it must never be treated as public media.
+        val nat64LocalUse =
+            bytes[0] == 0x00.toByte() &&
+                bytes[1] == 0x64.toByte() &&
+                bytes[2] == 0xFF.toByte() &&
+                bytes[3] == 0x9B.toByte() &&
+                bytes[4] == 0x00.toByte() &&
+                bytes[5] == 0x01.toByte()
+        if (nat64LocalUse) return false
 
         return when {
             // Unique-local fc00::/7.

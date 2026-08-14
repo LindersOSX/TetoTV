@@ -151,7 +151,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             ? Colors.black
             : context.appPalette.background,
         body: SafeArea(
-          minimum: context.responsiveScreenPadding.copyWith(bottom: 0),
+          minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

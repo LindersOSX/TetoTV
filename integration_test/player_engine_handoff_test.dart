@@ -230,6 +230,7 @@ class _PlayerExitHarness extends StatelessWidget {
                     anilistMediaId: _episode.anilistMediaId,
                     episode: _episode.episode,
                     onUseVlc: (_, _, _, _) {},
+                    onStreamAdopted: (_, _) async {},
                   )
                 : VlcTvPlayerScreen(
                     source: _source,
@@ -239,6 +240,7 @@ class _PlayerExitHarness extends StatelessWidget {
                     anilistMediaId: _episode.anilistMediaId,
                     episode: _episode.episode,
                     onUseMpv: (_, _, _, _) {},
+                    onStreamAdopted: (_, _) async {},
                   ),
           ),
         ),
@@ -309,6 +311,7 @@ class _EngineHandoffHarnessState extends State<_EngineHandoffHarness> {
             episode: _episode.episode,
             initialPosition: _resume,
             onUseVlc: (position, _, _, _) => _use(_SmokeEngine.vlc, position),
+            onStreamAdopted: (_, _) async {},
             onSelectEngine: (selected, position, _, _, _) {
               if (selected == PreferredPlayer.vlc) {
                 _use(_SmokeEngine.vlc, position);
@@ -324,6 +327,7 @@ class _EngineHandoffHarnessState extends State<_EngineHandoffHarness> {
             episode: _episode.episode,
             initialPosition: _resume,
             onUseMpv: (position, _, _, _) => _use(_SmokeEngine.mpv, position),
+            onStreamAdopted: (_, _) async {},
             onSelectEngine: (selected, position, _, _, _) {
               if (selected == PreferredPlayer.mpv) {
                 _use(_SmokeEngine.mpv, position);

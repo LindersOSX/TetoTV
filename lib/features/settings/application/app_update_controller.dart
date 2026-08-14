@@ -9,7 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
-const githubUpdateTokenStorageKey = 'github_update_token';
+const _legacyGithubUpdateTokenStorageKey = 'github_update_token';
 const _legacyBetaUpdateAccessKeyStorageKey = 'beta_update_access_key';
 const automaticUpdatesStorageKey = 'automatic_app_updates';
 const lastAutomaticUpdateCheckStorageKey = 'last_automatic_update_check';
@@ -18,17 +18,9 @@ const pendingReleaseNotesStorageKey = 'pending_release_notes';
 const updateChannelStorageKey = 'app_update_channel';
 const developerModeStorageKey = 'settings_developer_mode';
 const tetoTvPublicReleaseRepository = 'LindersOSX/TetoTV-Releases';
-const tetoTvUpdateBroker = 'https://tetotv-updates-lindows.onrender.com';
+const tetoTvBetaReleaseRepository = 'LindersOSX/TetoTV';
 const maxPublicReleaseAssetBytes = 300 * 1024 * 1024;
 const maxUpdateReleaseHistory = 20;
-
-// Supplied to both signed Public and Beta builds through protected Dart defines.
-// The value is deliberately
-// absent from source control and is never persisted, displayed, or logged.
-// A build without a valid value fails closed to the Public channel.
-const embeddedBetaUpdateAccessKey = String.fromEnvironment(
-  'TETOTV_BETA_UPDATE_ACCESS_KEY',
-);
 
 // Public releases restarted at 1.0.0 with a higher Android versionCode. The
 // pre-Public builds reached a larger user-facing SemVer (for example,
@@ -41,17 +33,20 @@ final appUpdateControllerProvider =
     StateNotifierProvider<AppUpdateController, AppUpdateState>((ref) {
       final bridge = AndroidTvBridge.instance;
       final storage = ref.watch(secureStorageProvider);
+      final github = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+          sendTimeout: const Duration(seconds: 15),
+        ),
+      );
       final controller = AppUpdateController(
         storage,
         GitHubAppReleaseSource(
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 15),
-              receiveTimeout: const Duration(seconds: 30),
-              sendTimeout: const Duration(seconds: 15),
-            ),
-          ),
+          github,
           repository: tetoTvPublicReleaseRepository,
+          releaseMajor: 1,
+          channelName: 'Public',
         ),
         () async {
           final version = await bridge.getAppVersion();
@@ -63,20 +58,14 @@ final appUpdateControllerProvider =
         () async => (await bridge.getDeviceProfile()).abis,
         getTemporaryDirectory,
         bridge.installApk,
-        betaReleaseSource: BrokerAppReleaseSource(
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 15),
-              receiveTimeout: const Duration(seconds: 30),
-              sendTimeout: const Duration(seconds: 15),
-            ),
-          ),
-          accessKeyLoader: () async => embeddedBetaUpdateAccessKey,
+        betaReleaseSource: GitHubAppReleaseSource(
+          github,
+          repository: tetoTvBetaReleaseRepository,
+          releaseMajor: 2,
+          channelName: 'Beta',
+          allowPrerelease: true,
         ),
         apkInspector: bridge.inspectApk,
-        betaAccessAvailable: isValidBetaUpdateAccessKey(
-          embeddedBetaUpdateAccessKey,
-        ),
       );
       Future.microtask(controller.load);
       return controller;
@@ -105,7 +94,6 @@ class AppUpdateState {
     this.automaticUpdates = true,
     this.updateChannel = AppUpdateChannel.public,
     this.developerMode = false,
-    this.betaAccessAvailable = false,
     this.releaseHistory = const [],
     this.releaseHistoryLoading = false,
   });
@@ -120,7 +108,6 @@ class AppUpdateState {
   final bool automaticUpdates;
   final AppUpdateChannel updateChannel;
   final bool developerMode;
-  final bool betaAccessAvailable;
   final List<AppReleaseInfo> releaseHistory;
   final bool releaseHistoryLoading;
 
@@ -140,7 +127,6 @@ class AppUpdateState {
     bool? automaticUpdates,
     AppUpdateChannel? updateChannel,
     bool? developerMode,
-    bool? betaAccessAvailable,
     List<AppReleaseInfo>? releaseHistory,
     bool? releaseHistoryLoading,
   }) {
@@ -163,7 +149,6 @@ class AppUpdateState {
       automaticUpdates: automaticUpdates ?? this.automaticUpdates,
       updateChannel: updateChannel ?? this.updateChannel,
       developerMode: developerMode ?? this.developerMode,
-      betaAccessAvailable: betaAccessAvailable ?? this.betaAccessAvailable,
       releaseHistory: releaseHistory ?? this.releaseHistory,
       releaseHistoryLoading:
           releaseHistoryLoading ?? this.releaseHistoryLoading,
@@ -181,7 +166,7 @@ extension AppUpdateChannelLabel on AppUpdateChannel {
 
   String get description => switch (this) {
     AppUpdateChannel.public => 'Stable releases from the public release page',
-    AppUpdateChannel.beta => 'Private 2.x preview builds for TetoTV testers',
+    AppUpdateChannel.beta => '2.x preview builds from the Beta release page',
   };
 
   String versionLabel(String version) =>
@@ -241,292 +226,20 @@ abstract class AppReleaseSource {
   });
 }
 
-/// Reads private release metadata and APK bytes through the fixed TetoTV
-/// update broker. GitHub credentials remain server-side. The build-time shared
-/// access credential is sent only to this fixed broker origin.
-class BrokerAppReleaseSource implements AppReleaseSource {
-  BrokerAppReleaseSource(this._dio, {required this.accessKeyLoader});
-
-  final Dio _dio;
-  final Future<String?> Function() accessKeyLoader;
-
-  static final Uri _latestUri = Uri.parse(
-    '$tetoTvUpdateBroker/v1/app-updates/latest',
-  );
-  static final Uri _historyUri = Uri.parse(
-    '$tetoTvUpdateBroker/v1/app-updates/releases',
-  );
-
-  @override
-  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
-    final headers = await _authorizedHeaders('application/json');
-    final response = await _dio.get<Map<String, dynamic>>(
-      _latestUri.toString(),
-      options: Options(
-        headers: headers,
-        followRedirects: false,
-        maxRedirects: 0,
-        validateStatus: (status) => status == HttpStatus.ok,
-      ),
-    );
-    final data = response.data;
-    if (data == null) {
-      throw StateError('The update service returned an empty release.');
-    }
-    return _parseRelease(data);
-  }
-
-  @override
-  Future<List<AppReleaseInfo>> history({
-    required List<String> deviceAbis,
-  }) async {
-    final headers = await _authorizedHeaders('application/json');
-    final response = await _dio.get<Map<String, dynamic>>(
-      _historyUri.toString(),
-      options: Options(
-        headers: headers,
-        followRedirects: false,
-        maxRedirects: 0,
-        validateStatus: (status) => status == HttpStatus.ok,
-      ),
-    );
-    final data = response.data;
-    final rawReleases = data?['releases'];
-    if (rawReleases is! List || rawReleases.length > maxUpdateReleaseHistory) {
-      throw FormatException(
-        'The update service returned invalid release history.',
-      );
-    }
-    final releases = rawReleases
-        .whereType<Map>()
-        .map((item) => _parseRelease(item.cast<String, dynamic>()))
-        .toList(growable: false);
-    if (releases.length != rawReleases.length ||
-        releases.any((release) => appVersionMajor(release.version) != 2)) {
-      throw FormatException(
-        'The update service returned invalid Beta release history.',
-      );
-    }
-    _validateReleaseHistoryOrder(releases);
-    return releases;
-  }
-
-  AppReleaseInfo _parseRelease(Map<String, dynamic> data) {
-    final rawAsset = data['asset'];
-    if (rawAsset is! Map) {
-      throw FormatException('The update service returned no APK metadata.');
-    }
-    final assetData = rawAsset.cast<Object?, Object?>();
-    final assetName = _requiredString(assetData['name'], 'asset name');
-    if (path.basename(assetName) != assetName ||
-        !assetName.toLowerCase().endsWith('.apk')) {
-      throw FormatException('The update service returned an invalid APK name.');
-    }
-    final size = (assetData['size'] as num?)?.toInt() ?? 0;
-    if (size <= 0) {
-      throw FormatException('The update service returned an invalid APK size.');
-    }
-    final contentType = _requiredString(
-      assetData['content_type'],
-      'asset content type',
-    ).toLowerCase();
-    if (contentType != 'application/vnd.android.package-archive' &&
-        contentType != 'application/octet-stream') {
-      throw FormatException(
-        'The update service returned an invalid APK content type.',
-      );
-    }
-    final tag = _requiredString(data['tag_name'], 'release tag');
-    final downloadUri = _trustedBrokerAssetUri(
-      _requiredString(assetData['download_url'], 'asset download URL'),
-      tag,
-    );
-    final digest = _parseSha256Digest(assetData['digest']);
-    final advertisedVersion = _requiredString(data['version'], 'version');
-    final tagVersion = normalizeAppVersion(tag);
-    final version = normalizeAppVersion(advertisedVersion);
-    if (version.isEmpty || compareAppVersions(version, tagVersion) != 0) {
-      throw FormatException('The update service returned mismatched versions.');
-    }
-    return AppReleaseInfo(
-      tagName: tag,
-      version: version,
-      name: _optionalString(data['name']) ?? tag,
-      notes: _optionalString(data['release_notes']) ?? '',
-      asset: AppReleaseAsset(
-        name: assetName,
-        apiUrl: downloadUri.toString(),
-        publicUrl: downloadUri.toString(),
-        size: size,
-        sha256Digest: digest,
-      ),
-    );
-  }
-
-  @override
-  Future<void> download({
-    required AppReleaseInfo release,
-    required String destination,
-    required void Function(int received, int total) onProgress,
-  }) async {
-    final uri = _trustedBrokerAssetUri(
-      release.asset.publicUrl,
-      release.tagName,
-    );
-    final headers = await _authorizedHeaders(
-      'application/vnd.android.package-archive',
-    );
-    await _dio.download(
-      uri.toString(),
-      destination,
-      options: Options(
-        headers: headers,
-        followRedirects: false,
-        maxRedirects: 0,
-        validateStatus: (status) => status == HttpStatus.ok,
-        receiveTimeout: const Duration(minutes: 20),
-      ),
-      onReceiveProgress: onProgress,
-      deleteOnError: true,
-    );
-  }
-
-  Future<Map<String, String>> _authorizedHeaders(String accept) async {
-    final key = (await accessKeyLoader())?.trim() ?? '';
-    if (!isValidBetaUpdateAccessKey(key)) {
-      throw StateError(
-        'This build does not include valid private Beta access.',
-      );
-    }
-    return {
-      'Accept': accept,
-      'Authorization': 'Beta $key',
-      'User-Agent': 'TetoTV-Android-Updater',
-    };
-  }
-
-  static Uri _trustedBrokerAssetUri(String value, String tag) {
-    if (!RegExp(r'^v[0-9]+\.[0-9]+\.[0-9]+$').hasMatch(tag)) {
-      throw FormatException(
-        'The update service returned an invalid release tag.',
-      );
-    }
-    final uri = Uri.tryParse(value);
-    final base = Uri.parse(tetoTvUpdateBroker);
-    if (uri == null ||
-        uri.scheme != base.scheme ||
-        uri.host != base.host ||
-        uri.port != base.port ||
-        uri.userInfo.isNotEmpty ||
-        uri.hasQuery ||
-        uri.hasFragment) {
-      throw FormatException(
-        'The update service returned an untrusted APK download URL.',
-      );
-    }
-    final segments = uri.pathSegments;
-    if (segments.length != 7 ||
-        segments[0] != 'v1' ||
-        segments[1] != 'app-updates' ||
-        segments[2] != 'releases' ||
-        segments[3] != tag ||
-        segments[4] != 'assets' ||
-        segments[6] != 'universal.apk') {
-      throw FormatException(
-        'The update service returned an invalid APK download path.',
-      );
-    }
-    final assetIdText = segments[5];
-    final assetId = int.tryParse(assetIdText);
-    if (!RegExp(r'^[1-9][0-9]*$').hasMatch(assetIdText) ||
-        assetId == null ||
-        assetId > 9007199254740991) {
-      throw FormatException(
-        'The update service returned an invalid APK asset ID.',
-      );
-    }
-    final expected = Uri.parse(
-      '$tetoTvUpdateBroker/v1/app-updates/releases/$tag/assets/'
-      '$assetIdText/universal.apk',
-    );
-    if (uri != expected) {
-      throw FormatException(
-        'The update service returned a non-canonical APK download URL.',
-      );
-    }
-    return uri;
-  }
-}
-
-/// Prefers the credential-free broker. The anonymous GitHub path is retained
-/// solely as a future public-repository fallback; it never receives a token.
-class BrokerFirstAppReleaseSource implements AppReleaseSource {
-  BrokerFirstAppReleaseSource(this._broker, this._anonymousGitHub);
-
-  final BrokerAppReleaseSource _broker;
-  final GitHubAppReleaseSource _anonymousGitHub;
-
-  @override
-  Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
-    try {
-      return await _broker.latest(deviceAbis: deviceAbis);
-    } on DioException catch (brokerError, brokerStack) {
-      try {
-        return await _anonymousGitHub.latest(deviceAbis: deviceAbis);
-      } catch (_) {
-        Error.throwWithStackTrace(brokerError, brokerStack);
-      }
-    }
-  }
-
-  @override
-  Future<List<AppReleaseInfo>> history({
-    required List<String> deviceAbis,
-  }) async {
-    try {
-      return await _broker.history(deviceAbis: deviceAbis);
-    } on DioException catch (brokerError, brokerStack) {
-      try {
-        return await _anonymousGitHub.history(deviceAbis: deviceAbis);
-      } catch (_) {
-        Error.throwWithStackTrace(brokerError, brokerStack);
-      }
-    }
-  }
-
-  @override
-  Future<void> download({
-    required AppReleaseInfo release,
-    required String destination,
-    required void Function(int received, int total) onProgress,
-  }) {
-    final uri = Uri.tryParse(release.asset.publicUrl);
-    final isBrokerAsset =
-        uri != null &&
-        uri.scheme == 'https' &&
-        uri.host == Uri.parse(tetoTvUpdateBroker).host;
-    return isBrokerAsset
-        ? _broker.download(
-            release: release,
-            destination: destination,
-            onProgress: onProgress,
-          )
-        : _anonymousGitHub.download(
-            release: release,
-            destination: destination,
-            onProgress: onProgress,
-          );
-  }
-}
-
 class GitHubAppReleaseSource implements AppReleaseSource {
   GitHubAppReleaseSource(
     this._dio, {
     this.repository = tetoTvPublicReleaseRepository,
+    this.releaseMajor = 1,
+    this.channelName = 'Public',
+    this.allowPrerelease = false,
   });
 
   final Dio _dio;
   final String repository;
+  final int releaseMajor;
+  final String channelName;
+  final bool allowPrerelease;
 
   @override
   Future<AppReleaseInfo> latest({required List<String> deviceAbis}) async {
@@ -552,9 +265,12 @@ class GitHubAppReleaseSource implements AppReleaseSource {
     final releases = <AppReleaseInfo>[];
     for (final raw in data.whereType<Map>()) {
       final item = raw.cast<String, dynamic>();
-      if (item['draft'] == true || item['prerelease'] == true) continue;
+      if (item['draft'] == true ||
+          (!allowPrerelease && item['prerelease'] == true)) {
+        continue;
+      }
       final tag = _optionalString(item['tag_name']);
-      if (tag == null || appVersionMajor(tag) != 1) continue;
+      if (tag == null || appVersionMajor(tag) != releaseMajor) continue;
       releases.add(_parseCompletedRelease(item, deviceAbis));
     }
     _validateReleaseHistoryOrder(releases);
@@ -565,31 +281,65 @@ class GitHubAppReleaseSource implements AppReleaseSource {
     Map<String, dynamic> data,
     List<String> deviceAbis,
   ) {
-    if (data['draft'] == true || data['prerelease'] == true) {
-      throw FormatException('The public update is not a completed release.');
+    if (data['draft'] == true ||
+        (!allowPrerelease && data['prerelease'] == true)) {
+      throw FormatException('$channelName update is not a completed release.');
     }
     final tag = _requiredString(data['tag_name'], 'release tag');
-    if (!RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(tag)) {
-      throw FormatException('The public update has an invalid release tag.');
+    if (!RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(tag) ||
+        appVersionMajor(tag) != releaseMajor) {
+      throw FormatException('$channelName update has an invalid release tag.');
     }
     final expectedAssetName = 'TetoTV-$tag-universal.apk';
-    final assets = (data['assets'] as List? ?? const [])
+    final candidates = (data['assets'] as List? ?? const [])
         .whereType<Map>()
         .map((item) => item.cast<String, dynamic>())
+        .where((item) => _isSafeApkName(item['name']))
+        .toList(growable: false);
+    final exact = candidates
         .where((item) => item['name'] == expectedAssetName)
-        .map(
-          (item) => AppReleaseAsset(
-            name: item['name'] as String? ?? '',
+        .toList(growable: false);
+    if (exact.length > 1) {
+      throw FormatException(
+        'The latest $channelName release has duplicate canonical APKs.',
+      );
+    }
+    final universal = candidates
+        .where((item) => _isUniversalApkName(item['name']))
+        .toList(growable: false);
+    if (exact.isEmpty && universal.length > 1) {
+      throw FormatException(
+        'The latest $channelName release has ambiguous universal APKs.',
+      );
+    }
+    final selected = exact.isNotEmpty
+        ? exact
+        : universal.isNotEmpty
+        ? universal
+        : candidates;
+    final assets = selected
+        .map((item) {
+          final assetName = item['name'] as String? ?? '';
+          final contentType = (item['content_type'] as String? ?? '')
+              .toLowerCase();
+          if (contentType != 'application/vnd.android.package-archive' &&
+              contentType != 'application/octet-stream') {
+            throw FormatException(
+              '$channelName update returned an invalid APK content type.',
+            );
+          }
+          return AppReleaseAsset(
+            name: assetName,
             apiUrl: item['url'] as String? ?? '',
             publicUrl: _trustedReleaseAssetUri(
               item['browser_download_url'] as String? ?? '',
               tag,
-              expectedAssetName,
+              assetName,
             ).toString(),
             size: (item['size'] as num?)?.toInt() ?? 0,
             sha256Digest: _parseSha256Digest(item['digest']),
-          ),
-        )
+          );
+        })
         .where(
           (asset) =>
               asset.name.isNotEmpty &&
@@ -601,12 +351,17 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         .toList(growable: false);
     if (assets.isEmpty) {
       throw StateError(
-        'The latest public release has no signed universal APK attached.',
+        'The latest $channelName release has no compatible signed APK attached.',
       );
     }
-    if (assets.length != 1) {
+    if (universal.isNotEmpty && assets.length != 1) {
       throw FormatException(
-        'The latest public release has duplicate universal APKs.',
+        'The latest $channelName release has ambiguous universal APKs.',
+      );
+    }
+    if (universal.isEmpty && !_hasUnambiguousAbiFallback(assets, deviceAbis)) {
+      throw FormatException(
+        'The latest $channelName release has ambiguous device APKs.',
       );
     }
     final asset = selectApkAsset(assets, deviceAbis);
@@ -646,11 +401,12 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         repositoryParts.any(
           (part) => !RegExp(r'^[A-Za-z0-9_.-]+$').hasMatch(part),
         )) {
-      throw FormatException('The public update repository is invalid.');
+      throw FormatException('$channelName update repository is invalid.');
     }
-    if (assetName != 'TetoTV-$tag-universal.apk' ||
-        !RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(tag)) {
-      throw FormatException('The public update asset identity is invalid.');
+    if (!_isSafeApkName(assetName) ||
+        !RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(tag) ||
+        appVersionMajor(tag) != releaseMajor) {
+      throw FormatException('$channelName update asset identity is invalid.');
     }
     final uri = Uri.tryParse(value);
     final expectedPath =
@@ -665,10 +421,48 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         uri.hasQuery ||
         uri.hasFragment) {
       throw FormatException(
-        'The public update returned an untrusted APK download URL.',
+        '$channelName update returned an untrusted APK download URL.',
       );
     }
     return uri;
+  }
+
+  bool _isUniversalApkName(Object? value) {
+    return value is String &&
+        _isSafeApkName(value) &&
+        value.toLowerCase().endsWith('-universal.apk');
+  }
+
+  bool _isSafeApkName(Object? value) {
+    return value is String &&
+        value.length <= 160 &&
+        path.basename(value) == value &&
+        RegExp(r'^[A-Za-z0-9_.-]+$').hasMatch(value) &&
+        value.toLowerCase().endsWith('.apk');
+  }
+
+  bool _hasUnambiguousAbiFallback(
+    List<AppReleaseAsset> assets,
+    List<String> deviceAbis,
+  ) {
+    if (assets.length == 1) return true;
+    final normalizedAbis = deviceAbis.map((abi) => abi.toLowerCase());
+    final markers = normalizedAbis.any((abi) => abi.contains('arm64'))
+        ? const ['arm64-v8a', 'arm64']
+        : normalizedAbis.any((abi) => abi.contains('armeabi'))
+        ? const ['armeabi-v7a', 'fire-tv-32bit', 'arm32']
+        : normalizedAbis.any((abi) => abi.contains('x86_64'))
+        ? const ['x86_64']
+        : const <String>[];
+    if (markers.isEmpty) return false;
+    return assets
+            .where(
+              (asset) => markers.any(
+                (marker) => asset.name.toLowerCase().contains(marker),
+              ),
+            )
+            .length ==
+        1;
   }
 
   Future<void> _download({
@@ -695,16 +489,16 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         );
         if (response.statusCode == HttpStatus.ok) return;
         if (redirectCount >= 3) {
-          throw const FormatException(
-            'The public update download redirected too many times.',
+          throw FormatException(
+            '$channelName update download redirected too many times.',
           );
         }
         currentUri = _trustedGitHubAssetRedirectUri(
           response.headers.value(HttpHeaders.locationHeader),
         );
       }
-      throw const FormatException(
-        'The public update download did not return an APK.',
+      throw FormatException(
+        '$channelName update download did not return an APK.',
       );
     } catch (_) {
       await _deleteUpdateFile(File(destination));
@@ -719,7 +513,7 @@ class GitHubAppReleaseSource implements AppReleaseSource {
       status == HttpStatus.temporaryRedirect ||
       status == HttpStatus.permanentRedirect;
 
-  static Uri _trustedGitHubAssetRedirectUri(String? value) {
+  Uri _trustedGitHubAssetRedirectUri(String? value) {
     final uri = value == null ? null : Uri.tryParse(value.trim());
     const trustedHosts = {
       'objects.githubusercontent.com',
@@ -733,8 +527,8 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         uri.userInfo.isNotEmpty ||
         uri.path.isEmpty ||
         uri.hasFragment) {
-      throw const FormatException(
-        'The public update returned an untrusted download redirect.',
+      throw FormatException(
+        '$channelName update returned an untrusted download redirect.',
       );
     }
     return uri;
@@ -758,9 +552,6 @@ String? _optionalString(Object? value) {
   final result = value.trim();
   return result.isEmpty ? null : result;
 }
-
-bool isValidBetaUpdateAccessKey(String value) =>
-    RegExp(r'^[A-Za-z0-9_-]{32,128}$').hasMatch(value);
 
 void _validateReleaseHistoryOrder(List<AppReleaseInfo> releases) {
   final tags = <String>{};
@@ -795,7 +586,7 @@ AppReleaseAsset selectApkAsset(
   // inaccurate ABI reports on vendor TV firmware, this lets a device move
   // safely between an older split APK and the newer universal APK.
   for (final asset in assets) {
-    if (asset.name.toLowerCase().contains('universal')) return asset;
+    if (asset.name.toLowerCase().endsWith('-universal.apk')) return asset;
   }
   final normalizedAbis = deviceAbis.map((abi) => abi.toLowerCase()).toList();
   final preferredMarker = normalizedAbis.any((abi) => abi.contains('arm64'))
@@ -941,11 +732,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     AppReleaseSource? betaReleaseSource,
     this.automaticCheckInterval = const Duration(hours: 12),
     this.apkInspector,
-    bool? betaAccessAvailable,
   }) : _betaReleaseSource = betaReleaseSource ?? _releaseSource,
-       _betaAccessAvailable =
-           betaAccessAvailable ??
-           isValidBetaUpdateAccessKey(embeddedBetaUpdateAccessKey),
        super(const AppUpdateState());
 
   final FlutterSecureStorage _storage;
@@ -957,7 +744,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   final ApkInstaller _apkInstaller;
   final Duration automaticCheckInterval;
   final ApkInspector? apkInspector;
-  final bool _betaAccessAvailable;
 
   bool _loaded = false;
   Future<void>? _loadRequest;
@@ -975,37 +761,28 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
 
   Future<void> _performLoad() async {
     final values = await Future.wait([
-      _storage.read(key: githubUpdateTokenStorageKey),
+      _storage.read(key: _legacyGithubUpdateTokenStorageKey),
       _storage.read(key: automaticUpdatesStorageKey),
       _storage.read(key: updateChannelStorageKey),
       _storage.read(key: developerModeStorageKey),
       _currentVersionLoader(),
     ]);
-    // Versions before the broker migration could store a GitHub credential on
-    // the device. It is no longer used and is removed during the first load.
+    // Older builds could store update credentials on the device. GitHub update
+    // checks are anonymous now, so both legacy secrets are removed on load.
     if (values[0] != null) {
-      await _storage.delete(key: githubUpdateTokenStorageKey);
+      await _storage.delete(key: _legacyGithubUpdateTokenStorageKey);
     }
-    // Remove keys saved by older builds. Beta access is now supplied only at
-    // compile time, so no raw shared credential remains in device storage.
     await _storage.delete(key: _legacyBetaUpdateAccessKeyStorageKey);
     final developerMode = values[3] == 'true';
     final requestedBeta =
         developerMode && values[2] == AppUpdateChannel.beta.name;
-    if (requestedBeta && !_betaAccessAvailable) {
-      await _storage.write(
-        key: updateChannelStorageKey,
-        value: AppUpdateChannel.public.name,
-      );
-    }
     _loaded = true;
     if (!mounted) return;
     state = state.copyWith(
       currentVersion: values[4] ?? 'unknown',
       automaticUpdates: values[1] != 'false',
       developerMode: developerMode,
-      betaAccessAvailable: _betaAccessAvailable,
-      updateChannel: requestedBeta && _betaAccessAvailable
+      updateChannel: requestedBeta
           ? AppUpdateChannel.beta
           : AppUpdateChannel.public,
     );
@@ -1024,14 +801,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   Future<void> setUpdateChannel(AppUpdateChannel channel) async {
     await load();
     if (channel == AppUpdateChannel.beta && !state.developerMode) return;
-    if (channel == AppUpdateChannel.beta && !state.betaAccessAvailable) {
-      state = state.copyWith(
-        phase: AppUpdatePhase.error,
-        message:
-            'This build does not include private Beta access. Public updates remain selected.',
-      );
-      return;
-    }
     if (state.isBusy || state.updateChannel == channel) return;
     await _storage.write(key: updateChannelStorageKey, value: channel.name);
     state = state.copyWith(
@@ -1055,16 +824,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
 
   Future<void> _refreshReleaseHistory() async {
     if (!mounted || !state.developerMode || state.releaseHistoryLoading) return;
-    if (state.updateChannel == AppUpdateChannel.beta &&
-        !state.betaAccessAvailable) {
-      state = state.copyWith(
-        releaseHistory: const [],
-        releaseHistoryLoading: false,
-        message:
-            'This build does not include private Beta access. Public releases are still available.',
-      );
-      return;
-    }
     state = state.copyWith(releaseHistoryLoading: true);
     try {
       final releases = await _sourceFor(
@@ -1189,15 +948,6 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   }) async {
     await load();
     if (state.isBusy) return;
-    if (state.updateChannel == AppUpdateChannel.beta &&
-        !state.betaAccessAvailable) {
-      state = state.copyWith(
-        phase: AppUpdatePhase.error,
-        message:
-            'This build does not include private Beta access. Public updates remain available.',
-      );
-      return;
-    }
     if (automatic) {
       if (!state.automaticUpdates) return;
       final saved = await _storage.read(key: _automaticCheckStorageKey);
@@ -1210,7 +960,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     state = state.copyWith(
       phase: AppUpdatePhase.checking,
       progress: 0,
-      message: automatic ? null : 'Checking the secure update service…',
+      message: automatic ? null : 'Checking GitHub for updates…',
     );
     try {
       final releaseSource = _sourceFor(state.updateChannel);
@@ -1261,11 +1011,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       final status = error.response?.statusCode;
       state = state.copyWith(
         phase: AppUpdatePhase.error,
-        message:
-            state.updateChannel == AppUpdateChannel.beta &&
-                (status == 401 || status == 403)
-            ? 'This build could not authenticate with the private Beta update service.'
-            : status == 404
+        message: status == 404
             ? 'No TetoTV update is available right now.'
             : 'Update check failed: ${_safeUpdateError(error)}',
       );
@@ -1390,16 +1136,9 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       );
       if (launchInstaller) await installDownloadedUpdate();
     } catch (error) {
-      final betaAccessRejected =
-          state.updateChannel == AppUpdateChannel.beta &&
-          error is DioException &&
-          (error.response?.statusCode == 401 ||
-              error.response?.statusCode == 403);
       state = state.copyWith(
         phase: AppUpdatePhase.error,
-        message: betaAccessRejected
-            ? 'This build could not authenticate with the private Beta update service.'
-            : 'Update download failed: ${_safeUpdateError(error)}',
+        message: 'Update download failed: ${_safeUpdateError(error)}',
       );
     }
   }

@@ -71,6 +71,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('main-navigation'))).dy,
+      0,
+      reason: 'Primary navigation must not gain extra top padding',
+    );
     expect(find.text('Followed anime'), findsOneWidget);
     expect(find.text('Unrelated anime'), findsNothing);
     final backDetector = find.descendant(

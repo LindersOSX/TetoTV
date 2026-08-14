@@ -17,6 +17,7 @@ import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
@@ -109,6 +110,7 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
     required this.debridService,
     required this.launch,
     required this.onUseMpv,
+    required this.onStreamAdopted,
     this.onSelectEngine,
     this.initialPosition,
     this.subtitle,
@@ -130,6 +132,8 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
     List<PlaybackStreamOption> directStreams,
   )
   onUseMpv;
+  final Future<void> Function(StreamReady stream, ReleaseCandidate release)
+  onStreamAdopted;
   final void Function(
     PreferredPlayer player,
     Duration position,
@@ -163,6 +167,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   bool _controlsVisible = true;
   bool _persistenceReady = false;
   bool _completionHandled = false;
+  final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
   bool _syncHandled = false;
   bool _restarting = false;
   bool _failingOver = false;
@@ -184,7 +189,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   List<PlaybackStreamOption> _directStreamOptions = const [];
   StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
   final Set<String> _failedDirectStreamUris = {};
-  int _alternativeIndex = 0;
+  final Set<ReleaseCandidate> _attemptedReleaseAlternatives = {};
   List<SkipSegment> _skips = const [];
   Timer? _skipLoadTimer;
   Duration? _skipDurationCandidate;
@@ -233,6 +238,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     options: _directStreamOptions,
     failedUris: _failedDirectStreamUris,
   );
+  PlaybackAudioPreference get _effectiveAudioPreference =>
+      _preferences.audioPreferenceSet
+      ? playbackAudioPreferenceForLanguage(_preferences.audioLanguage) ??
+            _audioPreference
+      : _audioPreference;
 
   @override
   void initState() {
@@ -300,6 +310,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (!mounted || _engineHandoffInProgress) return;
     _installController(_createController(_source, _decoderMode));
     setState(() {});
+    if (_currentStream.externalSubtitleRejected) {
+      _showMessage(
+        'External subtitles were blocked because they were unsafe or unsupported.',
+      );
+    }
   }
 
   bool _releaseRequiresSoftware(ReleaseCandidate release) {
@@ -650,7 +665,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return;
     }
     await _tryNextStream(message);
+    if (!mounted || _engineHandoffInProgress) return;
+    if (_playbackError == null) return;
     await _recordEngineFailure(message);
+    if (!mounted || _engineHandoffInProgress) return;
     if (_playbackError != null) {
       unawaited(
         recordAnonymousHandledError(
@@ -663,42 +681,61 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _recordEngineSuccess() async {
+    if (!mounted || _engineHandoffInProgress) return;
+    final database = _database;
     if (_currentStream.providerId case final providerId?) {
-      await _database.recordProviderSuccess(providerId);
+      await database.recordProviderSuccess(providerId);
       return;
     }
     final device = await AndroidTvBridge.instance.getDeviceProfile();
-    await _database.recordPlayerSuccess(device.key, 'vlc');
+    if (!mounted || _engineHandoffInProgress) return;
+    await database.recordPlayerSuccess(device.key, 'vlc');
   }
 
   Future<void> _recordEngineFailure(String reason) async {
+    if (!mounted || _engineHandoffInProgress) return;
+    final database = _database;
     if (_currentStream.providerId case final providerId?) {
-      await _database.recordProviderFailure(providerId, reason);
+      await database.recordProviderFailure(providerId, reason);
     } else {
       final device = await AndroidTvBridge.instance.getDeviceProfile();
-      await _database.recordPlayerFailure(device.key, 'vlc');
+      if (!mounted || _engineHandoffInProgress) return;
+      await database.recordPlayerFailure(device.key, 'vlc');
     }
-    await _database.recordDiagnosticEvent(
+    if (!mounted || _engineHandoffInProgress) return;
+    await database.recordDiagnosticEvent(
       category: 'player-vlc',
       message: reason,
     );
   }
 
-  Future<void> _restart(VlcDecoderMode mode, {String? reason}) {
+  Future<void> _restart(
+    VlcDecoderMode mode, {
+    String? reason,
+    Duration? resumePosition,
+    bool propagateFailure = false,
+  }) {
     if (_engineHandoffInProgress) return Future<void>.value();
-    return _trackControllerMutation(_runRestart(mode, reason: reason));
+    return _trackControllerMutation(
+      _runRestart(mode, reason: reason, resumePosition: resumePosition),
+      propagateFailure: propagateFailure,
+    );
   }
 
-  Future<void> _runRestart(VlcDecoderMode mode, {String? reason}) async {
+  Future<void> _runRestart(
+    VlcDecoderMode mode, {
+    String? reason,
+    Duration? resumePosition,
+  }) async {
     if (_restarting) return;
     _restarting = true;
     final old = _controller;
-    final position = old?.value.position ?? Duration.zero;
+    final position = resumePosition ?? old?.value.position ?? Duration.zero;
     _persistenceReady = false;
     _engineInitialized = false;
     _videoWatchdog?.cancel();
     _decoderMode = mode;
-    _pendingResume = position > const Duration(seconds: 2) ? position : null;
+    _pendingResume = position > Duration.zero ? position : null;
     _trackDiscoveryTimer?.cancel();
     _trackDiscoveryAttempts = 0;
     _audioPreferenceApplied = false;
@@ -725,12 +762,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
-  Future<void> _trackControllerMutation(Future<void> operation) async {
+  Future<void> _trackControllerMutation(
+    Future<void> operation, {
+    bool propagateFailure = false,
+  }) async {
     final guardedOperation = (() async {
       try {
         await operation;
       } catch (error, stackTrace) {
-        if (mounted && !_engineHandoffInProgress) {
+        if (!propagateFailure && mounted && !_engineHandoffInProgress) {
           unawaited(
             recordAnonymousHandledError(
               area: AnonymousErrorArea.playback,
@@ -740,6 +780,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           );
           setState(() => _playbackError = error.toString());
         }
+        if (propagateFailure) rethrow;
       }
     })();
     _controllerMutationOperations.add(guardedOperation);
@@ -1343,12 +1384,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     return position;
   }
 
-  Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
+  Future<StreamReady?> _resolveRelease(
+    ReleaseCandidate release, {
+    DebridTokenService? tokenService,
+  }) async {
+    if (!mounted || _engineHandoffInProgress) return null;
+    final DebridTokenService capturedTokenService =
+        tokenService ?? ref.read(debridTokenServiceProvider);
     String? token;
     try {
-      token = await ref
-          .read(debridTokenServiceProvider)
-          .accessToken(widget.debridService);
+      token = await capturedTokenService.accessToken(widget.debridService);
     } catch (_) {
       throw DebridProviderAccessException(
         widget.debridService,
@@ -1357,6 +1402,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             'refreshed. Reconnect it in Accounts, then try again.',
       );
     }
+    if (!mounted || _engineHandoffInProgress) return null;
     if (token == null || token.isEmpty) {
       throw DebridProviderAccessException(widget.debridService);
     }
@@ -1367,24 +1413,70 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       source: source,
     );
     await for (final resolution in resolver.resolve(widget.launch.episode)) {
+      if (!mounted || _engineHandoffInProgress) return null;
       if (resolution is StreamReady) return resolution;
     }
     return null;
   }
 
   Future<void> _tryNextStream(String reason) async {
-    if (_failingOver) return;
+    if (!mounted || _engineHandoffInProgress || _failingOver) return;
     _failingOver = true;
+    final position = _effectiveHandoffPosition();
+    final tokenService = ref.read(debridTokenServiceProvider);
     Object? terminalFailure;
     try {
-      if (await _switchToNextDirectStream()) return;
-      while (_alternativeIndex < widget.launch.alternatives.length) {
-        final candidate = widget.launch.alternatives[_alternativeIndex++];
-        _showMessage('Trying another compatible stream...');
-        StreamReady? ready;
+      final classOrder = playerFailoverClassOrder(
+        currentIsWeb: _currentStream.isWebStream,
+      );
+      final directFirst = classOrder.first == PlayerFailoverClass.directWeb;
+      if (directFirst) {
+        await _waitForInFlightDirectDiscovery();
+        if (!mounted || _engineHandoffInProgress) return;
+        if (await _switchToNextDirectStream(position)) return;
+      }
+      if (!mounted || _engineHandoffInProgress) return;
+      for (final candidate in _remainingReleaseFailoverCandidates().take(12)) {
+        _attemptedReleaseAlternatives.add(candidate);
+        final previousSource = _source;
+        final previousRelease = _release;
+        final previousStream = _currentStream;
+        final previousPreferences = _preferences;
+        final previousDecoderMode = _decoderMode;
         try {
-          ready = await _resolveRelease(candidate);
+          final ready = await _resolveRelease(
+            candidate,
+            tokenService: tokenService,
+          );
+          if (!mounted || _engineHandoffInProgress) return;
+          if (ready == null) continue;
+          _source = ready.uri.toString();
+          _release = candidate;
+          _currentStream = ready;
+          _preferences = _preferences.copyWith(
+            subtitleEnabled: subtitlesEnabledForAudioPreference(
+              candidate,
+              _audioPreference,
+            ),
+          );
+          _decoderMode = _releaseRequiresSoftware(candidate)
+              ? VlcDecoderMode.software
+              : VlcDecoderMode.hardwareCopy;
+          await _restart(
+            _decoderMode,
+            resumePosition: position,
+            propagateFailure: true,
+          );
+          if (!mounted || _engineHandoffInProgress) return;
+          await widget.onStreamAdopted(ready, candidate);
+          return;
         } catch (error) {
+          if (!mounted || _engineHandoffInProgress) return;
+          _source = previousSource;
+          _release = previousRelease;
+          _currentStream = previousStream;
+          _preferences = previousPreferences;
+          _decoderMode = previousDecoderMode;
           if (isTerminalDebridFailoverFailure(error)) {
             terminalFailure = error;
             break;
@@ -1392,23 +1484,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           // A rejected or broken release must not abort the remaining list.
           continue;
         }
-        if (ready == null) continue;
-        _source = ready.uri.toString();
-        _release = candidate;
-        _currentStream = ready;
-        _preferences = _preferences.copyWith(
-          subtitleEnabled: subtitlesEnabledForAudioPreference(
-            candidate,
-            _audioPreference,
-          ),
-        );
-        _decoderMode = _releaseRequiresSoftware(candidate)
-            ? VlcDecoderMode.software
-            : VlcDecoderMode.hardwareCopy;
-        await _restart(_decoderMode, reason: 'Switched to another stream');
-        return;
       }
-      if (mounted) {
+      if (!directFirst) {
+        if (!mounted || _engineHandoffInProgress) return;
+        await _waitForInFlightDirectDiscovery();
+        if (!mounted || _engineHandoffInProgress) return;
+        if (await _switchToNextDirectStream(position)) return;
+      }
+      if (mounted && !_engineHandoffInProgress) {
         setState(
           () => _playbackError =
               terminalFailure?.toString() ??
@@ -1420,40 +1503,144 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
   }
 
-  Future<bool> _switchToNextDirectStream() async {
-    if (!_currentStream.isWebStream) return false;
-    _failedDirectStreamUris.add(_currentStream.uri.toString());
-    final candidates = _directStreamOptions.where(
-      (option) =>
-          option.stream.isWebStream &&
-          !_failedDirectStreamUris.contains(option.stream.uri.toString()),
-    );
-    for (final candidate in candidates) {
-      final requestedUri = candidate.stream.uri;
-      _failedDirectStreamUris.add(requestedUri.toString());
-      final option = await _preflightDirectStream(candidate);
-      if (option == null) continue;
-      if (validatedRedirectWasAlreadyAttempted(
-        requestedUri: requestedUri,
-        validatedUri: option.stream.uri,
-        attemptedUris: _failedDirectStreamUris,
-      )) {
-        continue;
-      }
-      _failedDirectStreamUris.add(option.stream.uri.toString());
-      _currentStream = option.stream;
-      _release = option.release;
-      _source = option.stream.uri.toString();
-      _decoderMode = _releaseRequiresSoftware(option.release)
-          ? VlcDecoderMode.software
-          : VlcDecoderMode.hardwareCopy;
-      await _restart(
-        _decoderMode,
-        reason: 'Recovered with ${playbackStreamOptionLabel(option)}',
-      );
-      return true;
+  Future<bool> _switchToNextDirectStream(Duration position) async {
+    if (!mounted || _engineHandoffInProgress) {
+      return false;
     }
-    return false;
+    if (_currentStream.isWebStream) {
+      _failedDirectStreamUris.add(_currentStream.uri.toString());
+    }
+    final opened = await openFirstViablePlayerCandidate(
+      candidates: _remainingDirectFailoverCandidates(),
+      resumePosition: position,
+      isActive: () => mounted && !_engineHandoffInProgress,
+      attempt: (candidate, resumePosition) async {
+        final requestedUri = candidate.stream.uri;
+        _failedDirectStreamUris.add(requestedUri.toString());
+        final previousSource = _source;
+        final previousRelease = _release;
+        final previousStream = _currentStream;
+        final previousDecoderMode = _decoderMode;
+        PlaybackStreamOption? preparedOption;
+        try {
+          final option = await _preflightDirectStream(candidate, silent: true);
+          preparedOption = option;
+          if (!mounted || _engineHandoffInProgress) {
+            await option?.stream.playbackLease?.close();
+            return false;
+          }
+          if (option == null) return false;
+          if (validatedRedirectWasAlreadyAttempted(
+            requestedUri: requestedUri,
+            validatedUri: option.stream.uri,
+            attemptedUris: _failedDirectStreamUris,
+          )) {
+            await option.stream.playbackLease?.close();
+            return false;
+          }
+          _failedDirectStreamUris.add(option.stream.uri.toString());
+          _currentStream = option.stream;
+          _release = option.release;
+          _source = option.stream.uri.toString();
+          _decoderMode = _releaseRequiresSoftware(option.release)
+              ? VlcDecoderMode.software
+              : VlcDecoderMode.hardwareCopy;
+          await _restart(
+            _decoderMode,
+            resumePosition: resumePosition,
+            propagateFailure: true,
+          );
+          if (!mounted || _engineHandoffInProgress) {
+            await option.stream.playbackLease?.close();
+            return false;
+          }
+          await widget.onStreamAdopted(option.stream, option.release);
+          preparedOption = null;
+          return true;
+        } catch (_) {
+          await preparedOption?.stream.playbackLease?.close();
+          if (!mounted || _engineHandoffInProgress) rethrow;
+          _source = previousSource;
+          _release = previousRelease;
+          _currentStream = previousStream;
+          _decoderMode = previousDecoderMode;
+          rethrow;
+        }
+      },
+    );
+    return opened != null;
+  }
+
+  Future<void> _waitForInFlightDirectDiscovery() async {
+    if (_remainingDirectFailoverCandidates().isNotEmpty) {
+      return;
+    }
+    await _startWebSourceDiscovery();
+    if (!mounted || _engineHandoffInProgress) return;
+    await waitForPlayerFailoverCandidates(
+      snapshot: _remainingDirectFailoverCandidates,
+      isActive: () => mounted && !_engineHandoffInProgress,
+    );
+  }
+
+  List<ReleaseCandidate> _remainingReleaseFailoverCandidates() {
+    final candidates = widget.launch.alternatives
+        .where(
+          (candidate) => !_attemptedReleaseAlternatives.contains(candidate),
+        )
+        .toList();
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (candidate) =>
+          releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      affinityRank: _releaseFailoverAffinity,
+    );
+  }
+
+  List<PlaybackStreamOption> _remainingDirectFailoverCandidates() {
+    final candidates = _directStreamOptions
+        .where(
+          (option) =>
+              option.stream.isWebStream &&
+              !_failedDirectStreamUris.contains(option.stream.uri.toString()),
+        )
+        .toList();
+    final currentProvider = _currentStream.providerId?.trim().toLowerCase();
+    int affinityRank(PlaybackStreamOption option) {
+      final provider = option.stream.providerId?.trim().toLowerCase();
+      final providerRank =
+          provider != null && provider.isNotEmpty && provider == currentProvider
+          ? 0
+          : 1;
+      return (providerRank * 4) + _releaseFailoverAffinity(option.release);
+    }
+
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (option) =>
+          releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+      affinityRank: affinityRank,
+    );
+  }
+
+  int _releaseFailoverAffinity(ReleaseCandidate candidate) {
+    final currentProvider = _release.provider?.trim().toLowerCase();
+    final candidateProvider = candidate.provider?.trim().toLowerCase();
+    final sameProvider =
+        currentProvider != null &&
+        currentProvider.isNotEmpty &&
+        candidateProvider == currentProvider;
+    final sameSource =
+        _release.sourceId.trim().toLowerCase() ==
+        candidate.sourceId.trim().toLowerCase();
+    final currentAuthor = releaseGroupKey(_release.releaseName);
+    final sameAuthor =
+        currentAuthor != null &&
+        releaseGroupKey(candidate.releaseName) == currentAuthor;
+    if ((sameProvider || sameSource) && sameAuthor) return 0;
+    if (sameProvider || sameSource) return 1;
+    if (sameAuthor) return 2;
+    return 3;
   }
 
   Future<void> _returnToStreamPicker() async {
@@ -1506,19 +1693,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       // or watch-next persistence is temporarily unavailable.
     }
     if (!mounted || _engineHandoffInProgress) return;
-    final play = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const _VlcNextEpisodeDialog(),
-    );
-    if (!mounted) return;
-    if (play == true) await _playNextEpisode();
+    if (!_preferences.autoplayNextEpisode) return;
+    await _playNextEpisode();
   }
 
   Future<void> _playNextEpisode() async {
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
+    if (!_nextEpisodeHandoff.tryEnter()) return;
     try {
       final catalog = ref.read(catalogClientProvider);
       final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
@@ -1556,6 +1739,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (!mounted || decision.episode == null) return;
       final nextEpisode = decision.episode!;
       if (!mounted) return;
+      final preferredProvider = _release.provider?.trim();
+      final preferredSourceId = _release.sourceId.trim();
+      final preferredAuthor = releaseGroupKey(_release.releaseName);
+      final preferredWebProviderId = _currentStream.providerId?.trim();
       final route = Uri(
         path: '/resolve',
         queryParameters: {
@@ -1564,6 +1751,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           'synonyms': details.synonyms.join('|'),
           'episode': nextEpisode.toString(),
           'autoplay': '1',
+          if (preferredProvider != null && preferredProvider.isNotEmpty)
+            'preferredProvider': preferredProvider,
+          if (preferredSourceId.isNotEmpty)
+            'preferredSourceId': preferredSourceId,
+          if (preferredAuthor != null && preferredAuthor.isNotEmpty)
+            'preferredAuthor': preferredAuthor,
+          if (preferredWebProviderId != null &&
+              preferredWebProviderId.isNotEmpty)
+            'preferredWebProviderId': preferredWebProviderId,
           if (details.seasonYear != null) 'year': details.seasonYear.toString(),
           if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
           if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
@@ -1593,6 +1789,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       }
     } catch (_) {
       _showMessage('The next episode could not be prepared');
+    } finally {
+      if (!_engineHandoffInProgress) {
+        _nextEpisodeHandoff.leave();
+      }
     }
   }
 
@@ -1610,61 +1810,78 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           .watchSearchIncrementally(widget.launch.episode, refresh: refresh);
 
   Future<void> _startWebSourceDiscovery({bool restart = false}) async {
-    if (!_currentStream.isWebStream ||
-        !ref.read(settingsPreferencesProvider).webStreamsEnabled) {
-      return;
-    }
+    if (!mounted || _engineHandoffInProgress) return;
+    final webStreamsEnabled = ref
+        .read(settingsPreferencesProvider)
+        .webStreamsEnabled;
+    final aggregator = ref.read(webStreamAggregatorProvider);
+    final episode = widget.launch.episode;
+    if (!webStreamsEnabled) return;
     if (_sourceDiscoverySubscription != null && !restart) return;
     await _sourceDiscoverySubscription?.cancel();
-    _sourceDiscoverySubscription = _webSourceSearch().listen((progress) {
-      if (!mounted) return;
-      final merged = mergePlaybackStreamOptions(
-        _directStreamOptions,
-        progress.aggregation.streams.map(playbackOptionForWebStream),
-      );
-      final before = _directStreamOptions
-          .map((option) => option.stream.uri.toString())
-          .join('\n');
-      final after = merged
-          .map((option) => option.stream.uri.toString())
-          .join('\n');
-      if (before != after) setState(() => _directStreamOptions = merged);
-    }, onError: (_) {});
+    if (!mounted || _engineHandoffInProgress) return;
+    _sourceDiscoverySubscription = aggregator
+        .watchSearchIncrementally(episode)
+        .listen((progress) {
+          if (!mounted || _engineHandoffInProgress) return;
+          final merged = mergePlaybackStreamOptions(
+            _directStreamOptions,
+            progress.aggregation.streams.map(playbackOptionForWebStream),
+          );
+          final before = _directStreamOptions
+              .map((option) => option.stream.uri.toString())
+              .join('\n');
+          final after = merged
+              .map((option) => option.stream.uri.toString())
+              .join('\n');
+          if (before != after) setState(() => _directStreamOptions = merged);
+        }, onError: (_) {});
   }
 
   Future<PlaybackStreamOption?> _preflightDirectStream(
-    PlaybackStreamOption option,
-  ) async {
+    PlaybackStreamOption option, {
+    bool silent = false,
+  }) async {
+    if (!mounted || _engineHandoffInProgress) return null;
     if (!option.stream.isWebStream) return option;
-    _showMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    if (!silent) {
+      _showMessage('Checking ${playbackStreamOptionLabel(option)}...');
+    }
     try {
       final validated = await const WebStreamValidator().validate(
         option.stream.uri,
         option.stream.headers,
+        subtitleUri: option.stream.externalSubtitle,
       );
+      if (!mounted || _engineHandoffInProgress) {
+        await validated.session?.close();
+        return null;
+      }
       final validatedOption = PlaybackStreamOption(
         stream: StreamReady(
           uri: validated.uri,
           displayName: option.stream.displayName,
           headers: validated.headers,
-          externalSubtitle: option.stream.externalSubtitle,
+          externalSubtitle: validated.subtitleUri,
+          mediaContentType: validated.contentType,
+          subtitleContentType: validated.subtitleContentType,
+          externalSubtitleRejected: validated.subtitleRejected,
+          playbackLease: validated.session,
           providerId: option.stream.providerId,
           providerName: option.stream.providerName,
         ),
         release: option.release,
       );
-      _directStreamOptions = replaceValidatedPlaybackStreamOption(
-        options: _directStreamOptions,
-        requestedUri: option.stream.uri,
-        validated: validatedOption,
-      );
       return validatedOption;
     } catch (error) {
+      if (!mounted || _engineHandoffInProgress) return null;
       _failedDirectStreamUris.add(option.stream.uri.toString());
-      _showMessage(
-        'That source is unavailable: '
-        "${error.toString().replaceFirst('FormatException: ', '')}",
-      );
+      if (!silent) {
+        _showMessage(
+          'That source is unavailable: '
+          "${error.toString().replaceFirst('FormatException: ', '')}",
+        );
+      }
       return null;
     }
   }
@@ -1690,10 +1907,19 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return;
     }
     final option = await _preflightDirectStream(selected);
-    if (!mounted || option == null) {
+    if (!mounted) {
+      await option?.stream.playbackLease?.close();
+      return;
+    }
+    if (option == null) {
       _showControls();
       return;
     }
+    final previousSource = _source;
+    final previousStream = _currentStream;
+    final previousRelease = _release;
+    final previousDecoderMode = _decoderMode;
+    final previousDirectStreamOptions = _directStreamOptions;
     _failedDirectStreamUris.clear();
     _currentStream = option.stream;
     _source = option.stream.uri.toString();
@@ -1701,16 +1927,48 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _directStreamOptions = mergePlaybackStreamOptions(
       [option],
       _directStreamOptions.where(
-        (candidate) => candidate.stream.uri != selected.stream.uri,
+        (candidate) =>
+            candidate.stream.uri != selected.stream.uri &&
+            candidate.stream.uri != previousStream.uri,
       ),
     );
     _decoderMode = _releaseRequiresSoftware(option.release)
         ? VlcDecoderMode.software
         : VlcDecoderMode.hardwareCopy;
-    await _restart(
-      _decoderMode,
-      reason: 'Playing ${playbackStreamOptionLabel(option)}',
-    );
+    try {
+      await _restart(
+        _decoderMode,
+        reason: 'Playing ${playbackStreamOptionLabel(option)}',
+        propagateFailure: true,
+      );
+      if (!mounted || _engineHandoffInProgress) {
+        await option.stream.playbackLease?.close();
+        return;
+      }
+      await widget.onStreamAdopted(option.stream, option.release);
+    } catch (_) {
+      await option.stream.playbackLease?.close();
+      _source = previousSource;
+      _currentStream = previousStream;
+      _release = previousRelease;
+      _decoderMode = previousDecoderMode;
+      _directStreamOptions = previousDirectStreamOptions;
+      if (mounted && !_engineHandoffInProgress) {
+        await _restart(
+          _decoderMode,
+          resumePosition: _effectiveHandoffPosition(),
+        );
+        _showMessage(
+          'That source could not start. Restored the previous stream.',
+        );
+      }
+      return;
+    }
+    if (option.stream.externalSubtitleRejected) {
+      _showMessage(
+        'Playing without the unsafe or unsupported external subtitles.',
+      );
+    }
     _showControls();
   }
 
@@ -1920,8 +2178,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         subtitleSize: _subtitleSize,
         subtitleDelayMs: _subtitleDelayMs,
         audioDelayMs: _audioDelayMs,
-        hasAlternateStreams:
-            _alternativeIndex < widget.launch.alternatives.length,
+        hasAlternateStreams: widget.launch.alternatives.any(
+          (candidate) => !_attemptedReleaseAlternatives.contains(candidate),
+        ),
         hasDirectSources: _currentStream.isWebStream,
       ),
     );
@@ -3072,60 +3331,6 @@ class _VlcOptionsDialog extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _VlcNextEpisodeDialog extends StatefulWidget {
-  const _VlcNextEpisodeDialog();
-
-  @override
-  State<_VlcNextEpisodeDialog> createState() => _VlcNextEpisodeDialogState();
-}
-
-class _VlcNextEpisodeDialogState extends State<_VlcNextEpisodeDialog> {
-  int _seconds = 8;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      if (_seconds <= 1) {
-        Navigator.of(context).pop(true);
-      } else {
-        setState(() => _seconds--);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return AlertDialog(
-      backgroundColor: palette.playerSurface(
-        defaultColor: const Color(0xFF090909),
-      ),
-      title: const Text('Episode complete'),
-      content: Text('Playing the next episode in $_seconds seconds.'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Stay here'),
-        ),
-        FilledButton(
-          autofocus: true,
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Play next'),
-        ),
-      ],
     );
   }
 }

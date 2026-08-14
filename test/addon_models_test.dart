@@ -69,6 +69,7 @@ void main() {
       'https://[2001:db8::1]/catalog.json',
       'https://[64:ff9b::7f00:1]/catalog.json',
       'https://[64:ff9b::a00:1]/catalog.json',
+      'https://[64:ff9b:1::1]/catalog.json',
       'https://[2002:7f00:1::]/catalog.json',
       'https://100.64.0.1/catalog.json',
       'https://224.0.0.1/catalog.json',

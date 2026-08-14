@@ -47,7 +47,7 @@ void main() {
 
     final toggle = find.byKey(const ValueKey('episode-action-skip-filler'));
     expect(toggle, findsOneWidget);
-    expect(find.text('Skip filler episodes'), findsOneWidget);
+    expect(find.text('Skip filler'), findsOneWidget);
     expect(find.text('OFF'), findsOneWidget);
 
     for (var index = 0; index < 4; index++) {
@@ -84,7 +84,7 @@ void main() {
       },
     );
 
-    await tester.tap(find.text('Skip filler episodes'));
+    await tester.tap(find.text('Skip filler'));
     await tester.pumpAndSettle();
 
     expect(savedMediaId, anime.id);

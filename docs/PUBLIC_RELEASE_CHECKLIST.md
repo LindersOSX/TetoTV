@@ -15,14 +15,14 @@ the same as legal, store, or codec certification.
 - Choose and publish an explicit software license before exposing the source
   repository. APK distribution does not by itself grant permission to reuse
   TetoTV's source or branding.
-- Configure the broker's server-only `GITHUB_RELEASE_TOKEN` with access to only
-  the TetoTV repository and **Contents: Read-only**. Confirm `/health` reports
-  update support without revealing the token.
-- Configure `BETA_ACCESS_KEY_SHA256_HASHES` with only SHA-256 hashes of the
-  protected build-time Beta-channel key. Verify invalid/private Beta metadata
-  and APK requests fail, authentication is rate-limited, and `/health` reveals
-  only `beta_updates_configured`, never a key or hash. Verify the anonymous
-  legacy alias exposes only the signed Public 1.x migration APK.
+- Verify Public and Beta update checks use anonymous GitHub requests to their
+  fixed public repositories, send no token or shared Beta credential, prefer
+  the `-universal.apk` asset, and download directly from its
+  `browser_download_url`. During the one-release legacy migration window, keep
+  the previously deployed compatibility route available only for pre-1.0.2 and
+  pre-2.0.5 clients; new builds must never call it. After migration adoption is
+  verified, deploy the broker cleanup and confirm `/v1/app-updates/*` and all
+  update-specific secrets are gone.
 - Deploy exactly one broker instance while pairing state is process-local, or
   move pairing/rate-limit state to an atomic shared TTL store before scaling.
 - Obtain any required AniList authorization for a client that also integrates
@@ -73,9 +73,10 @@ in-place updates.
    and confirm the in-app About/Legal disclosure is present and readable.
 3. Run Flutter formatting, analysis, unit/widget/integration tests, broker
    syntax/self-tests, Android JVM tests, release lint, and Kotlin compilation.
-4. Build exactly one public APK with the protected key: the Universal APK
-   containing `armeabi-v7a` and `arm64-v8a`. Keep x86_64 and separate per-ABI
-   APKs test-only; do not upload them as release assets unless policy changes.
+4. Build exactly one public APK with the protected production signing key: the
+   Universal APK containing `armeabi-v7a` and `arm64-v8a`. Keep x86_64 and
+   separate per-ABI APKs test-only; do not upload them as release assets unless
+   policy changes.
 5. Verify package ID, version codes, signer identity, v2/v3 signatures,
    zip/page alignment, supported ABIs, min/target SDKs, manifest permissions,
    and absence of debug flags/secrets/default source URLs.
@@ -90,7 +91,7 @@ in-place updates.
    exactly one APK variant: the verified Universal APK. Also attach the required
    native corresponding-source bundle and third-party notices/license artifact;
    do not attach per-ABI APK variants. Immediately compare the hosted APK digest
-   and broker-downloaded bytes to the local file before announcing it.
+   and GitHub-downloaded bytes to the local file before announcing it.
 
 ## Content/source policy
 

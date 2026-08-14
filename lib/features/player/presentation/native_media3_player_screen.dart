@@ -8,8 +8,12 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
+import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
+import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
+import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
+import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -93,6 +97,7 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
     required this.launch,
     required this.onUseMpv,
     required this.onUseVlc,
+    required this.onStreamAdopted,
     this.initialPosition,
     this.subtitle,
     this.anilistMediaId,
@@ -126,6 +131,8 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
     ReleaseCandidate release,
   )
   onUseVlc;
+  final Future<void> Function(StreamReady stream, ReleaseCandidate release)
+  onStreamAdopted;
 
   @override
   ConsumerState<NativeMedia3PlayerScreen> createState() =>
@@ -134,17 +141,25 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
 
 class _NativeMedia3PlayerScreenState
     extends ConsumerState<NativeMedia3PlayerScreen> {
+  static const _maxAutomaticStreamAttempts = 4;
+  static const _maxFailoverCandidatesPerRequest = 12;
+
   late String _source;
   late ReleaseCandidate _release;
   late StreamReady _currentStream;
   List<PlaybackStreamOption> _directStreamOptions = const [];
+  StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
+  PlaybackAudioPreference _globalAudioPreference = PlaybackAudioPreference.dub;
   Duration _resumePosition = Duration.zero;
   DateTime? _resumeUpdatedAt;
-  int _alternativeIndex = 0;
   int _automaticStreamAttempts = 0;
+  final Set<String> _failedDirectStreamUris = {};
+  final Set<ReleaseCandidate> _attemptedReleaseAlternatives = {};
   bool _startFromBeginning = false;
   bool _syncHandled = false;
+  final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
+  bool _streamFailoverInProgress = false;
   bool _running = false;
   bool _nativeReleaseFailed = false;
   int? _resolvedMalMediaId;
@@ -158,6 +173,11 @@ class _NativeMedia3PlayerScreenState
       _resolvedMalMediaId ??
       widget.malMediaId ??
       widget.launch.episode.malMediaId;
+  PlaybackAudioPreference get _effectiveAudioPreference =>
+      _preferences.audioPreferenceSet
+      ? playbackAudioPreferenceForLanguage(_preferences.audioLanguage) ??
+            _globalAudioPreference
+      : _globalAudioPreference;
 
   @override
   void initState() {
@@ -169,6 +189,7 @@ class _NativeMedia3PlayerScreenState
       PlaybackStreamOption(stream: _currentStream, release: _release),
       ...widget.launch.directAlternatives,
     ], const []);
+    unawaited(_startWebSourceDiscovery());
     _resolvedMalMediaId = widget.malMediaId ?? widget.launch.episode.malMediaId;
     _startFromBeginning = widget.launch.episode.startFromBeginning;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -199,10 +220,8 @@ class _NativeMedia3PlayerScreenState
         return;
       }
       while (mounted) {
-        final effectiveAudio = _preferences.audioPreferenceSet
-            ? playbackAudioPreferenceForLanguage(_preferences.audioLanguage) ??
-                  appearance.preferredAudio
-            : appearance.preferredAudio;
+        _globalAudioPreference = appearance.preferredAudio;
+        final effectiveAudio = _effectiveAudioPreference;
         setState(() {
           _status = _automaticStreamAttempts == 0
               ? 'Opening the native TV player…'
@@ -222,7 +241,12 @@ class _NativeMedia3PlayerScreenState
           startFromBeginning: _startFromBeginning,
           externalSubtitle:
               _currentStream.externalSubtitle?.toString() ?? widget.subtitle,
+          mediaContentType: _currentStream.mediaContentType,
+          subtitleContentType: _currentStream.subtitleContentType,
+          externalSubtitleRejected: _currentStream.externalSubtitleRejected,
           headers: _currentStream.headers,
+          trustedPlaybackProxy: WebPlaybackProxy.instance
+              .isOwnedPlaybackProxyUri(_currentStream.uri),
           audioLanguage: _preferences.audioPreferenceSet
               ? _preferences.audioLanguage
               : effectiveAudio.audioLanguage,
@@ -407,14 +431,105 @@ class _NativeMedia3PlayerScreenState
         selected.stream.uri == _currentStream.uri) {
       return;
     }
-    _currentStream = selected.stream;
-    _release = selected.release;
-    _source = selected.stream.uri.toString();
+    final option = await _preflightDirectStream(selected);
+    if (!mounted) {
+      await option?.stream.playbackLease?.close();
+      return;
+    }
+    if (option == null) return;
+    final previousStream = _currentStream;
+    _failedDirectStreamUris.clear();
+    _currentStream = option.stream;
+    _release = option.release;
+    _source = option.stream.uri.toString();
     _directStreamOptions = mergePlaybackStreamOptions(
-      [selected],
+      [option],
       _directStreamOptions.where(
-        (candidate) => candidate.stream.uri != selected.stream.uri,
+        (candidate) =>
+            candidate.stream.uri != selected.stream.uri &&
+            candidate.stream.uri != previousStream.uri,
       ),
+    );
+    await widget.onStreamAdopted(option.stream, option.release);
+  }
+
+  Future<PlaybackStreamOption?> _preflightDirectStream(
+    PlaybackStreamOption option, {
+    bool silent = false,
+  }) async {
+    if (!mounted) return null;
+    if (!option.stream.isWebStream) return option;
+    if (!silent) {
+      setState(() {
+        _status = 'Checking ${playbackStreamOptionLabel(option)}...';
+        _diagnostic = null;
+      });
+    }
+    try {
+      final validated = await const WebStreamValidator().validate(
+        option.stream.uri,
+        option.stream.headers,
+        subtitleUri: option.stream.externalSubtitle,
+      );
+      if (!mounted) {
+        await validated.session?.close();
+        return null;
+      }
+      final validatedOption = PlaybackStreamOption(
+        stream: StreamReady(
+          uri: validated.uri,
+          displayName: option.stream.displayName,
+          headers: validated.headers,
+          externalSubtitle: validated.subtitleUri,
+          mediaContentType: validated.contentType,
+          subtitleContentType: validated.subtitleContentType,
+          externalSubtitleRejected: validated.subtitleRejected,
+          playbackLease: validated.session,
+          providerId: option.stream.providerId,
+          providerName: option.stream.providerName,
+        ),
+        release: option.release,
+      );
+      return validatedOption;
+    } catch (error) {
+      if (!mounted) return null;
+      _failedDirectStreamUris.add(option.stream.uri.toString());
+      if (!silent) {
+        setState(() {
+          _status = 'That source is unavailable';
+          _diagnostic = error.toString().replaceFirst('FormatException: ', '');
+        });
+      }
+      return null;
+    }
+  }
+
+  Future<void> _startWebSourceDiscovery() async {
+    if (!mounted || _sourceDiscoverySubscription != null) return;
+    final webStreamsEnabled = ref
+        .read(settingsPreferencesProvider)
+        .webStreamsEnabled;
+    final aggregator = ref.read(webStreamAggregatorProvider);
+    final episode = widget.launch.episode;
+    if (!webStreamsEnabled) return;
+    _sourceDiscoverySubscription = aggregator
+        .watchSearchIncrementally(episode)
+        .listen((progress) {
+          if (!mounted) return;
+          _directStreamOptions = mergePlaybackStreamOptions(
+            _directStreamOptions,
+            progress.aggregation.streams.map(playbackOptionForWebStream),
+          );
+        }, onError: (_) {});
+  }
+
+  Future<void> _waitForInFlightDirectDiscovery() async {
+    if (_remainingDirectFailoverCandidates().isNotEmpty) return;
+    await _startWebSourceDiscovery();
+    if (!mounted || !_streamFailoverInProgress) return;
+    await waitForPlayerFailoverCandidates(
+      snapshot: _remainingDirectFailoverCandidates,
+      isActive: () => mounted && _streamFailoverInProgress,
     );
   }
 
@@ -568,6 +683,7 @@ class _NativeMedia3PlayerScreenState
     if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
     final profile = await AndroidTvBridge.instance.getDeviceProfile();
+    if (!mounted) return;
     await database.recordPlayerSuccess(profile.key, 'media3');
   }
 
@@ -601,6 +717,7 @@ class _NativeMedia3PlayerScreenState
       final database = ref.read(tetoTvDatabaseProvider);
       final infoHash = _release.infoHash;
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
+      if (!mounted) return;
       final details = <String>[
         result.error ?? 'Native playback failed',
         if (result.decoder?.isNotEmpty == true) 'decoder=${result.decoder}',
@@ -625,53 +742,196 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<bool> _switchToCompatibleStream(String reason) async {
-    if (_automaticStreamAttempts >= 2) return false;
-    while (_alternativeIndex < widget.launch.alternatives.length) {
-      final candidate = widget.launch.alternatives[_alternativeIndex++];
-      // Do not burn CPU on H.264 Hi10P during automatic Fire TV recovery.
-      // MPV software mode remains available when the user explicitly wants it.
-      if (releaseRequiresSoftwareDecoder(candidate)) continue;
-      if (mounted) {
-        setState(() {
-          _status = 'Resolving a more compatible debrid stream…';
-          _diagnostic = reason;
-        });
-      }
-      StreamReady? ready;
-      try {
-        ready = await _resolveRelease(candidate);
-      } catch (error) {
-        if (!isTerminalDebridFailoverFailure(error)) {
-          // This release failed independently. Keep walking the ranked list.
-          continue;
+    if (!mounted ||
+        _streamFailoverInProgress ||
+        _automaticStreamAttempts >= _maxAutomaticStreamAttempts) {
+      return false;
+    }
+    _streamFailoverInProgress = true;
+    final tokenService = ref.read(debridTokenServiceProvider);
+    Object? terminalFailure;
+    try {
+      setState(() {
+        _status = 'Recovering playback…';
+        _diagnostic = null;
+      });
+
+      Future<bool> tryDirectCandidates() async {
+        if (_currentStream.isWebStream) {
+          _failedDirectStreamUris.add(_currentStream.uri.toString());
         }
-        if (mounted) {
-          setState(() {
-            _status = 'Could not switch debrid stream';
-            _diagnostic = error.toString();
-          });
+        await _waitForInFlightDirectDiscovery();
+        if (!mounted || !_streamFailoverInProgress) return false;
+        final opened = await openFirstViablePlayerCandidate(
+          candidates: _remainingDirectFailoverCandidates(),
+          resumePosition: _resumePosition,
+          maxCandidates: _maxFailoverCandidatesPerRequest,
+          isActive: () => mounted && _streamFailoverInProgress,
+          attempt: (candidate, resumePosition) async {
+            final requestedUri = candidate.stream.uri;
+            _failedDirectStreamUris.add(requestedUri.toString());
+            final option = await _preflightDirectStream(
+              candidate,
+              silent: true,
+            );
+            if (!mounted || !_streamFailoverInProgress) {
+              await option?.stream.playbackLease?.close();
+              return false;
+            }
+            if (option == null) return false;
+            if (validatedRedirectWasAlreadyAttempted(
+              requestedUri: requestedUri,
+              validatedUri: option.stream.uri,
+              attemptedUris: _failedDirectStreamUris,
+            )) {
+              await option.stream.playbackLease?.close();
+              return false;
+            }
+            _failedDirectStreamUris.add(option.stream.uri.toString());
+            _source = option.stream.uri.toString();
+            _release = option.release;
+            _currentStream = option.stream;
+            // Media3's native Activity receives this unchanged resume value on
+            // the next loop iteration.
+            _resumePosition = resumePosition;
+            _automaticStreamAttempts++;
+            await widget.onStreamAdopted(option.stream, option.release);
+            return true;
+          },
+        );
+        return opened != null;
+      }
+
+      Future<bool> tryDebridCandidates() async {
+        for (final candidate in _remainingReleaseFailoverCandidates().take(
+          _maxFailoverCandidatesPerRequest,
+        )) {
+          _attemptedReleaseAlternatives.add(candidate);
+          // Do not burn CPU on H.264 Hi10P during automatic Fire TV recovery.
+          // MPV software mode remains available when explicitly selected.
+          if (releaseRequiresSoftwareDecoder(candidate)) continue;
+          StreamReady? ready;
+          try {
+            ready = await _resolveRelease(
+              candidate,
+              tokenService: tokenService,
+            );
+            if (!mounted || !_streamFailoverInProgress) return false;
+          } catch (error) {
+            if (!mounted || !_streamFailoverInProgress) return false;
+            if (isTerminalDebridFailoverFailure(error)) {
+              terminalFailure = error;
+              break;
+            }
+            // This release failed independently. Keep walking the ranked list.
+            continue;
+          }
+          if (ready == null) continue;
+          _source = ready.uri.toString();
+          _release = candidate;
+          _currentStream = ready;
+          _automaticStreamAttempts++;
+          await widget.onStreamAdopted(ready, candidate);
+          return true;
         }
         return false;
       }
-      if (!mounted) return false;
-      if (ready == null) continue;
-      _source = ready.uri.toString();
-      _release = candidate;
-      _currentStream = ready;
-      _automaticStreamAttempts++;
-      return true;
+
+      final classOrder = playerFailoverClassOrder(
+        currentIsWeb: _currentStream.isWebStream,
+      );
+      final directFirst = classOrder.first == PlayerFailoverClass.directWeb;
+      if (directFirst && await tryDirectCandidates()) return true;
+      if (!mounted || !_streamFailoverInProgress) return false;
+      if (await tryDebridCandidates()) return true;
+      if (!mounted || !_streamFailoverInProgress) return false;
+      if (!directFirst && await tryDirectCandidates()) return true;
+      if (!mounted || !_streamFailoverInProgress) return false;
+
+      if (mounted) {
+        setState(() {
+          _status = 'No compatible streams remain';
+          _diagnostic = terminalFailure?.toString() ?? reason;
+        });
+      }
+      return false;
+    } finally {
+      _streamFailoverInProgress = false;
     }
-    return false;
   }
 
-  Future<StreamReady?> _resolveRelease(ReleaseCandidate release) async {
+  List<PlaybackStreamOption> _remainingDirectFailoverCandidates() {
+    final candidates = _directStreamOptions
+        .where(
+          (option) =>
+              option.stream.isWebStream &&
+              !_failedDirectStreamUris.contains(option.stream.uri.toString()),
+        )
+        .toList();
+    final currentProvider = _currentStream.providerId?.trim().toLowerCase();
+    int affinityRank(PlaybackStreamOption option) {
+      final provider = option.stream.providerId?.trim().toLowerCase();
+      final providerRank =
+          provider != null && provider.isNotEmpty && provider == currentProvider
+          ? 0
+          : 1;
+      return (providerRank * 4) + _releaseFailoverAffinity(option.release);
+    }
+
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (option) =>
+          releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+      affinityRank: affinityRank,
+    );
+  }
+
+  List<ReleaseCandidate> _remainingReleaseFailoverCandidates() {
+    final candidates = widget.launch.alternatives
+        .where(
+          (candidate) => !_attemptedReleaseAlternatives.contains(candidate),
+        )
+        .toList();
+    return rankAutomaticPlayerFailoverCandidates(
+      candidates: candidates,
+      audioRank: (candidate) =>
+          releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      affinityRank: _releaseFailoverAffinity,
+    );
+  }
+
+  int _releaseFailoverAffinity(ReleaseCandidate candidate) {
+    final currentProvider = _release.provider?.trim().toLowerCase();
+    final candidateProvider = candidate.provider?.trim().toLowerCase();
+    final sameProvider =
+        currentProvider != null &&
+        currentProvider.isNotEmpty &&
+        candidateProvider == currentProvider;
+    final sameSource =
+        _release.sourceId.trim().toLowerCase() ==
+        candidate.sourceId.trim().toLowerCase();
+    final currentAuthor = releaseGroupKey(_release.releaseName);
+    final sameAuthor =
+        currentAuthor != null &&
+        releaseGroupKey(candidate.releaseName) == currentAuthor;
+    if ((sameProvider || sameSource) && sameAuthor) return 0;
+    if (sameProvider || sameSource) return 1;
+    if (sameAuthor) return 2;
+    return 3;
+  }
+
+  Future<StreamReady?> _resolveRelease(
+    ReleaseCandidate release, {
+    DebridTokenService? tokenService,
+  }) async {
     if (!mounted) return null;
-    final tokenService = ref.read(debridTokenServiceProvider);
+    final DebridTokenService capturedTokenService =
+        tokenService ?? ref.read(debridTokenServiceProvider);
     final debridService = widget.debridService;
     final episode = widget.launch.episode;
     String? token;
     try {
-      token = await tokenService.accessToken(debridService);
+      token = await capturedTokenService.accessToken(debridService);
     } catch (_) {
       throw DebridProviderAccessException(
         debridService,
@@ -726,22 +986,21 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _offerNextEpisode() async {
     if (!mounted) return;
-    final playNext = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const _NativeNextEpisodeDialog(),
-    );
-    if (!mounted) return;
-    if (playNext == true) {
-      await _playNextEpisode();
-    } else if (context.canPop()) {
-      context.pop();
+    if (!_preferences.autoplayNextEpisode) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        GoRouter.of(context).go('/anime/$_mediaId');
+      }
+      return;
     }
+    await _playNextEpisode();
   }
 
   Future<void> _playNextEpisode() async {
+    if (!mounted || !_nextEpisodeHandoff.tryEnter()) return;
+    var routeStarted = false;
     try {
-      if (!mounted) return;
       final catalog = ref.read(catalogClientProvider);
       final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final unavailableNoticeController = ref.read(
@@ -780,13 +1039,16 @@ class _NativeMedia3PlayerScreenState
       if (decision.episode == null) {
         setState(() {
           _status = 'No non-filler episodes remain';
-          _diagnostic =
-              'Turn off Skip filler episodes on the series page to play them.';
+          _diagnostic = 'Turn off Skip filler on the series page to play them.';
         });
         return;
       }
       final nextEpisode = decision.episode!;
       if (!mounted) return;
+      final preferredProvider = _release.provider?.trim();
+      final preferredSourceId = _release.sourceId.trim();
+      final preferredAuthor = releaseGroupKey(_release.releaseName);
+      final preferredWebProviderId = _currentStream.providerId?.trim();
       context.pushReplacement(
         Uri(
           path: '/resolve',
@@ -796,6 +1058,15 @@ class _NativeMedia3PlayerScreenState
             'synonyms': details.synonyms.join('|'),
             'episode': nextEpisode.toString(),
             'autoplay': '1',
+            if (preferredProvider != null && preferredProvider.isNotEmpty)
+              'preferredProvider': preferredProvider,
+            if (preferredSourceId.isNotEmpty)
+              'preferredSourceId': preferredSourceId,
+            if (preferredAuthor != null && preferredAuthor.isNotEmpty)
+              'preferredAuthor': preferredAuthor,
+            if (preferredWebProviderId != null &&
+                preferredWebProviderId.isNotEmpty)
+              'preferredWebProviderId': preferredWebProviderId,
             if (details.seasonYear != null)
               'year': details.seasonYear.toString(),
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
@@ -803,9 +1074,18 @@ class _NativeMedia3PlayerScreenState
           },
         ).toString(),
       );
+      routeStarted = true;
     } catch (_) {
       if (mounted && context.canPop()) context.pop();
+    } finally {
+      if (!routeStarted) _nextEpisodeHandoff.leave();
     }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_sourceDiscoverySubscription?.cancel());
+    super.dispose();
   }
 
   @override
@@ -914,55 +1194,5 @@ class _NativeMedia3PlayerScreenState
         ),
       ),
     ),
-  );
-}
-
-class _NativeNextEpisodeDialog extends StatefulWidget {
-  const _NativeNextEpisodeDialog();
-
-  @override
-  State<_NativeNextEpisodeDialog> createState() =>
-      _NativeNextEpisodeDialogState();
-}
-
-class _NativeNextEpisodeDialogState extends State<_NativeNextEpisodeDialog> {
-  Timer? _timer;
-  int _seconds = 8;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      if (_seconds <= 1) {
-        Navigator.of(context).pop(true);
-      } else {
-        setState(() => _seconds--);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    backgroundColor: const Color(0xFF0B0B0D),
-    title: const Text('Episode complete'),
-    content: Text('Playing the next episode in $_seconds seconds.'),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(false),
-        child: const Text('Stay here'),
-      ),
-      FilledButton(
-        autofocus: true,
-        onPressed: () => Navigator.of(context).pop(true),
-        child: const Text('Play now'),
-      ),
-    ],
   );
 }

@@ -92,6 +92,12 @@ sealed class StreamResolution {
   const StreamResolution();
 }
 
+/// Runtime ownership for resources that must remain alive while an engine is
+/// reading them. Implementations must make [close] idempotent.
+abstract interface class PlaybackResourceLease {
+  Future<void> close();
+}
+
 class StreamReady extends StreamResolution {
   const StreamReady({
     required this.uri,
@@ -99,6 +105,10 @@ class StreamReady extends StreamResolution {
     this.debridService,
     this.headers = const {},
     this.externalSubtitle,
+    this.mediaContentType,
+    this.subtitleContentType,
+    this.externalSubtitleRejected = false,
+    this.playbackLease,
     this.providerId,
     this.providerName,
   });
@@ -108,6 +118,10 @@ class StreamReady extends StreamResolution {
   final DebridService? debridService;
   final Map<String, String> headers;
   final Uri? externalSubtitle;
+  final String? mediaContentType;
+  final String? subtitleContentType;
+  final bool externalSubtitleRejected;
+  final PlaybackResourceLease? playbackLease;
   final String? providerId;
   final String? providerName;
 

@@ -15,6 +15,7 @@ import 'package:anime_tv/features/discord/presentation/discord_device_pairing_sc
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
 import 'package:anime_tv/features/local_media/presentation/local_media_screen.dart';
 import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
+import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
@@ -197,6 +198,10 @@ final appRouter = GoRouter(
           return const _InvalidRouteScreen();
         }
         return ResolveEpisodeScreen(
+          preferredProvider: query['preferredProvider'],
+          preferredAuthor: query['preferredAuthor'],
+          preferredSourceId: query['preferredSourceId'],
+          preferredWebProviderId: query['preferredWebProviderId'],
           episode: EpisodeReference(
             anilistMediaId: anilistMediaId,
             malMediaId: positiveRouteInt(query['malId']),
@@ -223,20 +228,15 @@ final appRouter = GoRouter(
         final source = query['source'];
         final service = DebridService.fromSlug(query['debrid']);
         final resolved = state.extra;
-        final validTypedStream =
-            resolved is PlaybackLaunch &&
-            resolved.stream.uri.toString() == source &&
-            ((resolved.stream.debridService != null &&
-                    resolved.stream.debridService == service) ||
-                (resolved.stream.isWebStream &&
-                    service == null &&
-                    resolved.stream.providerId?.isNotEmpty == true));
-        if (source == null ||
-            !source.startsWith('https://') ||
-            !validTypedStream) {
+        final validTypedStream = isValidTypedPlayerLaunch(
+          source: source,
+          service: service,
+          resolved: resolved,
+        );
+        if (!isAllowedTypedPlayerSource(source) || !validTypedStream) {
           return const DebridOnlyPlaybackScreen();
         }
-        final launch = resolved;
+        final launch = resolved as PlaybackLaunch;
         return TvPlayerScreen(
           launch: launch,
           source: launch.stream.uri.toString(),
@@ -256,6 +256,42 @@ final appRouter = GoRouter(
 int? positiveRouteInt(String? value) {
   final parsed = int.tryParse(value ?? '');
   return parsed != null && parsed > 0 ? parsed : null;
+}
+
+/// Only public debrid HTTPS URLs and live, app-issued proxy capabilities may
+/// cross the typed player route. Arbitrary loopback URLs remain invalid even
+/// when a caller manages to construct a [PlaybackLaunch].
+bool isAllowedTypedPlayerSource(
+  String? source, {
+  bool Function(Uri uri)? ownsProxyUri,
+}) {
+  final uri = Uri.tryParse(source ?? '');
+  if (uri == null || uri.userInfo.isNotEmpty || uri.fragment.isNotEmpty) {
+    return false;
+  }
+  if (uri.scheme == 'https' && uri.host.isNotEmpty) return true;
+  return (ownsProxyUri ?? WebPlaybackProxy.instance.isOwnedPlaybackProxyUri)(
+    uri,
+  );
+}
+
+/// Verifies that `/player` navigation carries the exact typed launch object
+/// that produced its URL. A web launch may name a connected debrid service
+/// only when it also carries unresolved debrid fallbacks for that service.
+bool isValidTypedPlayerLaunch({
+  required String? source,
+  required DebridService? service,
+  required Object? resolved,
+}) {
+  if (resolved is! PlaybackLaunch || resolved.stream.uri.toString() != source) {
+    return false;
+  }
+  if (resolved.stream.debridService != null) {
+    return resolved.stream.debridService == service;
+  }
+  return resolved.stream.isWebStream &&
+      resolved.stream.providerId?.isNotEmpty == true &&
+      (service == null || resolved.alternatives.isNotEmpty);
 }
 
 class _InvalidRouteScreen extends StatelessWidget {
