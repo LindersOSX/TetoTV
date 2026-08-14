@@ -205,6 +205,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.replay_rounded,
                           label: 'Back ${seekBackSeconds}s',
+                          iconOnly: true,
                           revealScrollStart: true,
                           onPressed: onRewind,
                           onDismiss: onDismiss,
@@ -217,6 +218,7 @@ class TetoPlayerChrome extends StatelessWidget {
                               ? Icons.pause_rounded
                               : Icons.play_arrow_rounded,
                           label: isPlaying ? 'Pause' : 'Play',
+                          iconOnly: true,
                           onPressed: onPlayPause,
                           onDismiss: onDismiss,
                         ),
@@ -224,6 +226,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.forward_rounded,
                           label: 'Forward ${seekForwardSeconds}s',
+                          iconOnly: true,
                           onPressed: onForward,
                           onDismiss: onDismiss,
                         ),
@@ -402,6 +405,7 @@ class TetoPlayerControl extends StatelessWidget {
     required this.onPressed,
     this.focusNode,
     this.primary = false,
+    this.iconOnly = false,
     this.revealScrollStart = false,
     this.revealScrollEnd = false,
     this.onDismiss,
@@ -413,6 +417,7 @@ class TetoPlayerControl extends StatelessWidget {
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final bool primary;
+  final bool iconOnly;
   final bool revealScrollStart;
   final bool revealScrollEnd;
   final VoidCallback? onDismiss;
@@ -423,7 +428,7 @@ class TetoPlayerControl extends StatelessWidget {
     final foreground = primary
         ? _playerPrimaryControlTextColor(palette)
         : _playerPrimaryTextColor(palette);
-    return TvFocusable(
+    final control = TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
       onFocusChanged: (focused) {
@@ -475,35 +480,45 @@ class TetoPlayerControl extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
       child: Container(
         key: ValueKey('player-control-$label'),
+        width: iconOnly ? 40 : null,
         height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: iconOnly
+            ? EdgeInsets.zero
+            : const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: primary ? palette.accent : _playerControlSurfaceColor(palette),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: iconOnly
+              ? MainAxisAlignment.center
+              : MainAxisAlignment.start,
           children: [
             Icon(icon, size: 18, color: foreground),
-            const SizedBox(width: 6),
-            MediaQuery.withClampedTextScaling(
-              maxScaleFactor: _playerControlMaxTextScale,
-              child: Text(
-                label,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: foreground,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
+            if (!iconOnly) ...[
+              const SizedBox(width: 6),
+              MediaQuery.withClampedTextScaling(
+                maxScaleFactor: _playerControlMaxTextScale,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
+    if (!iconOnly) return control;
+    return Semantics(label: label, button: true, child: control);
   }
 }
 

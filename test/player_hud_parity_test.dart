@@ -16,54 +16,76 @@ void main() {
     }
   });
 
-  test('Flutter and Media3 HUDs keep the same control order and labels', () {
-    final flutterChrome = File(
-      'lib/features/player/presentation/teto_player_chrome.dart',
-    ).readAsStringSync();
-    final nativeChrome = File(
-      'android/app/src/main/res/layout/tetotv_player_controls.xml',
-    ).readAsStringSync();
-    final nativeStrings = File(
-      'android/app/src/main/res/values/strings.xml',
-    ).readAsStringSync();
+  test(
+    'Flutter and Media3 keep transport icons and labeled actions in order',
+    () {
+      final flutterChrome = File(
+        'lib/features/player/presentation/teto_player_chrome.dart',
+      ).readAsStringSync();
+      final nativeChrome = File(
+        'android/app/src/main/res/layout/tetotv_player_controls.xml',
+      ).readAsStringSync();
+      final nativeStrings = File(
+        'android/app/src/main/res/values/strings.xml',
+      ).readAsStringSync();
 
-    _expectInOrder(flutterChrome, const [
-      "label: 'Back \${seekBackSeconds}s'",
-      "label: isPlaying ? 'Pause' : 'Play'",
-      "label: 'Forward \${seekForwardSeconds}s'",
-      "label: 'Audio'",
-      "label: 'CC'",
-      "label: 'Size'",
-      "label: 'Picture'",
-      "label: 'Player'",
-      "label: 'Sources'",
-      "label: 'Options'",
-    ]);
-    _expectInOrder(nativeChrome, const [
-      '@id/exo_rew',
-      '@id/exo_play_pause',
-      '@id/exo_ffwd',
-      '@+id/tetotv_audio_tracks',
-      '@+id/tetotv_caption_tracks',
-      '@+id/tetotv_caption_size',
-      '@+id/tetotv_picture_mode',
-      '@+id/tetotv_fix_video',
-      '@+id/tetotv_player_sources',
-      '@+id/tetotv_player_options',
-    ]);
+      _expectInOrder(flutterChrome, const [
+        "label: 'Back \${seekBackSeconds}s'",
+        'iconOnly: true',
+        "label: isPlaying ? 'Pause' : 'Play'",
+        'iconOnly: true',
+        "label: 'Forward \${seekForwardSeconds}s'",
+        'iconOnly: true',
+        "label: 'Audio'",
+        "label: 'CC'",
+        "label: 'Size'",
+        "label: 'Picture'",
+        "label: 'Player'",
+        "label: 'Sources'",
+        "label: 'Options'",
+      ]);
+      _expectInOrder(nativeChrome, const [
+        '@id/exo_rew',
+        '@id/exo_play_pause',
+        '@id/exo_ffwd',
+        '@+id/tetotv_audio_tracks',
+        '@+id/tetotv_caption_tracks',
+        '@+id/tetotv_caption_size',
+        '@+id/tetotv_picture_mode',
+        '@+id/tetotv_fix_video',
+        '@+id/tetotv_player_sources',
+        '@+id/tetotv_player_options',
+      ]);
 
-    for (final label in [
-      '>Audio<',
-      '>CC<',
-      '>Size<',
-      '>Picture<',
-      '>Player<',
-      '>Sources<',
-      '>Options<',
-    ]) {
-      expect(nativeStrings, contains(label));
-    }
-  });
+      for (final label in [
+        '>Audio<',
+        '>CC<',
+        '>Size<',
+        '>Picture<',
+        '>Player<',
+        '>Sources<',
+        '>Options<',
+      ]) {
+        expect(nativeStrings, contains(label));
+      }
+
+      expect(flutterChrome, contains('Semantics(label: label, button: true'));
+      for (final transportLabelId in [
+        'tetotv_rewind_label',
+        'tetotv_play_pause_label',
+        'tetotv_fast_forward_label',
+      ]) {
+        expect(nativeChrome, isNot(contains(transportLabelId)));
+      }
+      for (final accessibilityLabel in [
+        '@string/tetotv_player_rewind',
+        '@string/tetotv_player_play',
+        '@string/tetotv_player_fast_forward',
+      ]) {
+        expect(nativeChrome, contains(accessibilityLabel));
+      }
+    },
+  );
 
   test('all HUDs reveal the final controls instead of clipping focus', () {
     final flutterChrome = File(

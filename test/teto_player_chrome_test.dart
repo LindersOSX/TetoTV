@@ -48,6 +48,12 @@ void main() {
     expect(find.text('Player'), findsOneWidget);
     expect(find.text('Sources'), findsOneWidget);
     expect(find.text('Options'), findsOneWidget);
+    expect(find.text('Back 10s'), findsNothing);
+    expect(find.text('Pause'), findsNothing);
+    expect(find.text('Forward 30s'), findsNothing);
+    expect(find.bySemanticsLabel('Back 10s'), findsOneWidget);
+    expect(find.bySemanticsLabel('Pause'), findsOneWidget);
+    expect(find.bySemanticsLabel('Forward 30s'), findsOneWidget);
     expect(find.text('03:00  /  24:00'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
     expect(find.byType(Slider), findsNothing);
@@ -56,8 +62,8 @@ void main() {
       findsNothing,
     );
     expect(
-      tester.getSize(find.widgetWithText(TetoPlayerControl, 'Back 10s')).height,
-      40,
+      tester.getSize(find.byKey(const ValueKey('player-control-Back 10s'))),
+      const Size.square(40),
     );
     expect(
       (tester
@@ -94,6 +100,65 @@ void main() {
     );
     expect(progress.color, AppColors.accentBright);
     expect(progress.backgroundColor, Colors.white.withValues(alpha: .24));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('icon-only transport controls keep their D-pad actions', (
+    tester,
+  ) async {
+    final playFocus = FocusNode();
+    addTearDown(playFocus.dispose);
+    var rewindCount = 0;
+    var playPauseCount = 0;
+    var forwardCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TetoPlayerChrome(
+            engineKey: 'transport-actions',
+            title: 'Episode',
+            streamLabel: 'Stream',
+            position: Duration.zero,
+            duration: const Duration(minutes: 24),
+            isPlaying: false,
+            playFocusNode: playFocus,
+            seekBackSeconds: 10,
+            seekForwardSeconds: 30,
+            onRewind: () => rewindCount++,
+            onPlayPause: () => playPauseCount++,
+            onForward: () => forwardCount++,
+            onAudio: () {},
+            onSubtitles: () {},
+            onCaptionSize: () {},
+            onPicture: () {},
+            onFixVideo: () {},
+            onOptions: () {},
+            onDismiss: () {},
+          ),
+        ),
+      ),
+    );
+
+    playFocus.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+
+    expect(playPauseCount, 1);
+    expect(rewindCount, 1);
+    expect(forwardCount, 1);
+    expect(find.text('Back 10s'), findsNothing);
+    expect(find.text('Play'), findsNothing);
+    expect(find.text('Forward 30s'), findsNothing);
+    expect(find.bySemanticsLabel('Back 10s'), findsOneWidget);
+    expect(find.bySemanticsLabel('Play'), findsOneWidget);
+    expect(find.bySemanticsLabel('Forward 30s'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -426,14 +491,10 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.select);
         await tester.pump();
 
-        final rewindControl = find.widgetWithText(
-          TetoPlayerControl,
-          'Back 10s',
+        final rewindControl = find.byKey(
+          const ValueKey('player-control-Back 10s'),
         );
         final rewindRect = tester.getRect(rewindControl);
-        final rewindTextRect = tester.getRect(
-          find.descendant(of: rewindControl, matching: find.text('Back 10s')),
-        );
         final rewindIconRect = tester.getRect(
           find.descendant(
             of: rewindControl,
@@ -441,8 +502,11 @@ void main() {
           ),
         );
         expect(rewindRect.left - 14, greaterThanOrEqualTo(panelRect.left));
-        expect(rewindRect.contains(rewindTextRect.topLeft), isTrue);
-        expect(rewindRect.contains(rewindTextRect.bottomRight), isTrue);
+        expect(tester.getSize(rewindControl), const Size.square(40));
+        expect(rewindRect.width, closeTo(41, .01));
+        expect(rewindRect.height, closeTo(41, .01));
+        expect(find.text('Back 10s'), findsNothing);
+        expect(find.bySemanticsLabel('Back 10s'), findsOneWidget);
         expect(rewindRect.contains(rewindIconRect.topLeft), isTrue);
         expect(rewindRect.contains(rewindIconRect.bottomRight), isTrue);
         expect(rewindActivated, isTrue);

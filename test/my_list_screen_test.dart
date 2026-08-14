@@ -7,6 +7,7 @@ import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -165,23 +166,31 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('TetoFan'), findsOneWidget);
-    expect(find.text('MALFan'), findsOneWidget);
+    expect(find.text('MALFan'), findsNothing);
     expect(find.text('AniList'), findsOneWidget);
-    expect(find.text('MAL'), findsOneWidget);
-    final anilistStats = tester.widget<Text>(
-      find.byKey(const ValueKey('main-nav-profile-stats-anilist')),
+    expect(find.text('+1 linked · MAL'), findsOneWidget);
+    final anilistStats = find.byKey(
+      const ValueKey('main-nav-profile-stats-anilist'),
     );
-    expect(anilistStats.data, contains('120 titles'));
-    expect(anilistStats.data, contains('2.4K eps'));
-    expect(anilistStats.data, contains('800h watched'));
-    expect(anilistStats.data, contains('82.4/100 mean'));
     expect(
-      tester
-          .widget<Text>(
-            find.byKey(const ValueKey('main-nav-profile-stats-myanimelist')),
-          )
-          .data,
-      '8.1/10 mean',
+      find.descendant(of: anilistStats, matching: find.text('120 titles')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: anilistStats, matching: find.text('2400 episodes')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: anilistStats, matching: find.text('800h watched')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: anilistStats, matching: find.text('Mean 82.4/100')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-stats-myanimelist')),
+      findsNothing,
     );
     expect(
       tester.getTopLeft(card).dy,
@@ -197,7 +206,7 @@ void main() {
   testWidgets('linked profiles stay labelled on a narrow screen', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(390, 844);
+    tester.view.physicalSize = const Size(430, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -222,12 +231,13 @@ void main() {
         ],
         child: const MaterialApp(
           home: Scaffold(
-            body: SafeArea(
-              minimum: EdgeInsets.symmetric(horizontal: 16),
-              child: MainNavigationBar(
-                active: MainNavigationDestination.myList,
-                preferences: SettingsPreferences(),
-              ),
+            body: Column(
+              children: [
+                MainNavigationBar(
+                  active: MainNavigationDestination.myList,
+                  preferences: SettingsPreferences(),
+                ),
+              ],
             ),
           ),
         ),
@@ -239,9 +249,8 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-summary')),
       findsOneWidget,
     );
-    expect(find.text('AniList'), findsOneWidget);
-    expect(find.text('TetoFan'), findsOneWidget);
-    expect(find.text('Linked account'), findsOneWidget);
+    expect(find.textContaining('AniList'), findsOneWidget);
+    expect(find.textContaining('TetoFan'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-profile-summary')),
@@ -288,38 +297,77 @@ void main() {
         ],
         child: const MaterialApp(
           home: Scaffold(
-            body: MainNavigationBar(
-              active: MainNavigationDestination.home,
-              preferences: SettingsPreferences(),
+            body: Column(
+              children: [
+                MainNavigationBar(
+                  active: MainNavigationDestination.home,
+                  preferences: SettingsPreferences(),
+                ),
+                Expanded(child: SizedBox()),
+              ],
             ),
           ),
         ),
       ),
     );
 
-    for (final width in <double>[330, 430, 820, 1200]) {
+    for (final width in <double>[330, 430, 820, 960, 1200]) {
       tester.view.physicalSize = Size(width, 720);
       await tester.pump();
 
       final navigation = find.byKey(const ValueKey('main-navigation'));
-      final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
       final settings = find.byKey(const ValueKey('main-nav-settings'));
-      expect(profile, findsOneWidget, reason: 'width $width');
       expect(settings, findsOneWidget, reason: 'width $width');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('main-nav-my-list')),
+          matching: find.text('My List'),
+        ),
+        findsOneWidget,
+        reason: 'My List must stay visibly labelled at width $width',
+      );
       expect(
         tester.getRect(settings).right,
         closeTo(tester.getRect(navigation).right, .01),
         reason: 'Settings must remain at the far-right at width $width',
       );
       expect(
-        tester.getRect(profile).right,
-        lessThanOrEqualTo(tester.getRect(settings).left),
-        reason: 'Profile and Settings must not overlap at width $width',
+        tester.getSize(navigation).height,
+        width >= 760 ? 96 : 62,
+        reason: 'Header geometry must remain fixed at width $width',
       );
+      final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+      if (width == 330) {
+        expect(profile, findsNothing);
+      } else {
+        expect(profile, findsOneWidget, reason: 'width $width');
+        expect(
+          tester.getRect(profile).right,
+          lessThanOrEqualTo(tester.getRect(settings).left),
+          reason: 'Profile must remain before Settings at width $width',
+        );
+        expect(
+          tester.getCenter(profile).dy,
+          closeTo(tester.getCenter(settings).dy, .01),
+          reason: 'Profile and navigation share one row at width $width',
+        );
+      }
+      if (width == 820) {
+        expect(find.textContaining('+1 MAL'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('main-nav-profile-myanimelist')),
+          findsNothing,
+        );
+      }
+      if (width == 960 || width == 1200) {
+        expect(find.text('+1 linked · MAL'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('main-nav-profile-myanimelist')),
+          findsNothing,
+        );
+      }
       expect(tester.takeException(), isNull, reason: 'width $width');
     }
-
-    expect(find.text('MALFan'), findsOneWidget);
   });
 
   testWidgets('1080p TV header shows avatar identity and useful stats', (
@@ -353,9 +401,14 @@ void main() {
         ],
         child: const MaterialApp(
           home: Scaffold(
-            body: MainNavigationBar(
-              active: MainNavigationDestination.home,
-              preferences: SettingsPreferences(),
+            body: Column(
+              children: [
+                MainNavigationBar(
+                  active: MainNavigationDestination.home,
+                  preferences: SettingsPreferences(),
+                ),
+                Expanded(child: SizedBox()),
+              ],
             ),
           ),
         ),
@@ -372,15 +425,113 @@ void main() {
       find.descendant(of: profile, matching: find.byType(NetworkArtwork)),
       findsOneWidget,
     );
-    final stats = tester.widget<Text>(
-      find.byKey(const ValueKey('main-nav-profile-stats-anilist')),
+    final stats = find.byKey(const ValueKey('main-nav-profile-stats-anilist'));
+    expect(
+      find.descendant(of: stats, matching: find.text('71 titles')),
+      findsOneWidget,
     );
-    expect(stats.data, contains('71 titles'));
-    expect(stats.data, contains('804 eps'));
-    expect(stats.data, contains('402h watched'));
+    expect(
+      find.descendant(of: stats, matching: find.text('804 episodes')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: stats, matching: find.text('402h watched')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: stats, matching: find.text('Mean 78.6/100')),
+      findsOneWidget,
+    );
+    expect(tester.getSize(profile).width, inInclusiveRange(420, 480));
+    expect(
+      tester.getSize(
+        find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
+      ),
+      const Size(62, 62),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-my-list')),
+        matching: find.text('My List'),
+      ),
+      findsOneWidget,
+    );
     expect(
       tester.getRect(settings).right,
       closeTo(tester.getRect(navigation).right, .01),
+    );
+    expect(tester.getSize(navigation).height, 96);
+    expect(
+      tester.getCenter(profile).dy,
+      closeTo(tester.getCenter(settings).dy, .01),
+    );
+    expect(
+      tester.getRect(profile).right,
+      lessThanOrEqualTo(tester.getRect(settings).left),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('TV wordmark uses live Theme Studio text and accent colors', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFF101820),
+      surface: const Color(0xFF182632),
+      accent: const Color(0xFF23B58F),
+      primaryText: const Color(0xFFF3EEDC),
+      mutedText: const Color(0xFF9CAAB2),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.darkFor(palette),
+          home: const Scaffold(
+            body: Column(
+              children: [
+                MainNavigationBar(
+                  active: MainNavigationDestination.home,
+                  preferences: SettingsPreferences(),
+                ),
+                Expanded(child: SizedBox()),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
+    expect(find.text('Teto'), findsOneWidget);
+    expect(find.text('TV'), findsOneWidget);
+    expect(find.text('TetoTV'), findsNothing);
+    expect(find.byType(Image), findsNothing);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('main-nav-wordmark-teto')))
+          .style
+          ?.color,
+      palette.primaryText,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('main-nav-wordmark-tv')))
+          .style
+          ?.color,
+      palette.accent,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-my-list')),
+        matching: find.text('My List'),
+      ),
+      findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });
@@ -404,9 +555,16 @@ void main() {
         child: const MaterialApp(
           home: TvShortcuts(
             child: Scaffold(
-              body: MainNavigationBar(
-                active: MainNavigationDestination.home,
-                preferences: SettingsPreferences(),
+              body: Column(
+                children: [
+                  MainNavigationBar(
+                    active: MainNavigationDestination.home,
+                    preferences: SettingsPreferences(),
+                  ),
+                  Expanded(
+                    child: SizedBox(key: ValueKey('header-layout-content')),
+                  ),
+                ],
               ),
             ),
           ),
@@ -426,6 +584,21 @@ void main() {
     settingsDetector().focusNode!.requestFocus();
     await tester.pump();
     expect(settingsDetector().focusNode!.hasFocus, isTrue);
+    final navigationBefore = tester.getRect(
+      find.byKey(const ValueKey('main-navigation')),
+    );
+    final contentTopBefore = tester
+        .getRect(find.byKey(const ValueKey('header-layout-content')))
+        .top;
+    final wordmarkBefore = tester.getRect(
+      find.byKey(const ValueKey('main-nav-wordmark')),
+    );
+    final myListBefore = tester.getRect(
+      find.byKey(const ValueKey('main-nav-my-list')),
+    );
+    final settingsBefore = tester.getRect(
+      find.byKey(const ValueKey('main-nav-settings')),
+    );
 
     accounts.replace(
       const TrackingAccountsState(
@@ -440,16 +613,55 @@ void main() {
     );
     await tester.pump();
     expect(settingsDetector().focusNode!.hasFocus, isTrue);
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-navigation'))),
+      navigationBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('header-layout-content'))).top,
+      contentTopBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-wordmark'))),
+      wordmarkBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-my-list'))),
+      myListBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-settings'))),
+      settingsBefore,
+    );
+
+    final profileSummary = find.byKey(
+      const ValueKey('main-nav-profile-summary'),
+    );
+    expect(
+      find.descendant(of: profileSummary, matching: find.byType(TvFocusable)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: profileSummary,
+        matching: find.byType(FocusableActionDetector),
+      ),
+      findsNothing,
+    );
+    final semantics = tester.widget<Semantics>(profileSummary);
+    expect(semantics.properties.button, isNot(true));
+    expect(semantics.properties.onTap, isNull);
+    expect(semantics.excludeSemantics, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();
-    final profileDetector = tester.widget<FocusableActionDetector>(
+    final calendarDetector = tester.widget<FocusableActionDetector>(
       find.descendant(
-        of: find.byKey(const ValueKey('main-nav-profile-summary')),
+        of: find.byKey(const ValueKey('main-nav-calendar')),
         matching: find.byType(FocusableActionDetector),
       ),
     );
-    expect(profileDetector.focusNode!.hasFocus, isTrue);
+    expect(calendarDetector.focusNode!.hasFocus, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
@@ -462,6 +674,26 @@ void main() {
       findsNothing,
     );
     expect(settingsDetector().focusNode!.hasFocus, isTrue);
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-navigation'))),
+      navigationBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('header-layout-content'))).top,
+      contentTopBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-wordmark'))),
+      wordmarkBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-my-list'))),
+      myListBefore,
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('main-nav-settings'))),
+      settingsBefore,
+    );
     expect(tester.takeException(), isNull);
   });
 
