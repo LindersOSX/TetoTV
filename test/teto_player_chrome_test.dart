@@ -325,7 +325,7 @@ void main() {
     (viewport: const Size(720, 480), textScale: 2.0),
   ]) {
     testWidgets(
-      'Options pill stays contained at ${testCase.viewport.width.toInt()}x'
+      'edge pills stay contained at ${testCase.viewport.width.toInt()}x'
       '${testCase.viewport.height.toInt()} and ${testCase.textScale}x text',
       (tester) async {
         tester.view.physicalSize = testCase.viewport;
@@ -335,6 +335,7 @@ void main() {
         final playFocus = FocusNode();
         addTearDown(playFocus.dispose);
         var optionsActivated = false;
+        var rewindActivated = false;
 
         await tester.pumpWidget(
           MaterialApp(
@@ -355,7 +356,7 @@ void main() {
                 playFocusNode: playFocus,
                 seekBackSeconds: 10,
                 seekForwardSeconds: 10,
-                onRewind: () {},
+                onRewind: () => rewindActivated = true,
                 onPlayPause: () {},
                 onForward: () {},
                 onAudio: () {},
@@ -393,13 +394,14 @@ void main() {
           ),
         );
         final viewportRect = Offset.zero & testCase.viewport;
+        final panelRect = tester.getRect(
+          find.byKey(const ValueKey('large-text-bottom-player-chrome')),
+        );
         expect(viewportRect.contains(controlRect.topLeft), isTrue);
         expect(viewportRect.contains(controlRect.bottomRight), isTrue);
-        // The trailing gutter also contains TvFocusable's scaled focus glow.
-        expect(
-          controlRect.right + 14,
-          lessThanOrEqualTo(testCase.viewport.width),
-        );
+        // The trailing gutter also contains TvFocusable's scaled focus glow
+        // inside the HUD card, not just inside the physical display.
+        expect(controlRect.right + 14, lessThanOrEqualTo(panelRect.right));
         expect(controlRect.contains(textRect.topLeft), isTrue);
         expect(controlRect.contains(textRect.bottomRight), isTrue);
         expect(controlRect.contains(iconRect.topLeft), isTrue);
@@ -411,6 +413,42 @@ void main() {
         expect(
           scrollable.position.pixels,
           closeTo(scrollable.position.maxScrollExtent, 0.01),
+        );
+
+        // Traverse all the way back from the trailing edge. This mirrors the
+        // real remote-control path and catches a leading-edge regression that
+        // a fresh, already-left-aligned HUD would hide.
+        for (var move = 0; move < 9; move++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+          await tester.pump(const Duration(milliseconds: 120));
+        }
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        await tester.pump();
+
+        final rewindControl = find.widgetWithText(
+          TetoPlayerControl,
+          'Back 10s',
+        );
+        final rewindRect = tester.getRect(rewindControl);
+        final rewindTextRect = tester.getRect(
+          find.descendant(of: rewindControl, matching: find.text('Back 10s')),
+        );
+        final rewindIconRect = tester.getRect(
+          find.descendant(
+            of: rewindControl,
+            matching: find.byIcon(Icons.replay_rounded),
+          ),
+        );
+        expect(rewindRect.left - 14, greaterThanOrEqualTo(panelRect.left));
+        expect(rewindRect.contains(rewindTextRect.topLeft), isTrue);
+        expect(rewindRect.contains(rewindTextRect.bottomRight), isTrue);
+        expect(rewindRect.contains(rewindIconRect.topLeft), isTrue);
+        expect(rewindRect.contains(rewindIconRect.bottomRight), isTrue);
+        expect(rewindActivated, isTrue);
+        expect(
+          scrollable.position.pixels,
+          closeTo(scrollable.position.minScrollExtent, 0.01),
         );
         expect(tester.takeException(), isNull);
       },

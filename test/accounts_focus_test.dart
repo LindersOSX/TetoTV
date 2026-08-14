@@ -75,6 +75,33 @@ void main() {
     );
   });
 
+  for (final layout in <(String, Size)>[
+    ('TV', const Size(1280, 720)),
+    ('phone', const Size(390, 844)),
+  ]) {
+    testWidgets(
+      'Local Media entry stays hidden outside Developer Mode on ${layout.$1}',
+      (tester) async {
+        FlutterSecureStorage.setMockInitialValues({});
+        tester.view.physicalSize = layout.$2;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        await tester.pumpWidget(
+          const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Streaming'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Local media, Jellyfin & Plex'), findsNothing);
+        expect(find.text('Open media'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('Home shelves remain visible without a dropdown', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(1280, 720);
@@ -501,9 +528,8 @@ void main() {
     expect(find.text('Developer mode'), findsOneWidget);
     expect(find.text('Update channel'), findsOneWidget);
     expect(find.text('Public'), findsOneWidget);
-    expect(find.text('Private Beta access'), findsOneWidget);
-    expect(find.text('KEY REQUIRED'), findsOneWidget);
-    expect(find.text('Set Beta key'), findsOneWidget);
+    expect(find.text('Load release history'), findsOneWidget);
+    expect(find.textContaining('Beta key'), findsNothing);
     expect(find.textContaining('Installed version:'), findsOneWidget);
     expect(find.textContaining('Build:'), findsOneWidget);
     expect(
@@ -513,13 +539,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('saved Beta access key is never displayed in Developer UI', (
+  testWidgets('legacy Beta key is removed and key controls stay hidden', (
     tester,
   ) async {
     const betaKey = 'beta_test_access_key_0123456789abcdef';
     FlutterSecureStorage.setMockInitialValues({
       developerModeStorageKey: 'true',
-      betaUpdateAccessKeyStorageKey: betaKey,
+      'beta_update_access_key': betaKey,
     });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidChannel, (call) async {
@@ -547,15 +573,17 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
 
-    expect(find.text('KEY SAVED'), findsOneWidget);
-    expect(find.text('Replace Beta key'), findsOneWidget);
-    expect(find.text('Clear Beta key'), findsOneWidget);
+    expect(find.text('Load release history'), findsOneWidget);
+    expect(find.textContaining('Beta key'), findsNothing);
     expect(find.text(betaKey), findsNothing);
     expect(find.textContaining(betaKey), findsNothing);
+    expect(
+      await const FlutterSecureStorage().read(key: 'beta_update_access_key'),
+      isNull,
+    );
     for (final key in [
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
     ]) {
@@ -564,13 +592,7 @@ void main() {
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.beta-access',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.beta-access-clear',
+      'accounts.updates.release-history',
     );
     expect(tester.takeException(), isNull);
   });
@@ -803,7 +825,19 @@ void main() {
   testWidgets('connected debrid traversal only targets visible controls', (
     tester,
   ) async {
-    FlutterSecureStorage.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      developerModeStorageKey: 'true',
+    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+          if (call.method == 'getAppVersion') {
+            return <String, Object?>{
+              'versionName': '1.0.1',
+              'versionCode': 410002,
+            };
+          }
+          return null;
+        });
     tester.view.physicalSize = const Size(1280, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);

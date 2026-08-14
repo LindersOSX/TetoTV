@@ -183,7 +183,10 @@ class SettingsPreferences {
     this.contentDensity = ContentDensity.standard,
     this.seekBackSeconds = 10,
     this.seekForwardSeconds = 10,
-    this.useBuiltInKeyboard = true,
+    // Prefer Android/Fire OS input out of the box. The app-owned remote
+    // keyboard remains available as an explicit accessibility/fallback
+    // choice in Settings.
+    this.useBuiltInKeyboard = false,
     this.debridStreamsEnabled = true,
     this.webStreamsEnabled = true,
     this.autoSkipIntros = false,
@@ -464,7 +467,10 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       restored = restored.copyWith(seekForwardSeconds: _seekValue(valueAt(9)));
     }
     if (canRestore(_builtInKeyboardKey, 10)) {
-      restored = restored.copyWith(useBuiltInKeyboard: valueAt(10) != 'false');
+      // Missing values are fresh/legacy installs that never made a keyboard
+      // choice, so migrate them to the system keyboard. Preserve an explicit
+      // saved opt-in to TetoTV's built-in keyboard.
+      restored = restored.copyWith(useBuiltInKeyboard: valueAt(10) == 'true');
     }
     if (canRestore(_debridStreamsEnabledKey, 11)) {
       restored = restored.copyWith(

@@ -5,7 +5,9 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +24,7 @@ class AiringCalendarScreen extends ConsumerWidget {
     final schedule = ref.watch(airingWeekProvider);
     final tracking = ref.watch(trackingHomeProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     return Scaffold(
       backgroundColor: context.appPalette == AppThemePalette.defaults
           ? Colors.black
@@ -31,6 +34,11 @@ class AiringCalendarScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            MainNavigationBar(
+              active: MainNavigationDestination.calendar,
+              preferences: preferences,
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 TvFocusable(

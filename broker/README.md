@@ -173,8 +173,11 @@ before broad public or app-store distribution.
 This endpoint now serves only the in-app **Beta** channel. The default Public
 channel reads completed releases anonymously from the dedicated public
 `LindersOSX/TetoTV-Releases` repository and does not pass through this broker.
-Private Beta routes remain broker-only and require the access-hash environment
-configuration described below.
+Private-repository Beta routes remain broker-only and require the access-hash
+environment configuration described below. A narrow anonymous migration alias
+is retained for legacy 1.11.x clients: it advertises a synthetic newer 1.11.x
+version while delivering only the latest signed 1.x APK from the public release
+repository. Current Public clients never use that alias.
 
 The broker can publish a deliberately narrow view of the latest private
 TetoTV release without putting a GitHub credential in the APK. Add these
@@ -194,26 +197,36 @@ token immediately if Render or GitHub access is compromised or no longer
 needed. Never pass this value as a Flutter build define, commit it to `.env`,
 or expose it in a client settings field.
 
-Generate a separate 32-128 character opaque tester key, distribute it privately,
-and store only its lowercase SHA-256 hash in
-`BETA_ACCESS_KEY_SHA256_HASHES`. Multiple comma-separated hashes support
-individual revocation. The broker health response reports only
-`beta_updates_configured: true` or `false`; it never exposes keys or hashes.
+Generate a separate 32-128 character opaque channel key and store only its
+lowercase SHA-256 hash in `BETA_ACCESS_KEY_SHA256_HASHES`. The matching raw key
+is supplied to signed release builds through a protected compile-time define;
+it is not committed, shown, or stored in an editable app setting. Because the
+same credential is present in the public APK, it is an extractable, revocable
+channel gate—not a confidentiality boundary. The private source repository and
+server-only GitHub token remain the actual private resources. Multiple hashes
+support rotation. `/health` reports only `beta_updates_configured`.
 
 The Android app uses the following broker contract and sends no GitHub
 credential:
 
 ```text
 GET /v1/app-updates/latest
+GET /v1/app-updates/releases
 GET /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
 HEAD /v1/app-updates/releases/vX.Y.Z/assets/ASSET_ID/universal.apk
 ```
 
-All three routes require `Authorization: Beta <opaque tester key>`. Anonymous,
-malformed, and invalid credentials receive no private release metadata or APK
-bytes and failed authentication is separately rate-limited. The app keeps the
-raw tester key only in Keystore-backed secure storage, never displays it after
-save, and sends it only to the fixed broker origin. Broker routes do not redirect.
+All private Beta metadata, history, and APK requests require
+`Authorization: Beta <opaque channel key>`. Anonymous, malformed, and invalid
+credentials receive no private release metadata or APK bytes and failed
+authentication is separately rate-limited. The app sends the build-injected
+key only to the fixed broker origin. Broker routes do not redirect.
+
+The only anonymous exceptions are `GET /v1/app-updates/latest` without an
+Authorization header and the exact download URL it returns. They form the
+legacy migration alias described above and contain only public 1.x release
+metadata/APK bytes. Supplying an invalid Authorization header never falls back
+to that alias.
 
 The metadata endpoint returns only the version, tag, title, release notes,
 publication time, and a single sanitized universal-APK descriptor. The
@@ -234,24 +247,24 @@ Metadata cache misses are coalesced. APK delivery is capped at four concurrent
 streams, twelve starts per minute process-wide, and four starts per minute per
 address for this private/friends deployment. Move binary delivery to dedicated
 object storage or a CDN before using the updater at public scale.
-Versioned paths are accepted only for the latest release or a release recently
-advertised by this broker; arbitrary historical tags and asset IDs are not a
-GitHub download oracle.
+Beta history is bounded to the newest 20 completed, non-prerelease 2.x releases.
+Versioned paths accept only strict 2.x tags and exact sanitized assets; arbitrary
+tags and asset IDs are not a GitHub download oracle.
 
 Example sanitized metadata:
 
 ```json
 {
-  "version": "1.11.6",
-  "tag_name": "v1.11.6",
-  "name": "TetoTV v1.11.6",
+  "version": "2.0.1",
+  "tag_name": "v2.0.1",
+  "name": "TetoTV 2.0.1 Beta",
   "release_notes": "...",
   "published_at": "2026-08-10T00:00:00.000Z",
   "asset": {
-    "name": "TetoTV-v1.11.6-universal.apk",
+    "name": "TetoTV-v2.0.1-universal.apk",
     "size": 113650688,
     "content_type": "application/vnd.android.package-archive",
-    "download_url": "https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v1.11.6/assets/116001/universal.apk"
+    "download_url": "https://tetotv-updates-lindows.onrender.com/v1/app-updates/releases/v2.0.1/assets/116001/universal.apk"
   }
 }
 ```

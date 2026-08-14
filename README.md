@@ -106,12 +106,13 @@ flutter analyze
 flutter test
 flutter build apk --debug
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
+$tetoReleaseDefines = 'C:\secure\TetoTV-release-defines.json'
 # Private Beta artifact (the pubspec carries the 2.x Beta version).
-flutter build apk --release --target-platform android-arm,android-arm64 --build-name 2.0.0 --build-number 410001
-Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v2.0.0-universal.apk
+flutter build apk --release --target-platform android-arm,android-arm64 --dart-define-from-file=$tetoReleaseDefines --build-name 2.0.1 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v2.0.1-universal.apk
 # Public artifact from the same commit/signing key.
-flutter build apk --release --target-platform android-arm,android-arm64 --build-name 1.0.0 --build-number 410001
-Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v1.0.0-universal.apk
+flutter build apk --release --target-platform android-arm,android-arm64 --dart-define-from-file=$tetoReleaseDefines --build-name 1.0.1 --build-number 410001
+Copy-Item .\build\app\outputs\flutter-apk\app-release.apk .\build\fire-tv\TetoTV-v1.0.1-universal.apk
 ```
 
 The sideloadable debug APK is written to:
@@ -135,9 +136,11 @@ flutter run --dart-define-from-file=.\config\dev.json
 ```
 
 Never put an AniList/MAL client secret, a Real-Debrid token, a TorBox token, or
-an OAuth access token in this JSON file. Tracker client secrets belong only in
-the pairing broker; user credentials are stored with
-`flutter_secure_storage`.
+an OAuth access token in this development JSON file. Tracker client secrets
+belong only in the pairing broker; user credentials are stored with
+`flutter_secure_storage`. Release builds use a separate protected, ignored JSON
+file containing `TETOTV_BETA_UPDATE_ACCESS_KEY`; its raw value must never appear
+in source control or command logs.
 
 Release builds include the trusted HTTPS broker origin declared in
 `lib/core/config/app_config.dart`. Phone-assisted source entry and private Beta
@@ -182,17 +185,21 @@ compatible manifests must be entered and installed explicitly by the user. The
 default Public update channel anonymously checks the releases-only
 `LindersOSX/TetoTV-Releases` repository. Activating **Settings > System** ten
 times reveals Developer mode, where testers can switch to the Beta channel.
-The first public release is `1.0.0`; the private preview line starts at
-`2.0.0 Beta`. Both initial signed APKs use Android `versionCode` `410001`, and
-future paired build codes continue increasing across both. Explicit channel
-changes may move between the 1.x Public and 2.x Beta families in either
-direction; normal version ordering resumes once the selected family is
-installed.
+The current public release is `1.0.1`; the paired private preview is
+`2.0.1 Beta`. Both signed APKs intentionally keep Android `versionCode`
+`410001`, the package ID, and production signer so Developer mode can replace
+them with another compatible completed release from their Public 1.x or Beta
+2.x history. Android rejects lower build codes; raising this code creates a
+one-way boundary for older history. Explicit channel changes may move between
+the 1.x Public and 2.x Beta families in either direction; normal version
+ordering resumes once the selected family is installed.
 Beta checks use the fixed TetoTV update broker; the broker uses a fine-grained,
 repository-scoped, Contents-read-only credential from its server environment
 to read the private `LindersOSX/TetoTV` release and streams only the signed
-universal APK. No update-token field or shared update secret exists on the
-device. See [the update-channel deployment contract](docs/UPDATE_CHANNELS.md).
+universal APK. Both signed release APKs contain a shared, revocable broker
+credential injected at compile time; it has no user-editable field and is not a
+confidentiality boundary because it can be extracted from a public APK. See
+[the update-channel deployment contract](docs/UPDATE_CHANNELS.md).
 
 Any token previously compiled into an APK, committed, or shared outside the
 device must be treated as exposed and revoked. Moving a token into encrypted

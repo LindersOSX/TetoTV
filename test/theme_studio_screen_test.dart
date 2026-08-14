@@ -56,10 +56,14 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('theme-editor-hex')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('theme-editor-built-in-colors')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
   });
 
-  testWidgets('color dialog supports D-pad focus traversal and Back cancel', (
+  testWidgets('built-in picker owns initial D-pad focus and Back cancels', (
     tester,
   ) async {
     final harness = await _pumpStudio(tester);
@@ -70,24 +74,69 @@ void main() {
     await tester.tap(accentTile);
     await tester.pumpAndSettle();
 
-    final hexEditable = find.descendant(
-      of: find.byKey(const ValueKey('theme-editor-hex')),
-      matching: find.byType(EditableText),
+    final selectedHex = tester.widget<Text>(
+      find.byKey(const ValueKey('theme-editor-selected-hex')),
     );
-    expect(hexEditable, findsOneWidget);
-    expect(tester.widget<EditableText>(hexEditable).focusNode.hasFocus, isTrue);
+    final selectedPreset = find.byKey(
+      ValueKey(
+        'theme-editor-preset-${selectedHex.data!.replaceFirst('#', '')}',
+      ),
+    );
+    final selectedDetector = find.descendant(
+      of: selectedPreset,
+      matching: find.byType(FocusableActionDetector),
+    );
+    expect(selectedPreset, findsOneWidget);
+    expect(
+      tester
+          .widget<FocusableActionDetector>(selectedDetector)
+          .focusNode
+          ?.hasFocus,
+      isTrue,
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pump();
     expect(FocusManager.instance.primaryFocus, isNotNull);
     expect(
-      tester.widget<EditableText>(hexEditable).focusNode.hasFocus,
+      tester
+          .widget<FocusableActionDetector>(selectedDetector)
+          .focusNode
+          ?.hasFocus,
       isFalse,
     );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
+  });
+
+  testWidgets('built-in picker changes a role without opening hex entry', (
+    tester,
+  ) async {
+    final harness = await _pumpStudio(tester);
+    addTearDown(harness.dispose);
+    final accentTile = find.byKey(const ValueKey('theme-color-accent'));
+    await tester.ensureVisible(accentTile);
+    await tester.pumpAndSettle();
+    await tester.tap(accentTile);
+    await tester.pumpAndSettle();
+
+    final blue = find.byKey(const ValueKey('theme-editor-preset-2979FF'));
+    await tester.ensureVisible(blue);
+    await tester.pumpAndSettle();
+    await tester.tap(blue);
+    await tester.pumpAndSettle();
+
+    expect(find.text('#2979FF'), findsOneWidget);
+    expect(find.byKey(const ValueKey('theme-editor-hex')), findsNothing);
+    final useColor = find.byKey(const ValueKey('theme-editor-use-color'));
+    await tester.ensureVisible(useColor);
+    await tester.pumpAndSettle();
+    await tester.tap(useColor);
+    await tester.pumpAndSettle();
+
+    expect(find.text('#2979FF'), findsOneWidget);
   });
 
   testWidgets('exact hex color can be previewed, applied and persisted', (
@@ -101,6 +150,13 @@ void main() {
     await tester.ensureVisible(accentTile);
     await tester.pumpAndSettle();
     await tester.tap(accentTile);
+    await tester.pumpAndSettle();
+    final hexToggle = find.byKey(const ValueKey('theme-editor-toggle-hex'));
+    await tester.ensureVisible(hexToggle);
+    await tester.pumpAndSettle();
+    await tester.tap(hexToggle);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('theme-editor-hex')));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('theme-editor-hex')),
@@ -131,6 +187,13 @@ void main() {
     await tester.ensureVisible(primaryTextTile);
     await tester.pumpAndSettle();
     await tester.tap(primaryTextTile);
+    await tester.pumpAndSettle();
+    final hexToggle = find.byKey(const ValueKey('theme-editor-toggle-hex'));
+    await tester.ensureVisible(hexToggle);
+    await tester.pumpAndSettle();
+    await tester.tap(hexToggle);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('theme-editor-hex')));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('theme-editor-hex')),

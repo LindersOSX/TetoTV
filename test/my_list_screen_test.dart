@@ -1,4 +1,6 @@
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -107,7 +109,7 @@ void main() {
     );
   });
 
-  testWidgets('shows linked tracker profile, avatar, and basic statistics', (
+  testWidgets('shows linked tracker summaries in the global navigation row', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 720);
@@ -155,19 +157,80 @@ void main() {
     );
     await tester.pump();
 
-    final card = find.byKey(const ValueKey('my-list-profile-anilist'));
+    final card = find.byKey(const ValueKey('main-nav-profile-anilist'));
     expect(card, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-summary')),
+      findsOneWidget,
+    );
     expect(find.text('TetoFan'), findsOneWidget);
-    expect(find.text('AniList'), findsOneWidget);
-    expect(find.text('120 titles'), findsOneWidget);
-    expect(find.text('2400 episodes'), findsOneWidget);
-    expect(find.text('800h watched'), findsOneWidget);
-    expect(find.text('Mean 82.4/100'), findsOneWidget);
-    expect(find.text('Mean 8.1/10'), findsOneWidget);
+    expect(find.text('MALFan'), findsOneWidget);
+    expect(find.text('AniList · 120 titles · 2400 eps'), findsOneWidget);
+    expect(find.text('MAL · Mean 8.1/10'), findsOneWidget);
+    expect(
+      tester.getTopLeft(card).dy,
+      lessThan(tester.getTopLeft(find.text('Watching').first).dy),
+    );
     final artwork = tester.widget<NetworkArtwork>(
       find.descendant(of: card, matching: find.byType(NetworkArtwork)),
     );
     expect(artwork.url, 'https://img.anili.st/avatar.png');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('linked profiles collapse to avatars on a narrow screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                usernames: {TrackingProvider.anilist: 'TetoFan'},
+                profiles: {
+                  TrackingProvider.anilist: TrackingAccountProfile(
+                    provider: TrackingProvider.anilist,
+                    username: 'TetoFan',
+                    avatarUrl: 'https://img.anili.st/avatar.png',
+                  ),
+                },
+              ),
+            ),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: SafeArea(
+              minimum: EdgeInsets.symmetric(horizontal: 16),
+              child: MainNavigationBar(
+                active: MainNavigationDestination.myList,
+                preferences: SettingsPreferences(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-summary')),
+      findsOneWidget,
+    );
+    expect(find.text('TetoFan'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-profile-summary')),
+        matching: find.byType(NetworkArtwork),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 

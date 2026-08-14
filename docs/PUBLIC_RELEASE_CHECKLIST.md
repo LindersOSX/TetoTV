@@ -18,10 +18,11 @@ the same as legal, store, or codec certification.
 - Configure the broker's server-only `GITHUB_RELEASE_TOKEN` with access to only
   the TetoTV repository and **Contents: Read-only**. Confirm `/health` reports
   update support without revealing the token.
-- Configure `BETA_ACCESS_KEY_SHA256_HASHES` with only SHA-256 hashes of
-  separately distributed opaque tester keys. Verify anonymous/invalid Beta
-  metadata and APK requests fail, authentication is rate-limited, and `/health`
-  reveals only `beta_updates_configured`, never a key or hash.
+- Configure `BETA_ACCESS_KEY_SHA256_HASHES` with only SHA-256 hashes of the
+  protected build-time Beta-channel key. Verify invalid/private Beta metadata
+  and APK requests fail, authentication is rate-limited, and `/health` reveals
+  only `beta_updates_configured`, never a key or hash. Verify the anonymous
+  legacy alias exposes only the signed Public 1.x migration APK.
 - Deploy exactly one broker instance while pairing state is process-local, or
   move pairing/rate-limit state to an atomic shared TTL store before scaling.
 - Obtain any required AniList authorization for a client that also integrates

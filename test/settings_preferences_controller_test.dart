@@ -75,7 +75,7 @@ void main() {
 
     expect(controller.state.debridStreamsEnabled, isTrue);
     expect(controller.state.webStreamsEnabled, isTrue);
-    expect(controller.state.useBuiltInKeyboard, isTrue);
+    expect(controller.state.useBuiltInKeyboard, isFalse);
     expect(controller.state.autoSkipIntros, isFalse);
     expect(controller.state.autoSkipOutros, isFalse);
     expect(controller.state.homeLayout, HomeLayout.cinematic);
@@ -94,6 +94,33 @@ void main() {
       controller.state.trackerUpdateThreshold,
       TrackerUpdateThreshold.nearlyFinished,
     );
+  });
+
+  test(
+    'legacy installs without a keyboard choice migrate to device input',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
+
+      await controller.load();
+
+      expect(controller.state.useBuiltInKeyboard, isFalse);
+    },
+  );
+
+  test('explicit built-in keyboard choice is preserved', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(controller.state.useBuiltInKeyboard, isTrue);
   });
 
   test('anonymous live counting persists only after explicit opt in', () async {

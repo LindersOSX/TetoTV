@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
@@ -23,6 +24,37 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('setup saves audio and automatic skip preferences', (
+    tester,
+  ) async {
+    await _pumpSetup(tester, const Size(1280, 720));
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Preferred anime audio'), findsOneWidget);
+    expect(find.text('Automatic intro and outro skipping'), findsOneWidget);
+
+    await tester.tap(find.text('Subtitled'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Skip intros'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Skip intros'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Skip outros'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Skip outros'));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(InitialSetupScreen)),
+    );
+    final preferences = container.read(settingsPreferencesProvider);
+    expect(preferences.preferredAudio, PlaybackAudioPreference.sub);
+    expect(preferences.autoSkipIntros, isTrue);
+    expect(preferences.autoSkipOutros, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('setup asks before enabling anonymous choices or Discord', (
     tester,
   ) async {

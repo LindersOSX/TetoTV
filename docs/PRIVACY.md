@@ -110,12 +110,15 @@ and signed APK update delivery:
 - Phone-assisted source entry holds submitted URLs in volatile memory for up
   to ten minutes. They are deleted after the authenticated device confirms
   local processing or when the session expires.
-- The update proxy reads release metadata with a server-only credential and
-  streams the signed universal APK. The GitHub credential is never sent to the
-  app. Private Beta users enter a separately issued tester key; its raw value
-  is stored only in Android Keystore-backed secure storage and sent only to the
-  fixed TetoTV update broker. The broker stores only configured SHA-256 hashes
-  for access checks and does not return keys or hashes from its health endpoint.
+- The update proxy reads private Beta release metadata with a server-only
+  credential and streams the signed universal APK. The GitHub credential is
+  never sent to the app. Signed builds contain a shared, revocable Beta-channel
+  access credential and send it only to the fixed TetoTV update broker; it is
+  not displayed or stored as an editable account secret. Because it is present
+  in the public APK, it is not a confidentiality boundary. The broker stores
+  only configured SHA-256 hashes for access checks and returns no key or hash
+  from `/health`. A narrow anonymous migration endpoint lets legacy 1.11.x
+  clients download only the latest signed APK from the public 1.x repository.
 - The host may process ordinary connection metadata for security, rate
   limiting, and operational logs. TetoTV does not use it for advertising or
   cross-service tracking.

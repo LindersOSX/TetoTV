@@ -17,6 +17,7 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -32,10 +33,11 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with SingleTickerProviderStateMixin {
   static const _homeEasterEggTapTarget = 10;
   static const _homeEasterEggTapWindow = Duration(seconds: 5);
-  static const _homeEasterEggDisplayDuration = Duration(seconds: 5);
+  static const _homeEasterEggDisplayDuration = Duration(seconds: 10);
 
   static const _connectTracking = [
     _ShelfItem(
@@ -51,6 +53,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _catalogFocusSettled = false;
   Timer? _heroTimer;
   Timer? _homeEasterEggTimer;
+  late final AnimationController _homeEasterEggAnimation;
+  late final Animation<double> _homeEasterEggFall;
+  late final Animation<double> _homeEasterEggShake;
   int _heroIndex = 0;
   int _homeEasterEggTapCount = 0;
   DateTime? _homeEasterEggSequenceStartedAt;
@@ -61,6 +66,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _homeEasterEggAnimation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1350),
+    );
+    _homeEasterEggFall = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(
+          begin: -2.15,
+          end: .075,
+        ).chain(CurveTween(curve: Curves.easeInCubic)),
+        weight: 56,
+      ),
+      TweenSequenceItem(
+        tween: Tween(
+          begin: .075,
+          end: -.035,
+        ).chain(CurveTween(curve: Curves.easeOutQuad)),
+        weight: 11,
+      ),
+      TweenSequenceItem(
+        tween: Tween(
+          begin: -.035,
+          end: 0.0,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 11,
+      ),
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 22),
+    ]).animate(_homeEasterEggAnimation);
+    _homeEasterEggShake = TweenSequence<double>([
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 60),
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: .038), weight: 5),
+      TweenSequenceItem(tween: Tween(begin: .038, end: -.032), weight: 6),
+      TweenSequenceItem(tween: Tween(begin: -.032, end: .024), weight: 6),
+      TweenSequenceItem(tween: Tween(begin: .024, end: -.015), weight: 6),
+      TweenSequenceItem(tween: Tween(begin: -.015, end: .008), weight: 6),
+      TweenSequenceItem(tween: Tween(begin: .008, end: 0.0), weight: 5),
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 6),
+    ]).animate(_homeEasterEggAnimation);
     _heroTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (!mounted) return;
       final count = ref.read(trendingAnimeProvider).valueOrNull?.take(5).length;
@@ -183,6 +226,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     messenger.clearSnackBars();
     messenger.removeCurrentSnackBar();
     if (!_showHomeEasterEgg) setState(() => _showHomeEasterEgg = true);
+    _homeEasterEggAnimation.forward(from: 0);
     unawaited(
       AndroidTvBridge.instance.playHomeEasterEgg(
         maximumDuration: _homeEasterEggDisplayDuration,
@@ -378,6 +422,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _scrollController.dispose();
     _heroTimer?.cancel();
     _homeEasterEggTimer?.cancel();
+    _homeEasterEggAnimation.dispose();
     unawaited(AndroidTvBridge.instance.stopHomeEasterEgg());
     super.dispose();
   }
@@ -595,9 +640,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 SliverPadding(
                   padding: contentHorizontalPadding,
                   sliver: SliverToBoxAdapter(
-                    child: _Header(
+                    child: MainNavigationBar(
+                      active: MainNavigationDestination.home,
                       preferences: preferences,
                       homeFocusNode: _homeNavFocus,
+                      autofocusActive: !preferences.showHero,
                       onHomePressed: _handleHomeActivation,
                     ),
                   ),
@@ -638,18 +685,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   key: const ValueKey('home.easter-egg.ignore-pointer'),
                   child: Align(
                     alignment: Alignment.bottomCenter,
-                    child: FractionallySizedBox(
-                      key: const ValueKey('home.easter-egg.region'),
-                      heightFactor: 0.5,
-                      widthFactor: 1,
-                      alignment: Alignment.bottomCenter,
-                      child: Image.asset(
-                        'assets/easter_egg/teto_plush.png',
-                        key: const ValueKey('home.easter-egg.image'),
+                    child: AnimatedBuilder(
+                      animation: _homeEasterEggAnimation,
+                      builder: (context, child) => FractionalTranslation(
+                        key: const ValueKey('home.easter-egg-motion'),
+                        translation: Offset(
+                          _homeEasterEggShake.value,
+                          _homeEasterEggFall.value,
+                        ),
+                        child: child,
+                      ),
+                      child: FractionallySizedBox(
+                        key: const ValueKey('home.easter-egg.region'),
+                        heightFactor: 0.5,
+                        widthFactor: 1,
                         alignment: Alignment.bottomCenter,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.medium,
-                        excludeFromSemantics: true,
+                        child: Image.asset(
+                          'assets/easter_egg/teto_plush.png',
+                          key: const ValueKey('home.easter-egg.image'),
+                          alignment: Alignment.bottomCenter,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                          excludeFromSemantics: true,
+                        ),
                       ),
                     ),
                   ),
@@ -657,99 +715,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.preferences,
-    required this.homeFocusNode,
-    required this.onHomePressed,
-  });
-
-  final SettingsPreferences preferences;
-  final FocusNode homeFocusNode;
-  final VoidCallback onHomePressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = context.isCompactWidth;
-    return SizedBox(
-      height: compact ? 62 : 70,
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(9)),
-            child: Image.asset(
-              'assets/branding/tetotv_icon.png',
-              cacheWidth: 72,
-              cacheHeight: 72,
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.low,
-            ),
-          ),
-          SizedBox(width: compact ? 7 : 10),
-          if (!compact || MediaQuery.sizeOf(context).width >= 420)
-            Text('TetoTV', style: Theme.of(context).textTheme.titleLarge),
-          SizedBox(width: compact ? 4 : 14),
-          if (preferences.showSearch) ...[
-            _HeaderAction(
-              icon: Icons.search_rounded,
-              label: 'Search',
-              compact: true,
-              onPressed: () => context.push('/search'),
-            ),
-            SizedBox(width: compact ? 2 : 6),
-          ],
-          _HeaderAction(
-            icon: Icons.home_rounded,
-            label: 'Home',
-            compact: true,
-            active: true,
-            autofocus: !preferences.showHero,
-            focusNode: homeFocusNode,
-            onPressed: onHomePressed,
-          ),
-          if (preferences.showMyList) ...[
-            SizedBox(width: compact ? 2 : 6),
-            _HeaderAction(
-              icon: Icons.video_library_rounded,
-              label: 'My List',
-              compact: compact,
-              onPressed: () => context.push('/my-list'),
-            ),
-          ],
-          if (preferences.showDiscover) ...[
-            SizedBox(width: compact ? 2 : 6),
-            _HeaderAction(
-              icon: Icons.explore_rounded,
-              label: 'Discover',
-              compact: true,
-              onPressed: () => context.push('/discover'),
-            ),
-          ],
-          if (preferences.showCalendar) ...[
-            SizedBox(width: compact ? 2 : 6),
-            _HeaderAction(
-              icon: Icons.calendar_month_rounded,
-              label: 'Calendar',
-              compact: true,
-              onPressed: () => context.push('/calendar'),
-            ),
-          ],
-          const Spacer(),
-          _HeaderAction(
-            icon: Icons.settings_rounded,
-            label: 'Settings',
-            compact: compact,
-            onPressed: () => context.push('/settings/accounts'),
-          ),
-        ],
       ),
     );
   }
@@ -1319,69 +1284,6 @@ class _TvButton extends StatelessWidget {
                 fontWeight: FontWeight.w900,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HeaderAction extends StatelessWidget {
-  const _HeaderAction({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.active = false,
-    this.compact = false,
-    this.autofocus = false,
-    this.focusNode,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-  final bool active;
-  final bool compact;
-  final bool autofocus;
-  final FocusNode? focusNode;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      autofocus: autofocus,
-      focusNode: focusNode,
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(7),
-      focusScale: 1.02,
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 8 : 11,
-          vertical: 8,
-        ),
-        decoration: BoxDecoration(
-          color: active ? const Color(0x22E52B50) : Colors.transparent,
-          border: Border(
-            bottom: BorderSide(
-              color: active
-                  ? context.appPalette.accentBright
-                  : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: active
-                  ? context.appPalette.accentBright
-                  : context.appPalette.primaryText,
-            ),
-            if (!compact) ...[
-              const SizedBox(width: 6),
-              Text(label, style: Theme.of(context).textTheme.labelLarge),
-            ],
           ],
         ),
       ),

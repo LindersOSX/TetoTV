@@ -12,7 +12,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PackageInfo
 import android.content.pm.FeatureInfo
-import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.graphics.Color
 import android.media.AudioDeviceInfo
@@ -210,8 +209,14 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isTelevision(): Boolean =
-        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+        TelevisionDevicePolicy.isTelevision(
+            uiMode = resources.configuration.uiMode,
+            hasLeanback = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK),
+            hasTelevisionFeature =
+                packageManager.hasSystemFeature(PackageManager.FEATURE_TELEVISION),
+            manufacturer = Build.MANUFACTURER.orEmpty(),
+            model = Build.MODEL.orEmpty(),
+        )
 
     /**
      * Lets Android's Storage Access Framework expose only the video selected

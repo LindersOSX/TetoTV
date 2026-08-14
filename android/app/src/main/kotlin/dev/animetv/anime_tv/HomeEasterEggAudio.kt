@@ -56,7 +56,7 @@ internal class HomeEasterEggAudio(context: Context) {
     }
 
     companion object {
-        const val MAXIMUM_DURATION_MS = 5_000L
+        const val MAXIMUM_DURATION_MS = 10_000L
         private const val MINIMUM_DURATION_MS = 100L
     }
 }
