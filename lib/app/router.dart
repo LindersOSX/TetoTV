@@ -143,7 +143,9 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/settings/accounts',
-      builder: (context, state) => const AccountsScreen(),
+      builder: (context, state) => AccountsScreen(
+        openTracking: state.uri.queryParameters['section'] == 'tracking',
+      ),
     ),
     GoRoute(
       path: '/settings/device-setup',

@@ -12,7 +12,7 @@ import 'package:go_router/go_router.dart';
 enum MainNavigationDestination { home, myList, discover, calendar }
 
 /// Keeps primary navigation stable while presenting the active shared-TV
-/// tracker identity as a compact menu at the far left of the row.
+/// tracker identity as a compact menu at the far right of the row.
 class MainNavigationBar extends ConsumerWidget {
   const MainNavigationBar({
     required this.active,
@@ -51,6 +51,9 @@ class MainNavigationBar extends ConsumerWidget {
         final normalTvLayout = width >= 700;
         final showWordmark = width >= 900;
         final showProfile = primaryProfile != null && width >= 700;
+        final visibleDestinations = preferences.topNavigationOrder
+            .where(preferences.isTopNavigationDestinationVisible)
+            .toList(growable: false);
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
         final headerHeight = width >= 760 ? 96.0 : 62.0;
@@ -62,7 +65,29 @@ class MainNavigationBar extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (showWordmark) ...[
+                const _TetoTvWordmark(),
+                const SizedBox(width: 8),
+              ],
+              for (
+                var index = 0;
+                index < visibleDestinations.length;
+                index++
+              ) ...[
+                if (index > 0) SizedBox(width: normalTvLayout ? 4 : 2),
+                _navigationAction(
+                  context: context,
+                  destination: visibleDestinations[index],
+                  active: active,
+                  settingsCompact: width < 1200,
+                  autofocusActive: autofocusActive,
+                  homeFocusNode: homeFocusNode,
+                  onHomePressed: onHomePressed,
+                ),
+              ],
+              const Spacer(),
               if (showProfile) ...[
+                SizedBox(width: normalTvLayout ? 8 : 4),
                 SizedBox(
                   width: 190,
                   height: 46,
@@ -80,93 +105,11 @@ class MainNavigationBar extends ConsumerWidget {
                           .read(settingsPreferencesProvider.notifier)
                           .setTrackingProvider(profile.provider);
                     },
-                    onManage: () => context.push('/settings/accounts'),
+                    onManage: () =>
+                        context.push('/settings/accounts?section=tracking'),
                   ),
                 ),
-                SizedBox(width: normalTvLayout ? 8 : 4),
               ],
-              if (showWordmark) ...[
-                const _TetoTvWordmark(),
-                const SizedBox(width: 8),
-              ],
-              if (preferences.showSearch) ...[
-                _NavigationAction(
-                  key: const ValueKey('main-nav-search'),
-                  icon: Icons.search_rounded,
-                  label: 'Search',
-                  compact: true,
-                  onPressed: () => context.push('/search'),
-                ),
-                SizedBox(width: normalTvLayout ? 4 : 2),
-              ],
-              _NavigationAction(
-                key: const ValueKey('main-nav-home'),
-                icon: Icons.home_rounded,
-                label: 'Home',
-                compact: true,
-                active: active == MainNavigationDestination.home,
-                autofocus:
-                    autofocusActive && active == MainNavigationDestination.home,
-                focusNode: homeFocusNode,
-                onPressed: onHomePressed ?? () => context.go('/'),
-              ),
-              if (preferences.showMyList) ...[
-                SizedBox(width: normalTvLayout ? 4 : 2),
-                _NavigationAction(
-                  key: const ValueKey('main-nav-my-list'),
-                  icon: Icons.video_library_rounded,
-                  label: 'My List',
-                  compact: false,
-                  active: active == MainNavigationDestination.myList,
-                  autofocus:
-                      autofocusActive &&
-                      active == MainNavigationDestination.myList,
-                  onPressed: active == MainNavigationDestination.myList
-                      ? () {}
-                      : () => context.go('/my-list'),
-                ),
-              ],
-              if (preferences.showDiscover) ...[
-                SizedBox(width: normalTvLayout ? 4 : 2),
-                _NavigationAction(
-                  key: const ValueKey('main-nav-discover'),
-                  icon: Icons.explore_rounded,
-                  label: 'Discover',
-                  compact: true,
-                  active: active == MainNavigationDestination.discover,
-                  autofocus:
-                      autofocusActive &&
-                      active == MainNavigationDestination.discover,
-                  onPressed: active == MainNavigationDestination.discover
-                      ? () {}
-                      : () => context.go('/discover'),
-                ),
-              ],
-              if (preferences.showCalendar) ...[
-                SizedBox(width: normalTvLayout ? 4 : 2),
-                _NavigationAction(
-                  key: const ValueKey('main-nav-calendar'),
-                  icon: Icons.calendar_month_rounded,
-                  label: 'Calendar',
-                  compact: true,
-                  active: active == MainNavigationDestination.calendar,
-                  autofocus:
-                      autofocusActive &&
-                      active == MainNavigationDestination.calendar,
-                  onPressed: active == MainNavigationDestination.calendar
-                      ? () {}
-                      : () => context.go('/calendar'),
-                ),
-              ],
-              SizedBox(width: normalTvLayout ? 4 : 2),
-              _NavigationAction(
-                key: const ValueKey('main-nav-settings'),
-                icon: Icons.settings_rounded,
-                label: 'Settings',
-                compact: width < 1200,
-                onPressed: () => context.push('/settings/accounts'),
-              ),
-              const Spacer(),
             ],
           ),
         );
@@ -174,6 +117,74 @@ class MainNavigationBar extends ConsumerWidget {
     );
   }
 }
+
+Widget _navigationAction({
+  required BuildContext context,
+  required TopNavigationDestination destination,
+  required MainNavigationDestination active,
+  required bool settingsCompact,
+  required bool autofocusActive,
+  required FocusNode? homeFocusNode,
+  required VoidCallback? onHomePressed,
+}) => switch (destination) {
+  TopNavigationDestination.search => _NavigationAction(
+    key: const ValueKey('main-nav-search'),
+    icon: Icons.search_rounded,
+    label: 'Search',
+    compact: true,
+    onPressed: () => context.push('/search'),
+  ),
+  TopNavigationDestination.home => _NavigationAction(
+    key: const ValueKey('main-nav-home'),
+    icon: Icons.home_rounded,
+    label: 'Home',
+    compact: true,
+    active: active == MainNavigationDestination.home,
+    autofocus: autofocusActive && active == MainNavigationDestination.home,
+    focusNode: homeFocusNode,
+    onPressed: onHomePressed ?? () => context.go('/'),
+  ),
+  TopNavigationDestination.myList => _NavigationAction(
+    key: const ValueKey('main-nav-my-list'),
+    icon: Icons.video_library_rounded,
+    label: 'My List',
+    compact: false,
+    active: active == MainNavigationDestination.myList,
+    autofocus: autofocusActive && active == MainNavigationDestination.myList,
+    onPressed: active == MainNavigationDestination.myList
+        ? () {}
+        : () => context.go('/my-list'),
+  ),
+  TopNavigationDestination.discover => _NavigationAction(
+    key: const ValueKey('main-nav-discover'),
+    icon: Icons.explore_rounded,
+    label: 'Discover',
+    compact: true,
+    active: active == MainNavigationDestination.discover,
+    autofocus: autofocusActive && active == MainNavigationDestination.discover,
+    onPressed: active == MainNavigationDestination.discover
+        ? () {}
+        : () => context.go('/discover'),
+  ),
+  TopNavigationDestination.calendar => _NavigationAction(
+    key: const ValueKey('main-nav-calendar'),
+    icon: Icons.calendar_month_rounded,
+    label: 'Calendar',
+    compact: true,
+    active: active == MainNavigationDestination.calendar,
+    autofocus: autofocusActive && active == MainNavigationDestination.calendar,
+    onPressed: active == MainNavigationDestination.calendar
+        ? () {}
+        : () => context.go('/calendar'),
+  ),
+  TopNavigationDestination.settings => _NavigationAction(
+    key: const ValueKey('main-nav-settings'),
+    icon: Icons.settings_rounded,
+    label: 'Settings',
+    compact: settingsCompact,
+    onPressed: () => context.push('/settings/accounts'),
+  ),
+};
 
 class _TetoTvWordmark extends StatelessWidget {
   const _TetoTvWordmark();
@@ -530,7 +541,7 @@ class _ProfileAvatar extends StatelessWidget {
       height: size,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        shape: BoxShape.circle,
+        borderRadius: BorderRadius.circular(6),
         color: context.appPalette.surfaceRaised,
       ),
       child: NetworkArtwork(

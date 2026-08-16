@@ -358,15 +358,13 @@ void main() {
         expect(profile, findsOneWidget, reason: 'width $width');
         expect(
           tester.getRect(profile).left,
-          closeTo(tester.getRect(navigation).left, .01),
-          reason: 'Profile must stay at the far left at width $width',
+          greaterThan(tester.getRect(settings).right),
+          reason: 'Profile must follow Settings at width $width',
         );
         expect(
           tester.getRect(profile).right,
-          lessThan(
-            tester.getRect(find.byKey(const ValueKey('main-nav-home'))).left,
-          ),
-          reason: 'Profile must precede primary navigation at width $width',
+          closeTo(tester.getRect(navigation).right, .01),
+          reason: 'Profile must stay at the far right at width $width',
         );
         expect(
           tester.getCenter(profile).dy,
@@ -382,6 +380,86 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'width $width');
     }
   });
+
+  testWidgets(
+    'header applies saved destination order and visibility to D-pad',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(
+            home: TvShortcuts(
+              child: Scaffold(
+                body: Column(
+                  children: [
+                    MainNavigationBar(
+                      active: MainNavigationDestination.discover,
+                      preferences: SettingsPreferences(
+                        showHome: false,
+                        showCalendar: false,
+                        topNavigationOrder: [
+                          TopNavigationDestination.settings,
+                          TopNavigationDestination.discover,
+                          TopNavigationDestination.myList,
+                          TopNavigationDestination.search,
+                          TopNavigationDestination.home,
+                          TopNavigationDestination.calendar,
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final settings = find.byKey(const ValueKey('main-nav-settings'));
+      final discover = find.byKey(const ValueKey('main-nav-discover'));
+      final myList = find.byKey(const ValueKey('main-nav-my-list'));
+      final search = find.byKey(const ValueKey('main-nav-search'));
+      expect(find.byKey(const ValueKey('main-nav-home')), findsNothing);
+      expect(find.byKey(const ValueKey('main-nav-calendar')), findsNothing);
+      expect(
+        tester.getRect(settings).left,
+        lessThan(tester.getRect(discover).left),
+      );
+      expect(
+        tester.getRect(discover).left,
+        lessThan(tester.getRect(myList).left),
+      );
+      expect(
+        tester.getRect(myList).left,
+        lessThan(tester.getRect(search).left),
+      );
+
+      FocusableActionDetector detector(Finder destination) =>
+          tester.widget<FocusableActionDetector>(
+            find.descendant(
+              of: destination,
+              matching: find.byType(FocusableActionDetector),
+            ),
+          );
+      detector(settings).focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(detector(discover).focusNode!.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(detector(myList).focusNode!.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(detector(search).focusNode!.hasFocus, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('1080p TV header shows avatar identity and useful stats', (
     tester,
@@ -459,6 +537,8 @@ void main() {
                 .decoration!
             as BoxDecoration;
     expect(avatarDecoration.border, isNull);
+    expect(avatarDecoration.shape, BoxShape.rectangle);
+    expect(avatarDecoration.borderRadius, BorderRadius.circular(6));
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-my-list')),
@@ -477,13 +557,11 @@ void main() {
     );
     expect(
       tester.getRect(profile).left,
-      closeTo(tester.getRect(navigation).left, .01),
+      greaterThan(tester.getRect(settings).right),
     );
     expect(
       tester.getRect(profile).right,
-      lessThan(
-        tester.getRect(find.byKey(const ValueKey('main-nav-home'))).left,
-      ),
+      closeTo(tester.getRect(navigation).right, .01),
     );
     await tester.tap(profile);
     await tester.pumpAndSettle();
@@ -653,9 +731,9 @@ void main() {
     final settingsAfter = tester.getRect(
       find.byKey(const ValueKey('main-nav-settings')),
     );
-    expect(wordmarkAfter.left, greaterThan(wordmarkBefore.left));
-    expect(myListAfter.left, greaterThan(myListBefore.left));
-    expect(settingsAfter.left, greaterThan(settingsBefore.left));
+    expect(wordmarkAfter.left, wordmarkBefore.left);
+    expect(myListAfter.left, myListBefore.left);
+    expect(settingsAfter.left, settingsBefore.left);
     expect(wordmarkAfter.top, wordmarkBefore.top);
     expect(myListAfter.top, myListBefore.top);
     expect(settingsAfter.top, settingsBefore.top);
@@ -678,6 +756,20 @@ void main() {
     expect(semantics.properties.button, isTrue);
     expect(semantics.properties.onTap, isNotNull);
     expect(semantics.excludeSemantics, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    final profileDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: profileSummary,
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(profileDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(settingsDetector().focusNode!.hasFocus, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();

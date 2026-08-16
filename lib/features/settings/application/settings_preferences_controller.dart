@@ -25,9 +25,12 @@ const _autoSkipOutrosKey = 'player_auto_skip_outros';
 const _showFillerIndicatorsKey = 'player_show_filler_indicators';
 const _homeLayoutKey = 'appearance_home_layout';
 const _showSearchKey = 'navigation_show_search';
+const _showHomeKey = 'navigation_show_home';
 const _showMyListKey = 'navigation_show_my_list';
 const _showDiscoverKey = 'navigation_show_discover';
 const _showCalendarKey = 'navigation_show_calendar';
+const _showSettingsKey = 'navigation_show_settings';
+const _topNavigationOrderKey = 'navigation_top_bar_order';
 const _showHeroKey = 'home_show_featured_hero';
 const _showPosterMetadataKey = 'home_show_poster_metadata';
 const _showCardSubtitlesKey = 'home_show_card_subtitles';
@@ -142,6 +145,36 @@ extension LandingPageLabel on LandingPage {
   };
 }
 
+/// Destinations that can be shown and ordered in the shared top navigation.
+enum TopNavigationDestination {
+  search,
+  home,
+  myList,
+  discover,
+  calendar,
+  settings,
+}
+
+const defaultTopNavigationOrder = <TopNavigationDestination>[
+  TopNavigationDestination.search,
+  TopNavigationDestination.home,
+  TopNavigationDestination.myList,
+  TopNavigationDestination.discover,
+  TopNavigationDestination.calendar,
+  TopNavigationDestination.settings,
+];
+
+extension TopNavigationDestinationLabel on TopNavigationDestination {
+  String get displayName => switch (this) {
+    TopNavigationDestination.search => 'Search',
+    TopNavigationDestination.home => 'Home',
+    TopNavigationDestination.myList => 'My List',
+    TopNavigationDestination.discover => 'Discover',
+    TopNavigationDestination.calendar => 'Calendar',
+    TopNavigationDestination.settings => 'Settings',
+  };
+}
+
 enum ContentDensity { compact, standard, comfortable }
 
 extension ContentDensityLabel on ContentDensity {
@@ -198,9 +231,12 @@ class SettingsPreferences {
     this.showFillerIndicators = true,
     this.homeLayout = HomeLayout.cinematic,
     this.showSearch = true,
+    this.showHome = true,
     this.showMyList = true,
     this.showDiscover = true,
     this.showCalendar = true,
+    this.showSettings = true,
+    this.topNavigationOrder = defaultTopNavigationOrder,
     this.showHero = true,
     this.showPosterMetadata = true,
     this.showCardSubtitles = true,
@@ -236,9 +272,12 @@ class SettingsPreferences {
   final bool showFillerIndicators;
   final HomeLayout homeLayout;
   final bool showSearch;
+  final bool showHome;
   final bool showMyList;
   final bool showDiscover;
   final bool showCalendar;
+  final bool showSettings;
+  final List<TopNavigationDestination> topNavigationOrder;
   final bool showHero;
   final bool showPosterMetadata;
   final bool showCardSubtitles;
@@ -274,9 +313,12 @@ class SettingsPreferences {
     bool? showFillerIndicators,
     HomeLayout? homeLayout,
     bool? showSearch,
+    bool? showHome,
     bool? showMyList,
     bool? showDiscover,
     bool? showCalendar,
+    bool? showSettings,
+    List<TopNavigationDestination>? topNavigationOrder,
     bool? showHero,
     bool? showPosterMetadata,
     bool? showCardSubtitles,
@@ -312,9 +354,12 @@ class SettingsPreferences {
     showFillerIndicators: showFillerIndicators ?? this.showFillerIndicators,
     homeLayout: homeLayout ?? this.homeLayout,
     showSearch: showSearch ?? this.showSearch,
+    showHome: showHome ?? this.showHome,
     showMyList: showMyList ?? this.showMyList,
     showDiscover: showDiscover ?? this.showDiscover,
     showCalendar: showCalendar ?? this.showCalendar,
+    showSettings: showSettings ?? this.showSettings,
+    topNavigationOrder: topNavigationOrder ?? this.topNavigationOrder,
     showHero: showHero ?? this.showHero,
     showPosterMetadata: showPosterMetadata ?? this.showPosterMetadata,
     showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
@@ -333,6 +378,27 @@ class SettingsPreferences {
         anonymousCrashReportingEnabled ?? this.anonymousCrashReportingEnabled,
     loaded: loaded ?? this.loaded,
   );
+
+  bool isTopNavigationDestinationVisible(
+    TopNavigationDestination destination,
+  ) => switch (destination) {
+    TopNavigationDestination.search => showSearch,
+    TopNavigationDestination.home => showHome,
+    TopNavigationDestination.myList => showMyList,
+    TopNavigationDestination.discover => showDiscover,
+    TopNavigationDestination.calendar => showCalendar,
+    TopNavigationDestination.settings => showSettings,
+  };
+
+  /// Home and Settings are the recovery paths for changing navigation again.
+  /// Do not allow both to be hidden at the same time.
+  bool canHideTopNavigationDestination(TopNavigationDestination destination) {
+    return switch (destination) {
+      TopNavigationDestination.home => showSettings,
+      TopNavigationDestination.settings => showHome,
+      _ => true,
+    };
+  }
 }
 
 final settingsPreferencesProvider =
@@ -422,6 +488,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_debridStreamSortKey),
       _safeRead(_streamSourcePriorityKey),
       _safeRead(_webStreamQualityKey),
+      _safeRead(_showHomeKey),
+      _safeRead(_showSettingsKey),
+      _safeRead(_topNavigationOrderKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -625,6 +694,22 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
+    if (canRestore(_showHomeKey, 36)) {
+      restored = restored.copyWith(showHome: valueAt(36) != 'false');
+    }
+    if (canRestore(_showSettingsKey, 37)) {
+      restored = restored.copyWith(showSettings: valueAt(37) != 'false');
+    }
+    if (canRestore(_topNavigationOrderKey, 38)) {
+      restored = restored.copyWith(
+        topNavigationOrder: _parseTopNavigationOrder(valueAt(38)),
+      );
+    }
+    if (!restored.showHome && !restored.showSettings) {
+      // Repair impossible/corrupt legacy state so navigation customization is
+      // always reachable from at least one primary destination.
+      restored = restored.copyWith(showSettings: true);
+    }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
@@ -729,33 +814,98 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setHomeLayout(HomeLayout value) =>
       _update(state.copyWith(homeLayout: value), {_homeLayoutKey: value.name});
 
-  Future<void> setShowSearch(bool value) => _setNavigationVisibility(
-    visible: value,
-    page: LandingPage.search,
-    visibilityKey: _showSearchKey,
-    next: state.copyWith(showSearch: value),
+  Future<void> setShowSearch(bool value) => setTopNavigationDestinationVisible(
+    TopNavigationDestination.search,
+    value,
   );
 
-  Future<void> setShowMyList(bool value) => _setNavigationVisibility(
-    visible: value,
-    page: LandingPage.myList,
-    visibilityKey: _showMyListKey,
-    next: state.copyWith(showMyList: value),
+  Future<void> setShowHome(bool value) =>
+      setTopNavigationDestinationVisible(TopNavigationDestination.home, value);
+
+  Future<void> setShowMyList(bool value) => setTopNavigationDestinationVisible(
+    TopNavigationDestination.myList,
+    value,
   );
 
-  Future<void> setShowDiscover(bool value) => _setNavigationVisibility(
-    visible: value,
-    page: LandingPage.discover,
-    visibilityKey: _showDiscoverKey,
-    next: state.copyWith(showDiscover: value),
-  );
+  Future<void> setShowDiscover(bool value) =>
+      setTopNavigationDestinationVisible(
+        TopNavigationDestination.discover,
+        value,
+      );
 
-  Future<void> setShowCalendar(bool value) => _setNavigationVisibility(
-    visible: value,
-    page: LandingPage.calendar,
-    visibilityKey: _showCalendarKey,
-    next: state.copyWith(showCalendar: value),
-  );
+  Future<void> setShowCalendar(bool value) =>
+      setTopNavigationDestinationVisible(
+        TopNavigationDestination.calendar,
+        value,
+      );
+
+  Future<void> setShowSettings(bool value) =>
+      setTopNavigationDestinationVisible(
+        TopNavigationDestination.settings,
+        value,
+      );
+
+  Future<void> setTopNavigationDestinationVisible(
+    TopNavigationDestination destination,
+    bool visible,
+  ) {
+    if (!visible && !state.canHideTopNavigationDestination(destination)) {
+      return Future<void>.value();
+    }
+    final next = switch (destination) {
+      TopNavigationDestination.search => state.copyWith(showSearch: visible),
+      TopNavigationDestination.home => state.copyWith(showHome: visible),
+      TopNavigationDestination.myList => state.copyWith(showMyList: visible),
+      TopNavigationDestination.discover => state.copyWith(
+        showDiscover: visible,
+      ),
+      TopNavigationDestination.calendar => state.copyWith(
+        showCalendar: visible,
+      ),
+      TopNavigationDestination.settings => state.copyWith(
+        showSettings: visible,
+      ),
+    };
+    final visibilityKey = switch (destination) {
+      TopNavigationDestination.search => _showSearchKey,
+      TopNavigationDestination.home => _showHomeKey,
+      TopNavigationDestination.myList => _showMyListKey,
+      TopNavigationDestination.discover => _showDiscoverKey,
+      TopNavigationDestination.calendar => _showCalendarKey,
+      TopNavigationDestination.settings => _showSettingsKey,
+    };
+    final landingPage = _landingPageForTopDestination(destination);
+    final nextLandingPage = !visible && state.defaultLandingPage == landingPage
+        ? LandingPage.home
+        : state.defaultLandingPage;
+    return _update(next.copyWith(defaultLandingPage: nextLandingPage), {
+      visibilityKey: visible.toString(),
+      if (nextLandingPage != state.defaultLandingPage)
+        _defaultLandingPageKey: nextLandingPage.name,
+    });
+  }
+
+  Future<void> moveTopNavigationDestination(
+    TopNavigationDestination destination,
+    int offset,
+  ) {
+    final current = [...state.topNavigationOrder];
+    final from = current.indexOf(destination);
+    if (from < 0) return Future<void>.value();
+    final to = (from + offset).clamp(0, current.length - 1);
+    if (from == to) return Future<void>.value();
+    current
+      ..removeAt(from)
+      ..insert(to, destination);
+    return setTopNavigationOrder(current);
+  }
+
+  Future<void> setTopNavigationOrder(Iterable<TopNavigationDestination> order) {
+    final normalized = _normalizeTopNavigationOrder(order);
+    return _update(state.copyWith(topNavigationOrder: normalized), {
+      _topNavigationOrderKey: normalized.map((item) => item.name).join(','),
+    });
+  }
 
   Future<void> setShowHero(bool value) => _update(
     state.copyWith(showHero: value),
@@ -832,9 +982,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     const keys = [
       _homeLayoutKey,
       _showSearchKey,
+      _showHomeKey,
       _showMyListKey,
       _showDiscoverKey,
       _showCalendarKey,
+      _showSettingsKey,
+      _topNavigationOrderKey,
       _showHeroKey,
       _showPosterMetadataKey,
       _showCardSubtitlesKey,
@@ -846,9 +999,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     state = state.copyWith(
       homeLayout: defaults.homeLayout,
       showSearch: defaults.showSearch,
+      showHome: defaults.showHome,
       showMyList: defaults.showMyList,
       showDiscover: defaults.showDiscover,
       showCalendar: defaults.showCalendar,
+      showSettings: defaults.showSettings,
+      topNavigationOrder: defaults.topNavigationOrder,
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,
@@ -930,22 +1086,6 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
 
   Future<void> _delete(String key) =>
       deleteValue?.call(key) ?? _storage.delete(key: key);
-
-  Future<void> _setNavigationVisibility({
-    required bool visible,
-    required LandingPage page,
-    required String visibilityKey,
-    required SettingsPreferences next,
-  }) {
-    final landingPage = !visible && state.defaultLandingPage == page
-        ? LandingPage.home
-        : state.defaultLandingPage;
-    return _update(next.copyWith(defaultLandingPage: landingPage), {
-      visibilityKey: visible.toString(),
-      if (landingPage != state.defaultLandingPage)
-        _defaultLandingPageKey: landingPage.name,
-    });
-  }
 }
 
 const _preferenceReadFailed = Object();
@@ -964,3 +1104,36 @@ int _seekValue(String? value) {
 
 T _enumByName<T extends Enum>(List<T> values, String? name, T fallback) =>
     values.where((value) => value.name == name).firstOrNull ?? fallback;
+
+LandingPage? _landingPageForTopDestination(
+  TopNavigationDestination destination,
+) => switch (destination) {
+  TopNavigationDestination.search => LandingPage.search,
+  TopNavigationDestination.home => LandingPage.home,
+  TopNavigationDestination.myList => LandingPage.myList,
+  TopNavigationDestination.discover => LandingPage.discover,
+  TopNavigationDestination.calendar => LandingPage.calendar,
+  TopNavigationDestination.settings => null,
+};
+
+List<TopNavigationDestination> _parseTopNavigationOrder(String? value) {
+  final parsed = (value ?? '')
+      .split(',')
+      .map(
+        (name) => TopNavigationDestination.values
+            .where((destination) => destination.name == name)
+            .firstOrNull,
+      )
+      .whereType<TopNavigationDestination>();
+  return _normalizeTopNavigationOrder(parsed);
+}
+
+List<TopNavigationDestination> _normalizeTopNavigationOrder(
+  Iterable<TopNavigationDestination> order,
+) {
+  final normalized = <TopNavigationDestination>[];
+  for (final destination in [...order, ...defaultTopNavigationOrder]) {
+    if (!normalized.contains(destination)) normalized.add(destination);
+  }
+  return List<TopNavigationDestination>.unmodifiable(normalized);
+}

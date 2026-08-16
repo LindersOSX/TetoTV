@@ -981,6 +981,74 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'top navigation can be ordered and hidden without losing access',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final moveSearchLater = find.byKey(
+        const ValueKey('settings-top-navigation-later-search'),
+      );
+      await tester.ensureVisible(moveSearchLater);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: moveSearchLater,
+          matching: find.byType(TvFocusable),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(moveSearchLater);
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(AccountsScreen)),
+      );
+      expect(container.read(settingsPreferencesProvider).topNavigationOrder, [
+        TopNavigationDestination.home,
+        TopNavigationDestination.search,
+        TopNavigationDestination.myList,
+        TopNavigationDestination.discover,
+        TopNavigationDestination.calendar,
+        TopNavigationDestination.settings,
+      ]);
+
+      final homeToggle = find.byKey(
+        const ValueKey('settings-top-navigation-toggle-home'),
+      );
+      await tester.ensureVisible(homeToggle);
+      await tester.tap(homeToggle);
+      await tester.pumpAndSettle();
+      expect(container.read(settingsPreferencesProvider).showHome, isFalse);
+
+      final settingsToggle = find.byKey(
+        const ValueKey('settings-top-navigation-toggle-settings'),
+      );
+      await tester.ensureVisible(settingsToggle);
+      await tester.tap(settingsToggle);
+      await tester.pump();
+      expect(container.read(settingsPreferencesProvider).showSettings, isTrue);
+      expect(
+        find.text(
+          'Keep Home or Settings visible so navigation can be changed again.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('filler labels setting is TV-focusable and updates globally', (
     tester,
   ) async {

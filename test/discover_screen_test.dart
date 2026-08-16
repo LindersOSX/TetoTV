@@ -18,6 +18,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('Discover Back returns Home when opened as a top-level route', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final router = GoRouter(
+      initialLocation: '/discover',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (_, _) => const Scaffold(body: Text('Home destination')),
+        ),
+        GoRoute(path: '/discover', builder: (_, _) => const DiscoverScreen()),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(_FakeCatalog())],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Home destination'), findsOneWidget);
+    expect(router.routeInformationProvider.value.uri.path, '/');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('discover keeps advanced filters inside a compact dialog', (
     tester,
   ) async {

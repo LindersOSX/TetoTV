@@ -43,7 +43,7 @@ class AiringCalendarScreen extends ConsumerWidget {
               children: [
                 TvFocusable(
                   autofocus: true,
-                  onPressed: context.pop,
+                  onPressed: () => _returnToPreviousOrHome(context),
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                     child: Icon(Icons.arrow_back_rounded),
@@ -283,6 +283,14 @@ class AiringCalendarScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
 }
 
 bool _isFollowed(AnimeSummary anime, List<HomeTrackedAnime> followed) {
