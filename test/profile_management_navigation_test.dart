@@ -80,6 +80,78 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('relocated Settings entry opens the main Settings route', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final router = GoRouter(
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(
+            body: MainNavigationBar(
+              active: MainNavigationDestination.home,
+              preferences: SettingsPreferences(
+                settingsEntryPlacement: SettingsEntryPlacement.profileMenu,
+              ),
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/accounts',
+          builder: (context, state) => Scaffold(
+            body: Text(
+              state.uri.queryParameters['section'] ?? 'default',
+              key: const ValueKey('accounts-section'),
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                profiles: {
+                  TrackingProvider.anilist: TrackingAccountProfile(
+                    provider: TrackingProvider.anilist,
+                    username: 'TetoFan',
+                  ),
+                },
+              ),
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('main-nav-settings')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('main-nav-profile-summary')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('main-nav-manage-profiles')),
+      findsOneWidget,
+    );
+    final settings = find.byKey(const ValueKey('main-nav-profile-settings'));
+    expect(settings, findsOneWidget);
+    await tester.tap(settings);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('accounts-section')), findsOneWidget);
+    expect(find.text('default'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('tracker settings route lands on profile controls', (
     tester,
   ) async {

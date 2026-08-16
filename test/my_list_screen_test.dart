@@ -187,6 +187,7 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-summary')),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(find.text('TetoFan'), findsOneWidget);
     expect(find.text('MALFan'), findsNothing);
     expect(find.text('AniList'), findsNothing);
@@ -208,6 +209,10 @@ void main() {
     expect(find.text('2400 episodes'), findsOneWidget);
     expect(find.text('800h watched'), findsOneWidget);
     expect(find.text('Mean 82.4/100'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-settings')),
+      findsNothing,
+    );
     expect(
       find.byKey(
         const ValueKey('main-nav-switch-profile-myanimelist-mal-malfan'),
@@ -274,6 +279,90 @@ void main() {
     expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'profile placement relocates Settings with narrow and unlinked fallbacks',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const linkedProfiles = {
+        TrackingProvider.anilist: TrackingAccountProfile(
+          provider: TrackingProvider.anilist,
+          username: 'TetoFan',
+        ),
+      };
+      final accounts = _StaticTrackingAccountsController(
+        const TrackingAccountsState(profiles: linkedProfiles),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trackingAccountsControllerProvider.overrideWith((_) => accounts),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: Column(
+                children: [
+                  MainNavigationBar(
+                    active: MainNavigationDestination.home,
+                    preferences: SettingsPreferences(
+                      settingsEntryPlacement:
+                          SettingsEntryPlacement.profileMenu,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('main-nav-settings')), findsNothing);
+      final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+      expect(profile, findsOneWidget);
+      await tester.tap(profile);
+      await tester.pumpAndSettle();
+
+      final manage = find.byKey(const ValueKey('main-nav-manage-profiles'));
+      final relocatedSettings = find.byKey(
+        const ValueKey('main-nav-profile-settings'),
+      );
+      expect(manage, findsOneWidget);
+      expect(relocatedSettings, findsOneWidget);
+      expect(
+        tester.getRect(relocatedSettings).top,
+        greaterThan(tester.getRect(manage).bottom),
+      );
+
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      accounts.replace(
+        const TrackingAccountsState(profiles: linkedProfiles, isLoading: true),
+      );
+      await tester.pump();
+      expect(profile, findsOneWidget);
+      expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
+      expect(relocatedSettings, findsNothing);
+
+      accounts.replace(const TrackingAccountsState(profiles: linkedProfiles));
+      tester.view.physicalSize = const Size(430, 720);
+      await tester.pump();
+      expect(profile, findsNothing);
+      expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
+      expect(relocatedSettings, findsNothing);
+
+      tester.view.physicalSize = const Size(1280, 720);
+      accounts.replace(const TrackingAccountsState());
+      await tester.pump();
+      expect(profile, findsNothing);
+      expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('tracker header fits every responsive breakpoint', (
     tester,

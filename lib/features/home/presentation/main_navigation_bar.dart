@@ -51,8 +51,18 @@ class MainNavigationBar extends ConsumerWidget {
         final normalTvLayout = width >= 700;
         final showWordmark = width >= 900;
         final showProfile = primaryProfile != null && width >= 700;
+        final settingsInProfileMenu =
+            showProfile &&
+            !accounts.isLoading &&
+            preferences.settingsEntryPlacement ==
+                SettingsEntryPlacement.profileMenu;
         final visibleDestinations = preferences.topNavigationOrder
-            .where(preferences.isTopNavigationDestinationVisible)
+            .where(
+              (destination) =>
+                  preferences.isTopNavigationDestinationVisible(destination) &&
+                  (destination != TopNavigationDestination.settings ||
+                      !settingsInProfileMenu),
+            )
             .toList(growable: false);
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
@@ -96,6 +106,7 @@ class MainNavigationBar extends ConsumerWidget {
                     savedProfiles: savedProfiles,
                     activeProfileIds: accounts.activeProfileIds,
                     isLoading: accounts.isLoading,
+                    showSettings: settingsInProfileMenu,
                     onSwitch: (profile) async {
                       final switched = await ref
                           .read(trackingAccountsControllerProvider.notifier)
@@ -107,6 +118,7 @@ class MainNavigationBar extends ConsumerWidget {
                     },
                     onManage: () =>
                         context.push('/settings/accounts?section=tracking'),
+                    onSettings: () => context.push('/settings/accounts'),
                   ),
                 ),
               ],
@@ -226,16 +238,20 @@ class _TrackerProfileMenuButton extends StatelessWidget {
     required this.savedProfiles,
     required this.activeProfileIds,
     required this.isLoading,
+    required this.showSettings,
     required this.onSwitch,
     required this.onManage,
+    required this.onSettings,
   });
 
   final TrackingAccountProfile profile;
   final List<StoredTrackingProfile> savedProfiles;
   final Map<TrackingProvider, String> activeProfileIds;
   final bool isLoading;
+  final bool showSettings;
   final Future<void> Function(StoredTrackingProfile profile) onSwitch;
   final VoidCallback onManage;
+  final VoidCallback onSettings;
 
   Future<void> _openMenu(BuildContext context) async {
     final box = context.findRenderObject() as RenderBox?;
@@ -315,11 +331,30 @@ class _TrackerProfileMenuButton extends StatelessWidget {
             ],
           ),
         ),
+        if (showSettings) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem<String>(
+            key: ValueKey('main-nav-profile-settings'),
+            value: 'settings',
+            height: 48,
+            child: Row(
+              children: [
+                Icon(Icons.settings_rounded, size: 20),
+                SizedBox(width: 10),
+                Text('Settings', style: TextStyle(fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+        ],
       ],
     );
     if (result == null) return;
     if (result == 'manage') {
       onManage();
+      return;
+    }
+    if (result == 'settings') {
+      onSettings();
       return;
     }
     final selected = savedProfiles
@@ -343,7 +378,7 @@ class _TrackerProfileMenuButton extends StatelessWidget {
         onTap: isLoading ? null : () => _openMenu(buttonContext),
         label:
             '${profile.username}, ${profile.provider.displayName} profile. '
-            'Open statistics and switch profiles.',
+            'Open statistics and switch profiles${showSettings ? ', or open Settings' : ''}.',
         excludeSemantics: true,
         child: TvFocusable(
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),

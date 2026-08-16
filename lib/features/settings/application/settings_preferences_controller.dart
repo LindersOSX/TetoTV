@@ -31,6 +31,7 @@ const _showDiscoverKey = 'navigation_show_discover';
 const _showCalendarKey = 'navigation_show_calendar';
 const _showSettingsKey = 'navigation_show_settings';
 const _topNavigationOrderKey = 'navigation_top_bar_order';
+const _settingsEntryPlacementKey = 'navigation_settings_entry_placement';
 const _showHeroKey = 'home_show_featured_hero';
 const _showPosterMetadataKey = 'home_show_poster_metadata';
 const _showCardSubtitlesKey = 'home_show_card_subtitles';
@@ -155,6 +156,16 @@ enum TopNavigationDestination {
   settings,
 }
 
+/// Chooses which always-reachable navigation surface owns Settings.
+enum SettingsEntryPlacement { topNavigation, profileMenu }
+
+extension SettingsEntryPlacementLabel on SettingsEntryPlacement {
+  String get displayName => switch (this) {
+    SettingsEntryPlacement.topNavigation => 'Top row',
+    SettingsEntryPlacement.profileMenu => 'Profile menu',
+  };
+}
+
 const defaultTopNavigationOrder = <TopNavigationDestination>[
   TopNavigationDestination.search,
   TopNavigationDestination.home,
@@ -237,6 +248,7 @@ class SettingsPreferences {
     this.showCalendar = true,
     this.showSettings = true,
     this.topNavigationOrder = defaultTopNavigationOrder,
+    this.settingsEntryPlacement = SettingsEntryPlacement.topNavigation,
     this.showHero = true,
     this.showPosterMetadata = true,
     this.showCardSubtitles = true,
@@ -278,6 +290,7 @@ class SettingsPreferences {
   final bool showCalendar;
   final bool showSettings;
   final List<TopNavigationDestination> topNavigationOrder;
+  final SettingsEntryPlacement settingsEntryPlacement;
   final bool showHero;
   final bool showPosterMetadata;
   final bool showCardSubtitles;
@@ -319,6 +332,7 @@ class SettingsPreferences {
     bool? showCalendar,
     bool? showSettings,
     List<TopNavigationDestination>? topNavigationOrder,
+    SettingsEntryPlacement? settingsEntryPlacement,
     bool? showHero,
     bool? showPosterMetadata,
     bool? showCardSubtitles,
@@ -360,6 +374,8 @@ class SettingsPreferences {
     showCalendar: showCalendar ?? this.showCalendar,
     showSettings: showSettings ?? this.showSettings,
     topNavigationOrder: topNavigationOrder ?? this.topNavigationOrder,
+    settingsEntryPlacement:
+        settingsEntryPlacement ?? this.settingsEntryPlacement,
     showHero: showHero ?? this.showHero,
     showPosterMetadata: showPosterMetadata ?? this.showPosterMetadata,
     showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
@@ -387,15 +403,14 @@ class SettingsPreferences {
     TopNavigationDestination.myList => showMyList,
     TopNavigationDestination.discover => showDiscover,
     TopNavigationDestination.calendar => showCalendar,
-    TopNavigationDestination.settings => showSettings,
+    // Settings is the permanent recovery path for navigation customization.
+    TopNavigationDestination.settings => true,
   };
 
-  /// Home and Settings are the recovery paths for changing navigation again.
-  /// Do not allow both to be hidden at the same time.
+  /// Settings is always available so every other destination can be hidden.
   bool canHideTopNavigationDestination(TopNavigationDestination destination) {
     return switch (destination) {
-      TopNavigationDestination.home => showSettings,
-      TopNavigationDestination.settings => showHome,
+      TopNavigationDestination.settings => false,
       _ => true,
     };
   }
@@ -491,6 +506,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_showHomeKey),
       _safeRead(_showSettingsKey),
       _safeRead(_topNavigationOrderKey),
+      _safeRead(_settingsEntryPlacementKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -697,22 +713,31 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(_showHomeKey, 36)) {
       restored = restored.copyWith(showHome: valueAt(36) != 'false');
     }
-    if (canRestore(_showSettingsKey, 37)) {
-      restored = restored.copyWith(showSettings: valueAt(37) != 'false');
-    }
+    final repairHiddenSettings =
+        canRestore(_showSettingsKey, 37) && valueAt(37) == 'false';
+    // Settings is now the permanent recovery path. Ignore and repair a hidden
+    // value left by an older build instead of briefly hiding it at startup.
+    restored = restored.copyWith(showSettings: true);
     if (canRestore(_topNavigationOrderKey, 38)) {
       restored = restored.copyWith(
         topNavigationOrder: _parseTopNavigationOrder(valueAt(38)),
       );
     }
-    if (!restored.showHome && !restored.showSettings) {
-      // Repair impossible/corrupt legacy state so navigation customization is
-      // always reachable from at least one primary destination.
-      restored = restored.copyWith(showSettings: true);
+    if (canRestore(_settingsEntryPlacementKey, 39)) {
+      restored = restored.copyWith(
+        settingsEntryPlacement: _enumByName(
+          SettingsEntryPlacement.values,
+          valueAt(39),
+          SettingsEntryPlacement.topNavigation,
+        ),
+      );
     }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
+    if (repairHiddenSettings) {
+      await _enqueueStorage(() => _write(_showSettingsKey, 'true'));
+    }
   }
 
   Future<Object?> _safeRead(String key) async {
@@ -907,6 +932,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     });
   }
 
+  Future<void> setSettingsEntryPlacement(SettingsEntryPlacement value) =>
+      _update(state.copyWith(settingsEntryPlacement: value), {
+        _settingsEntryPlacementKey: value.name,
+      });
+
   Future<void> setShowHero(bool value) => _update(
     state.copyWith(showHero: value),
     {_showHeroKey: value.toString()},
@@ -988,6 +1018,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _showCalendarKey,
       _showSettingsKey,
       _topNavigationOrderKey,
+      _settingsEntryPlacementKey,
       _showHeroKey,
       _showPosterMetadataKey,
       _showCardSubtitlesKey,
@@ -1005,6 +1036,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       showCalendar: defaults.showCalendar,
       showSettings: defaults.showSettings,
       topNavigationOrder: defaults.topNavigationOrder,
+      settingsEntryPlacement: defaults.settingsEntryPlacement,
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
@@ -144,16 +146,25 @@ final deviceSetupProvider =
     });
 
 class DeviceSetupController extends StateNotifier<DeviceSetupState> {
-  DeviceSetupController(this._storage) : super(const DeviceSetupState());
+  DeviceSetupController(
+    this._storage, {
+    Future<TvDeviceProfile> Function()? loadProfile,
+  }) : _loadProfile =
+           loadProfile ??
+           (() => AndroidTvBridge.instance.getDeviceProfile(refresh: true)),
+       super(const DeviceSetupState());
 
   final FlutterSecureStorage _storage;
+  final Future<TvDeviceProfile> Function() _loadProfile;
+  bool _persistWhenReady = false;
+  Future<void>? _scheduledPersistence;
 
   Future<void> scan() async {
     if (state.loading) return;
     state = state.copyWith(loading: true, error: null);
     try {
       final values = await Future.wait([
-        AndroidTvBridge.instance.getDeviceProfile(refresh: true),
+        _loadProfile(),
         _storage.read(key: _calibratedDeviceKey),
       ]);
       final profile = values[0] as TvDeviceProfile;
@@ -162,6 +173,7 @@ class DeviceSetupController extends StateNotifier<DeviceSetupState> {
         report: buildDeviceCalibrationReport(profile),
         previouslyCompleted: values[1] == profile.key,
       );
+      _scheduleRequestedPersistence();
     } catch (error) {
       if (mounted) {
         state = DeviceSetupState(error: 'Device scan failed: $error');
@@ -169,9 +181,48 @@ class DeviceSetupController extends StateNotifier<DeviceSetupState> {
     }
   }
 
+  /// Requests setup calibration persistence without waiting for a pending
+  /// platform scan. The controller owns the late completion so the setup
+  /// widget can be disposed safely after Finish or Set up later.
+  void persistWhenReady() {
+    _persistWhenReady = true;
+    _scheduleRequestedPersistence();
+  }
+
+  void _scheduleRequestedPersistence() {
+    final report = state.report;
+    if (!_persistWhenReady ||
+        report == null ||
+        state.previouslyCompleted ||
+        _scheduledPersistence != null ||
+        !_isKnownProfile(report.profile)) {
+      return;
+    }
+    final persistence = _persistRequestedReport();
+    _scheduledPersistence = persistence;
+    unawaited(persistence);
+  }
+
+  Future<void> _persistRequestedReport() async {
+    try {
+      await markCompleted();
+    } catch (_) {
+      // Setup completion must remain nonblocking. Device calibration can be
+      // retried from Settings if encrypted storage is unavailable.
+    } finally {
+      _scheduledPersistence = null;
+    }
+  }
+
   Future<void> markCompleted() async {
     final report = state.report;
     if (report == null) return;
+    // An unknown profile is returned outside Android and when the platform
+    // bridge cannot identify the device. It is not evidence that hardware AVC
+    // is missing, so never persist MPV from that fallback value.
+    if (!_isKnownProfile(report.profile)) {
+      return;
+    }
     final hasHardwareAvc = report.profile.codecs.any(
       (codec) => codec.hardware && codec.mime == 'video/avc',
     );
@@ -189,3 +240,8 @@ class DeviceSetupController extends StateNotifier<DeviceSetupState> {
     if (mounted) state = state.copyWith(previouslyCompleted: true);
   }
 }
+
+bool _isKnownProfile(TvDeviceProfile profile) =>
+    profile.sdk > 0 &&
+    profile.manufacturer != 'Unknown' &&
+    profile.model != 'Unknown';

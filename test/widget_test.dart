@@ -1,4 +1,5 @@
 import 'package:anime_tv/app/app.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/layout/interface_scaling.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
@@ -575,9 +576,10 @@ void main() {
     },
   );
 
-  testWidgets('fresh installs open setup and can skip it', (tester) async {
+  testWidgets('fresh TV installs open setup and can defer it', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
-    tester.view.physicalSize = const Size(1280, 720);
+    // The production TV shell normalizes 1080p output to a 960x540 canvas.
+    tester.view.physicalSize = const Size(1920, 1080);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -585,6 +587,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          isTelevisionProvider.overrideWithValue(true),
           trendingAnimeProvider.overrideWith((_) => const <AnimeSummary>[]),
           seasonalAnimeProvider.overrideWith((_) => const <AnimeSummary>[]),
           trackingHomeProvider.overrideWith(
@@ -601,8 +604,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Set up TetoTV'), findsOneWidget);
-    expect(find.text('Skip setup'), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    expect(find.text('Set up later'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Set up later'));
     await tester.pumpAndSettle();
     expect(find.text('Set up TetoTV'), findsNothing);
     expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);

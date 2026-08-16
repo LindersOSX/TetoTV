@@ -1040,10 +1040,20 @@ void main() {
       await tester.pump();
       expect(container.read(settingsPreferencesProvider).showSettings, isTrue);
       expect(
-        find.text(
-          'Keep Home or Settings visible so navigation can be changed again.',
+        container.read(settingsPreferencesProvider).settingsEntryPlacement,
+        SettingsEntryPlacement.profileMenu,
+      );
+      expect(tester.widget(settingsToggle), isA<TvFocusable>());
+      expect(find.text('PROFILE MENU'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(
+            const ValueKey('settings-top-navigation-earlier-settings'),
+          ),
+          matching: find.byType(TvFocusable),
         ),
         findsOneWidget,
+        reason: 'Settings remains reorderable even though it cannot be hidden',
       );
       expect(tester.takeException(), isNull);
     },

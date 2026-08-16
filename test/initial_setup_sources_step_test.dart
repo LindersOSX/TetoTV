@@ -16,6 +16,7 @@ import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,10 +31,8 @@ void main() {
   ) async {
     await _pumpSetup(tester, const Size(1280, 720));
 
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
     expect(find.text('Preferred anime audio'), findsOneWidget);
-    expect(find.text('Automatic intro and outro skipping'), findsOneWidget);
+    expect(find.text('Automatic skipping'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Subtitled'));
     await tester.pumpAndSettle();
@@ -63,9 +62,7 @@ void main() {
     (tester) async {
       await _pumpSetup(tester, const Size(1280, 720));
 
-      await tester.tap(find.text('Continue'));
-      await tester.pumpAndSettle();
-      expect(find.text('Text input keyboard'), findsOneWidget);
+      expect(find.text('Text input'), findsOneWidget);
       final container = ProviderScope.containerOf(
         tester.element(find.byType(InitialSetupScreen)),
       );
@@ -96,12 +93,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
 
-    expect(find.text('Privacy and Discord'), findsOneWidget);
+    expect(find.text('Connect your accounts'), findsOneWidget);
     expect(find.text('Enable live count'), findsNothing);
     expect(find.textContaining('live viewer'), findsNothing);
-    expect(find.text('Do not send'), findsOneWidget);
-    expect(find.text('Allow error reports'), findsOneWidget);
     final container = ProviderScope.containerOf(
       tester.element(find.byType(InitialSetupScreen)),
     );
@@ -112,6 +109,16 @@ void main() {
       isFalse,
     );
 
+    await tester.tap(find.text('Link Discord (optional)'));
+    await tester.pumpAndSettle();
+    expect(discord.authenticateCalls, 1);
+    expect(find.text('Discord linked and enabled'), findsOneWidget);
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('One last choice'), findsOneWidget);
+    expect(find.text('Do not send'), findsOneWidget);
+    expect(find.text('Allow error reports'), findsOneWidget);
     await tester.tap(find.text('Allow error reports'));
     await tester.pumpAndSettle();
     expect(
@@ -120,11 +127,6 @@ void main() {
           .anonymousCrashReportingEnabled,
       isTrue,
     );
-
-    await tester.tap(find.text('Link Discord (optional)'));
-    await tester.pumpAndSettle();
-    expect(discord.authenticateCalls, 1);
-    expect(find.text('Discord linked and enabled'), findsOneWidget);
   });
 
   testWidgets('TV setup opens device pairing without launching a browser', (
@@ -152,6 +154,8 @@ void main() {
       router: router,
     );
 
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
@@ -194,6 +198,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Link Discord (optional)'));
     await tester.pumpAndSettle();
 
@@ -202,16 +208,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('TV setup places Sources between Debrid and tracking', (
+  testWidgets('TV setup keeps Debrid and sources together before accounts', (
     tester,
   ) async {
-    await _pumpSetup(tester, const Size(1280, 720));
+    await _pumpSetup(tester, const Size(960, 540));
 
-    // Skip setup starts focused. Down enters the persistent Continue action;
-    // focus then stays there while each page advances.
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    for (var index = 0; index < 5; index++) {
+    // Continue owns initial focus and keeps it as pages advance.
+    for (var index = 0; index < 2; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
     }
@@ -219,6 +222,8 @@ void main() {
     _expectSourcesStep(tester);
     expect(tester.takeException(), isNull);
 
+    await tester.ensureVisible(find.text('Add sources with phone'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Add sources with phone'));
     await tester.pumpAndSettle();
     expect(find.byType(SourcePairingDialog), findsOneWidget);
@@ -227,14 +232,14 @@ void main() {
 
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
-    expect(find.text('Connect an anime list'), findsOneWidget);
+    expect(find.text('Connect your accounts'), findsOneWidget);
   });
 
   testWidgets('Sources setup step fits a narrow phone without overflow', (
     tester,
   ) async {
     await _pumpSetup(tester, const Size(390, 844));
-    for (var index = 0; index < 5; index++) {
+    for (var index = 0; index < 2; index++) {
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
     }
@@ -242,13 +247,234 @@ void main() {
     _expectSourcesStep(tester);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'setup scans quietly and only shows actionable compatibility advice',
+    (tester) async {
+      await _pumpSetup(tester, const Size(1280, 720));
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(InitialSetupScreen)),
+      );
+      final deviceSetup =
+          container.read(deviceSetupProvider.notifier)
+              as _StaticDeviceSetupController;
+      expect(deviceSetup.scanCalls, 1);
+      expect(find.text('Playback compatibility'), findsNothing);
+      expect(find.text('H.264 / AVC'), findsNothing);
+
+      expect(find.text('Choose your playback defaults'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('setup-compatibility-warning')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('1080p H.264'), findsOneWidget);
+      expect(find.textContaining('AV1/HEVC'), findsNothing);
+    },
+  );
+
+  testWidgets('modern TVs do not get a compatibility warning', (tester) async {
+    await _pumpSetup(
+      tester,
+      const Size(1280, 720),
+      deviceProfile: const TvDeviceProfile(
+        manufacturer: 'Example',
+        model: 'TV',
+        sdk: 35,
+        abis: ['arm64-v8a'],
+        displayModes: [],
+        hdrTypes: [],
+        codecs: [
+          TvCodecCapability(
+            name: 'hardware.avc',
+            mime: 'video/avc',
+            hardware: true,
+          ),
+        ],
+        audioOutputs: [],
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey('setup-compatibility-warning')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Continue owns initial focus and remote Back returns one step', (
+    tester,
+  ) async {
+    await _pumpSetup(tester, const Size(960, 540));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Make it feel right on your TV'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Choose your playback defaults'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Leave setup?'), findsOneWidget);
+    expect(find.text('Keep setting up'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Set up later never waits for the quiet device scan', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final delayedDeviceSetup = _DelayedDeviceSetupController();
+    final router = GoRouter(
+      initialLocation: '/setup',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(body: Text('HOME')),
+        ),
+        GoRoute(
+          path: '/setup',
+          builder: (context, state) => const InitialSetupScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          deviceSetupProvider.overrideWith((_) => delayedDeviceSetup),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    expect(delayedDeviceSetup.state.loading, isTrue);
+
+    await tester.tap(find.text('Set up later'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget);
+    const storage = FlutterSecureStorage();
+    expect(await storage.read(key: initialSetupCompletedStorageKey), 'true');
+    delayedDeviceSetup.completeScan(_legacyDeviceProfile);
+    await tester.pump();
+    await tester.pump();
+    expect(delayedDeviceSetup.markCompletedCalls, 1);
+    expect(delayedDeviceSetup.state.previouslyCompleted, isTrue);
+
+    delayedDeviceSetup.persistWhenReady();
+    await tester.pump();
+    expect(delayedDeviceSetup.markCompletedCalls, 1);
+  });
+
+  testWidgets('Finish persists a known report that arrives after navigation', (
+    tester,
+  ) async {
+    final delayedDeviceSetup = _DelayedDeviceSetupController();
+    final router = GoRouter(
+      initialLocation: '/setup',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(body: Text('HOME')),
+        ),
+        GoRoute(
+          path: '/setup',
+          builder: (context, state) => const InitialSetupScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await _pumpSetup(
+      tester,
+      const Size(960, 540),
+      router: router,
+      deviceSetupController: delayedDeviceSetup,
+    );
+
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(find.text('Finish'));
+    await tester.pumpAndSettle();
+    expect(find.text('HOME'), findsOneWidget);
+    expect(delayedDeviceSetup.markCompletedCalls, 0);
+
+    delayedDeviceSetup.completeScan(_legacyDeviceProfile);
+    await tester.pump();
+    await tester.pump();
+    expect(delayedDeviceSetup.markCompletedCalls, 1);
+  });
+
+  testWidgets('a late unknown report persists no calibration', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final delayedDeviceSetup = _DelayedDeviceSetupController();
+    final router = GoRouter(
+      initialLocation: '/setup',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(body: Text('HOME')),
+        ),
+        GoRoute(
+          path: '/setup',
+          builder: (context, state) => const InitialSetupScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          deviceSetupProvider.overrideWith((_) => delayedDeviceSetup),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Set up later'));
+    await tester.pumpAndSettle();
+    delayedDeviceSetup.completeScan(const TvDeviceProfile.unknown());
+    await tester.pump();
+    await tester.pump();
+
+    expect(delayedDeviceSetup.markCompletedCalls, 0);
+    expect(delayedDeviceSetup.state.previouslyCompleted, isFalse);
+  });
 }
+
+const _legacyDeviceProfile = TvDeviceProfile(
+  manufacturer: 'Example',
+  model: 'Legacy TV',
+  sdk: 33,
+  abis: ['arm64-v8a'],
+  displayModes: [],
+  hdrTypes: [],
+  codecs: [],
+  audioOutputs: [],
+);
 
 Future<_SetupDiscordPlatform> _pumpSetup(
   WidgetTester tester,
   Size size, {
   bool isTelevision = false,
   AndroidDeviceCategory? nativeCategory,
+  TvDeviceProfile deviceProfile = const TvDeviceProfile(
+    manufacturer: 'Example',
+    model: 'Legacy TV',
+    sdk: 33,
+    abis: ['arm64-v8a'],
+    displayModes: [],
+    hdrTypes: [],
+    codecs: [],
+    audioOutputs: [],
+  ),
+  DeviceSetupController? deviceSetupController,
   GoRouter? router,
 }) async {
   FlutterSecureStorage.setMockInitialValues({
@@ -278,7 +504,8 @@ Future<_SetupDiscordPlatform> _pumpSetup(
     ),
   );
   final pairing = _StaticSourcePairingController();
-  final deviceSetup = _StaticDeviceSetupController();
+  final deviceSetup =
+      deviceSetupController ?? _StaticDeviceSetupController(deviceProfile);
   final discord = _SetupDiscordPlatform();
 
   await tester.pumpWidget(
@@ -309,7 +536,8 @@ Future<_SetupDiscordPlatform> _pumpSetup(
 }
 
 void _expectSourcesStep(WidgetTester tester) {
-  expect(find.text('Add streaming sources'), findsOneWidget);
+  expect(find.text('Set up streaming'), findsOneWidget);
+  expect(find.text('Your sources'), findsOneWidget);
   expect(find.textContaining('does not bundle or recommend'), findsOneWidget);
   expect(find.text('2'), findsOneWidget);
   expect(find.text('Marketplace repositories'), findsOneWidget);
@@ -317,7 +545,7 @@ void _expectSourcesStep(WidgetTester tester) {
   expect(find.text('Torrent source manifests'), findsOneWidget);
   expect(find.text('Add sources with phone'), findsOneWidget);
   expect(find.text('Open Marketplace manually'), findsOneWidget);
-  expect(find.text('Skip setup'), findsOneWidget);
+  expect(find.text('Set up later'), findsOneWidget);
   expect(find.text('Back'), findsOneWidget);
   expect(find.text('Continue'), findsOneWidget);
 }
@@ -353,14 +581,44 @@ class _StaticSourcePairingController extends SourcePairingController {
 }
 
 class _StaticDeviceSetupController extends DeviceSetupController {
-  _StaticDeviceSetupController() : super(const FlutterSecureStorage()) {
-    state = DeviceSetupState(
-      report: buildDeviceCalibrationReport(const TvDeviceProfile.unknown()),
-    );
+  _StaticDeviceSetupController(this.profile)
+    : super(const FlutterSecureStorage());
+
+  final TvDeviceProfile profile;
+  int scanCalls = 0;
+
+  @override
+  Future<void> scan() async {
+    scanCalls++;
+    state = DeviceSetupState(report: buildDeviceCalibrationReport(profile));
   }
 
   @override
-  Future<void> scan() async {}
+  Future<void> markCompleted() async {
+    state = state.copyWith(previouslyCompleted: true);
+  }
+}
+
+class _DelayedDeviceSetupController extends DeviceSetupController {
+  _DelayedDeviceSetupController() : this._(Completer<TvDeviceProfile>());
+
+  _DelayedDeviceSetupController._(this._scanCompleter)
+    : super(
+        const FlutterSecureStorage(),
+        loadProfile: () => _scanCompleter.future,
+      );
+
+  final Completer<TvDeviceProfile> _scanCompleter;
+  int markCompletedCalls = 0;
+
+  @override
+  Future<void> markCompleted() async {
+    markCompletedCalls++;
+    state = state.copyWith(previouslyCompleted: true);
+  }
+
+  void completeScan(TvDeviceProfile profile) =>
+      _scanCompleter.complete(profile);
 }
 
 class _SetupDiscordPlatform implements DiscordPresencePlatform {
