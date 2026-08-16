@@ -31,9 +31,30 @@ class InitialSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
-  static const _stepCount = 8;
+  static const _stepCount = 5;
+  static const _stepNames = [
+    'Playback',
+    'Home',
+    'Streaming',
+    'Accounts',
+    'Privacy',
+  ];
   final _pages = PageController();
+  bool _finishing = false;
+  bool _transitioning = false;
   int _step = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(setupProgressProvider.notifier).start();
+      if (ref.read(deviceSetupProvider).report == null) {
+        unawaited(ref.read(deviceSetupProvider.notifier).scan());
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -43,146 +64,164 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
 
   Future<void> _setStep(int step) async {
     final next = step.clamp(0, _stepCount - 1);
-    final shouldScan =
-        next == 2 && ref.read(deviceSetupProvider).report == null;
-    final deviceSetup = shouldScan
-        ? ref.read(deviceSetupProvider.notifier)
-        : null;
-    setState(() => _step = next);
-    await _pages.animateToPage(
-      next,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-    );
-    if (!mounted) return;
-    if (shouldScan) unawaited(deviceSetup!.scan());
+    if (_transitioning || next == _step) return;
+    _transitioning = true;
+    try {
+      setState(() => _step = next);
+      await _pages.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    } finally {
+      _transitioning = false;
+    }
   }
 
   Future<void> _finish() async {
+    if (_finishing) return;
+    _finishing = true;
     final deviceSetup = ref.read(deviceSetupProvider.notifier);
     final setupProgress = ref.read(setupProgressProvider.notifier);
-    final hasDeviceReport = ref.read(deviceSetupProvider).report != null;
-    if (hasDeviceReport) await deviceSetup.markCompleted();
-    await setupProgress.complete();
-    if (!mounted) return;
-    if (context.canPop()) {
-      context.pop();
-    } else {
-      context.go('/');
+    try {
+      deviceSetup.persistWhenReady();
+      await setupProgress.complete();
+      if (!mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
+      }
+    } finally {
+      _finishing = false;
     }
+  }
+
+  Future<void> _handleBack() async {
+    if (_transitioning || _finishing) return;
+    if (_step > 0) {
+      await _setStep(_step - 1);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: context.appPalette.surface,
+        title: const Text('Leave setup?'),
+        content: const Text(
+          'You can finish these choices later from Settings.',
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep setting up'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Set up later'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) await _finish();
   }
 
   @override
   Widget build(BuildContext context) {
     final preferences = ref.watch(settingsPreferencesProvider);
-    return Scaffold(
-      backgroundColor: context.appPalette.background,
-      body: SafeArea(
-        minimum: context.responsiveScreenPadding,
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  clipBehavior: Clip.hardEdge,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Image.asset(
-                    'assets/branding/tetotv_icon.png',
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Set up TetoTV',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                ),
-                _SetupButton(
-                  label: 'Skip setup',
-                  icon: Icons.skip_next_rounded,
-                  autofocus: true,
-                  onPressed: _finish,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _SetupProgress(step: _step, count: _stepCount),
-            const SizedBox(height: 12),
-            Expanded(
-              child: PageView(
-                controller: _pages,
-                physics: const NeverScrollableScrollPhysics(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_handleBack());
+      },
+      child: Scaffold(
+        backgroundColor: context.appPalette.background,
+        body: SafeArea(
+          minimum: context.responsiveScreenPadding,
+          child: Column(
+            children: [
+              Row(
                 children: [
-                  const _WelcomeStep(),
-                  _CustomizationStep(preferences: preferences),
-                  _PrivacyCommunityStep(preferences: preferences),
-                  const _DeviceStep(),
-                  const _DebridStep(),
-                  const _SourcesStep(),
-                  const _TrackingStep(),
-                  const _FinishedStep(),
+                  Container(
+                    width: 38,
+                    height: 38,
+                    clipBehavior: Clip.hardEdge,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Image.asset(
+                      'assets/branding/tetotv_icon.png',
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Set up TetoTV',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                  ),
+                  _SetupButton(
+                    label: 'Set up later',
+                    icon: Icons.schedule_rounded,
+                    onPressed: _finish,
+                  ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                if (_step > 0)
-                  _SetupButton(
-                    label: 'Back',
-                    icon: Icons.arrow_back_rounded,
-                    onPressed: () => _setStep(_step - 1),
-                  ),
-                const Spacer(),
-                _SetupButton(
-                  label: _step == _stepCount - 1 ? 'Finish' : 'Continue',
-                  icon: _step == _stepCount - 1
-                      ? Icons.check_rounded
-                      : Icons.arrow_forward_rounded,
-                  primary: true,
-                  onPressed: _step == _stepCount - 1
-                      ? _finish
-                      : () => _setStep(_step + 1),
+              const SizedBox(height: 12),
+              _SetupProgress(
+                step: _step,
+                count: _stepCount,
+                label: _stepNames[_step],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: PageView(
+                  controller: _pages,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    _PlaybackStep(preferences: preferences),
+                    _TvExperienceStep(preferences: preferences),
+                    const _StreamingStep(),
+                    const _AccountsStep(),
+                    _PrivacyStep(preferences: preferences),
+                  ],
                 ),
-              ],
-            ),
-          ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (_step > 0)
+                    _SetupButton(
+                      label: 'Back',
+                      icon: Icons.arrow_back_rounded,
+                      onPressed: () => _setStep(_step - 1),
+                    ),
+                  const Spacer(),
+                  _SetupButton(
+                    label: _step == _stepCount - 1 ? 'Finish' : 'Continue',
+                    icon: _step == _stepCount - 1
+                        ? Icons.check_rounded
+                        : Icons.arrow_forward_rounded,
+                    primary: true,
+                    autofocus: true,
+                    onPressed: _step == _stepCount - 1
+                        ? _finish
+                        : () => _setStep(_step + 1),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _WelcomeStep extends StatelessWidget {
-  const _WelcomeStep();
-
-  @override
-  Widget build(BuildContext context) => _SetupPage(
-    icon: Icons.auto_awesome_rounded,
-    title: 'Welcome to TetoTV',
-    subtitle:
-        'This short walkthrough configures the interface, checks playback compatibility, and connects your services.',
-    child: const Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      alignment: WrapAlignment.center,
-      children: [
-        _FeaturePill(Icons.tv_rounded, 'TV and mobile layouts'),
-        _FeaturePill(Icons.high_quality_rounded, 'Device-aware playback'),
-        _FeaturePill(Icons.cloud_done_rounded, 'Debrid streaming'),
-        _FeaturePill(Icons.sync_rounded, 'Anime tracking'),
-      ],
-    ),
-  );
-}
-
-class _CustomizationStep extends ConsumerWidget {
-  const _CustomizationStep({required this.preferences});
+class _TvExperienceStep extends ConsumerWidget {
+  const _TvExperienceStep({required this.preferences});
 
   final SettingsPreferences preferences;
 
@@ -191,9 +230,8 @@ class _CustomizationStep extends ConsumerWidget {
     final controller = ref.read(settingsPreferencesProvider.notifier);
     return _SetupPage(
       icon: Icons.tune_rounded,
-      title: 'Make it yours',
-      subtitle:
-          'Choose a spacious cinematic Home or a denser layout, then keep only the shortcuts you use.',
+      title: 'Make it feel right on your TV',
+      subtitle: 'Choose how Home looks and keep your everyday shortcuts close.',
       child: Column(
         children: [
           _SetupChoiceRow(
@@ -249,9 +287,35 @@ class _CustomizationStep extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlaybackStep extends ConsumerWidget {
+  const _PlaybackStep({required this.preferences});
+
+  final SettingsPreferences preferences;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(settingsPreferencesProvider.notifier);
+    final report = ref.watch(deviceSetupProvider).report;
+    final showCompatibilityAdvice =
+        report != null &&
+        report.profile.sdk > 0 &&
+        !report.profile.codecs.any(
+          (codec) => codec.hardware && codec.mime == 'video/avc',
+        );
+    return _SetupPage(
+      icon: Icons.play_circle_outline_rounded,
+      title: 'Choose your playback defaults',
+      subtitle: 'Set how you type, listen, and move through episodes.',
+      child: Column(
+        children: [
           _SetupChoiceRow(
-            label: 'Text input keyboard',
+            label: 'Text input',
             children: [
               _SetupChoice(
                 label: 'TetoTV keyboard',
@@ -265,7 +329,7 @@ class _CustomizationStep extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           _SetupChoiceRow(
             label: 'Preferred anime audio',
             children: [
@@ -277,9 +341,9 @@ class _CustomizationStep extends ConsumerWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           _SetupChoiceRow(
-            label: 'Automatic intro and outro skipping',
+            label: 'Automatic skipping',
             children: [
               _SetupChoice(
                 label: 'Skip intros',
@@ -295,26 +359,37 @@ class _CustomizationStep extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 9),
           Text(
-            'Automatic skipping only runs when reliable timestamps are available. You can always use the on-screen skip button instead.',
+            'Automatic skipping only runs when reliable timestamps are available.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
+          if (showCompatibilityAdvice) ...[
+            const SizedBox(height: 16),
+            const _SetupNote(
+              key: ValueKey('setup-compatibility-warning'),
+              icon: Icons.info_outline_rounded,
+              text:
+                  'For smoother playback on this TV, start with 1080p H.264 releases. TetoTV will use compatibility playback automatically.',
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _PrivacyCommunityStep extends ConsumerWidget {
-  const _PrivacyCommunityStep({required this.preferences});
-
-  final SettingsPreferences preferences;
+class _AccountsStep extends ConsumerWidget {
+  const _AccountsStep();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.read(settingsPreferencesProvider.notifier);
+    final preferences = ref.watch(settingsPreferencesProvider);
+    final accounts = ref.watch(trackingAccountsControllerProvider);
+    final trackingConnected = accounts.isConnected(
+      preferences.trackingProvider,
+    );
     final isTelevision = ref.watch(isTelevisionProvider);
     final discord = ref.watch(discordPresenceControllerProvider);
     final discordController = ref.read(
@@ -332,37 +407,44 @@ class _PrivacyCommunityStep extends ConsumerWidget {
               : 'Discord linked but disabled'
         : 'Link Discord (optional)';
     return _SetupPage(
-      icon: Icons.privacy_tip_outlined,
-      title: 'Privacy and Discord',
-      subtitle:
-          'Every choice is optional and starts off. You can change it later in Settings.',
+      icon: Icons.people_alt_outlined,
+      title: 'Connect your accounts',
+      subtitle: 'Sync your watchlist and Discord presence, or skip either one.',
       child: Column(
         children: [
           _SetupChoiceRow(
-            label:
-                'Send anonymous crash and error reports to help improve TetoTV?',
+            label: 'Anime list',
             children: [
-              _SetupChoice(
-                label: 'Do not send',
-                selected: !preferences.anonymousCrashReportingEnabled,
-                onPressed: () =>
-                    settings.setAnonymousCrashReportingEnabled(false),
-              ),
-              _SetupChoice(
-                label: 'Allow error reports',
-                selected: preferences.anonymousCrashReportingEnabled,
-                onPressed: () =>
-                    settings.setAnonymousCrashReportingEnabled(true),
-              ),
+              for (final provider in TrackingProvider.values)
+                _SetupChoice(
+                  label: provider.displayName,
+                  selected: preferences.trackingProvider == provider,
+                  onPressed: () => ref
+                      .read(settingsPreferencesProvider.notifier)
+                      .setTrackingProvider(provider),
+                ),
             ],
           ),
-          const SizedBox(height: 9),
-          Text(
-            'Reports include the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include the show, episode, account, device ID, source, or URL.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
+          const SizedBox(height: 10),
+          _SetupButton(
+            label: trackingConnected
+                ? '${preferences.trackingProvider.displayName} connected'
+                : 'Connect ${preferences.trackingProvider.displayName}',
+            icon: trackingConnected
+                ? Icons.check_rounded
+                : Icons.qr_code_rounded,
+            onPressed: () => context.push(
+              preferences.trackingProvider == TrackingProvider.anilist
+                  ? '/pair/anilist'
+                  : '/pair/myanimelist',
+            ),
           ),
           const SizedBox(height: 18),
+          const Text(
+            'Discord presence',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
           if (discord.busy || !discord.loaded || !discord.available)
             _FeaturePill(Icons.forum_rounded, discordLabel)
           else
@@ -389,7 +471,7 @@ class _PrivacyCommunityStep extends ConsumerWidget {
             ),
           const SizedBox(height: 9),
           Text(
-            'Discord Rich Presence can show what you are watching. TetoTV never sees or stores your Discord password.',
+            'Connections are optional. TetoTV never sees or stores your account passwords.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
@@ -407,73 +489,8 @@ class _PrivacyCommunityStep extends ConsumerWidget {
   }
 }
 
-class _DeviceStep extends ConsumerWidget {
-  const _DeviceStep();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(deviceSetupProvider);
-    final report = state.report;
-    return _SetupPage(
-      icon: Icons.memory_rounded,
-      title: 'Playback compatibility',
-      subtitle:
-          'TetoTV checks the device’s hardware decoders, HDR display, audio output, and anime subtitle renderer.',
-      child: state.loading
-          ? Padding(
-              padding: const EdgeInsets.all(26),
-              child: CircularProgressIndicator(
-                color: context.appPalette.accentBright,
-              ),
-            )
-          : state.error != null
-          ? Column(
-              children: [
-                Text(state.error!, textAlign: TextAlign.center),
-                const SizedBox(height: 10),
-                _SetupButton(
-                  label: 'Scan again',
-                  icon: Icons.refresh_rounded,
-                  onPressed: () =>
-                      ref.read(deviceSetupProvider.notifier).scan(),
-                ),
-              ],
-            )
-          : report == null
-          ? _SetupButton(
-              label: 'Run scan',
-              icon: Icons.play_arrow_rounded,
-              primary: true,
-              onPressed: () => ref.read(deviceSetupProvider.notifier).scan(),
-            )
-          : Column(
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    for (final check in report.checks)
-                      _CapabilityPill(check: check),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  report.recommendation,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: context.appPalette.secondaryAccent,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-}
-
-class _DebridStep extends ConsumerWidget {
-  const _DebridStep();
+class _StreamingStep extends ConsumerWidget {
+  const _StreamingStep();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -482,6 +499,10 @@ class _DebridStep extends ConsumerWidget {
     final torBox = ref.watch(torBoxSettingsControllerProvider);
     final allDebrid = ref.watch(allDebridSettingsControllerProvider);
     final premiumize = ref.watch(premiumizeSettingsControllerProvider);
+    final marketplace = ref.watch(marketplaceControllerProvider);
+    final torrentSources = ref.watch(userTorrentSourcesControllerProvider);
+    final repositoryCount = marketplace.repositories.length;
+    final manifestCount = torrentSources.manifestUrls.length;
     final selectedConnected = switch (preferences.debridProvider) {
       DebridService.realDebrid => realDebrid.hasSavedToken,
       DebridService.torBox => torBox.hasSavedToken,
@@ -490,13 +511,20 @@ class _DebridStep extends ConsumerWidget {
     };
     return _SetupPage(
       icon: Icons.cloud_done_rounded,
-      title: 'Choose your debrid service',
+      title: 'Set up streaming',
       subtitle:
-          'TetoTV only sends supported releases through the debrid provider you select.',
+          'Choose a debrid provider if you use one. Connecting it now is optional.',
       child: Column(
         children: [
-          _SetupChoiceRow(
-            label: 'Provider',
+          const Text(
+            'Debrid provider',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
             children: [
               for (final service in DebridService.values)
                 _SetupChoice(
@@ -508,7 +536,7 @@ class _DebridStep extends ConsumerWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 10),
           _SetupButton(
             label: selectedConnected
                 ? '${preferences.debridProvider.displayName} connected'
@@ -524,28 +552,18 @@ class _DebridStep extends ConsumerWidget {
               DebridService.premiumize => '/pair/premiumize',
             }),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SourcesStep extends ConsumerWidget {
-  const _SourcesStep();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final marketplace = ref.watch(marketplaceControllerProvider);
-    final torrentSources = ref.watch(userTorrentSourcesControllerProvider);
-    final repositoryCount = marketplace.repositories.length;
-    final manifestCount = torrentSources.manifestUrls.length;
-    return _SetupPage(
-      icon: Icons.add_link_rounded,
-      title: 'Add streaming sources',
-      subtitle:
-          'TetoTV does not bundle or recommend streaming sources. Add only Marketplace repositories and Torrent source manifests you trust and are authorized to use.',
-      child: Column(
-        children: [
+          const SizedBox(height: 20),
+          const Text(
+            'Your sources',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            'Add only repositories and manifests you trust and are authorized to use. TetoTV does not bundle or recommend sources.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
+          ),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 10,
             runSpacing: 10,
@@ -567,7 +585,7 @@ class _SourcesStep extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 10,
             runSpacing: 10,
@@ -586,64 +604,55 @@ class _SourcesStep extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            'This step is optional. You can add or remove sources later in Settings.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
-          ),
         ],
       ),
     );
   }
 }
 
-class _TrackingStep extends ConsumerWidget {
-  const _TrackingStep();
+class _PrivacyStep extends ConsumerWidget {
+  const _PrivacyStep({required this.preferences});
+
+  final SettingsPreferences preferences;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final preferences = ref.watch(settingsPreferencesProvider);
-    final accounts = ref.watch(trackingAccountsControllerProvider);
-    final connected = accounts.isConnected(preferences.trackingProvider);
+    final settings = ref.read(settingsPreferencesProvider.notifier);
     return _SetupPage(
-      icon: Icons.sync_alt_rounded,
-      title: 'Connect an anime list',
+      icon: Icons.privacy_tip_outlined,
+      title: 'One last choice',
       subtitle:
-          'Choose the service that should populate My List and receive episode progress. You can change it later.',
+          'Choose whether anonymous technical errors can be sent to help improve TetoTV.',
       child: Column(
         children: [
           _SetupChoiceRow(
-            label: 'Tracking service',
+            label: 'Anonymous crash and error reports',
             children: [
-              for (final provider in TrackingProvider.values)
-                _SetupChoice(
-                  label: provider.displayName,
-                  selected: preferences.trackingProvider == provider,
-                  onPressed: () => ref
-                      .read(settingsPreferencesProvider.notifier)
-                      .setTrackingProvider(provider),
-                ),
+              _SetupChoice(
+                label: 'Do not send',
+                selected: !preferences.anonymousCrashReportingEnabled,
+                onPressed: () =>
+                    settings.setAnonymousCrashReportingEnabled(false),
+              ),
+              _SetupChoice(
+                label: 'Allow error reports',
+                selected: preferences.anonymousCrashReportingEnabled,
+                onPressed: () =>
+                    settings.setAnonymousCrashReportingEnabled(true),
+              ),
             ],
-          ),
-          const SizedBox(height: 18),
-          _SetupButton(
-            label: connected
-                ? '${preferences.trackingProvider.displayName} connected'
-                : 'Connect ${preferences.trackingProvider.displayName}',
-            icon: connected ? Icons.check_rounded : Icons.qr_code_rounded,
-            primary: !connected,
-            onPressed: () => context.push(
-              preferences.trackingProvider == TrackingProvider.anilist
-                  ? '/pair/anilist'
-                  : '/pair/myanimelist',
-            ),
           ),
           const SizedBox(height: 10),
           Text(
-            'Connecting is optional. TetoTV can still browse and play without an anime-list account.',
+            'Reports may include the app version, Android version, device class, error type, time, and a redacted trace. They never include what you watch, accounts, device IDs, sources, or URLs.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
+          ),
+          const SizedBox(height: 18),
+          const _SetupNote(
+            icon: Icons.check_circle_outline_rounded,
+            text:
+                'That’s it. Your choices are saved on this TV and remain available in Settings.',
           ),
         ],
       ),
@@ -688,19 +697,6 @@ class _SourceCount extends StatelessWidget {
         ),
       ],
     ),
-  );
-}
-
-class _FinishedStep extends StatelessWidget {
-  const _FinishedStep();
-
-  @override
-  Widget build(BuildContext context) => const _SetupPage(
-    icon: Icons.check_circle_rounded,
-    title: 'TetoTV is ready',
-    subtitle:
-        'Your choices are saved on this device. Everything in this walkthrough remains available under Settings → System.',
-    child: _FeaturePill(Icons.play_arrow_rounded, 'Start watching'),
   );
 }
 
@@ -756,29 +752,52 @@ class _SetupPage extends StatelessWidget {
 }
 
 class _SetupProgress extends StatelessWidget {
-  const _SetupProgress({required this.step, required this.count});
+  const _SetupProgress({
+    required this.step,
+    required this.count,
+    required this.label,
+  });
 
   final int step;
   final int count;
+  final String label;
 
   @override
-  Widget build(BuildContext context) => Row(
+  Widget build(BuildContext context) => Column(
     children: [
-      for (var index = 0; index < count; index++) ...[
-        Expanded(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            height: 4,
-            decoration: BoxDecoration(
-              color: index <= step
-                  ? context.appPalette.accentBright
-                  : Colors.white12,
-              borderRadius: BorderRadius.circular(99),
-            ),
+      Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
           ),
-        ),
-        if (index != count - 1) const SizedBox(width: 5),
-      ],
+          const Spacer(),
+          Text(
+            '${step + 1} of $count',
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
+          ),
+        ],
+      ),
+      const SizedBox(height: 7),
+      Row(
+        children: [
+          for (var index = 0; index < count; index++) ...[
+            Expanded(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                height: 3,
+                decoration: BoxDecoration(
+                  color: index <= step
+                      ? context.appPalette.accentBright
+                      : Colors.white12,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+            ),
+            if (index != count - 1) const SizedBox(width: 5),
+          ],
+        ],
+      ),
     ],
   );
 }
@@ -870,31 +889,31 @@ class _FeaturePill extends StatelessWidget {
   );
 }
 
-class _CapabilityPill extends StatelessWidget {
-  const _CapabilityPill({required this.check});
+class _SetupNote extends StatelessWidget {
+  const _SetupNote({super.key, required this.icon, required this.text});
 
-  final CapabilityCheck check;
+  final IconData icon;
+  final String text;
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+    constraints: const BoxConstraints(maxWidth: 660),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
     decoration: BoxDecoration(
-      color: check.supported
-          ? const Color(0xFF143526)
-          : context.appPalette.surfaceRaised,
-      borderRadius: BorderRadius.circular(8),
+      color: context.appPalette.surfaceRaised,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: Colors.white.withValues(alpha: .08)),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(
-          check.supported ? Icons.check_rounded : Icons.info_outline_rounded,
-          size: 16,
-        ),
-        const SizedBox(width: 5),
-        Text(
-          check.label,
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
+        Icon(icon, size: 20, color: context.appPalette.secondaryAccent),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(
+            text,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
         ),
       ],
     ),

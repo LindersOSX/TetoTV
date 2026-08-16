@@ -115,6 +115,10 @@ void main() {
       expect(controller.state.defaultLandingPage, LandingPage.home);
       expect(controller.state.showHome, isTrue);
       expect(controller.state.showSettings, isTrue);
+      expect(
+        controller.state.settingsEntryPlacement,
+        SettingsEntryPlacement.topNavigation,
+      );
       expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
       expect(controller.state.showMyList, isTrue);
       expect(controller.state.showDiscover, isTrue);
@@ -241,7 +245,7 @@ void main() {
     expect(controller.takeInitialLandingRoute(), isNull);
   });
 
-  test('top navigation always keeps Home or Settings reachable', () async {
+  test('Settings stays visible while Home remains optional', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
@@ -249,24 +253,86 @@ void main() {
     await controller.setShowHome(false);
     expect(controller.state.showHome, isFalse);
     expect(controller.state.showSettings, isTrue);
+    expect(
+      controller.state.settingsEntryPlacement,
+      SettingsEntryPlacement.topNavigation,
+    );
 
     await controller.setShowSettings(false);
-    expect(
-      controller.state.showSettings,
-      isTrue,
-      reason: 'Settings is the only remaining recovery destination',
-    );
+    expect(controller.state.showSettings, isTrue);
 
     await controller.setShowHome(true);
     await controller.setShowSettings(false);
     expect(controller.state.showHome, isTrue);
-    expect(controller.state.showSettings, isFalse);
+    expect(controller.state.showSettings, isTrue);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
     expect(restored.state.showHome, isTrue);
-    expect(restored.state.showSettings, isFalse);
+    expect(restored.state.showSettings, isTrue);
   });
+
+  test('a saved hidden Settings destination is repaired on load', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'navigation_show_home': 'false',
+      'navigation_show_settings': 'false',
+    });
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.load();
+
+    expect(controller.state.showHome, isFalse);
+    expect(controller.state.showSettings, isTrue);
+    expect(
+      controller.state.isTopNavigationDestinationVisible(
+        TopNavigationDestination.settings,
+      ),
+      isTrue,
+    );
+    expect(await storage.read(key: 'navigation_show_settings'), 'true');
+  });
+
+  test(
+    'Settings placement persists and customization reset restores top row',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+
+      expect(
+        controller.state.settingsEntryPlacement,
+        SettingsEntryPlacement.topNavigation,
+      );
+      await controller.setSettingsEntryPlacement(
+        SettingsEntryPlacement.profileMenu,
+      );
+      expect(
+        controller.state.settingsEntryPlacement,
+        SettingsEntryPlacement.profileMenu,
+      );
+      expect(controller.state.showSettings, isTrue);
+
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(
+        restored.state.settingsEntryPlacement,
+        SettingsEntryPlacement.profileMenu,
+      );
+
+      await restored.resetCustomization();
+      expect(
+        restored.state.settingsEntryPlacement,
+        SettingsEntryPlacement.topNavigation,
+      );
+      final resetRestored = SettingsPreferencesController(storage);
+      await resetRestored.load();
+      expect(
+        resetRestored.state.settingsEntryPlacement,
+        SettingsEntryPlacement.topNavigation,
+      );
+    },
+  );
 
   test('top navigation order is normalized, movable, and persisted', () async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -362,7 +428,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 39, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 40, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

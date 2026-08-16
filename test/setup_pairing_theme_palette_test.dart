@@ -46,7 +46,9 @@ void main() {
     expect(_decorationColors(tester), contains(_customPalette.surface));
     expect(_decorationColors(tester), contains(_customPalette.surfaceRaised));
     expect(
-      tester.widget<Icon>(find.byIcon(Icons.auto_awesome_rounded).first).color,
+      tester
+          .widget<Icon>(find.byIcon(Icons.play_circle_outline_rounded).first)
+          .color,
       _customPalette.accentBright,
     );
     expect(tester.takeException(), isNull);

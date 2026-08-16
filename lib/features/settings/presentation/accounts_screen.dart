@@ -1775,22 +1775,12 @@ class _CustomizationPanel extends StatelessWidget {
               final visible = preferences.isTopNavigationDestinationVisible(
                 destination,
               );
-              if (visible &&
-                  !preferences.canHideTopNavigationDestination(destination)) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Keep Home or Settings visible so navigation can be changed again.',
-                    ),
-                  ),
-                );
-                return;
-              }
               controller.setTopNavigationDestinationVisible(
                 destination,
                 !visible,
               );
             },
+            onSettingsPlacementChanged: controller.setSettingsEntryPlacement,
             onMove: controller.moveTopNavigationDestination,
           ),
           const _PreferenceDivider(),
@@ -2674,11 +2664,13 @@ class _TopNavigationOrganizer extends StatelessWidget {
   const _TopNavigationOrganizer({
     required this.preferences,
     required this.onToggle,
+    required this.onSettingsPlacementChanged,
     required this.onMove,
   });
 
   final SettingsPreferences preferences;
   final ValueChanged<TopNavigationDestination> onToggle;
+  final ValueChanged<SettingsEntryPlacement> onSettingsPlacementChanged;
   final void Function(TopNavigationDestination destination, int offset) onMove;
 
   @override
@@ -2699,7 +2691,7 @@ class _TopNavigationOrganizer extends StatelessWidget {
           ),
           const SizedBox(height: 3),
           Text(
-            'Choose which buttons are shown and move them into your preferred order.',
+            'Choose which buttons are shown and move them into your preferred order. Settings can move to the profile menu, with a top-row fallback on small screens or when no profile is linked.',
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
           const SizedBox(height: 8),
@@ -2711,7 +2703,22 @@ class _TopNavigationOrganizer extends StatelessWidget {
               visible: preferences.isTopNavigationDestinationVisible(
                 order[index],
               ),
-              onToggle: () => onToggle(order[index]),
+              settingsPlacement:
+                  order[index] == TopNavigationDestination.settings
+                  ? preferences.settingsEntryPlacement
+                  : null,
+              onToggle: () {
+                if (order[index] == TopNavigationDestination.settings) {
+                  onSettingsPlacementChanged(
+                    preferences.settingsEntryPlacement ==
+                            SettingsEntryPlacement.topNavigation
+                        ? SettingsEntryPlacement.profileMenu
+                        : SettingsEntryPlacement.topNavigation,
+                  );
+                } else {
+                  onToggle(order[index]);
+                }
+              },
               onMoveEarlier: () => onMove(order[index], -1),
               onMoveLater: () => onMove(order[index], 1),
             ),
@@ -2729,6 +2736,7 @@ class _TopNavigationRow extends StatelessWidget {
     required this.total,
     required this.destination,
     required this.visible,
+    required this.settingsPlacement,
     required this.onToggle,
     required this.onMoveEarlier,
     required this.onMoveLater,
@@ -2738,6 +2746,7 @@ class _TopNavigationRow extends StatelessWidget {
   final int total;
   final TopNavigationDestination destination;
   final bool visible;
+  final SettingsEntryPlacement? settingsPlacement;
   final VoidCallback onToggle;
   final VoidCallback onMoveEarlier;
   final VoidCallback onMoveLater;
@@ -2745,12 +2754,75 @@ class _TopNavigationRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final id = destination.name;
+    final isSettings = settingsPlacement != null;
+    final settingsInProfileMenu =
+        settingsPlacement == SettingsEntryPlacement.profileMenu;
+    final visibilityControl = Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: visible
+            ? context.appPalette.accent.withValues(alpha: .28)
+            : context.appPalette.surfaceRaised,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: visible
+              ? context.appPalette.accentBright.withValues(alpha: .7)
+              : _settingsBorderColor(context, .08),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isSettings
+                ? (settingsInProfileMenu
+                      ? Icons.account_box_rounded
+                      : Icons.view_week_rounded)
+                : (visible
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded),
+            size: 17,
+            color: visible
+                ? _settingsPrimaryText(context)
+                : context.appPalette.mutedText,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              destination.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: visible
+                    ? _settingsPrimaryText(context)
+                    : context.appPalette.mutedText,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Text(
+            isSettings
+                ? (settingsInProfileMenu ? 'PROFILE MENU' : 'TOP ROW')
+                : (visible ? 'SHOWN' : 'HIDDEN'),
+            style: TextStyle(
+              color: visible
+                  ? context.appPalette.accentBright
+                  : context.appPalette.mutedText,
+              fontSize: 8,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .7,
+            ),
+          ),
+        ],
+      ),
+    );
     return Semantics(
       key: ValueKey('settings-top-navigation-$id'),
       container: true,
       label:
           '${destination.displayName}, position ${index + 1} of $total, '
-          '${visible ? 'shown' : 'hidden'}',
+          '${isSettings ? '${settingsPlacement!.displayName} placement' : (visible ? 'shown' : 'hidden')}',
       child: Row(
         children: [
           SizedBox(
@@ -2772,60 +2844,7 @@ class _TopNavigationRow extends StatelessWidget {
               onPressed: onToggle,
               focusScale: 1.01,
               borderRadius: BorderRadius.circular(8),
-              child: Container(
-                height: 38,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: visible
-                      ? context.appPalette.accent.withValues(alpha: .28)
-                      : context.appPalette.surfaceRaised,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: visible
-                        ? context.appPalette.accentBright.withValues(alpha: .7)
-                        : _settingsBorderColor(context, .08),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      visible
-                          ? Icons.visibility_rounded
-                          : Icons.visibility_off_rounded,
-                      size: 17,
-                      color: visible
-                          ? _settingsPrimaryText(context)
-                          : context.appPalette.mutedText,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        destination.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: visible
-                              ? _settingsPrimaryText(context)
-                              : context.appPalette.mutedText,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      visible ? 'SHOWN' : 'HIDDEN',
-                      style: TextStyle(
-                        color: visible
-                            ? context.appPalette.accentBright
-                            : context.appPalette.mutedText,
-                        fontSize: 8,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: .7,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              child: visibilityControl,
             ),
           ),
           const SizedBox(width: 7),

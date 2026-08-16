@@ -40,8 +40,8 @@ Beta reads the latest completed release from:
 https://api.github.com/repos/LindersOSX/TetoTV/releases/latest
 ```
 
-The current Beta release is `v2.0.7`, with the user-facing name
-**TetoTV 2.0.7 Beta**. The repository determines that this is the Beta channel;
+The current Beta release is `v2.0.8`, with the user-facing name
+**TetoTV 2.0.8 Beta**. The repository determines that this is the Beta channel;
 the client does not require GitHub's `prerelease` field to be `true`. Publish a
 normal, non-draft release so GitHub's `/releases/latest` endpoint can return it.
 
@@ -69,7 +69,7 @@ TV.
 
 ## Switching and rollback
 
-Public `1.0.2` and Beta `2.0.7` use Android `versionCode` `410001`, the same
+Public `1.0.2` and Beta `2.0.8` use Android `versionCode` `410001`, the same
 application ID, and the same production signer. This lets Developer mode move
 between compatible completed Public 1.x and Beta 2.x releases even when the
 target's user-facing SemVer is lower. Once the installed major family matches

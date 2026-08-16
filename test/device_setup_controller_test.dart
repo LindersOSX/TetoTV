@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -57,4 +58,24 @@ void main() {
     );
     expect(report.recommendation, contains('MPV/VLC'));
   });
+
+  test(
+    'unknown profiles are never persisted as an MPV recommendation',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final controller = _DeviceSetupControllerFixture();
+
+      await controller.markCompleted();
+
+      expect(controller.state.previouslyCompleted, isFalse);
+    },
+  );
+}
+
+class _DeviceSetupControllerFixture extends DeviceSetupController {
+  _DeviceSetupControllerFixture() : super(const FlutterSecureStorage()) {
+    state = DeviceSetupState(
+      report: buildDeviceCalibrationReport(const TvDeviceProfile.unknown()),
+    );
+  }
 }
