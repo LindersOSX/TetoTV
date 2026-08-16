@@ -1,4 +1,5 @@
 {
   "AUTH_BROKER_BASE_URL": "https://your-real-broker.example",
+  "CRASH_REPORT_BASE_URL": "https://your-crash-receiver.example",
   "RELEASE_RESOLVER_BASE_URL": ""
 }

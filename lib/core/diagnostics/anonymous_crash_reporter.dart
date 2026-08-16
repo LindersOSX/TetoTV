@@ -82,7 +82,7 @@ class BrokerAnonymousCrashReportClient implements AnonymousCrashReportClient {
   final Dio _dio;
 
   static String _validatedBrokerOrigin() {
-    final uri = Uri.tryParse(AppConfig.sourcePairingBrokerBaseUrl.trim());
+    final uri = Uri.tryParse(AppConfig.crashReportBaseUrl.trim());
     if (uri == null ||
         uri.scheme != 'https' ||
         uri.host.isEmpty ||
@@ -91,7 +91,7 @@ class BrokerAnonymousCrashReportClient implements AnonymousCrashReportClient {
         uri.hasFragment ||
         (uri.path.isNotEmpty && uri.path != '/')) {
       throw StateError(
-        'Anonymous crash-report broker is not configured safely.',
+        'Anonymous crash-report endpoint is not configured safely.',
       );
     }
     return uri.origin;

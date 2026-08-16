@@ -9,6 +9,11 @@ abstract final class AppConfig {
     defaultValue: 'https://tetotv-updates-lindows.onrender.com',
   );
 
+  static const crashReportBaseUrl = String.fromEnvironment(
+    'CRASH_REPORT_BASE_URL',
+    defaultValue: 'https://tetotv-bot.wisp.uno',
+  );
+
   static const releaseResolverBaseUrl = String.fromEnvironment(
     'RELEASE_RESOLVER_BASE_URL',
   );
@@ -16,6 +21,8 @@ abstract final class AppConfig {
   static bool get hasAuthBroker => authBrokerBaseUrl.trim().isNotEmpty;
   static bool get hasSourcePairingBroker =>
       sourcePairingBrokerBaseUrl.trim().isNotEmpty;
+  static bool get hasCrashReportEndpoint =>
+      crashReportBaseUrl.trim().isNotEmpty;
   static bool get hasReleaseResolver =>
       releaseResolverBaseUrl.trim().isNotEmpty;
 }

@@ -1,11 +1,11 @@
 # TetoTV privacy disclosure
 
-Effective date: August 15, 2026
+Effective date: August 16, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
-This disclosure describes the data handled by the app and by the optional
-TetoTV pairing and companion-services broker.
+This disclosure describes the data handled by the app, the optional TetoTV
+pairing services, and the optional crash-report receiver.
 
 ## Data kept on the device
 
@@ -154,14 +154,15 @@ technical error/stack trace. It does not intentionally include the show,
 episode, account, device or installation identifier, source/provider, URL,
 credential, playback history, or full diagnostics database.
 
-The companion-services broker validates and rate-limits the report, adds a random
-per-incident reference, and forwards it over an authenticated server-to-server
-connection to the TetoTV Discord bot. The bot posts it to the designated crash
-report channel. Reports remain in Discord according to that channel's access
-and retention settings until a moderator deletes them. The broker does not
-store report bodies, though the hosting providers and Discord process ordinary
-connection/request metadata under their own policies. Disabling reporting
-deletes any queued unsent report and prevents later crashes from being sent.
+The app sends reports over HTTPS to the dedicated TetoTV crash-report receiver
+at <https://tetotv-bot.wisp.uno>. That receiver validates and rate-limits each
+report, adds a random per-incident reference, and posts it through the TetoTV
+Discord bot to the designated crash report channel. Reports remain in Discord
+according to that channel's access and retention settings until a moderator
+deletes them. The receiver does not store report bodies, though Wispbyte and
+Discord process ordinary connection/request metadata under their own policies.
+Disabling reporting deletes any queued unsent report and prevents later crashes
+from being sent.
 
 Other bounded diagnostics stay on the device unless the user explicitly copies
 or shares a report. Manually exported reports contain app/build and
