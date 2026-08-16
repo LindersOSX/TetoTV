@@ -1,13 +1,19 @@
+import 'dart:async';
+
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/streaming/application/episode_discovery_prefetch_controller.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -56,6 +62,375 @@ void main() {
       isTrue,
     );
     expect(find.text('Could not load anime'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('opening details immediately warms the selected episode', (
+    tester,
+  ) async {
+    const anime = AnimeSummary(
+      id: 44,
+      idMal: 440,
+      title: 'Prefetched Show',
+      description: '',
+      episodes: 12,
+      score: 8,
+      seasonYear: 2026,
+    );
+    EpisodeReference? warmed;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LoadedSettingsController(),
+          ),
+          episodeDiscoveryPrefetcherProvider.overrideWithValue((
+            episode, {
+            required preferences,
+          }) {
+            warmed = episode;
+            return EpisodeDiscoveryPrefetchHandle.completed();
+          }),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 44)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(warmed?.anilistMediaId, 44);
+    expect(warmed?.episode, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'details waits for disabled source preferences before prefetching',
+    (tester) async {
+      const anime = AnimeSummary(
+        id: 46,
+        title: 'Private source choices',
+        description: '',
+        episodes: 12,
+        score: 8,
+      );
+      final loadGate = Completer<void>();
+      final settings = _DelayedSettingsController(loadGate);
+      var prefetchCalls = 0;
+      var debridStarts = 0;
+      var webStarts = 0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith((_) => settings),
+            episodeDiscoveryPrefetcherProvider.overrideWithValue((
+              episode, {
+              required preferences,
+            }) {
+              prefetchCalls++;
+              if (preferences.debridStreamsEnabled) debridStarts++;
+              if (preferences.webStreamsEnabled) webStarts++;
+              return EpisodeDiscoveryPrefetchHandle.completed();
+            }),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 46)),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(prefetchCalls, 0);
+      expect(debridStarts, 0);
+      expect(webStarts, 0);
+
+      loadGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(prefetchCalls, 1);
+      expect(debridStarts, 0);
+      expect(webStarts, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('rapid D-pad episode changes only prefetch the final selection', (
+    tester,
+  ) async {
+    const anime = AnimeSummary(
+      id: 45,
+      idMal: 450,
+      title: 'Debounced Show',
+      description: '',
+      episodes: 12,
+      score: 8,
+      seasonYear: 2026,
+    );
+    final warmedEpisodes = <int>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LoadedSettingsController(),
+          ),
+          episodeDiscoveryPrefetcherProvider.overrideWithValue((
+            episode, {
+            required preferences,
+          }) {
+            warmedEpisodes.add(episode.episode);
+            return EpisodeDiscoveryPrefetchHandle.completed();
+          }),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 45)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(warmedEpisodes, contains(1));
+    warmedEpisodes.clear();
+
+    final nextControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('episode-step-next')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    nextControl.focusNode!.requestFocus();
+    await tester.pump();
+    for (var i = 0; i < 3; i += 1) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    expect(find.text('Episode 4 of 12'), findsOneWidget);
+    expect(warmedEpisodes, isEmpty);
+    await tester.pump(const Duration(milliseconds: 299));
+    expect(warmedEpisodes, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(warmedEpisodes, [4]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'returning to a cancelled episode restarts only that latest prefetch',
+    (tester) async {
+      const anime = AnimeSummary(
+        id: 48,
+        title: 'Traversal race',
+        description: '',
+        episodes: 12,
+        score: 8,
+      );
+      final startedEpisodes = <int>[];
+      final cancelledEpisodes = <int>[];
+      final firstCancellationCanFinish = Completer<void>();
+      var activeHandles = 0;
+      var maximumActiveHandles = 0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(
+                const SettingsPreferences(
+                  debridStreamsEnabled: false,
+                  webStreamsEnabled: true,
+                  loaded: true,
+                ),
+              ),
+            ),
+            episodeDiscoveryPrefetcherProvider.overrideWithValue((
+              episode, {
+              required preferences,
+            }) {
+              startedEpisodes.add(episode.episode);
+              activeHandles++;
+              if (activeHandles > maximumActiveHandles) {
+                maximumActiveHandles = activeHandles;
+              }
+              final handleNumber = startedEpisodes.length;
+              final completion = Completer<void>();
+              var cancelled = false;
+              return EpisodeDiscoveryPrefetchHandle(
+                done: completion.future,
+                cancel: () async {
+                  if (cancelled) return;
+                  cancelled = true;
+                  cancelledEpisodes.add(episode.episode);
+                  if (handleNumber == 1) {
+                    await firstCancellationCanFinish.future;
+                  }
+                  activeHandles--;
+                  completion.complete();
+                },
+              );
+            }),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 48)),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(startedEpisodes, [1]);
+      expect(activeHandles, 1);
+
+      final nextControl = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-step-next')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      nextControl.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Episode 2 of 12'), findsOneWidget);
+      expect(cancelledEpisodes, [1]);
+      expect(activeHandles, 1);
+
+      final previousControl = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-step-previous')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      previousControl.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 299));
+      expect(find.text('Episode 1 of 12'), findsOneWidget);
+      expect(startedEpisodes, [1]);
+
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(startedEpisodes, [1]);
+      expect(activeHandles, 1);
+
+      firstCancellationCanFinish.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(startedEpisodes, [1, 1]);
+      expect(activeHandles, 1);
+      expect(maximumActiveHandles, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(activeHandles, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('changing episode and leaving details cancel active prefetch', (
+    tester,
+  ) async {
+    const anime = AnimeSummary(
+      id: 47,
+      title: 'Cancelable discovery',
+      description: '',
+      episodes: 12,
+      score: 8,
+    );
+    final cancelledEpisodes = <int>[];
+    final startedEpisodes = <int>[];
+    final completions = <int, Completer<void>>{};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LoadedSettingsController(
+              const SettingsPreferences(
+                debridStreamsEnabled: false,
+                webStreamsEnabled: true,
+                loaded: true,
+              ),
+            ),
+          ),
+          episodeDiscoveryPrefetcherProvider.overrideWithValue((
+            episode, {
+            required preferences,
+          }) {
+            startedEpisodes.add(episode.episode);
+            final completion = completions.putIfAbsent(
+              episode.episode,
+              Completer<void>.new,
+            );
+            return EpisodeDiscoveryPrefetchHandle(
+              done: completion.future,
+              cancel: () async {
+                cancelledEpisodes.add(episode.episode);
+                if (!completion.isCompleted) completion.complete();
+              },
+            );
+          }),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 47)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(startedEpisodes, [1]);
+
+    final nextControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('episode-step-next')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    nextControl.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(cancelledEpisodes, [1]);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(startedEpisodes, [1, 2]);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(cancelledEpisodes, [1, 2]);
     expect(tester.takeException(), isNull);
   });
 
@@ -466,4 +841,31 @@ void main() {
       },
     );
   }
+}
+
+class _DelayedSettingsController extends SettingsPreferencesController {
+  _DelayedSettingsController(this.gate) : super(const FlutterSecureStorage());
+
+  final Completer<void> gate;
+
+  @override
+  Future<void> load() async {
+    await gate.future;
+    state = const SettingsPreferences(
+      debridStreamsEnabled: false,
+      webStreamsEnabled: false,
+      loaded: true,
+    );
+  }
+}
+
+class _LoadedSettingsController extends SettingsPreferencesController {
+  _LoadedSettingsController([
+    SettingsPreferences preferences = const SettingsPreferences(loaded: true),
+  ]) : super(const FlutterSecureStorage()) {
+    state = preferences;
+  }
+
+  @override
+  Future<void> load() async {}
 }

@@ -35,6 +35,38 @@ void main() {
   });
 
   test(
+    'startup preloader returns the persisted palette already loaded',
+    () async {
+      final palette = AppThemePalette.fromSeeds(
+        background: const Color(0xFF071A2C),
+        surface: const Color(0xFF102C46),
+        accent: const Color(0xFF4ED8C7),
+        primaryText: Colors.white,
+        mutedText: const Color(0xFFB9D7D4),
+      );
+      final encoded = encodeThemeStudioState(
+        ThemeStudioState(palette: palette, contrastGuardEnabled: false),
+      );
+
+      final storageRead = Completer<String?>();
+      var preloadCompleted = false;
+      final preload = preloadThemeStudioController(
+        readValue: (_) => storageRead.future,
+      )..then((_) => preloadCompleted = true);
+
+      await Future<void>.delayed(Duration.zero);
+      expect(preloadCompleted, isFalse);
+      storageRead.complete(encoded);
+      final controller = await preload;
+
+      expect(preloadCompleted, isTrue);
+      expect(controller.state.loaded, isTrue);
+      expect(controller.state.palette, palette);
+      expect(controller.state.contrastGuardEnabled, isFalse);
+    },
+  );
+
+  test(
     'readability guard blocks an inaccessible theme without persisting',
     () async {
       final values = <String, String>{};

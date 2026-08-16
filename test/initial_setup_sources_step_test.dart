@@ -87,7 +87,7 @@ void main() {
     },
   );
 
-  testWidgets('setup asks before enabling anonymous choices or Discord', (
+  testWidgets('setup asks before enabling crash reports or Discord', (
     tester,
   ) async {
     final discord = await _pumpSetup(tester, const Size(1280, 720));
@@ -98,29 +98,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Privacy and Discord'), findsOneWidget);
-    expect(find.text('Keep off'), findsOneWidget);
-    expect(find.text('Enable live count'), findsOneWidget);
+    expect(find.text('Enable live count'), findsNothing);
+    expect(find.textContaining('live viewer'), findsNothing);
     expect(find.text('Do not send'), findsOneWidget);
     expect(find.text('Allow error reports'), findsOneWidget);
     final container = ProviderScope.containerOf(
       tester.element(find.byType(InitialSetupScreen)),
     );
     expect(
-      container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
-      isFalse,
-    );
-    expect(
       container
           .read(settingsPreferencesProvider)
           .anonymousCrashReportingEnabled,
       isFalse,
-    );
-
-    await tester.tap(find.text('Enable live count'));
-    await tester.pumpAndSettle();
-    expect(
-      container.read(settingsPreferencesProvider).anonymousUsageCountEnabled,
-      isTrue,
     );
 
     await tester.tap(find.text('Allow error reports'));

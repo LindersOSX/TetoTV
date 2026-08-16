@@ -14,6 +14,9 @@ import 'package:anime_tv/features/player/application/filler_episode_navigation.d
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/streaming/application/episode_discovery_prefetch_controller.dart';
+import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
@@ -72,10 +75,29 @@ class _DetailsContent extends ConsumerStatefulWidget {
 }
 
 class _DetailsContentState extends ConsumerState<_DetailsContent> {
+  static const _episodePrefetchDebounce = Duration(milliseconds: 300);
+
   int? _selectedEpisode;
   bool _savingSkipFiller = false;
+  int? _activePrefetchEpisode;
+  int? _lastCompletedPrefetchEpisode;
+  int? _requestedPrefetchEpisode;
+  bool _initialPrefetchStarted = false;
+  bool _initialPrefetchScheduled = false;
+  Timer? _prefetchDebounce;
+  EpisodeDiscoveryPrefetchHandle? _activePrefetch;
+  Future<void> _prefetchCancellation = Future<void>.value();
+  int _prefetchGeneration = 0;
 
   AnimeSummary get anime => widget.anime;
+
+  @override
+  void dispose() {
+    _prefetchGeneration++;
+    _prefetchDebounce?.cancel();
+    _cancelActivePrefetch();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -137,6 +159,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       1,
       knownEpisodes,
     );
+    _scheduleEpisodePrefetch(selectedEpisode);
     _EpisodeActions episodeActions({
       required bool autofocusPrimary,
     }) => _EpisodeActions(
@@ -532,6 +555,189 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     } finally {
       if (mounted) setState(() => _savingSkipFiller = false);
     }
+  }
+
+  void _scheduleEpisodePrefetch(int episode) {
+    if (_requestedPrefetchEpisode == episode) return;
+    _requestedPrefetchEpisode = episode;
+    _prefetchGeneration++;
+    _cancelActivePrefetch();
+    _prefetchDebounce?.cancel();
+    _prefetchDebounce = null;
+    if (_lastCompletedPrefetchEpisode == episode) return;
+
+    // Warm the initially selected episode as soon as details render. Later
+    // episode changes are debounced so holding a remote button only searches
+    // for the episode where the user stops.
+    if (!_initialPrefetchStarted) {
+      if (_initialPrefetchScheduled) return;
+      _initialPrefetchScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initialPrefetchScheduled = false;
+        if (!mounted) return;
+        final requestedEpisode = _requestedPrefetchEpisode;
+        if (requestedEpisode == null) return;
+        _startEpisodePrefetch(requestedEpisode);
+      });
+      return;
+    }
+
+    _prefetchDebounce = Timer(_episodePrefetchDebounce, () {
+      _prefetchDebounce = null;
+      if (!mounted || _requestedPrefetchEpisode != episode) return;
+      _startEpisodePrefetch(episode);
+    });
+  }
+
+  void _startEpisodePrefetch(int episode) {
+    if (!mounted ||
+        _activePrefetchEpisode == episode ||
+        _lastCompletedPrefetchEpisode == episode) {
+      return;
+    }
+    _initialPrefetchStarted = true;
+    _activePrefetchEpisode = episode;
+    final generation = _prefetchGeneration;
+    final cancellation = _prefetchCancellation;
+    unawaited(
+      _startEpisodePrefetchAfterCancellation(
+        anime,
+        episode,
+        generation,
+        cancellation,
+      ),
+    );
+  }
+
+  Future<void> _startEpisodePrefetchAfterCancellation(
+    AnimeSummary anime,
+    int episode,
+    int generation,
+    Future<void> cancellation,
+  ) async {
+    await cancellation;
+    if (!mounted ||
+        generation != _prefetchGeneration ||
+        _requestedPrefetchEpisode != episode) {
+      return;
+    }
+    await _prefetchEpisode(anime, episode, generation);
+    if (mounted &&
+        generation == _prefetchGeneration &&
+        _activePrefetch == null &&
+        _activePrefetchEpisode == episode) {
+      _activePrefetchEpisode = null;
+    }
+  }
+
+  void _cancelActivePrefetch() {
+    final handle = _activePrefetch;
+    _activePrefetch = null;
+    _activePrefetchEpisode = null;
+    if (handle == null) return;
+    final previousCancellation = _prefetchCancellation;
+    _prefetchCancellation = () async {
+      await previousCancellation;
+      try {
+        await handle.cancel();
+      } catch (_) {
+        // Discovery warming is fail-open and cancellation must not block the
+        // latest episode from starting.
+      }
+    }();
+  }
+
+  Future<void> _prefetchEpisode(
+    AnimeSummary anime,
+    int episode,
+    int generation,
+  ) async {
+    final settingsController = ref.read(settingsPreferencesProvider.notifier);
+    final torrentSourcesController = ref.read(
+      userTorrentSourcesControllerProvider.notifier,
+    );
+    final alternativeTitles = <String?>{
+      anime.titleEnglish,
+      anime.titleRomaji,
+      ...anime.synonyms,
+    }.whereType<String>().toSet()..remove(anime.title);
+    final reference = EpisodeReference(
+      anilistMediaId: anime.id,
+      malMediaId: anime.idMal,
+      year: anime.seasonYear,
+      title: anime.title,
+      alternativeTitles: alternativeTitles.toList(growable: false),
+      coverImageUrl: anime.coverImageUrl,
+      episode: episode,
+    );
+    try {
+      var preferences = ref.read(settingsPreferencesProvider);
+      if (!preferences.loaded) {
+        await settingsController.load();
+        if (!mounted ||
+            generation != _prefetchGeneration ||
+            _requestedPrefetchEpisode != episode) {
+          return;
+        }
+        preferences = ref.read(settingsPreferencesProvider);
+      }
+      // Start Web providers and already-restored torrent sources only after
+      // encrypted opt-in/opt-out choices have finished loading.
+      final initialHandle = ref.read(episodeDiscoveryPrefetcherProvider)(
+        reference,
+        preferences: preferences,
+      );
+      if (!mounted || generation != _prefetchGeneration) {
+        await initialHandle.cancel();
+        return;
+      }
+      _adoptPrefetch(initialHandle, episode, generation);
+      if (!preferences.debridStreamsEnabled ||
+          ref.read(userTorrentSourcesControllerProvider).loaded) {
+        return;
+      }
+      await torrentSourcesController.load();
+      if (!mounted ||
+          generation != _prefetchGeneration ||
+          _requestedPrefetchEpisode != episode) {
+        return;
+      }
+      final refreshedHandle = ref.read(episodeDiscoveryPrefetcherProvider)(
+        reference,
+        preferences: ref.read(settingsPreferencesProvider),
+      );
+      if (!mounted || generation != _prefetchGeneration) {
+        await refreshedHandle.cancel();
+        return;
+      }
+      _adoptPrefetch(refreshedHandle, episode, generation);
+    } catch (_) {
+      // Discovery warming is deliberately invisible and fail-open.
+    }
+  }
+
+  void _adoptPrefetch(
+    EpisodeDiscoveryPrefetchHandle handle,
+    int episode,
+    int generation,
+  ) {
+    final previous = _activePrefetch;
+    _activePrefetch = handle;
+    _activePrefetchEpisode = episode;
+    if (previous != null && !identical(previous, handle)) {
+      unawaited(previous.cancel());
+    }
+    unawaited(
+      handle.done.whenComplete(() {
+        if (mounted &&
+            generation == _prefetchGeneration &&
+            identical(_activePrefetch, handle)) {
+          _activePrefetch = null;
+          _activePrefetchEpisode = null;
+          _lastCompletedPrefetchEpisode = episode;
+        }
+      }),
+    );
   }
 
   Future<void> _openEpisodeWithFillerCheck(

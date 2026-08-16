@@ -17,8 +17,8 @@ void main() {
       'void dispose()',
       'Future<void> _loadDevicePreference',
     );
-    expect(router, contains('_usageReporter = ref.read('));
-    expect(routerDispose, contains('_usageReporter?.setStreaming(false)'));
+    expect(router, isNot(contains('anonymousUsageReporterProvider')));
+    expect(routerDispose, contains('playbackLease?.close()'));
     expect(routerDispose, isNot(contains('ref.')));
     expect(
       router,
@@ -134,6 +134,16 @@ void main() {
       source,
       contains('if (!_engineHandoffInProgress && !_playerReleasedForHandoff)'),
     );
+    final applySubtitle = _methodSlice(
+      source,
+      'Future<void> _applySubtitle',
+      'Future<void> _persistPlayback',
+    );
+    _expectInOrder(applySubtitle, const [
+      'SubtitleTrack.uri(subtitle',
+      'if (!_seriesPreferences.subtitleEnabled)',
+      '_player.setSubtitleTrack(SubtitleTrack.no())',
+    ]);
     expect(
       source,
       contains(
@@ -257,7 +267,7 @@ void main() {
     final discoveryRetry = _methodSlice(
       source,
       'void _scheduleTrackDiscoveryRetry',
-      'Future<void> _restoreResume',
+      'Future<bool> _restoreResume',
     );
     _expectInOrder(discoveryRetry, const [
       'if (!_canApplyTracksTo(controller)',
@@ -314,7 +324,31 @@ void main() {
       'Future<void> _runRestart',
       'Future<void> _trackControllerMutation',
     );
-    expect(restart, contains('await _disposeControllerAuthoritatively(old)'));
+    _expectInOrder(restart, const [
+      '_controllerPendingRelease = old',
+      'setState(() => _controller = null)',
+      'await WidgetsBinding.instance.endOfFrame',
+      'await _waitForControllerMutations()',
+      'await _disposeControllerAuthoritatively(old)',
+      '_installController(_createController(_source, mode))',
+    ]);
+    expect(source, contains('key: ObjectKey(controller)'));
+    expect(
+      source,
+      contains(
+        'if (controller == _controller && restored) _pendingResume = null',
+      ),
+    );
+    expect(
+      source,
+      contains('Keep _pendingResume intact'),
+      reason: 'a failed VLC seek must survive an immediate engine handoff',
+    );
+    expect(
+      source,
+      contains('vlcSubtitleTrackSignature'),
+      reason: 'CC waits for late embedded or external tracks',
+    );
 
     final vlcPlayer = _methodSlice(
       source,
@@ -398,6 +432,10 @@ void main() {
       contains('playbackResourcesReleased = playerViewReleased &&'),
     );
     expect(source, contains('STATUS_RELEASE_FAILED'));
+    expect(source, contains('pendingCaptionTrackPicker'));
+    expect(source, contains('waitForCaptionTracks(sourceButton)'));
+    expect(source, contains('unsupportedAudioWatchdog'));
+    expect(source, contains('UNSUPPORTED_AUDIO_GRACE_MS'));
     expect(source, contains('if (!preserveDiscordPresenceForEngineHandoff)'));
     expect(source, contains('suppressDiscordPresence = trustedLocalSource'));
     expect(source, contains('R.string.tetotv_player_local_media3_only'));
@@ -459,6 +497,160 @@ void main() {
       'case NativePlayerReturnNavigation.none:',
     ]);
   });
+
+  test(
+    'next-episode preparation follows live player source and audio state',
+    () {
+      final mpv = _read(
+        'lib/features/player/presentation/tv_player_screen.dart',
+      );
+      final vlc = _read(
+        'lib/features/player/presentation/vlc_tv_player_screen.dart',
+      );
+      final nativeFlutter = _read(
+        'lib/features/player/presentation/native_media3_player_screen.dart',
+      );
+      final bridge = _read('lib/core/platform/android_tv_bridge.dart');
+      final mainActivity = _read(
+        'android/app/src/main/kotlin/dev/animetv/anime_tv/MainActivity.kt',
+      );
+      final media3 = _read(
+        'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+        'Media3PlayerActivity.kt',
+      );
+
+      for (final player in [mpv, vlc, nativeFlutter]) {
+        expect(player, contains('_nextEpisodePreparationRequest()'));
+        expect(
+          player,
+          contains('currentRequest: _nextEpisodePreparationRequest()'),
+        );
+        expect(player, contains('final generation = _prewarmRetry.generation'));
+        expect(player, contains('_prewarmRetry.isCurrent(generation)'));
+        expect(player, contains('prepared != null'));
+        expect(player, contains('_invalidateNextEpisodePreparation();'));
+        expect(player, contains('preparation.warmWithOutcome('));
+        expect(player, contains('outcome.isTerminal'));
+        expect(player, contains('_prewarmRetry.recordTerminal(generation)'));
+        expect(player, contains('_prewarmRetry.recordFailure('));
+        expect(
+          player,
+          contains('_nextEpisodePreparation.hasReady('),
+          reason: 'local readiness must not outlive the controller lease TTL',
+        );
+        expect(player, contains('NextEpisodePrewarmSettingsKey.fromSettings('));
+        expect(player, contains('if (!_preserveNextEpisodePreparation &&'));
+        expect(player, contains('_nextEpisodePreparation.abandon('));
+        expect(player, contains('_preserveNextEpisodePreparation = true;'));
+        expect(
+          RegExp(
+            r'_preserveNextEpisodePreparation = true;[\s\S]{0,300}'
+            r'preparedNextEpisodePlayerLocation\(prepared\)',
+          ).hasMatch(player),
+          isTrue,
+          reason: 'prepared-next replacement must transfer cache ownership',
+        );
+      }
+
+      final mpvExit = _methodSlice(
+        mpv,
+        'Future<void> _confirmExit()',
+        '@override\n  void dispose()',
+      );
+      final vlcExit = _methodSlice(
+        vlc,
+        'Future<void> _confirmExit()',
+        '@override\n  void dispose()',
+      );
+      expect(mpvExit, isNot(contains('_preserveNextEpisodePreparation')));
+      expect(vlcExit, isNot(contains('_preserveNextEpisodePreparation')));
+
+      final mpvEngineSwitch = _methodSlice(
+        mpv,
+        'Future<void> _fallbackToVlc',
+        'NextEpisodePreparationRequest _nextEpisodePreparationRequest',
+      );
+      _expectInOrder(mpvEngineSwitch, const [
+        '_preserveNextEpisodePreparation = true',
+        'widget.onUseVlc(',
+      ]);
+      final vlcEngineSwitch = _methodSlice(
+        vlc,
+        'Future<void> _handoffTo',
+        'Future<void> _openPlayerPicker',
+      );
+      _expectInOrder(vlcEngineSwitch, const [
+        '_preserveNextEpisodePreparation = true',
+        'callback(selected, position, stream, release, directStreams)',
+      ]);
+      final nativeEngineSwitch = _methodSlice(
+        nativeFlutter,
+        'void _handoffToMpv()',
+        'void _handoffToVlc()',
+      );
+      _expectInOrder(nativeEngineSwitch, const [
+        '_preserveNextEpisodePreparation = true',
+        'widget.onUseMpv(',
+      ]);
+      expect(
+        mpv,
+        contains('playerAudioIntentChanged('),
+        reason: 'MPV manual exact-language changes must replace stale prep',
+      );
+      expect(
+        vlc,
+        contains('final manualAudioIntentChanged ='),
+        reason: 'VLC manual exact-language changes must replace stale prep',
+      );
+
+      final nativeRun = _methodSlice(
+        nativeFlutter,
+        'Future<void> _run()',
+        'Future<int?> _resolveSkipMalMediaId',
+      );
+      expect(nativeRun, isNot(contains('unawaited(_prewarmNextEpisode())')));
+      expect(nativeFlutter, contains('.nativePlaybackProgress'));
+      expect(
+        nativeFlutter,
+        contains('progress.checkpointKey != _checkpointKey'),
+      );
+      expect(nativeFlutter, contains('if (!progress.isPlaying) return;'));
+      expect(nativeFlutter, contains('progress.audioPreferenceSet'));
+      expect(nativeFlutter, contains('_persistNativeAudioSelection(progress)'));
+      expect(
+        nativeFlutter,
+        contains('database.saveSeriesPreferences(_mediaId, next)'),
+      );
+      expect(nativeFlutter, contains('currentRequest: previousRequest'));
+      expect(
+        nativeFlutter,
+        contains(
+          'shouldPrepareNextEpisode(position: position, duration: duration)',
+        ),
+      );
+      expect(bridge, contains("case 'nativePlaybackProgress':"));
+      expect(
+        mainActivity,
+        contains('NativePlayerProgressBridge.attach(channel)'),
+      );
+      expect(
+        mainActivity,
+        contains('NativePlayerProgressBridge.detach(channel)'),
+      );
+      expect(media3, contains('publishPlaybackProgress()'));
+      expect(
+        media3,
+        contains('publishPlaybackProgress(includeManualAudioSelection = true)'),
+      );
+      expect(media3, contains('"isPlaying" to isPlaying'));
+      expect(media3, contains('"audioPreferenceSet" to audioPreferenceSet'));
+      expect(
+        media3,
+        contains('publishPlaybackProgress(isPlayingOverride = false)'),
+      );
+      expect(media3, contains('"nativePlaybackProgress"'));
+    },
+  );
 
   test('web streams wait for stable duration before loading skip data', () {
     final mpv = _read('lib/features/player/presentation/tv_player_screen.dart');

@@ -12,6 +12,7 @@ import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
+import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
@@ -20,6 +21,7 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -82,6 +84,43 @@ bool shouldRedirectMedia3ToMpv({
         releaseRequiresSoftwareDecoder(release) ||
         preferences.subtitleDelayMs != 0 ||
         preferences.audioDelayMs != 0);
+
+/// Persists an explicit native audio choice before invalidating preparation.
+///
+/// Keeping this orchestration platform-independent makes the Media3 event
+/// contract behaviorally testable: a duplicate event is inert, while a real
+/// manual change saves intent, closes stale preparation, and then rewarms.
+Future<bool> applyNativeAudioPreferenceSelection({
+  required NativePlaybackProgress progress,
+  required SeriesPlaybackPreferences currentPreferences,
+  required Future<void> Function(SeriesPlaybackPreferences next) save,
+  required void Function(SeriesPlaybackPreferences next) commit,
+  required Future<void> Function() abandonStalePreparation,
+  required void Function() invalidatePreparation,
+}) async {
+  if (!progress.audioPreferenceSet) return false;
+  final audioLanguage = canonicalPlayerTrackLanguage(
+    language: progress.audioLanguage,
+  );
+  if (audioLanguage.isEmpty) return false;
+  final nextPreferences = currentPreferences.copyWith(
+    audioLanguage: audioLanguage,
+    audioPreferenceSet: true,
+  );
+  if (!playerAudioIntentChanged(
+    previousLanguage: currentPreferences.audioLanguage,
+    previousPreferenceSet: currentPreferences.audioPreferenceSet,
+    nextLanguage: nextPreferences.audioLanguage,
+    nextPreferenceSet: nextPreferences.audioPreferenceSet,
+  )) {
+    return false;
+  }
+  await save(nextPreferences);
+  commit(nextPreferences);
+  await abandonStalePreparation();
+  invalidatePreparation();
+  return true;
+}
 
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
@@ -147,8 +186,10 @@ class _NativeMedia3PlayerScreenState
   late String _source;
   late ReleaseCandidate _release;
   late StreamReady _currentStream;
+  late final NextEpisodePreparationController _nextEpisodePreparation;
   List<PlaybackStreamOption> _directStreamOptions = const [];
   StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
+  StreamSubscription<NativePlaybackProgress>? _nativeProgressSubscription;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   PlaybackAudioPreference _globalAudioPreference = PlaybackAudioPreference.dub;
   Duration _resumePosition = Duration.zero;
@@ -161,6 +202,16 @@ class _NativeMedia3PlayerScreenState
   final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
   bool _streamFailoverInProgress = false;
   bool _running = false;
+  bool _prewarmingNextEpisode = false;
+  bool _prewarmedNextEpisode = false;
+  final NextEpisodePrewarmRetryPolicy _prewarmRetry =
+      NextEpisodePrewarmRetryPolicy();
+  late NextEpisodePrewarmSettingsKey _prewarmSettingsKey;
+  Duration _nativePlaybackPosition = Duration.zero;
+  Duration _nativePlaybackDuration = Duration.zero;
+  bool _nativePlaybackIsPlaying = false;
+  Future<void> _nativeAudioSelectionOperation = Future.value();
+  bool _preserveNextEpisodePreparation = false;
   bool _nativeReleaseFailed = false;
   int? _resolvedMalMediaId;
   String _status = 'Opening the native TV player…';
@@ -169,6 +220,7 @@ class _NativeMedia3PlayerScreenState
   int get _mediaId =>
       widget.anilistMediaId ?? widget.launch.episode.anilistMediaId;
   int get _episodeNumber => widget.episode ?? widget.launch.episode.episode;
+  String get _checkpointKey => '$_mediaId:$_episodeNumber';
   int? get _malMediaId =>
       _resolvedMalMediaId ??
       widget.malMediaId ??
@@ -179,9 +231,100 @@ class _NativeMedia3PlayerScreenState
             _globalAudioPreference
       : _globalAudioPreference;
 
+  void _onNativePlaybackProgress(NativePlaybackProgress progress) {
+    if (!mounted || progress.checkpointKey != _checkpointKey) return;
+    _nativePlaybackPosition = progress.position;
+    if (progress.duration > Duration.zero) {
+      _nativePlaybackDuration = progress.duration;
+    }
+    _nativePlaybackIsPlaying = progress.isPlaying;
+    if (progress.audioPreferenceSet) {
+      _nativeAudioSelectionOperation = _nativeAudioSelectionOperation.then(
+        (_) => _persistNativeAudioSelection(progress),
+      );
+      unawaited(_nativeAudioSelectionOperation);
+      return;
+    }
+    if (!progress.isPlaying) return;
+    _maybePrewarmNextEpisode(
+      position: progress.position,
+      duration: _nativePlaybackDuration,
+    );
+  }
+
+  Future<void> _persistNativeAudioSelection(
+    NativePlaybackProgress progress,
+  ) async {
+    if (!mounted) return;
+    final previousPreferences = _preferences;
+    final previousRequest = _nextEpisodePreparationRequest();
+    final database = ref.read(tetoTvDatabaseProvider);
+    var changed = false;
+    try {
+      changed = await applyNativeAudioPreferenceSelection(
+        progress: progress,
+        currentPreferences: previousPreferences,
+        save: (next) => database.saveSeriesPreferences(_mediaId, next),
+        commit: (next) {
+          if (mounted) _preferences = next;
+        },
+        abandonStalePreparation: () => _nextEpisodePreparation.abandon(
+          previousRequest.mediaId,
+          previousRequest.currentEpisode,
+          currentRequest: previousRequest,
+        ),
+        invalidatePreparation: () {
+          if (mounted) _invalidateNextEpisodePreparation();
+        },
+      );
+    } catch (_) {
+      return;
+    }
+    if (!changed && mounted && _nativePlaybackIsPlaying) {
+      _maybePrewarmNextEpisode(
+        position: _nativePlaybackPosition,
+        duration: _nativePlaybackDuration,
+      );
+    }
+  }
+
+  void _handoffToMpv() {
+    if (!mounted) return;
+    _preserveNextEpisodePreparation = true;
+    try {
+      widget.onUseMpv(_resumePosition, _currentStream, _release);
+    } catch (_) {
+      _preserveNextEpisodePreparation = false;
+      rethrow;
+    }
+  }
+
+  void _handoffToVlc() {
+    if (!mounted) return;
+    _preserveNextEpisodePreparation = true;
+    try {
+      widget.onUseVlc(_resumePosition, _currentStream, _release);
+    } catch (_) {
+      _preserveNextEpisodePreparation = false;
+      rethrow;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _nextEpisodePreparation = ref.read(
+      nextEpisodePreparationControllerProvider,
+    );
+    _prewarmSettingsKey = NextEpisodePrewarmSettingsKey.fromSettings(
+      ref.read(settingsPreferencesProvider),
+    );
+    ref.listenManual(settingsPreferencesProvider, (_, next) {
+      final key = NextEpisodePrewarmSettingsKey.fromSettings(next);
+      if (key == _prewarmSettingsKey) return;
+      _prewarmSettingsKey = key;
+      _invalidateNextEpisodePreparation();
+    });
     _source = widget.source;
     _release = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
@@ -189,6 +332,10 @@ class _NativeMedia3PlayerScreenState
       PlaybackStreamOption(stream: _currentStream, release: _release),
       ...widget.launch.directAlternatives,
     ], const []);
+    _nativeProgressSubscription = AndroidTvBridge
+        .instance
+        .nativePlaybackProgress
+        .listen(_onNativePlaybackProgress);
     unawaited(_startWebSourceDiscovery());
     _resolvedMalMediaId = widget.malMediaId ?? widget.launch.episode.malMediaId;
     _startFromBeginning = widget.launch.episode.startFromBeginning;
@@ -215,7 +362,7 @@ class _NativeMedia3PlayerScreenState
         release: _release,
       )) {
         if (mounted) {
-          widget.onUseMpv(_resumePosition, _currentStream, _release);
+          _handoffToMpv();
         }
         return;
       }
@@ -231,7 +378,7 @@ class _NativeMedia3PlayerScreenState
         final result = await AndroidTvBridge.instance.startNativePlayer(
           source: Uri.parse(_source),
           title: widget.title,
-          checkpointKey: '$_mediaId:$_episodeNumber',
+          checkpointKey: _checkpointKey,
           releaseName: _release.releaseName,
           streamLabel:
               _currentStream.providerName ??
@@ -290,6 +437,9 @@ class _NativeMedia3PlayerScreenState
             ? Duration.zero
             : result.position;
         _resumeUpdatedAt = DateTime.now();
+        _nativePlaybackPosition = result.position;
+        _nativePlaybackDuration = result.duration;
+        _nativePlaybackIsPlaying = false;
         if (returnNavigation == NativePlayerReturnNavigation.previousRoute) {
           await runBestEffortNativePlayerExitBookkeeping([
             () => _persistResult(result),
@@ -335,13 +485,13 @@ class _NativeMedia3PlayerScreenState
           case 'use_vlc':
           case 'fallback_vlc':
             if (mounted) {
-              widget.onUseVlc(_resumePosition, _currentStream, _release);
+              _handoffToVlc();
             }
             return;
           case 'use_mpv':
           case 'fallback_mpv':
             if (mounted) {
-              widget.onUseMpv(_resumePosition, _currentStream, _release);
+              _handoffToMpv();
             }
             return;
           case 'error':
@@ -365,12 +515,12 @@ class _NativeMedia3PlayerScreenState
             // MPV keeps libass and unusual-codec support as the second engine.
             // VLC remains available manually from MPV or on a future retry.
             if (mounted) {
-              widget.onUseMpv(_resumePosition, _currentStream, _release);
+              _handoffToMpv();
             }
             return;
           case 'unsupported':
             if (mounted) {
-              widget.onUseMpv(_resumePosition, _currentStream, _release);
+              _handoffToMpv();
             }
             return;
           case 'release_failed':
@@ -451,6 +601,7 @@ class _NativeMedia3PlayerScreenState
       ),
     );
     await widget.onStreamAdopted(option.stream, option.release);
+    _invalidateNextEpisodePreparation();
   }
 
   Future<PlaybackStreamOption?> _preflightDirectStream(
@@ -581,6 +732,9 @@ class _NativeMedia3PlayerScreenState
     if (!mounted) return;
     final database = ref.read(tetoTvDatabaseProvider);
     final settingsController = ref.read(settingsPreferencesProvider.notifier);
+    final previousAudioPreference = _effectiveAudioPreference;
+    final previousAudioLanguage = _preferences.audioLanguage;
+    final previousAudioPreferenceSet = _preferences.audioPreferenceSet;
     final normalizedSize = result.subtitleSize?.clamp(18, 60).toDouble();
     final audioLanguage = canonicalPlayerTrackLanguage(
       language: result.audioLanguage,
@@ -631,6 +785,15 @@ class _NativeMedia3PlayerScreenState
         _preferences.toJson().toString()) {
       _preferences = nextPreferences;
       await database.saveSeriesPreferences(_mediaId, _preferences);
+      if (playerAudioIntentChanged(
+            previousLanguage: previousAudioLanguage,
+            previousPreferenceSet: previousAudioPreferenceSet,
+            nextLanguage: _preferences.audioLanguage,
+            nextPreferenceSet: _preferences.audioPreferenceSet,
+          ) ||
+          _effectiveAudioPreference != previousAudioPreference) {
+        _invalidateNextEpisodePreparation();
+      }
     }
     if (result.subtitleBackgroundColor case final backgroundColor?) {
       await settingsController.setCaptionBackgroundColor(backgroundColor);
@@ -796,6 +959,7 @@ class _NativeMedia3PlayerScreenState
             _resumePosition = resumePosition;
             _automaticStreamAttempts++;
             await widget.onStreamAdopted(option.stream, option.release);
+            _invalidateNextEpisodePreparation();
             return true;
           },
         );
@@ -832,6 +996,7 @@ class _NativeMedia3PlayerScreenState
           _currentStream = ready;
           _automaticStreamAttempts++;
           await widget.onStreamAdopted(ready, candidate);
+          _invalidateNextEpisodePreparation();
           return true;
         }
         return false;
@@ -997,20 +1162,146 @@ class _NativeMedia3PlayerScreenState
     await _playNextEpisode();
   }
 
+  NextEpisodePreparationRequest _nextEpisodePreparationRequest() =>
+      NextEpisodePreparationRequest(
+        currentLaunch: PlaybackLaunch(
+          stream: _currentStream,
+          episode: widget.launch.episode,
+          selectedRelease: _release,
+          alternatives: widget.launch.alternatives,
+          directAlternatives: _directStreamOptions,
+        ),
+        seriesPreferences: _preferences,
+        debridService: widget.debridService,
+      );
+
+  void _maybePrewarmNextEpisode({
+    required Duration position,
+    required Duration duration,
+  }) {
+    if (!mounted ||
+        !_nativePlaybackIsPlaying ||
+        !_preferences.autoplayNextEpisode ||
+        widget.episode == null ||
+        !shouldPrepareNextEpisode(position: position, duration: duration)) {
+      return;
+    }
+    if (_prewarmedNextEpisode) {
+      if (_nextEpisodePreparation.hasReady(_nextEpisodePreparationRequest())) {
+        return;
+      }
+      _prewarmedNextEpisode = false;
+      _prewarmRetry.resetGeneration();
+    }
+    if (_prewarmingNextEpisode || !_prewarmRetry.canAttempt(DateTime.now())) {
+      return;
+    }
+    unawaited(_prewarmNextEpisode());
+  }
+
+  void _invalidateNextEpisodePreparation() {
+    _prewarmRetry.resetGeneration();
+    _prewarmingNextEpisode = false;
+    _prewarmedNextEpisode = false;
+    if (!_nativePlaybackIsPlaying) return;
+    _maybePrewarmNextEpisode(
+      position: _nativePlaybackPosition,
+      duration: _nativePlaybackDuration,
+    );
+  }
+
+  Future<void> _prewarmNextEpisode() async {
+    if (!mounted ||
+        !_nativePlaybackIsPlaying ||
+        _prewarmingNextEpisode ||
+        _prewarmedNextEpisode ||
+        !_preferences.autoplayNextEpisode ||
+        widget.episode == null) {
+      return;
+    }
+    final generation = _prewarmRetry.generation;
+    _prewarmingNextEpisode = true;
+    final preparation = ref.read(nextEpisodePreparationControllerProvider);
+    try {
+      final outcome = await preparation.warmWithOutcome(
+        _nextEpisodePreparationRequest(),
+      );
+      final prepared = outcome.prepared;
+      if (!mounted || !_prewarmRetry.isCurrent(generation)) return;
+      _prewarmedNextEpisode = prepared != null;
+      if (prepared == null) {
+        if (outcome.isTerminal) {
+          _prewarmRetry.recordTerminal(generation);
+        } else {
+          _prewarmRetry.recordFailure(generation, DateTime.now());
+        }
+      } else {
+        _prewarmRetry.recordSuccess(generation);
+      }
+    } catch (_) {
+      // Invisible preparation must never affect current native playback.
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarmRetry.recordFailure(generation, DateTime.now());
+      }
+    } finally {
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarmingNextEpisode = false;
+      }
+    }
+  }
+
   Future<void> _playNextEpisode() async {
     if (!mounted || !_nextEpisodeHandoff.tryEnter()) return;
     var routeStarted = false;
     try {
-      final catalog = ref.read(catalogClientProvider);
-      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final unavailableNoticeController = ref.read(
         fillerUnavailableNotifiedSeriesProvider.notifier,
       );
+      final preparation = ref.read(nextEpisodePreparationControllerProvider);
+      final prepared = await preparation.take(
+        _mediaId,
+        _episodeNumber,
+        currentRequest: _nextEpisodePreparationRequest(),
+      );
+      if (prepared != null) {
+        if (!mounted) {
+          await prepared.launch.stream.playbackLease?.close();
+          return;
+        }
+        final requestedEpisode = _episodeNumber + 1;
+        if (prepared.fillerDecision.dataUnavailable &&
+            consumeFillerUnavailableNotice(
+              unavailableNoticeController,
+              _mediaId,
+            )) {
+          showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+        }
+        unawaited(showFillerSkipNotification(context, prepared.fillerDecision));
+        if (!mounted) {
+          await prepared.launch.stream.playbackLease?.close();
+          return;
+        }
+        _preserveNextEpisodePreparation = true;
+        try {
+          context.pushReplacement(
+            preparedNextEpisodePlayerLocation(prepared),
+            extra: prepared.launch,
+          );
+          routeStarted = true;
+          return;
+        } catch (_) {
+          _preserveNextEpisodePreparation = false;
+          await prepared.launch.stream.playbackLease?.close();
+        }
+      }
+      if (!mounted) return;
+      final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final skipFillerEpisodes = _preferences.skipFillerEpisodes;
       final details = await catalog.details(_mediaId);
       if (!mounted) return;
       final requestedEpisode = _episodeNumber + 1;
-      if (details.episodes != null && requestedEpisode > details.episodes!) {
+      if (!isEpisodeAvailableForPlayback(details, requestedEpisode)) {
         if (mounted && context.canPop()) context.pop();
         return;
       }
@@ -1027,6 +1318,12 @@ class _NativeMedia3PlayerScreenState
         skipEnabled: skipFillerEpisodes,
       );
       if (!mounted) return;
+      final nextEpisode = decision.episode;
+      if (nextEpisode != null &&
+          !isEpisodeAvailableForPlayback(details, nextEpisode)) {
+        if (context.canPop()) context.pop();
+        return;
+      }
       if (decision.dataUnavailable &&
           consumeFillerUnavailableNotice(
             unavailableNoticeController,
@@ -1034,16 +1331,15 @@ class _NativeMedia3PlayerScreenState
           )) {
         showFillerDataUnavailableNotice(context, episode: requestedEpisode);
       }
-      await showFillerSkipNotification(context, decision);
+      unawaited(showFillerSkipNotification(context, decision));
       if (!mounted) return;
-      if (decision.episode == null) {
+      if (nextEpisode == null) {
         setState(() {
           _status = 'No non-filler episodes remain';
           _diagnostic = 'Turn off Skip filler on the series page to play them.';
         });
         return;
       }
-      final nextEpisode = decision.episode!;
       if (!mounted) return;
       final preferredProvider = _release.provider?.trim();
       final preferredSourceId = _release.sourceId.trim();
@@ -1084,6 +1380,17 @@ class _NativeMedia3PlayerScreenState
 
   @override
   void dispose() {
+    if (!_preserveNextEpisodePreparation && widget.episode != null) {
+      final request = _nextEpisodePreparationRequest();
+      unawaited(
+        _nextEpisodePreparation.abandon(
+          request.mediaId,
+          request.currentEpisode,
+          currentRequest: request,
+        ),
+      );
+    }
+    unawaited(_nativeProgressSubscription?.cancel());
     unawaited(_sourceDiscoverySubscription?.cancel());
     super.dispose();
   }
@@ -1171,20 +1478,12 @@ class _NativeMedia3PlayerScreenState
                 ],
                 if (!_nativeReleaseFailed) ...[
                   OutlinedButton(
-                    onPressed: () => widget.onUseMpv(
-                      _resumePosition,
-                      _currentStream,
-                      _release,
-                    ),
+                    onPressed: _handoffToMpv,
                     child: const Text('Use MPV compatibility player'),
                   ),
                   const SizedBox(height: 10),
                   TextButton(
-                    onPressed: () => widget.onUseVlc(
-                      _resumePosition,
-                      _currentStream,
-                      _release,
-                    ),
+                    onPressed: _handoffToVlc,
                     child: const Text('Use VLC software player'),
                   ),
                 ],

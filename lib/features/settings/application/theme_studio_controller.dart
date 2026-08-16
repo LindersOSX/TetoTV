@@ -56,6 +56,28 @@ final themeStudioControllerProvider =
       return controller;
     });
 
+/// Restores the saved palette before Flutter builds the first app frame.
+///
+/// The regular provider still loads lazily for isolated widgets and tests, but
+/// production startup overrides it with this already-loaded controller. That
+/// prevents the default palette from being painted while secure storage is
+/// still returning a custom theme.
+Future<ThemeStudioController> preloadThemeStudioController({
+  FlutterSecureStorage storage = const FlutterSecureStorage(),
+  Future<String?> Function(String key)? readValue,
+  Future<void> Function(String key, String value)? writeValue,
+  Future<void> Function(String key)? deleteValue,
+}) async {
+  final controller = ThemeStudioController(
+    storage,
+    readValue: readValue,
+    writeValue: writeValue,
+    deleteValue: deleteValue,
+  );
+  await controller.load();
+  return controller;
+}
+
 class ThemeStudioController extends StateNotifier<ThemeStudioState> {
   ThemeStudioController(
     this._storage, {

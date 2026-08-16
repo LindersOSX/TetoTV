@@ -64,9 +64,6 @@ const forwardedForMode = selfTest
     : process.env.TRUST_PROXY === "1"
       ? "rightmost"
       : "none";
-const appPresenceTtlMs = 3 * 60 * 1000;
-const appPresenceHeartbeatSeconds = 45;
-const maxAppPresenceSessions = 10_000;
 const crashBotUrl = normalizeCrashBotUrl(
   process.env.CRASH_REPORT_BOT_URL ||
     (selfTest ? "https://bot.example.com/crash-reports" : ""),
@@ -80,7 +77,6 @@ const codes = new Map();
 const sourcePairings = new Map();
 const sourceCodes = new Map();
 const sourceReceipts = new Map();
-const appPresenceSessions = new Map();
 const rateLimits = new Map();
 let nextRateLimitCleanupAt = 0;
 
@@ -201,7 +197,7 @@ function privacyPage(response) {
     response,
     200,
     `<h1>TetoTV privacy disclosure</h1>
-     <p><small>Effective August 14, 2026</small></p>
+     <p><small>Effective August 15, 2026</small></p>
      <p>TetoTV is an independent Android application. It has no advertising or analytics SDK, no TetoTV account system, and does not sell personal data.</p>
 
      <h2>Data kept on the device</h2>
@@ -219,10 +215,6 @@ function privacyPage(response) {
      <p>Phone-assisted source entry keeps submitted URLs in volatile memory for at most ten minutes after submission. The URLs are deleted when the authenticated app acknowledges local processing or the session expires. A count-only confirmation can remain for at most another ten minutes.</p>
      <p>Rate limiting keeps pseudonymous namespace-and-address hashes for roughly one minute. App updates do not pass through this broker; TetoTV requests anonymous release metadata and signed APK assets directly from the channel's public GitHub repository.</p>
      <p>The hosting provider may independently process IP addresses, request metadata, opaque pairing or receipt IDs, and OAuth callback parameters in operational access logs. TetoTV does not use this data for advertising or cross-service tracking.</p>
-
-     <h2>Anonymous live activity count</h2>
-     <p>Anonymous live counting is disabled by default and requires an explicit choice during first-time setup or in Settings. When enabled, TetoTV creates a random per-launch token that is kept only in app and broker memory. It reports only whether that app session is active or currently playing video. It never reports the show, episode, account, device identifier, stream provider, or URL.</p>
-     <p>Sessions expire after about three minutes without a heartbeat and are removed when the app opts out or closes normally. Only aggregate active and streaming counts are public. The hosting provider may process IP addresses for short-lived rate limiting and ordinary access logs.</p>
 
      <h2>Diagnostics and choices</h2>
      <p><strong>Anonymous crash reporting is disabled by default.</strong> First-time setup and Settings both let the user explicitly enable or disable it. When enabled, unexpected handled app errors and unhandled crashes can be reported. TetoTV sends only the app version/build, crash category, Android version, CPU architecture, TV-or-phone class, time, and a bounded redacted technical error/stack trace. It does not intentionally send the show, episode, account, device or installation identifier, source/provider, URL, credential, playback history, or full diagnostics database.</p>
@@ -310,86 +302,6 @@ function cleanup() {
       if (pairing.receiptToken) sourceReceipts.delete(pairing.receiptToken);
     }
   }
-  for (const [tokenHash, session] of appPresenceSessions) {
-    if (session.expiresAt <= now) appPresenceSessions.delete(tokenHash);
-  }
-}
-
-function presenceTokenHash(value) {
-  return digest(value).toString("base64url");
-}
-
-function bearerToken(request) {
-  const authorization = String(request.headers.authorization || "");
-  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,128})$/);
-  return match?.[1] || "";
-}
-
-async function createAppPresenceSession(request, response) {
-  await drainBody(request);
-  cleanup();
-  if (appPresenceSessions.size >= maxAppPresenceSessions) {
-    return json(
-      response,
-      503,
-      { error: "presence_capacity_reached" },
-      { "Retry-After": "60" },
-    );
-  }
-  const token = randomToken(32);
-  appPresenceSessions.set(presenceTokenHash(token), {
-    state: "active",
-    expiresAt: Date.now() + appPresenceTtlMs,
-  });
-  return json(response, 201, {
-    session_token: token,
-    expires_in: Math.floor(appPresenceTtlMs / 1000),
-    heartbeat_interval: appPresenceHeartbeatSeconds,
-  });
-}
-
-async function updateAppPresenceSession(request, response) {
-  const token = bearerToken(request);
-  if (!token) return json(response, 401, { error: "invalid_session" });
-  const body = await readJson(request, { requireBody: true });
-  if (
-    !body ||
-    typeof body !== "object" ||
-    Array.isArray(body) ||
-    Object.keys(body).length !== 1 ||
-    (body.state !== "active" && body.state !== "streaming")
-  ) {
-    throw new RequestInputError(400, "Invalid presence state.");
-  }
-  cleanup();
-  const session = appPresenceSessions.get(presenceTokenHash(token));
-  if (!session) return json(response, 401, { error: "invalid_session" });
-  session.state = body.state;
-  session.expiresAt = Date.now() + appPresenceTtlMs;
-  response.writeHead(204, { "Cache-Control": "no-store" });
-  response.end();
-}
-
-async function closeAppPresenceSession(request, response) {
-  await drainBody(request);
-  const token = bearerToken(request);
-  if (!token) return json(response, 401, { error: "invalid_session" });
-  appPresenceSessions.delete(presenceTokenHash(token));
-  response.writeHead(204, { "Cache-Control": "no-store" });
-  response.end();
-}
-
-function appPresenceSummary(response) {
-  cleanup();
-  let streaming = 0;
-  for (const session of appPresenceSessions.values()) {
-    if (session.state === "streaming") streaming += 1;
-  }
-  return json(response, 200, {
-    active: appPresenceSessions.size,
-    streaming,
-    ttl_seconds: Math.floor(appPresenceTtlMs / 1000),
-  });
 }
 
 function crashReportingConfigured() {
@@ -1341,68 +1253,11 @@ const server = createServer(
         },
         source_pairing: true,
         source_pairing_version: 2,
-        app_presence: true,
         crash_reporting: crashReportingConfigured(),
       });
     }
     if (request.method === "GET" && url.pathname === "/privacy") {
       return privacyPage(response);
-    }
-    if (
-      request.method === "POST" &&
-      url.pathname === "/v1/app-presence/sessions"
-    ) {
-      if (rateLimited(request, 10, "presence-create")) {
-        return json(
-          response,
-          429,
-          { error: "rate_limited" },
-          { "Retry-After": "60" },
-        );
-      }
-      return await createAppPresenceSession(request, response);
-    }
-    if (
-      request.method === "PUT" &&
-      url.pathname === "/v1/app-presence/sessions/current"
-    ) {
-      if (rateLimited(request, 10, "presence-heartbeat")) {
-        return json(
-          response,
-          429,
-          { error: "rate_limited" },
-          { "Retry-After": "60" },
-        );
-      }
-      return await updateAppPresenceSession(request, response);
-    }
-    if (
-      request.method === "DELETE" &&
-      url.pathname === "/v1/app-presence/sessions/current"
-    ) {
-      if (rateLimited(request, 10, "presence-close")) {
-        return json(
-          response,
-          429,
-          { error: "rate_limited" },
-          { "Retry-After": "60" },
-        );
-      }
-      return await closeAppPresenceSession(request, response);
-    }
-    if (
-      request.method === "GET" &&
-      url.pathname === "/v1/app-presence/summary"
-    ) {
-      if (rateLimited(request, 60, "presence-summary")) {
-        return json(
-          response,
-          429,
-          { error: "rate_limited" },
-          { "Retry-After": "60" },
-        );
-      }
-      return appPresenceSummary(response);
     }
     if (request.method === "POST" && url.pathname === "/v1/crash-reports") {
       if (rateLimited(request, 4, "anonymous-crash-report")) {
@@ -1567,51 +1422,6 @@ server.listen(port, async () => {
       const health = await healthResponse.json();
       const privacyResponse = await fetch(`http://127.0.0.1:${port}/privacy`);
       const privacyBody = await privacyResponse.text();
-      const presenceCreateResponse = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/sessions`,
-        { method: "POST" },
-      );
-      const presenceSession = await presenceCreateResponse.json();
-      const presenceBefore = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/summary`,
-      ).then((response) => response.json());
-      const presenceHeartbeatResponse = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${presenceSession.session_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ state: "streaming" }),
-        },
-      );
-      const presenceAfter = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/summary`,
-      ).then((response) => response.json());
-      const invalidPresenceResponse = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${"x".repeat(43)}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ state: "active" }),
-        },
-      );
-      const presenceCloseResponse = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/sessions/current`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${presenceSession.session_token}`,
-          },
-        },
-      );
-      const presenceClosed = await fetch(
-        `http://127.0.0.1:${port}/v1/app-presence/summary`,
-      ).then((response) => response.json());
       const crashReportResponse = await fetch(
         `http://127.0.0.1:${port}/v1/crash-reports`,
         {
@@ -2051,7 +1861,7 @@ server.listen(port, async () => {
           ?.includes("default-src 'none'") ||
         !privacyBody.includes("TetoTV privacy disclosure") ||
         !privacyBody.includes("at most ten minutes") ||
-        !privacyBody.includes("Effective August 14, 2026") ||
+        !privacyBody.includes("Effective August 15, 2026") ||
         !privacyBody.includes("Android's system file picker") ||
         !privacyBody.includes("Jellyfin and Plex traffic do not pass through") ||
         !privacyBody.includes("Filler labels and the optional per-series Skip filler feature") ||
@@ -2067,14 +1877,12 @@ server.listen(port, async () => {
         !privacyBody.includes("broker is not involved in Discord linking") ||
         !privacyBody.includes("disabled by default") ||
         !privacyBody.includes("https://discord.gg/juC6k7d4WY") ||
-        !privacyBody.includes("Anonymous live activity count") ||
         !privacyBody.includes("Anonymous crash reporting is disabled by default") ||
         !privacyBody.includes("unexpected handled app errors") ||
         !privacyBody.includes("designated crash-report channel") ||
         !privacyBody.includes("App updates do not pass through this broker") ||
         health.source_pairing !== true ||
         health.source_pairing_version !== 2 ||
-        health.app_presence !== true ||
         health.crash_reporting !== true ||
         crashReportResponse.status !== 202 ||
         crashReportBody.status !== "accepted" ||
@@ -2095,18 +1903,6 @@ server.listen(port, async () => {
             "(Media3PlayerActivity.kt:169)",
         ) ||
         !selfTestCrashForwards[0].signature.startsWith("sha256=") ||
-        presenceCreateResponse.status !== 201 ||
-        !/^[A-Za-z0-9_-]{43}$/.test(presenceSession.session_token) ||
-        presenceSession.heartbeat_interval !== 45 ||
-        presenceBefore.active !== 1 ||
-        presenceBefore.streaming !== 0 ||
-        presenceHeartbeatResponse.status !== 204 ||
-        presenceAfter.active !== 1 ||
-        presenceAfter.streaming !== 1 ||
-        invalidPresenceResponse.status !== 401 ||
-        presenceCloseResponse.status !== 204 ||
-        presenceClosed.active !== 0 ||
-        presenceClosed.streaming !== 0 ||
         health.callbacks.myanimelist !==
           "https://auth.example.com/oauth/myanimelist/callback" ||
         !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.user_code) ||

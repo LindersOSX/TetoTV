@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -15,6 +16,7 @@ import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -211,6 +213,29 @@ void main() {
     );
   });
 
+  test('resolver Web ranking bridges the saved soft quality preference', () {
+    final p1080 = _providerWebStream(
+      providerId: '1080',
+      providerName: 'Provider',
+      quality: '1080p',
+    );
+    final p720 = _providerWebStream(
+      providerId: '720',
+      providerName: 'Provider',
+      quality: '720p',
+    );
+
+    expect(
+      compareAutoplayWebStreams(
+        p720,
+        p1080,
+        preferredAudio: PlaybackAudioPreference.dub,
+        qualityPreference: WebStreamQualityPreference.p720,
+      ),
+      lessThan(0),
+    );
+  });
+
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({
       DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
@@ -230,6 +255,528 @@ void main() {
           const MethodChannel('dev.tetotv/android_tv'),
           null,
         );
+  });
+
+  testWidgets('saved Web-first preference orders picker source sections', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      'streaming_source_priority': 'webFirst',
+      'streaming_web_quality_preference': 'p720',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([
+              _providerWebStream(
+                providerId: 'web-1080',
+                providerName: 'Web 1080',
+                quality: '1080p',
+              ),
+              _providerWebStream(
+                providerId: 'web-720',
+                providerName: 'Web 720',
+                quality: '720p',
+              ),
+            ]),
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88001,
+              title: 'Ranked Picker',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+    expect(find.text('WEB STREAMS'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('WEB STREAMS')).dy,
+      lessThan(tester.getTopLeft(find.text('DEBRID STREAMS')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text('Web 720 720p')).dy,
+      lessThan(tester.getTopLeft(find.text('Web 1080 1080p')).dy),
+    );
+  });
+
+  testWidgets('Web-first autoplay selects Web when audio ranks match', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      'streaming_source_priority': 'webFirst',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final web = _providerWebStream(
+      providerId: 'preferred-class',
+      providerName: 'Preferred class',
+      quality: '1080p',
+    );
+    var debridCalls = 0;
+    final router = GoRouter(
+      initialLocation: '/resolve',
+      routes: [
+        GoRoute(
+          path: '/resolve',
+          builder: (_, _) => const ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88002,
+              title: 'Source Priority',
+              episode: 1,
+              autoPlay: true,
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/player',
+          builder: (_, state) => Scaffold(
+            body: Text(
+              (state.extra! as PlaybackLaunch).stream.isWebStream
+                  ? 'WEB PRIORITY OPENED'
+                  : 'WRONG SOURCE OPENED',
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          addonStoreProvider.overrideWithValue(_NoopAddonStore()),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([web]),
+          ),
+          webStreamPreflightProvider.overrideWithValue((
+            uri,
+            headers, {
+            subtitleUri,
+          }) async {
+            return ValidatedWebStream(
+              uri: uri,
+              headers: headers,
+              contentType: 'application/vnd.apple.mpegurl',
+            );
+          }),
+          debridStreamResolverFactoryProvider.overrideWithValue(({
+            required service,
+            required token,
+            required source,
+          }) {
+            debridCalls++;
+            return const _ReadyResolver();
+          }),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('WEB PRIORITY OPENED'));
+    expect(find.text('WRONG SOURCE OPENED'), findsNothing);
+    expect(debridCalls, 0);
+  });
+
+  testWidgets('failed Web-first candidate waits for pending Debrid discovery', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      'streaming_source_priority': 'webFirst',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final slowDebrid = Completer<List<ReleaseCandidate>>();
+    final failedWeb = _providerWebStream(
+      providerId: 'broken-web',
+      providerName: 'Broken Web',
+      quality: '1080p',
+    );
+    const recoveredDebrid = ReleaseCandidate(
+      infoHash: '8888888888888888888888888888888888888888',
+      magnetUri: 'magnet:?xt=urn:btih:8888888888888888888888888888888888888888',
+      releaseName: '[Recovered] Show - 02 1080p English Dub',
+      seeders: 20,
+      sourceId: 'slow-debrid',
+      provider: 'Recovered Debrid',
+      isDubbed: true,
+      quality: '1080p',
+      codec: 'H.264',
+    );
+    PlaybackLaunch? opened;
+    final router = GoRouter(
+      initialLocation: '/resolve',
+      routes: [
+        GoRoute(
+          path: '/resolve',
+          builder: (_, _) => const ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88004,
+              title: 'Pending Debrid Recovery',
+              episode: 2,
+              autoPlay: true,
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/player',
+          builder: (_, state) {
+            opened = state.extra! as PlaybackLaunch;
+            return const Scaffold(body: Text('PENDING DEBRID RECOVERY OPENED'));
+          },
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            CompositeReleaseSource([
+              _CallbackReleaseSource('slow-debrid', () => slowDebrid.future),
+            ]),
+          ),
+          addonStoreProvider.overrideWithValue(_NoopAddonStore()),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([failedWeb]),
+          ),
+          webStreamPreflightProvider.overrideWithValue((
+            uri,
+            headers, {
+            subtitleUri,
+          }) async {
+            throw const FormatException('broken web stream');
+          }),
+          debridStreamResolverFactoryProvider.overrideWithValue(
+            ({required service, required token, required source}) =>
+                const _ReadyResolver(),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+
+    await _pumpUntilFound(
+      tester,
+      find.text('Web streams failed. Waiting for Debrid sources…'),
+    );
+    expect(find.text('No playable stream'), findsNothing);
+    slowDebrid.complete(const [recoveredDebrid]);
+    await _pumpUntilFound(tester, find.text('PENDING DEBRID RECOVERY OPENED'));
+    expect(opened, isNotNull);
+    expect(opened!.stream.isWebStream, isFalse);
+    expect(opened!.selectedRelease, recoveredDebrid);
+  });
+
+  testWidgets('Web-first autoplay never overrides matching Dub audio', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      'streaming_source_priority': 'webFirst',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final subOnlyWeb = _providerWebStream(
+      providerId: 'sub-only',
+      providerName: 'Sub only',
+      quality: '1080p',
+      isDubbed: false,
+    );
+    var debridCalls = 0;
+    final router = GoRouter(
+      initialLocation: '/resolve',
+      routes: [
+        GoRoute(
+          path: '/resolve',
+          builder: (_, _) => const ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88003,
+              title: 'Audio Safety',
+              episode: 1,
+              autoPlay: true,
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/player',
+          builder: (_, state) => Scaffold(
+            body: Text(
+              (state.extra! as PlaybackLaunch).stream.isWebStream
+                  ? 'WRONG AUDIO SOURCE'
+                  : 'MATCHING DUB OPENED',
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([subOnlyWeb]),
+          ),
+          debridStreamResolverFactoryProvider.overrideWithValue(({
+            required service,
+            required token,
+            required source,
+          }) {
+            debridCalls++;
+            return const _ReadyResolver();
+          }),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('MATCHING DUB OPENED'));
+    expect(find.text('WRONG AUDIO SOURCE'), findsNothing);
+    expect(debridCalls, 1);
+  });
+
+  testWidgets(
+    'strict H264 single episode beats an exact-source HEVC batch fallback',
+    (tester) async {
+      const exactFallback = ReleaseCandidate(
+        infoHash: '1010101010101010101010101010101010101010',
+        magnetUri:
+            'magnet:?xt=urn:btih:1010101010101010101010101010101010101010',
+        releaseName: '[Fast] Show Batch 2160p HEVC English Dub',
+        seeders: 500,
+        sourceId: 'fast-source',
+        provider: 'Fast Provider',
+        isDubbed: true,
+        isBatch: true,
+        quality: '2160p',
+        codec: 'HEVC',
+      );
+      const strict = ReleaseCandidate(
+        infoHash: '2020202020202020202020202020202020202020',
+        magnetUri:
+            'magnet:?xt=urn:btih:2020202020202020202020202020202020202020',
+        releaseName: '[Safe] Show - 02 1080p x264 English Dub',
+        seeders: 5,
+        sourceId: 'safe-source',
+        provider: 'Safe Provider',
+        isDubbed: true,
+        quality: '1080p',
+        codec: 'H.264',
+      );
+
+      final launch = await _pumpAutoplayLaunch(
+        tester,
+        mediaId: 88101,
+        releases: const [exactFallback, strict],
+        preferences: const SeriesPlaybackPreferences(
+          preferredQuality: 'p1080',
+          preferredCodec: 'h264',
+          allowBatchStreams: false,
+        ),
+        secureValues: const {'streaming_web_enabled': 'false'},
+        preferredProvider: 'Fast Provider',
+        preferredSourceId: 'fast-source',
+        deviceProfile: const TvDeviceProfile(
+          manufacturer: 'Test',
+          model: 'AVC only',
+          sdk: 36,
+          abis: ['arm64-v8a'],
+          displayModes: [],
+          hdrTypes: [],
+          codecs: [
+            TvCodecCapability(
+              name: 'AVC decoder',
+              mime: 'video/avc',
+              hardware: true,
+            ),
+          ],
+          audioOutputs: [],
+        ),
+        failureCounts: const {'1010101010101010101010101010101010101010': 2},
+      );
+
+      expect(launch.selectedRelease.infoHash, strict.infoHash);
+    },
+  );
+
+  testWidgets('strict 1080p Web stream beats an exact-provider 4K fallback', (
+    tester,
+  ) async {
+    final exactFallback = _providerWebStream(
+      providerId: 'same-web',
+      providerName: 'Same Web',
+      quality: '2160p',
+    );
+    final strict = _providerWebStream(
+      providerId: 'strict-web',
+      providerName: 'Strict Web',
+      quality: '1080p',
+    );
+
+    final launch = await _pumpAutoplayLaunch(
+      tester,
+      mediaId: 88102,
+      webStreams: [exactFallback, strict],
+      preferences: const SeriesPlaybackPreferences(preferredQuality: 'p1080'),
+      secureValues: const {
+        'streaming_debrid_enabled': 'false',
+        'streaming_web_enabled': 'true',
+      },
+      preferredWebProviderId: 'same-web',
+    );
+
+    expect(launch.stream.providerId, 'strict-web');
+  });
+
+  testWidgets(
+    'known-incompatible exact Debrid source never overrides a safe release',
+    (tester) async {
+      const unsafeExact = ReleaseCandidate(
+        infoHash: '5050505050505050505050505050505050505050',
+        magnetUri:
+            'magnet:?xt=urn:btih:5050505050505050505050505050505050505050',
+        releaseName: '[Current] Show - 02 2160p AV1 English Dub',
+        seeders: 2000,
+        sourceId: 'current-unsafe',
+        provider: 'Current Unsafe',
+        isDubbed: true,
+        quality: '2160p',
+        codec: 'AV1',
+      );
+      const safe = ReleaseCandidate(
+        infoHash: '6060606060606060606060606060606060606060',
+        magnetUri:
+            'magnet:?xt=urn:btih:6060606060606060606060606060606060606060',
+        releaseName: '[Safe] Show - 02 1080p x264 English Dub',
+        seeders: 3,
+        sourceId: 'safe',
+        provider: 'Safe',
+        isDubbed: true,
+        quality: '1080p',
+        codec: 'H.264',
+      );
+
+      final launch = await _pumpAutoplayLaunch(
+        tester,
+        mediaId: 88105,
+        releases: const [unsafeExact, safe],
+        preferredProvider: 'Current Unsafe',
+        preferredSourceId: 'current-unsafe',
+        secureValues: const {'streaming_web_enabled': 'false'},
+        deviceProfile: const TvDeviceProfile(
+          manufacturer: 'Test',
+          model: 'AVC only',
+          sdk: 36,
+          abis: ['arm64-v8a'],
+          displayModes: [],
+          hdrTypes: [],
+          codecs: [
+            TvCodecCapability(
+              name: 'AVC decoder',
+              mime: 'video/avc',
+              hardware: true,
+            ),
+          ],
+          audioOutputs: [],
+        ),
+        failureCounts: const {'5050505050505050505050505050505050505050': 2},
+      );
+
+      expect(launch.selectedRelease.infoHash, safe.infoHash);
+    },
+  );
+
+  testWidgets(
+    'strict Web tier beats fallback Debrid even with Debrid-first selected',
+    (tester) async {
+      const fallbackDebrid = ReleaseCandidate(
+        infoHash: '3030303030303030303030303030303030303030',
+        magnetUri:
+            'magnet:?xt=urn:btih:3030303030303030303030303030303030303030',
+        releaseName: '[Fallback] Show - 02 2160p English Dub',
+        seeders: 1000,
+        sourceId: 'fallback-debrid',
+        provider: 'Fallback Debrid',
+        isDubbed: true,
+        quality: '2160p',
+        codec: 'H.264',
+      );
+      final strictWeb = _providerWebStream(
+        providerId: 'strict-web-class',
+        providerName: 'Strict Web class',
+        quality: '1080p',
+      );
+
+      final launch = await _pumpAutoplayLaunch(
+        tester,
+        mediaId: 88103,
+        releases: const [fallbackDebrid],
+        webStreams: [strictWeb],
+        preferences: const SeriesPlaybackPreferences(preferredQuality: 'p1080'),
+        secureValues: const {'streaming_source_priority': 'debridFirst'},
+      );
+
+      expect(launch.stream.isWebStream, isTrue);
+      expect(launch.stream.providerId, 'strict-web-class');
+    },
+  );
+
+  testWidgets('exact strict Debrid source beats fallback Web under Web-first', (
+    tester,
+  ) async {
+    const exactDebrid = ReleaseCandidate(
+      infoHash: '4040404040404040404040404040404040404040',
+      magnetUri: 'magnet:?xt=urn:btih:4040404040404040404040404040404040404040',
+      releaseName: '[Current] Show - 02 1080p English Dub',
+      seeders: 2,
+      sourceId: 'current-debrid',
+      provider: 'Current Debrid',
+      isDubbed: true,
+      quality: '1080p',
+      codec: 'H.264',
+    );
+    final fallbackWeb = _providerWebStream(
+      providerId: 'fallback-web-class',
+      providerName: 'Fallback Web class',
+      quality: '2160p',
+    );
+
+    final launch = await _pumpAutoplayLaunch(
+      tester,
+      mediaId: 88104,
+      releases: const [exactDebrid],
+      webStreams: [fallbackWeb],
+      preferences: const SeriesPlaybackPreferences(preferredQuality: 'p1080'),
+      secureValues: const {'streaming_source_priority': 'webFirst'},
+      preferredProvider: 'Current Debrid',
+      preferredSourceId: 'current-debrid',
+    );
+
+    expect(launch.stream.isWebStream, isFalse);
+    expect(launch.selectedRelease.infoHash, exactDebrid.infoHash);
   });
 
   testWidgets('shows resolver errors and debounces repeated activation', (
@@ -2890,6 +3437,96 @@ class _CallbackReleaseSource implements ReleaseSource {
 
   @override
   Future<List<ReleaseCandidate>> search(EpisodeReference episode) => callback();
+}
+
+Future<PlaybackLaunch> _pumpAutoplayLaunch(
+  WidgetTester tester, {
+  required int mediaId,
+  List<ReleaseCandidate> releases = const [],
+  List<WebStreamResult> webStreams = const [],
+  SeriesPlaybackPreferences preferences = const SeriesPlaybackPreferences(),
+  Map<String, String> secureValues = const {},
+  String? preferredProvider,
+  String? preferredSourceId,
+  String? preferredWebProviderId,
+  TvDeviceProfile deviceProfile = const TvDeviceProfile.unknown(),
+  Map<String, int> failureCounts = const {},
+}) async {
+  FlutterSecureStorage.setMockInitialValues({
+    DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+    ...secureValues,
+  });
+  await tester.binding.setSurfaceSize(const Size(1920, 1080));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  PlaybackLaunch? opened;
+  final router = GoRouter(
+    initialLocation: '/resolve',
+    routes: [
+      GoRoute(
+        path: '/resolve',
+        builder: (_, _) => ResolveEpisodeScreen(
+          preferredProvider: preferredProvider,
+          preferredSourceId: preferredSourceId,
+          preferredWebProviderId: preferredWebProviderId,
+          episode: EpisodeReference(
+            anilistMediaId: mediaId,
+            title: 'Strict tier show',
+            episode: 2,
+            autoPlay: true,
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/player',
+        builder: (_, state) {
+          opened = state.extra! as PlaybackLaunch;
+          return const Scaffold(body: Text('STRICT TIER PLAYER OPENED'));
+        },
+      ),
+    ],
+  );
+  addTearDown(router.dispose);
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        configuredReleaseSourceProvider.overrideWithValue(
+          _ListReleaseSource(releases),
+        ),
+        addonStoreProvider.overrideWithValue(_NoopAddonStore()),
+        seriesPreferencesReaderProvider.overrideWithValue(
+          (_) async => preferences,
+        ),
+        resolveDeviceProfileReaderProvider.overrideWithValue(
+          () async => deviceProfile,
+        ),
+        resolveFailureCountsReaderProvider.overrideWithValue(
+          (_) async => failureCounts,
+        ),
+        webStreamAggregatorProvider.overrideWithValue(
+          _FixedWebAggregator(webStreams),
+        ),
+        webStreamPreflightProvider.overrideWithValue((
+          uri,
+          headers, {
+          subtitleUri,
+        }) async {
+          return ValidatedWebStream(
+            uri: uri,
+            headers: headers,
+            contentType: 'video/mp4',
+          );
+        }),
+        debridStreamResolverFactoryProvider.overrideWithValue(
+          ({required service, required token, required source}) =>
+              const _ReadyResolver(),
+        ),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await _pumpUntilFound(tester, find.text('STRICT TIER PLAYER OPENED'));
+  return opened!;
 }
 
 class _ListReleaseSource implements ReleaseSource {

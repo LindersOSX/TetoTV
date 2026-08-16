@@ -94,6 +94,8 @@ class Media3PlayerSafetyTest {
     fun `dual and multi audio release labels request extended discovery`() {
         assertTrue(nativeReleaseAdvertisesMultipleAudio("[Group] Show - Dual Audio"))
         assertTrue(nativeReleaseAdvertisesMultipleAudio("Show.Multi-Audio.1080p"))
+        assertTrue(nativeReleaseAdvertisesMultipleAudio("Show [DUAL] 1080p"))
+        assertTrue(nativeReleaseAdvertisesMultipleAudio("Show ENG+JPN 1080p"))
         assertFalse(nativeReleaseAdvertisesMultipleAudio("Show Japanese Audio 1080p"))
         assertFalse(nativeReleaseAdvertisesMultipleAudio(null))
     }
@@ -104,6 +106,36 @@ class Media3PlayerSafetyTest {
         assertEquals("Japanese", nativeSelectedTrackLanguage("zxx", "Japanese"))
         assertEquals("eng", nativeSelectedTrackLanguage("eng", "Japanese"))
         assertEquals(null, nativeSelectedTrackLanguage("mul", ""))
+    }
+
+    @Test
+    fun `manual native audio events publish canonical persisted languages`() {
+        assertEquals("eng", nativeCanonicalTrackLanguage("en-US", "Japanese"))
+        assertEquals("eng", nativeCanonicalTrackLanguage("und", "English Dub 5.1"))
+        assertEquals("jpn", nativeCanonicalTrackLanguage(null, "Japanese"))
+        assertEquals("spa", nativeCanonicalTrackLanguage("es", null))
+        assertEquals(null, nativeCanonicalTrackLanguage("mul", ""))
+    }
+
+    @Test
+    fun `native progress allows explicit audio before duration discovery`() {
+        assertTrue(nativePlaybackProgressIsPublishable("15125:9", 1_440_000L))
+        assertFalse(nativePlaybackProgressIsPublishable("", 1_440_000L))
+        assertFalse(nativePlaybackProgressIsPublishable("15125:9", 0L))
+        assertTrue(
+            nativePlaybackProgressIsPublishable(
+                "15125:9",
+                0L,
+                audioPreferenceSet = true,
+            ),
+        )
+        assertFalse(
+            nativePlaybackProgressIsPublishable(
+                "",
+                0L,
+                audioPreferenceSet = true,
+            ),
+        )
     }
 
     @Test

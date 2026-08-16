@@ -39,9 +39,8 @@ not copy either provider client secret into Flutter configuration.
 The current production app deliberately uses two deployments of this broker:
 `https://tetotv-auth.onrender.com` remains the AniList/MyAnimeList OAuth origin,
 while `https://tetotv-updates-lindows.onrender.com` handles source pairing,
-optional anonymous presence, and optional crash-report relay. App updates do
-not pass through either deployment. Keep tracker callback registrations pointed
-at the auth origin.
+and optional crash-report relay. App updates do not pass through either
+deployment. Keep tracker callback registrations pointed at the auth origin.
 
 ## Anonymous crash-report relay
 

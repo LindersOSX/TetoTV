@@ -1,8 +1,7 @@
-import 'dart:math' as math;
-
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
@@ -12,9 +11,8 @@ import 'package:go_router/go_router.dart';
 
 enum MainNavigationDestination { home, myList, discover, calendar }
 
-/// Keeps primary navigation stable while presenting linked tracker information
-/// as a lightweight, informational part of the same row. The tracker summary
-/// intentionally never participates in remote focus traversal.
+/// Keeps primary navigation stable while presenting the active shared-TV
+/// tracker identity as a compact menu at the far left of the row.
 class MainNavigationBar extends ConsumerWidget {
   const MainNavigationBar({
     required this.active,
@@ -38,16 +36,21 @@ class MainNavigationBar extends ConsumerWidget {
       for (final provider in TrackingProvider.values)
         ?accounts.profiles[provider],
     ];
+    final activeProfile = profiles
+        .where((profile) => profile.provider == preferences.trackingProvider)
+        .firstOrNull;
+    final primaryProfile = activeProfile ?? profiles.firstOrNull;
+    final savedProfiles = [
+      for (final provider in TrackingProvider.values)
+        ...?accounts.savedProfiles[provider],
+    ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final normalTvLayout = width >= 700;
         final showWordmark = width >= 900;
-        final showFullProfile = profiles.isNotEmpty && width >= 900;
-        final showCompactProfile =
-            profiles.isNotEmpty && width >= 380 && !showFullProfile;
-        final showEveryProfile = profiles.length > 1 && width >= 1400;
+        final showProfile = primaryProfile != null && width >= 700;
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
         final headerHeight = width >= 760 ? 96.0 : 62.0;
@@ -59,6 +62,29 @@ class MainNavigationBar extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (showProfile) ...[
+                SizedBox(
+                  width: 190,
+                  height: 46,
+                  child: _TrackerProfileMenuButton(
+                    profile: primaryProfile,
+                    savedProfiles: savedProfiles,
+                    activeProfileIds: accounts.activeProfileIds,
+                    isLoading: accounts.isLoading,
+                    onSwitch: (profile) async {
+                      final switched = await ref
+                          .read(trackingAccountsControllerProvider.notifier)
+                          .switchProfile(profile);
+                      if (!switched) return;
+                      await ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setTrackingProvider(profile.provider);
+                    },
+                    onManage: () => context.push('/settings/accounts'),
+                  ),
+                ),
+                SizedBox(width: normalTvLayout ? 8 : 4),
+              ],
               if (showWordmark) ...[
                 const _TetoTvWordmark(),
                 const SizedBox(width: 8),
@@ -140,36 +166,7 @@ class MainNavigationBar extends ConsumerWidget {
                 compact: width < 1200,
                 onPressed: () => context.push('/settings/accounts'),
               ),
-              if (showFullProfile || showCompactProfile) ...[
-                SizedBox(width: normalTvLayout ? 8 : 4),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, profileConstraints) {
-                      final maximumWidth = showEveryProfile ? 830.0 : 410.0;
-                      return Align(
-                        alignment: Alignment.centerRight,
-                        child: SizedBox(
-                          width: math.min(
-                            profileConstraints.maxWidth,
-                            showCompactProfile ? 190.0 : maximumWidth,
-                          ),
-                          height: showCompactProfile ? 34 : 58,
-                          child: showFullProfile
-                              ? _TrackerIdentitySummary(
-                                  profiles: profiles,
-                                  showEveryProfile: showEveryProfile,
-                                )
-                              : _CompactTrackerIdentitySummary(
-                                  profiles: profiles,
-                                ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ] else ...[
-                const Spacer(),
-              ],
+              const Spacer(),
             ],
           ),
         );
@@ -212,253 +209,162 @@ class _TetoTvWordmark extends StatelessWidget {
   }
 }
 
-class _TrackerIdentitySummary extends StatelessWidget {
-  const _TrackerIdentitySummary({
-    required this.profiles,
-    required this.showEveryProfile,
-  });
-
-  final List<TrackingAccountProfile> profiles;
-  final bool showEveryProfile;
-
-  @override
-  Widget build(BuildContext context) {
-    final label = profiles
-        .map(
-          (profile) => '${profile.username} on ${profile.provider.displayName}',
-        )
-        .join(', ');
-    final visibleProfiles = showEveryProfile
-        ? profiles
-        : profiles.take(1).toList(growable: false);
-    final hiddenProfiles = showEveryProfile
-        ? const <TrackingAccountProfile>[]
-        : profiles.skip(1).toList(growable: false);
-    return ExcludeFocus(
-      child: Semantics(
-        key: const ValueKey('main-nav-profile-summary'),
-        container: true,
-        label: 'Linked tracker profiles: $label',
-        excludeSemantics: true,
-        child: Row(
-          children: [
-            for (var index = 0; index < visibleProfiles.length; index++) ...[
-              Expanded(
-                child: _FullTrackerProfile(
-                  profile: visibleProfiles[index],
-                  additionalProfiles: index == 0
-                      ? hiddenProfiles
-                      : const <TrackingAccountProfile>[],
-                ),
-              ),
-              if (index != visibleProfiles.length - 1)
-                const SizedBox(width: 12),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FullTrackerProfile extends StatelessWidget {
-  const _FullTrackerProfile({
+class _TrackerProfileMenuButton extends StatelessWidget {
+  const _TrackerProfileMenuButton({
     required this.profile,
-    required this.additionalProfiles,
+    required this.savedProfiles,
+    required this.activeProfileIds,
+    required this.isLoading,
+    required this.onSwitch,
+    required this.onManage,
   });
 
   final TrackingAccountProfile profile;
-  final List<TrackingAccountProfile> additionalProfiles;
+  final List<StoredTrackingProfile> savedProfiles;
+  final Map<TrackingProvider, String> activeProfileIds;
+  final bool isLoading;
+  final Future<void> Function(StoredTrackingProfile profile) onSwitch;
+  final VoidCallback onManage;
+
+  Future<void> _openMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final result = await showMenu<String>(
+      context: context,
+      color: context.appPalette.surface,
+      elevation: 14,
+      constraints: const BoxConstraints(minWidth: 360, maxWidth: 430),
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(
+          topLeft.dx,
+          topLeft.dy + box.size.height + 4,
+          box.size.width,
+          box.size.height,
+        ),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem<String>(
+          enabled: false,
+          height: 106,
+          child: _TrackerMenuStats(profile: profile),
+        ),
+        const PopupMenuDivider(),
+        for (final saved in savedProfiles)
+          PopupMenuItem<String>(
+            key: ValueKey(
+              'main-nav-switch-profile-${saved.provider.slug}-${saved.id}',
+            ),
+            value: '${saved.provider.slug}:${saved.id}',
+            height: 52,
+            child: Row(
+              children: [
+                Icon(
+                  saved.provider == profile.provider &&
+                          activeProfileIds[saved.provider] == saved.id
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                  size: 19,
+                  color:
+                      saved.provider == profile.provider &&
+                          activeProfileIds[saved.provider] == saved.id
+                      ? context.appPalette.accentBright
+                      : context.appPalette.mutedText,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    saved.username,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _ProviderBadge(provider: saved.provider, compact: true),
+              ],
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          key: ValueKey('main-nav-manage-profiles'),
+          value: 'manage',
+          height: 48,
+          child: Row(
+            children: [
+              Icon(Icons.manage_accounts_rounded, size: 20),
+              SizedBox(width: 10),
+              Text(
+                'Add or manage profiles',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (result == null) return;
+    if (result == 'manage') {
+      onManage();
+      return;
+    }
+    final selected = savedProfiles
+        .where((item) => '${item.provider.slug}:${item.id}' == result)
+        .firstOrNull;
+    if (selected == null) return;
+    if (selected.provider == profile.provider &&
+        activeProfileIds[selected.provider] == selected.id) {
+      return;
+    }
+    await onSwitch(selected);
+  }
 
   @override
   Widget build(BuildContext context) {
     final slug = profile.provider.slug;
-    return Container(
-      key: ValueKey('main-nav-profile-$slug'),
-      height: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-      child: Row(
-        children: [
-          _ProfileAvatar(profile: profile, size: 44),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Builder(
+      builder: (buttonContext) => Semantics(
+        key: const ValueKey('main-nav-profile-summary'),
+        button: true,
+        onTap: isLoading ? null : () => _openMenu(buttonContext),
+        label:
+            '${profile.username}, ${profile.provider.displayName} profile. '
+            'Open statistics and switch profiles.',
+        excludeSemantics: true,
+        child: TvFocusable(
+          onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
+          borderRadius: BorderRadius.circular(9),
+          focusScale: 1.02,
+          child: Container(
+            key: ValueKey('main-nav-profile-$slug'),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        profile.username,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: context.appPalette.primaryText,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
+                _ProfileAvatar(profile: profile, size: 36),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    profile.username,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: context.appPalette.primaryText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
                     ),
-                    const SizedBox(width: 6),
-                    _ProviderBadge(provider: profile.provider, compact: true),
-                    if (additionalProfiles.isNotEmpty) ...[
-                      const SizedBox(width: 5),
-                      _LinkedProfilesIndicator(
-                        profiles: additionalProfiles,
-                        compact: true,
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 3),
-                Row(
-                  key: ValueKey('main-nav-profile-stats-$slug'),
-                  children: [
-                    Expanded(
-                      child: _ProfileStat(
-                        key: ValueKey('main-nav-profile-stat-$slug-titles'),
-                        icon: Icons.video_library_outlined,
-                        text: profile.animeCount == null
-                            ? '— titles'
-                            : '${_readableCount(profile.animeCount!)} titles',
-                      ),
-                    ),
-                    Expanded(
-                      child: _ProfileStat(
-                        key: ValueKey('main-nav-profile-stat-$slug-episodes'),
-                        icon: Icons.play_circle_outline_rounded,
-                        text: profile.episodesWatched == null
-                            ? '— episodes'
-                            : '${_readableCount(profile.episodesWatched!)} episodes',
-                      ),
-                    ),
-                    Expanded(
-                      child: _ProfileStat(
-                        key: ValueKey('main-nav-profile-stat-$slug-time'),
-                        icon: Icons.schedule_rounded,
-                        text: profile.minutesWatched == null
-                            ? '— watched'
-                            : _watchedDuration(profile.minutesWatched!),
-                      ),
-                    ),
-                    Expanded(
-                      child: _ProfileStat(
-                        key: ValueKey('main-nav-profile-stat-$slug-mean'),
-                        icon: Icons.star_rounded,
-                        text: profile.meanScore == null
-                            ? 'Mean —/${profile.provider == TrackingProvider.anilist ? 100 : 10}'
-                            : 'Mean ${profile.meanScore!.toStringAsFixed(1)}/${profile.provider == TrackingProvider.anilist ? 100 : 10}',
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.arrow_drop_down_rounded,
+                  size: 20,
+                  color: context.appPalette.mutedText,
                 ),
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileStat extends StatelessWidget {
-  const _ProfileStat({required this.icon, required this.text, super.key});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 12, color: context.appPalette.mutedText),
-          const SizedBox(width: 3),
-          Expanded(
-            child: FittedBox(
-              alignment: Alignment.centerLeft,
-              fit: BoxFit.scaleDown,
-              child: Text(
-                text,
-                maxLines: 1,
-                style: TextStyle(
-                  color: context.appPalette.mutedText,
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CompactTrackerIdentitySummary extends StatelessWidget {
-  const _CompactTrackerIdentitySummary({required this.profiles});
-
-  final List<TrackingAccountProfile> profiles;
-
-  @override
-  Widget build(BuildContext context) {
-    final label = profiles
-        .map(
-          (profile) => '${profile.username} on ${profile.provider.displayName}',
-        )
-        .join(', ');
-    return ExcludeFocus(
-      child: Semantics(
-        key: const ValueKey('main-nav-profile-summary'),
-        container: true,
-        label: 'Linked tracker profiles: $label',
-        excludeSemantics: true,
-        child: Container(
-          key: const ValueKey('main-nav-profile-compact-shell'),
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              if (constraints.maxWidth < 120) {
-                final additional = profiles.length > 1
-                    ? ' +${profiles.length - 1} ${profiles.skip(1).map((profile) => profile.provider.displayName).join('/')}'
-                    : '';
-                return Container(
-                  key: ValueKey(
-                    'main-nav-profile-${profiles.first.provider.slug}',
-                  ),
-                  alignment: Alignment.centerLeft,
-                  child: FittedBox(
-                    alignment: Alignment.centerLeft,
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      '${profiles.first.provider.displayName}: ${profiles.first.username}$additional',
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: context.appPalette.primaryText,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(
-                    child: _CompactProfileIdentity(profile: profiles.first),
-                  ),
-                  if (profiles.length > 1) ...[
-                    const SizedBox(width: 5),
-                    _LinkedProfilesIndicator(
-                      profiles: profiles.skip(1).toList(growable: false),
-                      compact: true,
-                    ),
-                  ],
-                ],
-              );
-            },
           ),
         ),
       ),
@@ -466,68 +372,97 @@ class _CompactTrackerIdentitySummary extends StatelessWidget {
   }
 }
 
-class _CompactProfileIdentity extends StatelessWidget {
-  const _CompactProfileIdentity({required this.profile});
+class _TrackerMenuStats extends StatelessWidget {
+  const _TrackerMenuStats({required this.profile});
 
   final TrackingAccountProfile profile;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      key: ValueKey('main-nav-profile-${profile.provider.slug}'),
+    final scoreMaximum = profile.provider == TrackingProvider.anilist
+        ? 100
+        : 10;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _ProviderBadge(provider: profile.provider, compact: true),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            profile.username,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: context.appPalette.primaryText,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
+        Row(
+          children: [
+            _ProfileAvatar(profile: profile, size: 34, identify: false),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                profile.username,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: context.appPalette.primaryText,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ),
-          ),
+            _ProviderBadge(provider: profile.provider, compact: true),
+          ],
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 12,
+          runSpacing: 7,
+          children: [
+            _TrackerMenuStat(
+              icon: Icons.video_library_outlined,
+              text: profile.animeCount == null
+                  ? '— titles'
+                  : '${_readableCount(profile.animeCount!)} titles',
+            ),
+            _TrackerMenuStat(
+              icon: Icons.play_circle_outline_rounded,
+              text: profile.episodesWatched == null
+                  ? '— episodes'
+                  : '${_readableCount(profile.episodesWatched!)} episodes',
+            ),
+            _TrackerMenuStat(
+              icon: Icons.schedule_rounded,
+              text: profile.minutesWatched == null
+                  ? '— watched'
+                  : _watchedDuration(profile.minutesWatched!),
+            ),
+            _TrackerMenuStat(
+              icon: Icons.star_rounded,
+              text: profile.meanScore == null
+                  ? 'Mean —/$scoreMaximum'
+                  : 'Mean ${profile.meanScore!.toStringAsFixed(1)}/$scoreMaximum',
+            ),
+          ],
         ),
       ],
     );
   }
 }
 
-class _LinkedProfilesIndicator extends StatelessWidget {
-  const _LinkedProfilesIndicator({
-    required this.profiles,
-    this.compact = false,
-  });
+class _TrackerMenuStat extends StatelessWidget {
+  const _TrackerMenuStat({required this.icon, required this.text});
 
-  final List<TrackingAccountProfile> profiles;
-  final bool compact;
+  final IconData icon;
+  final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final providers = profiles
-        .map((profile) => profile.provider.displayName)
-        .join('/');
-    return Container(
-      key: const ValueKey('main-nav-profile-additional'),
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 4 : 6,
-        vertical: compact ? 2 : 3,
-      ),
-      child: Text(
-        compact
-            ? '+${profiles.length} $providers'
-            : '+${profiles.length} linked · $providers',
-        maxLines: 1,
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 13, color: context.appPalette.mutedText),
+      const SizedBox(width: 4),
+      Text(
+        text,
         style: TextStyle(
           color: context.appPalette.mutedText,
-          fontSize: compact ? 7.5 : 8.5,
-          fontWeight: FontWeight.w900,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
         ),
       ),
-    );
-  }
+    ],
+  );
 }
 
 class _ProviderBadge extends StatelessWidget {
@@ -575,15 +510,22 @@ String _watchedDuration(int minutes) {
 }
 
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.profile, required this.size});
+  const _ProfileAvatar({
+    required this.profile,
+    required this.size,
+    this.identify = true,
+  });
 
   final TrackingAccountProfile profile;
   final double size;
+  final bool identify;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      key: ValueKey('main-nav-profile-avatar-${profile.provider.slug}'),
+      key: identify
+          ? ValueKey('main-nav-profile-avatar-${profile.provider.slug}')
+          : null,
       width: size,
       height: size,
       clipBehavior: Clip.antiAlias,

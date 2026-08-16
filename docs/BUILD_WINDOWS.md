@@ -224,11 +224,11 @@ production signing identity:
 ```powershell
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
 
-# Beta 2.0.5
+# Beta 2.0.6
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.5 --build-number 410001
+  --build-name 2.0.6 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v2.0.5-universal.apk
+  .\build\fire-tv\TetoTV-v2.0.6-universal.apk
 
 # Public 1.0.2, built from the same reviewed commit and signing key
 flutter build apk --release --target-platform android-arm,android-arm64 `

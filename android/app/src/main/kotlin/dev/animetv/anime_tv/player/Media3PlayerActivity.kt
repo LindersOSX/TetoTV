@@ -66,6 +66,7 @@ import dev.animetv.anime_tv.R
 import dev.animetv.anime_tv.DiscordRichPresenceBridge
 import dev.animetv.anime_tv.security.NetworkRequestPolicy
 import dev.animetv.anime_tv.security.PublicNetworkDns
+import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
@@ -77,6 +78,66 @@ import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
+
+internal fun nativePlaybackProgressIsPublishable(
+    checkpointKey: String,
+    durationMs: Long,
+    audioPreferenceSet: Boolean = false,
+): Boolean = checkpointKey.isNotBlank() && (durationMs > 0L || audioPreferenceSet)
+
+/**
+ * Session-scoped native progress delivery for the Flutter orchestration route.
+ *
+ * Media3 renders in a separate Activity, so Flutter cannot observe its player
+ * position directly. This narrow bridge lets Dart apply the same final-ten-
+ * minute next-episode preparation threshold as MPV and VLC without resolving
+ * anything merely because the Activity was launched.
+ */
+internal object NativePlayerProgressBridge {
+    @Volatile
+    private var channel: MethodChannel? = null
+
+    fun attach(channel: MethodChannel) {
+        this.channel = channel
+    }
+
+    fun detach(channel: MethodChannel) {
+        if (this.channel === channel) this.channel = null
+    }
+
+    fun publish(
+        checkpointKey: String,
+        positionMs: Long,
+        durationMs: Long,
+        isPlaying: Boolean,
+        audioLanguage: String? = null,
+        audioPreferenceSet: Boolean = false,
+    ) {
+        if (!nativePlaybackProgressIsPublishable(
+                checkpointKey,
+                durationMs,
+                audioPreferenceSet,
+            )
+        ) return
+        val activeChannel = channel ?: return
+        val event = mapOf(
+            "checkpointKey" to checkpointKey,
+            "positionMs" to positionMs.coerceAtLeast(0L),
+            "durationMs" to durationMs,
+            "isPlaying" to isPlaying,
+            "audioLanguage" to audioLanguage,
+            "audioPreferenceSet" to audioPreferenceSet,
+        )
+        val deliver = Runnable {
+            runCatching { activeChannel.invokeMethod("nativePlaybackProgress", event) }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            deliver.run()
+        } else {
+            Handler(Looper.getMainLooper()).post(deliver)
+        }
+    }
+}
 
 internal fun safeNativeSkipTargetMs(
     requestedMs: Long,
@@ -101,7 +162,9 @@ internal fun nativeReleaseAdvertisesMultipleAudio(releaseName: String?): Boolean
         .lowercase()
         .replace(Regex("[^a-z0-9]+"), " ")
         .trim()
-    return Regex("\\b(?:dual|multi) audio\\b").containsMatchIn(normalized)
+    return Regex("\\b(?:dual|multi)(?: audio)?\\b").containsMatchIn(normalized) ||
+        Regex("\\b(?:eng|english) (?:jpn|japanese)\\b").containsMatchIn(normalized) ||
+        Regex("\\b(?:jpn|japanese) (?:eng|english)\\b").containsMatchIn(normalized)
 }
 
 internal fun nativeSelectedTrackLanguage(language: String?, label: String?): String? {
@@ -110,6 +173,26 @@ internal fun nativeSelectedTrackLanguage(language: String?, label: String?): Str
         return language?.trim()
     }
     return label?.trim()?.takeIf(String::isNotEmpty)
+}
+
+/** Mirrors Dart's persisted player-language normalization for live events. */
+internal fun nativeCanonicalTrackLanguage(language: String?, label: String?): String? {
+    val normalized = nativeSelectedTrackLanguage(language, label)
+        ?.trim()
+        ?.lowercase()
+        ?.replace('_', '-')
+        .orEmpty()
+    if (normalized.isEmpty() || normalized in setOf("und", "zxx", "mul", "unknown", "undetermined")) {
+        return null
+    }
+    fun contains(pattern: String): Boolean = Regex(pattern).containsMatchIn(normalized)
+    return when {
+        contains("(^|[^a-z])(english|eng|en(?:-[a-z]{2})?|dub(?:bed)?)([^a-z]|$)") -> "eng"
+        contains("(^|[^a-z])(japanese|jpn|ja)([^a-z]|$)") -> "jpn"
+        contains("(^|[^a-z])(spanish|spa|es)([^a-z]|$)") -> "spa"
+        contains("(^|[^a-z])(french|fra|fre|fr)([^a-z]|$)") -> "fra"
+        else -> normalized
+    }
 }
 
 /**
@@ -294,6 +377,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var consecutiveChoppyWindows = 0
     private var activeTrackDialog: Dialog? = null
     private var pendingAudioTrackPicker: Runnable? = null
+    private var pendingCaptionTrackPicker: Runnable? = null
     private var consumedNavigationKeyUp: Int? = null
     private var malMediaId = 0
     private var episodeNumber = 0
@@ -314,6 +398,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val checkpointRunnable = object : Runnable {
         override fun run() {
             persistCheckpoint()
+            publishPlaybackProgress()
             publishDiscordPresence()
             if (!isFinishing && !isDestroyed && isForeground) {
                 handler.postDelayed(this, CHECKPOINT_INTERVAL_MS)
@@ -354,6 +439,19 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 "(position=${position}ms, decoder=${decoderName ?: "unknown"}, " +
                 "surfaceReady=$surfaceReady)."
         finishWithResult(STATUS_ERROR)
+    }
+    private val unsupportedAudioWatchdog = Runnable {
+        if (resultSent || playerCoreReleased || !::player.isInitialized) return@Runnable
+        val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+        if (
+            audioGroups.isNotEmpty() &&
+            audioGroups.none { group ->
+                (0 until group.length).any(group::isTrackSupported)
+            }
+        ) {
+            terminalError = "Media3 found audio tracks but no supported audio decoder."
+            finishWithResult(STATUS_ERROR)
+        }
     }
 
     private val startupWatchdog = Runnable {
@@ -882,6 +980,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             Player.STATE_READY -> {
                 handler.removeCallbacks(firstFrameWatchdog)
                 fetchSkipSegmentsIfReady()
+                publishPlaybackProgress()
                 publishDiscordPresence()
                 if (isForeground && !firstFrameRendered && hasSelectedVideoTrack()) {
                     handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
@@ -895,6 +994,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (resultSent || playbackResourcesReleased) return
         updatePlaybackIntentUi()
+        publishPlaybackProgress()
         publishDiscordPresence()
     }
 
@@ -1647,9 +1747,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 (0 until group.length).any(group::isTrackSupported)
             }
         ) {
-            terminalError = "Media3 found audio tracks but no supported audio decoder."
-            finishWithResult(STATUS_ERROR)
-            return
+            // Matroska demuxers can publish an incomplete first snapshot while
+            // the replacement engine is still enumerating a dual-audio file.
+            // Give a later supported track a bounded chance to arrive instead
+            // of immediately returning to Flutter and relaunching in a loop.
+            handler.removeCallbacks(unsupportedAudioWatchdog)
+            handler.postDelayed(unsupportedAudioWatchdog, UNSUPPORTED_AUDIO_GRACE_MS)
+        } else {
+            handler.removeCallbacks(unsupportedAudioWatchdog)
         }
         applyPreferredAudioOverride(tracks)
         applyPreferredSubtitleOverride(tracks)
@@ -1757,6 +1862,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             return
         }
+        if (trackType == C.TRACK_TYPE_TEXT && supportedTrackCount(trackType) < 1) {
+            waitForCaptionTracks(sourceButton)
+            return
+        }
         showTrackPickerNow(trackType, sourceButton)
     }
 
@@ -1797,6 +1906,36 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             }
         }
         pendingAudioTrackPicker = task
+        handler.postDelayed(task, AUDIO_TRACK_POLL_MS)
+    }
+
+    private fun waitForCaptionTracks(sourceButton: View) {
+        if (pendingCaptionTrackPicker != null) return
+        handler.removeCallbacks(hideControllerRunnable)
+        Toast.makeText(
+            this,
+            R.string.tetotv_player_checking_caption_tracks,
+            Toast.LENGTH_SHORT,
+        ).show()
+        val startedAt = SystemClock.uptimeMillis()
+        val task = object : Runnable {
+            override fun run() {
+                if (resultSent || playerCoreReleased || isFinishing || isDestroyed) {
+                    pendingCaptionTrackPicker = null
+                    return
+                }
+                val trackCount = supportedTrackCount(C.TRACK_TYPE_TEXT)
+                val timedOut =
+                    SystemClock.uptimeMillis() - startedAt >= CAPTION_TRACK_WAIT_MS
+                if (trackCount >= 1 || timedOut) {
+                    pendingCaptionTrackPicker = null
+                    showTrackPickerNow(C.TRACK_TYPE_TEXT, sourceButton)
+                } else {
+                    handler.postDelayed(this, AUDIO_TRACK_POLL_MS)
+                }
+            }
+        }
+        pendingCaptionTrackPicker = task
         handler.postDelayed(task, AUDIO_TRACK_POLL_MS)
     }
 
@@ -1857,6 +1996,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         // selection. Reconsider the latest snapshot if the
                         // picker was dismissed without changing anything.
                         applyPreferredAudioOverride(player.currentTracks)
+                    } else {
+                        // Flutter owns series preferences and next-episode
+                        // preparation. Publish an explicit, session-scoped
+                        // selection immediately instead of waiting until the
+                        // native Activity eventually returns.
+                        publishPlaybackProgress(includeManualAudioSelection = true)
                     }
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -2700,6 +2845,34 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             .apply()
     }
 
+    private fun publishPlaybackProgress(
+        includeManualAudioSelection: Boolean = false,
+        isPlayingOverride: Boolean? = null,
+    ) {
+        if (
+            resultSent ||
+            !isForeground ||
+            !::player.isInitialized ||
+            playerCoreReleased
+        ) return
+        NativePlayerProgressBridge.publish(
+            checkpointKey = checkpointKey,
+            positionMs = safePositionMs(),
+            durationMs = safeDurationMs(),
+            isPlaying = isPlayingOverride
+                ?: runCatching { player.isPlaying }.getOrDefault(false),
+            audioLanguage = if (includeManualAudioSelection) {
+                nativeCanonicalTrackLanguage(
+                    selectedTrackLanguage(C.TRACK_TYPE_AUDIO),
+                    null,
+                )
+            } else {
+                null
+            },
+            audioPreferenceSet = includeManualAudioSelection,
+        )
+    }
+
     private fun clearNativeCheckpoint() {
         checkpointPreferences.edit()
             .remove(positionKey())
@@ -2715,13 +2888,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private fun updatedKey() = "$checkpointKey.updatedAt"
 
     override fun onPause() {
-        isForeground = false
-        pauseScheduledWork()
         if (::player.isInitialized && !playerCoreReleased && !resultSent) {
             persistCheckpoint()
             resumeAfterTransientPause = runCatching { player.playWhenReady }.getOrDefault(false)
+            // onIsPlayingChanged may arrive after the Activity is no longer
+            // foreground, so publish the impending pause explicitly first.
+            publishPlaybackProgress(isPlayingOverride = false)
             runCatching { player.pause() }
         }
+        isForeground = false
+        pauseScheduledWork()
         super.onPause()
     }
 
@@ -2788,6 +2964,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(hideControllerRunnable)
         pendingAudioTrackPicker?.let(handler::removeCallbacks)
         pendingAudioTrackPicker = null
+        pendingCaptionTrackPicker?.let(handler::removeCallbacks)
+        pendingCaptionTrackPicker = null
+        handler.removeCallbacks(unsupportedAudioWatchdog)
     }
 
     private fun armForegroundWork() {
@@ -3082,6 +3261,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val AUDIO_TRACK_POLL_MS = 250L
         private const val AUDIO_TRACK_DEFAULT_WAIT_MS = 2_000L
         private const val AUDIO_TRACK_ADVERTISED_WAIT_MS = 5_000L
+        private const val CAPTION_TRACK_WAIT_MS = 3_000L
+        private const val UNSUPPORTED_AUDIO_GRACE_MS = 1_500L
         private const val SKIP_SEGMENT_POLL_MS = 300L
         private const val MAX_SKIP_FETCH_ATTEMPTS = 3
         private const val MAX_SKIP_RESPONSE_BYTES = 256L * 1024L

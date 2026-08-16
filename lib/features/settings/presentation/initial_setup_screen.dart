@@ -339,28 +339,6 @@ class _PrivacyCommunityStep extends ConsumerWidget {
       child: Column(
         children: [
           _SetupChoiceRow(
-            label: 'Show this session in the anonymous live viewer count?',
-            children: [
-              _SetupChoice(
-                label: 'Keep off',
-                selected: !preferences.anonymousUsageCountEnabled,
-                onPressed: () => settings.setAnonymousUsageCountEnabled(false),
-              ),
-              _SetupChoice(
-                label: 'Enable live count',
-                selected: preferences.anonymousUsageCountEnabled,
-                onPressed: () => settings.setAnonymousUsageCountEnabled(true),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          Text(
-            'Only active/streaming state is counted. No show, episode, account, device ID, source, or URL is sent.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
-          ),
-          const SizedBox(height: 18),
-          _SetupChoiceRow(
             label:
                 'Send anonymous crash and error reports to help improve TetoTV?',
             children: [

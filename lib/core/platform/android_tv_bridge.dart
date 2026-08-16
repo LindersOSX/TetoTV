@@ -164,6 +164,39 @@ class MediaAction {
   final int? value;
 }
 
+@immutable
+class NativePlaybackProgress {
+  const NativePlaybackProgress({
+    required this.checkpointKey,
+    required this.position,
+    required this.duration,
+    required this.isPlaying,
+    this.audioLanguage,
+    this.audioPreferenceSet = false,
+  });
+
+  final String checkpointKey;
+  final Duration position;
+  final Duration duration;
+  final bool isPlaying;
+  final String? audioLanguage;
+  final bool audioPreferenceSet;
+
+  factory NativePlaybackProgress.fromMap(Map<Object?, Object?> value) =>
+      NativePlaybackProgress(
+        checkpointKey: value['checkpointKey'] as String? ?? '',
+        position: Duration(
+          milliseconds: (value['positionMs'] as num?)?.round() ?? 0,
+        ),
+        duration: Duration(
+          milliseconds: (value['durationMs'] as num?)?.round() ?? 0,
+        ),
+        isPlaying: value['isPlaying'] as bool? ?? false,
+        audioLanguage: value['audioLanguage'] as String?,
+        audioPreferenceSet: value['audioPreferenceSet'] as bool? ?? false,
+      );
+}
+
 class DiscordBridgeEvent {
   const DiscordBridgeEvent(this.type, this.data);
 
@@ -400,11 +433,15 @@ class AndroidTvBridge {
   static final instance = AndroidTvBridge._();
   static const _channel = MethodChannel('dev.tetotv/android_tv');
   final _mediaActions = StreamController<MediaAction>.broadcast();
+  final _nativePlaybackProgress =
+      StreamController<NativePlaybackProgress>.broadcast();
   final _discordEvents = StreamController<DiscordBridgeEvent>.broadcast();
   TvDeviceProfile? _cachedProfile;
   AndroidDeviceCategory? _cachedDeviceCategory;
 
   Stream<MediaAction> get mediaActions => _mediaActions.stream;
+  Stream<NativePlaybackProgress> get nativePlaybackProgress =>
+      _nativePlaybackProgress.stream;
   Stream<DiscordBridgeEvent> get discordEvents => _discordEvents.stream;
 
   Future<void> playHomeEasterEgg({
@@ -467,6 +504,15 @@ class AndroidTvBridge {
         _mediaActions.add(
           MediaAction(args['action'] as String? ?? '', args['value'] as int?),
         );
+        return;
+      case 'nativePlaybackProgress':
+        if (args == null) return;
+        final progress = NativePlaybackProgress.fromMap(args);
+        if (progress.checkpointKey.isNotEmpty &&
+            (progress.duration > Duration.zero ||
+                progress.audioPreferenceSet)) {
+          _nativePlaybackProgress.add(progress);
+        }
         return;
       case 'discordConnectionState':
       case 'discordPresenceError':

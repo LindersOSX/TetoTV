@@ -45,7 +45,9 @@ bool releaseAdvertisesMultipleAudio(String releaseName) {
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
       .trim();
-  return RegExp(r'\b(?:dual|multi) audio\b').hasMatch(normalized);
+  return RegExp(r'\b(?:dual|multi)(?: audio)?\b').hasMatch(normalized) ||
+      RegExp(r'\b(?:eng|english) (?:jpn|japanese)\b').hasMatch(normalized) ||
+      RegExp(r'\b(?:jpn|japanese) (?:eng|english)\b').hasMatch(normalized);
 }
 
 String mediaKitAudioTrackSignature(Iterable<AudioTrack> tracks) => tracks
@@ -62,6 +64,22 @@ String mediaKitAudioTrackSignature(Iterable<AudioTrack> tracks) => tracks
     .join('\u001e');
 
 String vlcAudioTrackSignature(Map<int, String> tracks) {
+  final entries = tracks.entries.where((entry) => entry.key >= 0).toList()
+    ..sort((left, right) => left.key.compareTo(right.key));
+  return entries
+      .map((entry) => '${entry.key}\u001f${entry.value}')
+      .join('\u001e');
+}
+
+String mediaKitSubtitleTrackSignature(Iterable<SubtitleTrack> tracks) => tracks
+    .where((track) => track.id != 'auto' && track.id != 'no')
+    .map(
+      (track) =>
+          [track.id, track.title ?? '', track.language ?? ''].join('\u001f'),
+    )
+    .join('\u001e');
+
+String vlcSubtitleTrackSignature(Map<int, String> tracks) {
   final entries = tracks.entries.where((entry) => entry.key >= 0).toList()
     ..sort((left, right) => left.key.compareTo(right.key));
   return entries

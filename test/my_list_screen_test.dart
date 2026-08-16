@@ -132,6 +132,38 @@ void main() {
       username: 'MALFan',
       meanScore: 8.1,
     );
+    final accountsController = _StaticTrackingAccountsController(
+      const TrackingAccountsState(
+        usernames: {
+          TrackingProvider.anilist: 'TetoFan',
+          TrackingProvider.myAnimeList: 'MALFan',
+        },
+        profiles: {
+          TrackingProvider.anilist: profile,
+          TrackingProvider.myAnimeList: malProfile,
+        },
+        savedProfiles: {
+          TrackingProvider.anilist: [
+            StoredTrackingProfile(
+              id: 'anilist-tetofan',
+              provider: TrackingProvider.anilist,
+              username: 'TetoFan',
+            ),
+          ],
+          TrackingProvider.myAnimeList: [
+            StoredTrackingProfile(
+              id: 'mal-malfan',
+              provider: TrackingProvider.myAnimeList,
+              username: 'MALFan',
+            ),
+          ],
+        },
+        activeProfileIds: {
+          TrackingProvider.anilist: 'anilist-tetofan',
+          TrackingProvider.myAnimeList: 'mal-malfan',
+        },
+      ),
+    );
 
     await tester.pumpWidget(
       ProviderScope(
@@ -140,18 +172,7 @@ void main() {
             TrackingListStatus.watching,
           ).overrideWith((_) async => const TrackingListResult(items: [])),
           trackingAccountsControllerProvider.overrideWith(
-            (_) => _StaticTrackingAccountsController(
-              const TrackingAccountsState(
-                usernames: {
-                  TrackingProvider.anilist: 'TetoFan',
-                  TrackingProvider.myAnimeList: 'MALFan',
-                },
-                profiles: {
-                  TrackingProvider.anilist: profile,
-                  TrackingProvider.myAnimeList: malProfile,
-                },
-              ),
-            ),
+            (_) => accountsController,
           ),
         ],
         child: const MaterialApp(home: MyListScreen()),
@@ -168,39 +189,8 @@ void main() {
     );
     expect(find.text('TetoFan'), findsOneWidget);
     expect(find.text('MALFan'), findsNothing);
-    expect(find.text('AniList'), findsOneWidget);
-    expect(find.text('+1 MAL'), findsOneWidget);
-    expect(
-      tester
-          .widget<Container>(
-            find.byKey(const ValueKey('main-nav-profile-additional')),
-          )
-          .decoration,
-      isNull,
-    );
-    final anilistStats = find.byKey(
-      const ValueKey('main-nav-profile-stats-anilist'),
-    );
-    expect(
-      find.descendant(of: anilistStats, matching: find.text('120 titles')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: anilistStats, matching: find.text('2400 episodes')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: anilistStats, matching: find.text('800h watched')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: anilistStats, matching: find.text('Mean 82.4/100')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('main-nav-profile-stats-myanimelist')),
-      findsNothing,
-    );
+    expect(find.text('AniList'), findsNothing);
+    expect(find.text('120 titles'), findsNothing);
     expect(
       tester.getTopLeft(card).dy,
       lessThan(tester.getTopLeft(find.text('Watching').first).dy),
@@ -209,10 +199,32 @@ void main() {
       find.descendant(of: card, matching: find.byType(NetworkArtwork)),
     );
     expect(artwork.url, 'https://img.anili.st/avatar.png');
+
+    await tester.tap(find.byKey(const ValueKey('main-nav-profile-summary')));
+    await tester.pumpAndSettle();
+    expect(find.text('AniList'), findsWidgets);
+    expect(find.text('MALFan'), findsOneWidget);
+    expect(find.text('120 titles'), findsOneWidget);
+    expect(find.text('2400 episodes'), findsOneWidget);
+    expect(find.text('800h watched'), findsOneWidget);
+    expect(find.text('Mean 82.4/100'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('main-nav-switch-profile-myanimelist-mal-malfan'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('main-nav-switch-profile-myanimelist-mal-malfan'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(accountsController.switchedProfile?.id, 'mal-malfan');
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('linked profiles stay labelled on a narrow screen', (
+  testWidgets('tracker profile control yields to navigation on a phone', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(430, 844);
@@ -256,25 +268,10 @@ void main() {
 
     expect(
       find.byKey(const ValueKey('main-nav-profile-summary')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('AniList'), findsOneWidget);
-    expect(find.textContaining('TetoFan'), findsOneWidget);
-    expect(
-      tester
-          .widget<Container>(
-            find.byKey(const ValueKey('main-nav-profile-compact-shell')),
-          )
-          .decoration,
-      isNull,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('main-nav-profile-summary')),
-        matching: find.byType(NetworkArtwork),
-      ),
       findsNothing,
     );
+    expect(find.textContaining('TetoFan'), findsNothing);
+    expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -355,19 +352,21 @@ void main() {
         reason: 'Header geometry must remain fixed at width $width',
       );
       final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
-      if (width == 330) {
+      if (width < 700) {
         expect(profile, findsNothing);
       } else {
         expect(profile, findsOneWidget, reason: 'width $width');
         expect(
           tester.getRect(profile).left,
-          greaterThanOrEqualTo(tester.getRect(settings).right),
-          reason: 'Profile must fill the space after Settings at width $width',
+          closeTo(tester.getRect(navigation).left, .01),
+          reason: 'Profile must stay at the far left at width $width',
         );
         expect(
           tester.getRect(profile).right,
-          closeTo(tester.getRect(navigation).right, .01),
-          reason: 'Profile must use the right-side gap at width $width',
+          lessThan(
+            tester.getRect(find.byKey(const ValueKey('main-nav-home'))).left,
+          ),
+          reason: 'Profile must precede primary navigation at width $width',
         );
         expect(
           tester.getCenter(profile).dy,
@@ -375,20 +374,11 @@ void main() {
           reason: 'Profile and navigation share one row at width $width',
         );
       }
-      if (width == 820) {
-        expect(find.textContaining('+1 MAL'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('main-nav-profile-myanimelist')),
-          findsNothing,
-        );
-      }
-      if (width == 960 || width == 1200) {
-        expect(find.text('+1 MAL'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('main-nav-profile-myanimelist')),
-          findsNothing,
-        );
-      }
+      expect(find.textContaining('+1 MAL'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('main-nav-profile-myanimelist')),
+        findsNothing,
+      );
       expect(tester.takeException(), isNull, reason: 'width $width');
     }
   });
@@ -443,36 +433,19 @@ void main() {
     final calendar = find.byKey(const ValueKey('main-nav-calendar'));
     final settings = find.byKey(const ValueKey('main-nav-settings'));
     final navigation = find.byKey(const ValueKey('main-navigation'));
-    expect(find.text('AniList'), findsOneWidget);
     expect(find.text('LivingRoomFan'), findsOneWidget);
     expect(
       find.descendant(of: profile, matching: find.byType(NetworkArtwork)),
       findsOneWidget,
     );
-    final stats = find.byKey(const ValueKey('main-nav-profile-stats-anilist'));
-    expect(
-      find.descendant(of: stats, matching: find.text('71 titles')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: stats, matching: find.text('804 episodes')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: stats, matching: find.text('402h watched')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: stats, matching: find.text('Mean 78.6/100')),
-      findsOneWidget,
-    );
-    expect(tester.getSize(profile).width, inInclusiveRange(360, 410));
-    expect(tester.getSize(profile).height, 58);
+    expect(find.text('AniList'), findsNothing);
+    expect(find.text('71 titles'), findsNothing);
+    expect(tester.getSize(profile), const Size(190, 46));
     expect(
       tester.getSize(
         find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
       ),
-      const Size(44, 44),
+      const Size(36, 36),
     );
     final profileContainer = tester.widget<Container>(
       find.byKey(const ValueKey('main-nav-profile-anilist')),
@@ -504,12 +477,21 @@ void main() {
     );
     expect(
       tester.getRect(profile).left,
-      greaterThanOrEqualTo(tester.getRect(settings).right),
+      closeTo(tester.getRect(navigation).left, .01),
     );
     expect(
       tester.getRect(profile).right,
-      closeTo(tester.getRect(navigation).right, .01),
+      lessThan(
+        tester.getRect(find.byKey(const ValueKey('main-nav-home'))).left,
+      ),
     );
+    await tester.tap(profile);
+    await tester.pumpAndSettle();
+    expect(find.text('AniList'), findsOneWidget);
+    expect(find.text('71 titles'), findsOneWidget);
+    expect(find.text('804 episodes'), findsOneWidget);
+    expect(find.text('402h watched'), findsOneWidget);
+    expect(find.text('Mean 78.6/100'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -662,36 +644,39 @@ void main() {
       tester.getRect(find.byKey(const ValueKey('header-layout-content'))).top,
       contentTopBefore,
     );
-    expect(
-      tester.getRect(find.byKey(const ValueKey('main-nav-wordmark'))),
-      wordmarkBefore,
+    final wordmarkAfter = tester.getRect(
+      find.byKey(const ValueKey('main-nav-wordmark')),
     );
-    expect(
-      tester.getRect(find.byKey(const ValueKey('main-nav-my-list'))),
-      myListBefore,
+    final myListAfter = tester.getRect(
+      find.byKey(const ValueKey('main-nav-my-list')),
     );
-    expect(
-      tester.getRect(find.byKey(const ValueKey('main-nav-settings'))),
-      settingsBefore,
+    final settingsAfter = tester.getRect(
+      find.byKey(const ValueKey('main-nav-settings')),
     );
+    expect(wordmarkAfter.left, greaterThan(wordmarkBefore.left));
+    expect(myListAfter.left, greaterThan(myListBefore.left));
+    expect(settingsAfter.left, greaterThan(settingsBefore.left));
+    expect(wordmarkAfter.top, wordmarkBefore.top);
+    expect(myListAfter.top, myListBefore.top);
+    expect(settingsAfter.top, settingsBefore.top);
 
     final profileSummary = find.byKey(
       const ValueKey('main-nav-profile-summary'),
     );
     expect(
       find.descendant(of: profileSummary, matching: find.byType(TvFocusable)),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.descendant(
         of: profileSummary,
         matching: find.byType(FocusableActionDetector),
       ),
-      findsNothing,
+      findsOneWidget,
     );
     final semantics = tester.widget<Semantics>(profileSummary);
-    expect(semantics.properties.button, isNot(true));
-    expect(semantics.properties.onTap, isNull);
+    expect(semantics.properties.button, isTrue);
+    expect(semantics.properties.onTap, isNotNull);
     expect(semantics.excludeSemantics, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
@@ -1057,6 +1042,14 @@ class _StaticTrackingAccountsController extends TrackingAccountsController {
 
   @override
   Future<void> load() async {}
+
+  StoredTrackingProfile? switchedProfile;
+
+  @override
+  Future<bool> switchProfile(StoredTrackingProfile profile) async {
+    switchedProfile = profile;
+    return true;
+  }
 
   void replace(TrackingAccountsState next) => state = next;
 }

@@ -2,17 +2,16 @@ import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
-import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
-import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
+import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
@@ -27,13 +26,10 @@ import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
-import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
+import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
-import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
-import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:go_router/go_router.dart';
@@ -181,7 +177,6 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   _TvPlaybackEngine _engine = _TvPlaybackEngine.nativeMedia3;
   late String _activeSource;
   late PlaybackLaunch _activeLaunch;
-  AnonymousUsageReporter? _usageReporter;
   bool _profileReady = false;
   Duration? _resumeOverride;
   bool _manualEngineSelection = false;
@@ -196,10 +191,6 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   @override
   void initState() {
     super.initState();
-    if (!kDebugMode) {
-      _usageReporter = ref.read(anonymousUsageReporterProvider);
-      _usageReporter!.setStreaming(true);
-    }
     _activeSource = widget.source;
     _activeLaunch = widget.launch;
     final preferred = ref.read(settingsPreferencesProvider).preferredPlayer;
@@ -216,9 +207,6 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
 
   @override
   void dispose() {
-    // Riverpod invalidates ConsumerState.ref before State.dispose is invoked.
-    // Use the dependency captured while mounted instead of reading ref here.
-    _usageReporter?.setStreaming(false);
     unawaited(_activeLaunch.stream.playbackLease?.close());
     super.dispose();
   }
@@ -538,6 +526,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
   late final TetoTvDatabase _database;
+  late final NextEpisodePreparationController _nextEpisodePreparation;
 
   Map<String, String> get _httpHeaders => {
     'Accept': '*/*',
@@ -599,6 +588,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   bool _failingOver = false;
   bool _prewarming = false;
   bool _prewarmed = false;
+  final NextEpisodePrewarmRetryPolicy _prewarmRetry =
+      NextEpisodePrewarmRetryPolicy();
+  late NextEpisodePrewarmSettingsKey _prewarmSettingsKey;
+  bool _preserveNextEpisodePreparation = false;
   DateTime _lastCheckpointSave = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastMediaSessionUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   StreamSubscription<bool>? _playingSubscription;
@@ -733,6 +726,18 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     // Final checkpoints and preferences are written during State.dispose,
     // after Riverpod has invalidated ConsumerState.ref.
     _database = ref.read(tetoTvDatabaseProvider);
+    _nextEpisodePreparation = ref.read(
+      nextEpisodePreparationControllerProvider,
+    );
+    _prewarmSettingsKey = NextEpisodePrewarmSettingsKey.fromSettings(
+      ref.read(settingsPreferencesProvider),
+    );
+    ref.listenManual(settingsPreferencesProvider, (_, next) {
+      final key = NextEpisodePrewarmSettingsKey.fromSettings(next);
+      if (key == _prewarmSettingsKey) return;
+      _prewarmSettingsKey = key;
+      _invalidateNextEpisodePreparation();
+    });
     _source = widget.source;
     _currentRelease = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
@@ -931,10 +936,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final duration = _player.state.duration;
     _scheduleSkipSegmentLoad(duration);
     if (duration.inSeconds <= 0) return;
-    final ratio = position.inMilliseconds / duration.inMilliseconds;
-    if (!_prewarmed && !_prewarming && ratio >= .65) {
-      unawaited(_prewarmNextEpisode());
-    }
+    _maybePrewarmNextEpisode(position: position, duration: duration);
     if (_progressHandled || widget.episode == null) return;
     if (widget.anilistMediaId == null && widget.malMediaId == null) return;
     final threshold = ref
@@ -1171,22 +1173,86 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
+  Future<bool> _openPreparedNextEpisode(
+    StateController<Set<int>> unavailableNoticeController,
+  ) async {
+    final preparation = ref.read(nextEpisodePreparationControllerProvider);
+    final prepared = await preparation.take(
+      widget.anilistMediaId!,
+      widget.episode!,
+      currentRequest: _nextEpisodePreparationRequest(),
+    );
+    if (prepared == null) return false;
+    if (!mounted || _engineHandoffInProgress) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    final requestedEpisode = widget.episode! + 1;
+    if (prepared.fillerDecision.dataUnavailable &&
+        consumeFillerUnavailableNotice(
+          unavailableNoticeController,
+          widget.anilistMediaId!,
+        )) {
+      showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+    }
+    unawaited(showFillerSkipNotification(context, prepared.fillerDecision));
+    if (!mounted || _engineHandoffInProgress) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    final completedPosition = _player.state.duration > Duration.zero
+        ? _player.state.duration
+        : _player.state.position;
+    if (!await _prepareForEngineHandoff(completedPosition)) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    if (!mounted) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    _preserveNextEpisodePreparation = true;
+    try {
+      final navigation = GoRouter.of(context).pushReplacement<void>(
+        preparedNextEpisodePlayerLocation(prepared),
+        extra: prepared.launch,
+      );
+      unawaited(
+        navigation.then<void>(
+          (_) {},
+          onError: (Object error, StackTrace stackTrace) async {
+            _preserveNextEpisodePreparation = false;
+            await prepared.launch.stream.playbackLease?.close();
+            if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+          },
+        ),
+      );
+    } catch (_) {
+      _preserveNextEpisodePreparation = false;
+      await prepared.launch.stream.playbackLease?.close();
+      if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+    }
+    return true;
+  }
+
   Future<void> _playNextEpisode() async {
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
     if (!_nextEpisodeHandoff.tryEnter()) return;
     try {
-      final catalog = ref.read(catalogClientProvider);
-      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final unavailableNoticeController = ref.read(
         fillerUnavailableNotifiedSeriesProvider.notifier,
       );
+      if (await _openPreparedNextEpisode(unavailableNoticeController)) return;
+      if (!mounted) return;
+      final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final skipFillerEpisodes = _seriesPreferences.skipFillerEpisodes;
       final details = await catalog.details(widget.anilistMediaId!);
       if (!mounted) return;
       final requestedEpisode = widget.episode! + 1;
-      if (details.episodes != null && requestedEpisode > details.episodes!) {
+      if (!isEpisodeAvailableForPlayback(details, requestedEpisode)) {
         return; // No more episodes
       }
       final totalEpisodes = episodeNavigationCeiling(
@@ -1202,6 +1268,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         skipEnabled: skipFillerEpisodes,
       );
       if (!mounted) return;
+      final nextEp = decision.episode;
+      if (nextEp != null && !isEpisodeAvailableForPlayback(details, nextEp)) {
+        return;
+      }
       if (decision.dataUnavailable &&
           consumeFillerUnavailableNotice(
             unavailableNoticeController,
@@ -1209,9 +1279,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           )) {
         showFillerDataUnavailableNotice(context, episode: requestedEpisode);
       }
-      await showFillerSkipNotification(context, decision);
-      if (!mounted || decision.episode == null) return;
-      final nextEp = decision.episode!;
+      unawaited(showFillerSkipNotification(context, decision));
+      if (!mounted || nextEp == null) return;
       if (!mounted) return;
       final preferredProvider = _currentRelease.provider?.trim();
       final preferredSourceId = _currentRelease.sourceId.trim();
@@ -1481,24 +1550,32 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _applySubtitle() async {
-    if (!_seriesPreferences.subtitleEnabled) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
-      return;
-    }
     final subtitle =
         _currentStream.externalSubtitle?.toString() ?? widget.subtitle;
     if (subtitle != null && subtitle.isNotEmpty) {
-      if (subtitle.startsWith('asset:///')) {
-        final assetKey = subtitle.substring('asset:///'.length);
-        final data = await rootBundle.loadString(assetKey);
-        await _player.setSubtitleTrack(
-          SubtitleTrack.data(data, title: 'Bundled styled subtitles'),
-        );
-      } else {
-        await _player.setSubtitleTrack(
-          SubtitleTrack.uri(subtitle, title: 'External subtitles'),
-        );
+      try {
+        if (subtitle.startsWith('asset:///')) {
+          final assetKey = subtitle.substring('asset:///'.length);
+          final data = await rootBundle.loadString(assetKey);
+          await _player.setSubtitleTrack(
+            SubtitleTrack.data(data, title: 'Bundled styled subtitles'),
+          );
+        } else {
+          await _player.setSubtitleTrack(
+            SubtitleTrack.uri(subtitle, title: 'External subtitles'),
+          );
+        }
+      } catch (_) {
+        if (mounted && !_engineHandoffInProgress) {
+          _showTrackMessage('External captions could not be loaded');
+        }
       }
+    }
+    if (!_seriesPreferences.subtitleEnabled) {
+      // Register a safe external track before disabling display. libmpv keeps
+      // it in the selectable track list, so Dub-by-default playback can still
+      // turn CC on later instead of incorrectly reporting no captions.
+      await _player.setSubtitleTrack(SubtitleTrack.no());
     }
   }
 
@@ -1704,6 +1781,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           await _openMedia(resume: position, propagateFailure: true);
           if (!mounted || _engineHandoffInProgress) return;
           await widget.onStreamAdopted(ready, candidate);
+          _invalidateNextEpisodePreparation();
           if (_skips.isEmpty) {
             _skipLoadComplete = false;
             _skipLoadAttempts = 0;
@@ -1804,6 +1882,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             return false;
           }
           await widget.onStreamAdopted(option.stream, option.release);
+          _invalidateNextEpisodePreparation();
           preparedOption = null;
           setState(() => _playbackError = null);
           return true;
@@ -2063,13 +2142,64 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     );
     final position = _effectiveHandoffPosition();
     if (await _prepareForEngineHandoff(position)) {
-      widget.onUseVlc(
-        position,
-        _currentStream,
-        _currentRelease,
-        List.unmodifiable(_directStreamOptions),
-      );
+      _preserveNextEpisodePreparation = true;
+      try {
+        widget.onUseVlc(
+          position,
+          _currentStream,
+          _currentRelease,
+          List.unmodifiable(_directStreamOptions),
+        );
+      } catch (_) {
+        _preserveNextEpisodePreparation = false;
+        rethrow;
+      }
     }
+  }
+
+  NextEpisodePreparationRequest _nextEpisodePreparationRequest() =>
+      NextEpisodePreparationRequest(
+        currentLaunch: PlaybackLaunch(
+          stream: _currentStream,
+          episode: widget.launch.episode,
+          selectedRelease: _currentRelease,
+          alternatives: widget.launch.alternatives,
+          directAlternatives: _directStreamOptions,
+        ),
+        seriesPreferences: _seriesPreferences,
+        debridService: widget.debridService,
+      );
+
+  void _maybePrewarmNextEpisode({
+    required Duration position,
+    required Duration duration,
+  }) {
+    if (!mounted ||
+        _engineHandoffInProgress ||
+        !_seriesPreferences.autoplayNextEpisode ||
+        widget.episode == null ||
+        !shouldPrepareNextEpisode(position: position, duration: duration)) {
+      return;
+    }
+    if (_prewarmed) {
+      if (_nextEpisodePreparation.hasReady(_nextEpisodePreparationRequest())) {
+        return;
+      }
+      _prewarmed = false;
+      _prewarmRetry.resetGeneration();
+    }
+    if (_prewarming || !_prewarmRetry.canAttempt(DateTime.now())) return;
+    unawaited(_prewarmNextEpisode());
+  }
+
+  void _invalidateNextEpisodePreparation() {
+    _prewarmRetry.resetGeneration();
+    _prewarming = false;
+    _prewarmed = false;
+    _maybePrewarmNextEpisode(
+      position: _player.state.position,
+      duration: _player.state.duration,
+    );
   }
 
   Future<void> _prewarmNextEpisode() async {
@@ -2077,72 +2207,42 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _engineHandoffInProgress ||
         _prewarming ||
         _prewarmed ||
+        !_seriesPreferences.autoplayNextEpisode ||
         widget.episode == null) {
       return;
     }
+    final generation = _prewarmRetry.generation;
     _prewarming = true;
-    final userSourcesController = ref.read(
-      userTorrentSourcesControllerProvider.notifier,
-    );
-    final userSourcesSubscription = ref.listenManual(
-      userTorrentSourcesControllerProvider,
-      (_, _) {},
-    );
-    final tokenService = ref.read(debridTokenServiceProvider);
-    final launchEpisode = widget.launch.episode;
-    final nextEpisodeNumber = widget.episode! + 1;
-    final currentRelease = _currentRelease;
-    final audioPreference = _audioPreference;
+    final preparation = ref.read(nextEpisodePreparationControllerProvider);
     try {
-      final userManifests = await loadPlayerPrewarmSnapshot(
-        load: userSourcesController.load,
-        snapshot: () => userSourcesSubscription.read().manifestUrls,
-        isActive: () => mounted && !_engineHandoffInProgress,
+      final outcome = await preparation.warmWithOutcome(
+        _nextEpisodePreparationRequest(),
       );
-      if (!mounted || _engineHandoffInProgress || userManifests == null) return;
-      final sources = <ReleaseSource>[
-        for (final manifestUrl in userManifests)
-          StremioTorrentReleaseSource(manifestUrl: manifestUrl),
-        if (AppConfig.hasReleaseResolver)
-          HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
-      ];
-      if (sources.isEmpty) return;
-      final next = EpisodeReference(
-        anilistMediaId: launchEpisode.anilistMediaId,
-        malMediaId: launchEpisode.malMediaId,
-        year: launchEpisode.year,
-        title: launchEpisode.title,
-        alternativeTitles: launchEpisode.alternativeTitles,
-        coverImageUrl: launchEpisode.coverImageUrl,
-        episode: nextEpisodeNumber,
-      );
-      final releases = await CompositeReleaseSource(sources).search(next);
-      if (!mounted || _engineHandoffInProgress) return;
-      if (releases.isEmpty) return;
-      final currentGroup = releaseGroupKey(currentRelease.releaseName);
-      final currentProvider = currentRelease.provider?.toLowerCase();
-      releases.sort((a, b) {
-        final group = (releaseGroupKey(a.releaseName) == currentGroup ? 0 : 1)
-            .compareTo(releaseGroupKey(b.releaseName) == currentGroup ? 0 : 1);
-        if (group != 0 && currentGroup != null) return group;
-        final provider = (a.provider?.toLowerCase() == currentProvider ? 0 : 1)
-            .compareTo(b.provider?.toLowerCase() == currentProvider ? 0 : 1);
-        if (provider != 0 && currentProvider != null) return provider;
-        final audio = releaseAudioPreferenceRank(
-          a,
-          audioPreference,
-        ).compareTo(releaseAudioPreferenceRank(b, audioPreference));
-        if (audio != 0) return audio;
-        return b.seeders.compareTo(a.seeders);
-      });
-      await _resolveRelease(releases.first, next, tokenService: tokenService);
-      if (!mounted || _engineHandoffInProgress) return;
-      _prewarmed = true;
+      final prepared = outcome.prepared;
+      if (!mounted ||
+          _engineHandoffInProgress ||
+          !_prewarmRetry.isCurrent(generation)) {
+        return;
+      }
+      _prewarmed = prepared != null;
+      if (prepared == null) {
+        if (outcome.isTerminal) {
+          _prewarmRetry.recordTerminal(generation);
+        } else {
+          _prewarmRetry.recordFailure(generation, DateTime.now());
+        }
+      } else {
+        _prewarmRetry.recordSuccess(generation);
+      }
     } catch (_) {
       // Prewarming is intentionally invisible and never blocks playback.
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarmRetry.recordFailure(generation, DateTime.now());
+      }
     } finally {
-      userSourcesSubscription.close();
-      if (mounted) _prewarming = false;
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarming = false;
+      }
     }
   }
 
@@ -2581,6 +2681,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         return;
       }
       await widget.onStreamAdopted(option.stream, option.release);
+      _invalidateNextEpisodePreparation();
     } catch (_) {
       await option.stream.playbackLease?.close();
       _source = previousSource;
@@ -2735,11 +2836,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (!await _prepareForEngineHandoff(position)) return;
     final callback = widget.onSelectEngine;
     if (callback != null) {
-      callback(selected, position, stream, release, directStreams);
+      _preserveNextEpisodePreparation = true;
+      try {
+        callback(selected, position, stream, release, directStreams);
+      } catch (_) {
+        _preserveNextEpisodePreparation = false;
+        rethrow;
+      }
       return;
     }
     if (selected == PreferredPlayer.vlc) {
-      widget.onUseVlc(position, stream, release, directStreams);
+      _preserveNextEpisodePreparation = true;
+      try {
+        widget.onUseVlc(position, stream, release, directStreams);
+      } catch (_) {
+        _preserveNextEpisodePreparation = false;
+        rethrow;
+      }
       return;
     }
     _showTrackMessage('This player is not available from this screen');
@@ -2990,6 +3103,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return;
     }
     final selected = tracks.firstWhere((track) => track.id == selectedId);
+    final previousAudioLanguage = _seriesPreferences.audioLanguage;
+    final previousAudioPreferenceSet = _seriesPreferences.audioPreferenceSet;
     _preferredAudioSelected = true;
     await _player.setAudioTrack(selected);
     final selectedLanguage = persistedPlayerAudioLanguage(
@@ -3004,6 +3119,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       audioPreferenceSet: true,
     );
     await _saveSeriesPreferences();
+    if (playerAudioIntentChanged(
+      previousLanguage: previousAudioLanguage,
+      previousPreferenceSet: previousAudioPreferenceSet,
+      nextLanguage: _seriesPreferences.audioLanguage,
+      nextPreferenceSet: _seriesPreferences.audioPreferenceSet,
+    )) {
+      _invalidateNextEpisodePreparation();
+    }
     _showTrackMessage(
       'Audio: ${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
     );
@@ -3057,16 +3180,35 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openSubtitleTrackPicker() async {
-    var embedded = _player.state.tracks.subtitle
-        .where((track) => track.id != 'auto' && track.id != 'no')
-        .toList(growable: false);
-    for (var attempt = 0; embedded.isEmpty && attempt < 5; attempt++) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      if (!mounted) return;
-      embedded = _player.state.tracks.subtitle
-          .where((track) => track.id != 'auto' && track.id != 'no')
-          .toList(growable: false);
-    }
+    _showTrackMessage('Checking embedded and external captions…');
+    final discovered = await waitForStableTrackSnapshot<List<SubtitleTrack>>(
+      read: () async {
+        if (!mounted || _engineHandoffInProgress) {
+          return const <SubtitleTrack>[];
+        }
+        return _player.state.tracks.subtitle
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .toList(growable: false);
+      },
+      signature: mediaKitSubtitleTrackSignature,
+      hasTracks: (tracks) => tracks.isNotEmpty,
+      maximumWait:
+          _currentStream.externalSubtitle != null || widget.subtitle != null
+          ? const Duration(seconds: 4)
+          : const Duration(seconds: 3),
+    );
+    if (!mounted || _engineHandoffInProgress) return;
+    // media_kit can select a URI subtitle before it adds that external track
+    // to the demuxer's published list. Keep the selected track visible in the
+    // picker instead of incorrectly presenting only "Off".
+    final current = _player.state.track.subtitle;
+    final embedded = <SubtitleTrack>[
+      ...discovered,
+      if (current.id != 'auto' &&
+          current.id != 'no' &&
+          !discovered.any((track) => track.id == current.id))
+        current,
+    ];
     final tracks = <SubtitleTrack>[SubtitleTrack.no(), ...embedded];
     _controlsTimer?.cancel();
     final currentId = _player.state.track.subtitle.id;
@@ -3105,8 +3247,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     final selected = tracks.firstWhere((track) => track.id == selectedId);
     _preferredSubtitleSelected = true;
+    final selectedLanguage = canonicalPlayerTrackLanguage(
+      language: selected.language,
+      title: selected.title,
+    );
+    _seriesPreferences = _seriesPreferences.copyWith(
+      subtitleLanguage: selectedLanguage.isEmpty
+          ? _seriesPreferences.subtitleLanguage
+          : selectedLanguage,
+      subtitleEnabled: selected.id != 'no',
+      subtitlePreferenceSet: true,
+    );
     await _player.setSubtitleTrack(selected);
-    unawaited(_saveSeriesPreferences());
+    await _saveSeriesPreferences();
     _showTrackMessage(
       selected.id == 'no'
           ? 'Subtitles: Off'
@@ -3235,6 +3388,16 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   void dispose() {
     _skipLoadTimer?.cancel();
     _durationSubscription?.cancel();
+    if (!_preserveNextEpisodePreparation && widget.episode != null) {
+      final request = _nextEpisodePreparationRequest();
+      unawaited(
+        _nextEpisodePreparation.abandon(
+          request.mediaId,
+          request.currentEpisode,
+          currentRequest: request,
+        ),
+      );
+    }
     if (!_engineHandoffInProgress && !_playerReleasedForHandoff) {
       unawaited(_persistPlayback(_player.state.position, force: true));
       unawaited(_saveSeriesPreferences());

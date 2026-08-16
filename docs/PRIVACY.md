@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 14, 2026
+Effective date: August 15, 2026
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
@@ -54,8 +54,15 @@ TetoTV makes network requests only for app features the user uses:
   episode count, and confirmed filler episode numbers) is treated as valid for
   24 hours; expired records are ignored and can remain in application cache
   storage until they are overwritten or application data is cleared;
-- source repositories and extensions installed by the user receive the title,
-  episode, and related request data needed to find sources;
+- enabled source repositories and Web-stream extensions installed by the user
+  receive the title, episode, and related request data needed to find sources.
+  To reduce TV loading delays, this discovery can begin after encrypted source
+  preferences finish loading when an episode is selected on its details page;
+  changing the selected episode or leaving the page cancels that observer.
+  TetoTV does not ask a debrid provider to resolve a torrent merely from
+  opening details. If next-episode autoplay is enabled, the selected debrid
+  provider or Web extension can be contacted again during the final ten
+  minutes of playback to prepare the next episode;
 - voice search uses Android's selected speech-recognition service. If a
   device cannot open its system voice prompt, TetoTV requests microphone
   permission and sends the spoken query to that recognition service only
@@ -131,21 +138,6 @@ entry:
 
 Pairing records are held in process memory, not a user-profile database. A
 broker restart can end an active pairing session.
-
-## Anonymous live activity count
-
-Anonymous live counting is disabled by default and requires an explicit choice
-during first-time setup or in Settings. When enabled, the app creates a random
-per-launch session token. The token is kept only in app and broker memory and
-is not a persistent device or user identifier. TetoTV reports only whether
-that app session is active or currently playing video. It does not send the
-show, episode, account, device identifier, stream provider, or URL.
-
-The broker deletes an active session when the app opts out or closes normally,
-and automatically expires it after about three minutes without a heartbeat.
-Only aggregate active and streaming counts are publicly available. The host
-may process IP addresses for short-lived rate limiting and normal operational
-access logs. Users can disable this feature at any time in Settings.
 
 ## Diagnostics and sharing
 
