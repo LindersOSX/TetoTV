@@ -22,6 +22,7 @@ void main() {
     await controller.setAutoSkipOutros(true);
     await controller.setShowFillerIndicators(false);
     await controller.setHomeLayout(HomeLayout.compact);
+    await controller.setShowHome(false);
     await controller.setShowMyList(false);
     await controller.setShowDiscover(false);
     await controller.setShowCalendar(false);
@@ -40,6 +41,14 @@ void main() {
     await controller.setWebStreamQuality(WebStreamQualityPreference.p720);
     await controller.setDefaultLandingPage(LandingPage.myList);
     await controller.setAnonymousCrashReportingEnabled(true);
+    await controller.setTopNavigationOrder(const [
+      TopNavigationDestination.settings,
+      TopNavigationDestination.calendar,
+      TopNavigationDestination.discover,
+      TopNavigationDestination.myList,
+      TopNavigationDestination.home,
+      TopNavigationDestination.search,
+    ]);
 
     final restored = SettingsPreferencesController(storage);
     await restored.load();
@@ -50,6 +59,8 @@ void main() {
     expect(restored.state.autoSkipOutros, isTrue);
     expect(restored.state.showFillerIndicators, isFalse);
     expect(restored.state.homeLayout, HomeLayout.compact);
+    expect(restored.state.showHome, isFalse);
+    expect(restored.state.showSettings, isTrue);
     expect(restored.state.showMyList, isFalse);
     expect(restored.state.showDiscover, isFalse);
     expect(restored.state.showCalendar, isFalse);
@@ -71,6 +82,14 @@ void main() {
     expect(restored.state.webStreamQuality, WebStreamQualityPreference.p720);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
+    expect(restored.state.topNavigationOrder, [
+      TopNavigationDestination.settings,
+      TopNavigationDestination.calendar,
+      TopNavigationDestination.discover,
+      TopNavigationDestination.myList,
+      TopNavigationDestination.home,
+      TopNavigationDestination.search,
+    ]);
     expect(restored.state.loaded, isTrue);
   });
 
@@ -94,6 +113,9 @@ void main() {
       expect(controller.state.navigationSounds, isTrue);
       expect(controller.state.clickSounds, isTrue);
       expect(controller.state.defaultLandingPage, LandingPage.home);
+      expect(controller.state.showHome, isTrue);
+      expect(controller.state.showSettings, isTrue);
+      expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
       expect(controller.state.showMyList, isTrue);
       expect(controller.state.showDiscover, isTrue);
       expect(controller.state.showCalendar, isTrue);
@@ -219,6 +241,68 @@ void main() {
     expect(controller.takeInitialLandingRoute(), isNull);
   });
 
+  test('top navigation always keeps Home or Settings reachable', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setShowHome(false);
+    expect(controller.state.showHome, isFalse);
+    expect(controller.state.showSettings, isTrue);
+
+    await controller.setShowSettings(false);
+    expect(
+      controller.state.showSettings,
+      isTrue,
+      reason: 'Settings is the only remaining recovery destination',
+    );
+
+    await controller.setShowHome(true);
+    await controller.setShowSettings(false);
+    expect(controller.state.showHome, isTrue);
+    expect(controller.state.showSettings, isFalse);
+
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.showHome, isTrue);
+    expect(restored.state.showSettings, isFalse);
+  });
+
+  test('top navigation order is normalized, movable, and persisted', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setTopNavigationOrder(const [
+      TopNavigationDestination.settings,
+      TopNavigationDestination.search,
+    ]);
+    expect(controller.state.topNavigationOrder, [
+      TopNavigationDestination.settings,
+      TopNavigationDestination.search,
+      TopNavigationDestination.home,
+      TopNavigationDestination.myList,
+      TopNavigationDestination.discover,
+      TopNavigationDestination.calendar,
+    ]);
+
+    await controller.moveTopNavigationDestination(
+      TopNavigationDestination.calendar,
+      -2,
+    );
+    expect(
+      controller.state.topNavigationOrder[3],
+      TopNavigationDestination.calendar,
+    );
+
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(
+      restored.state.topNavigationOrder,
+      controller.state.topNavigationOrder,
+    );
+  });
+
   test('configured landing page is consumed only once per launch', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = SettingsPreferencesController(
@@ -278,7 +362,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 36, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 39, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

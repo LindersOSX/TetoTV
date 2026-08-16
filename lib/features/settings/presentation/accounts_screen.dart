@@ -31,14 +31,18 @@ import 'package:qr_flutter/qr_flutter.dart';
 enum _SettingsArea { customize, streaming, tracking, system }
 
 class AccountsScreen extends ConsumerStatefulWidget {
-  const AccountsScreen({super.key});
+  const AccountsScreen({this.openTracking = false, super.key});
+
+  /// Opens Settings directly on the tracker profile controls. The regular
+  /// Settings entry point keeps the default Customize area.
+  final bool openTracking;
 
   @override
   ConsumerState<AccountsScreen> createState() => _AccountsScreenState();
 }
 
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
-  _SettingsArea _activeArea = _SettingsArea.customize;
+  late _SettingsArea _activeArea;
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
@@ -141,6 +145,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
   };
   int _systemActivationCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeArea = widget.openTracking
+        ? _SettingsArea.tracking
+        : _SettingsArea.customize;
+  }
 
   @override
   void dispose() {
@@ -1757,30 +1769,29 @@ class _CustomizationPanel extends StatelessWidget {
               ),
             ],
           ),
-          _PreferenceRow(
-            label: 'Visible shortcuts',
-            children: [
-              toggle(
-                label: 'Search',
-                value: preferences.showSearch,
-                onChanged: controller.setShowSearch,
-              ),
-              toggle(
-                label: 'My List',
-                value: preferences.showMyList,
-                onChanged: controller.setShowMyList,
-              ),
-              toggle(
-                label: 'Discover',
-                value: preferences.showDiscover,
-                onChanged: controller.setShowDiscover,
-              ),
-              toggle(
-                label: 'Calendar',
-                value: preferences.showCalendar,
-                onChanged: controller.setShowCalendar,
-              ),
-            ],
+          _TopNavigationOrganizer(
+            preferences: preferences,
+            onToggle: (destination) {
+              final visible = preferences.isTopNavigationDestinationVisible(
+                destination,
+              );
+              if (visible &&
+                  !preferences.canHideTopNavigationDestination(destination)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Keep Home or Settings visible so navigation can be changed again.',
+                    ),
+                  ),
+                );
+                return;
+              }
+              controller.setTopNavigationDestinationVisible(
+                destination,
+                !visible,
+              );
+            },
+            onMove: controller.moveTopNavigationDestination,
           ),
           const _PreferenceDivider(),
           const _MiniSectionLabel('INPUT & FEEDBACK'),
@@ -2659,6 +2670,184 @@ class _HomeShelfOrganizer extends StatelessWidget {
   }
 }
 
+class _TopNavigationOrganizer extends StatelessWidget {
+  const _TopNavigationOrganizer({
+    required this.preferences,
+    required this.onToggle,
+    required this.onMove,
+  });
+
+  final SettingsPreferences preferences;
+  final ValueChanged<TopNavigationDestination> onToggle;
+  final void Function(TopNavigationDestination destination, int offset) onMove;
+
+  @override
+  Widget build(BuildContext context) {
+    final order = preferences.topNavigationOrder;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Top navigation',
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Choose which buttons are shown and move them into your preferred order.',
+            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
+          ),
+          const SizedBox(height: 8),
+          for (var index = 0; index < order.length; index++) ...[
+            _TopNavigationRow(
+              index: index,
+              total: order.length,
+              destination: order[index],
+              visible: preferences.isTopNavigationDestinationVisible(
+                order[index],
+              ),
+              onToggle: () => onToggle(order[index]),
+              onMoveEarlier: () => onMove(order[index], -1),
+              onMoveLater: () => onMove(order[index], 1),
+            ),
+            if (index != order.length - 1) const SizedBox(height: 6),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TopNavigationRow extends StatelessWidget {
+  const _TopNavigationRow({
+    required this.index,
+    required this.total,
+    required this.destination,
+    required this.visible,
+    required this.onToggle,
+    required this.onMoveEarlier,
+    required this.onMoveLater,
+  });
+
+  final int index;
+  final int total;
+  final TopNavigationDestination destination;
+  final bool visible;
+  final VoidCallback onToggle;
+  final VoidCallback onMoveEarlier;
+  final VoidCallback onMoveLater;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = destination.name;
+    return Semantics(
+      key: ValueKey('settings-top-navigation-$id'),
+      container: true,
+      label:
+          '${destination.displayName}, position ${index + 1} of $total, '
+          '${visible ? 'shown' : 'hidden'}',
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            child: Text(
+              '${index + 1}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TvFocusable(
+              key: ValueKey('settings-top-navigation-toggle-$id'),
+              onPressed: onToggle,
+              focusScale: 1.01,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                height: 38,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: visible
+                      ? context.appPalette.accent.withValues(alpha: .28)
+                      : context.appPalette.surfaceRaised,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: visible
+                        ? context.appPalette.accentBright.withValues(alpha: .7)
+                        : _settingsBorderColor(context, .08),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      visible
+                          ? Icons.visibility_rounded
+                          : Icons.visibility_off_rounded,
+                      size: 17,
+                      color: visible
+                          ? _settingsPrimaryText(context)
+                          : context.appPalette.mutedText,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        destination.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: visible
+                              ? _settingsPrimaryText(context)
+                              : context.appPalette.mutedText,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      visible ? 'SHOWN' : 'HIDDEN',
+                      style: TextStyle(
+                        color: visible
+                            ? context.appPalette.accentBright
+                            : context.appPalette.mutedText,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .7,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 7),
+          _ShelfOrderButton(
+            key: ValueKey('settings-top-navigation-earlier-$id'),
+            icon: Icons.keyboard_arrow_up_rounded,
+            label: 'Move ${destination.displayName} earlier',
+            onPressed: index == 0 ? null : onMoveEarlier,
+          ),
+          const SizedBox(width: 5),
+          _ShelfOrderButton(
+            key: ValueKey('settings-top-navigation-later-$id'),
+            icon: Icons.keyboard_arrow_down_rounded,
+            label: 'Move ${destination.displayName} later',
+            onPressed: index == total - 1 ? null : onMoveLater,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HomeShelfRow extends StatelessWidget {
   const _HomeShelfRow({
     required this.index,
@@ -2781,6 +2970,7 @@ class _ShelfOrderButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    super.key,
   });
 
   final IconData icon;

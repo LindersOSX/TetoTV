@@ -166,7 +166,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                     focusNode: _backFocus,
                     icon: Icons.arrow_back_rounded,
                     label: context.isCompactWidth ? null : 'Back',
-                    onPressed: context.pop,
+                    onPressed: () => _returnToPreviousOrHome(context),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -256,6 +256,14 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
       ),
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
 }
 
 class _DiscoverFiltersDialog extends StatefulWidget {
