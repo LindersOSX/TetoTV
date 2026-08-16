@@ -1,4 +1,6 @@
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -58,5 +60,95 @@ void main() {
     });
 
     expect(result.subtitleBackgroundColor, 0x99000000);
+  });
+
+  test('parses session-scoped native playback progress', () {
+    final progress = NativePlaybackProgress.fromMap(<Object?, Object?>{
+      'checkpointKey': '15125:9',
+      'positionMs': 930_500,
+      'durationMs': 1_440_000,
+      'isPlaying': true,
+      'audioLanguage': 'eng',
+      'audioPreferenceSet': true,
+    });
+
+    expect(progress.checkpointKey, '15125:9');
+    expect(progress.position, const Duration(milliseconds: 930_500));
+    expect(progress.duration, const Duration(minutes: 24));
+    expect(progress.isPlaying, isTrue);
+    expect(progress.audioLanguage, 'eng');
+    expect(progress.audioPreferenceSet, isTrue);
+  });
+
+  test('missing native progress values remain safely inert', () {
+    final progress = NativePlaybackProgress.fromMap(const {});
+
+    expect(progress.checkpointKey, isEmpty);
+    expect(progress.position, Duration.zero);
+    expect(progress.duration, Duration.zero);
+    expect(progress.isPlaying, isFalse);
+    expect(progress.audioLanguage, isNull);
+    expect(progress.audioPreferenceSet, isFalse);
+  });
+
+  test('explicit native audio saves then replaces stale preparation', () async {
+    final calls = <String>[];
+    SeriesPlaybackPreferences? committed;
+    final changed = await applyNativeAudioPreferenceSelection(
+      progress: const NativePlaybackProgress(
+        checkpointKey: '15125:9',
+        position: Duration(minutes: 15),
+        duration: Duration(minutes: 24),
+        isPlaying: true,
+        audioLanguage: 'en-US',
+        audioPreferenceSet: true,
+      ),
+      currentPreferences: const SeriesPlaybackPreferences(
+        audioLanguage: 'jpn',
+        audioPreferenceSet: true,
+      ),
+      save: (next) async {
+        calls.add('save:${next.audioLanguage}');
+      },
+      commit: (next) {
+        committed = next;
+        calls.add('commit:${next.audioLanguage}');
+      },
+      abandonStalePreparation: () async => calls.add('abandon'),
+      invalidatePreparation: () => calls.add('invalidate'),
+    );
+
+    expect(changed, isTrue);
+    expect(committed?.audioLanguage, 'eng');
+    expect(committed?.audioPreferenceSet, isTrue);
+    expect(calls, ['save:eng', 'commit:eng', 'abandon', 'invalidate']);
+  });
+
+  test('duplicate or automatic native audio observations are inert', () async {
+    final calls = <String>[];
+    const current = SeriesPlaybackPreferences(
+      audioLanguage: 'eng',
+      audioPreferenceSet: true,
+    );
+
+    for (final explicit in [true, false]) {
+      final changed = await applyNativeAudioPreferenceSelection(
+        progress: NativePlaybackProgress(
+          checkpointKey: '15125:9',
+          position: const Duration(minutes: 15),
+          duration: const Duration(minutes: 24),
+          isPlaying: true,
+          audioLanguage: explicit ? 'English Dub' : 'jpn',
+          audioPreferenceSet: explicit,
+        ),
+        currentPreferences: current,
+        save: (_) async => calls.add('save'),
+        commit: (_) => calls.add('commit'),
+        abandonStalePreparation: () async => calls.add('abandon'),
+        invalidatePreparation: () => calls.add('invalidate'),
+      );
+      expect(changed, isFalse);
+    }
+    expect(calls, isEmpty);
   });
 }

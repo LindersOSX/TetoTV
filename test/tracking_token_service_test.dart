@@ -120,6 +120,80 @@ void main() {
       isNull,
     );
   });
+
+  test(
+    'encrypted profile slots switch accounts without exposing tokens',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        TrackingProvider.anilist.tokenStorageKey: 'alice-secret-token',
+      });
+      final service = TrackingTokenService(storage);
+
+      final alice = await service.rememberCurrentProfile(
+        TrackingProvider.anilist,
+        'Alice',
+      );
+      expect(alice, isNotNull);
+      await storage.write(
+        key: TrackingProvider.anilist.tokenStorageKey,
+        value: 'bob-secret-token',
+      );
+      final bob = await service.rememberCurrentProfile(
+        TrackingProvider.anilist,
+        'Bob',
+      );
+
+      final saved = await service.savedProfiles();
+      expect(saved.map((profile) => profile.username), ['Alice', 'Bob']);
+      expect(alice!.id, isNot(bob!.id));
+      final index = await storage.read(key: 'tracking_profile_index_v1');
+      expect(index, isNot(contains('alice-secret-token')));
+      expect(index, isNot(contains('bob-secret-token')));
+
+      await service.activateProfile(alice);
+      expect(
+        await storage.read(key: TrackingProvider.anilist.tokenStorageKey),
+        'alice-secret-token',
+      );
+      expect(await service.activeProfileId(TrackingProvider.anilist), alice.id);
+
+      await service.clear(TrackingProvider.anilist);
+      expect(await service.savedProfiles(), isEmpty);
+      expect(
+        await storage.read(key: TrackingProvider.anilist.tokenStorageKey),
+        isNull,
+      );
+    },
+  );
+
+  test('profile activation restores rotating MAL session metadata', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.myAnimeList.tokenStorageKey: 'mal-access-a',
+      TrackingProvider.myAnimeList.refreshTokenStorageKey: 'mal-refresh-a',
+      TrackingProvider.myAnimeList.expiresAtStorageKey: now
+          .add(const Duration(days: 1))
+          .toIso8601String(),
+    });
+    final service = TrackingTokenService(storage, now: () => now);
+    final profile = await service.rememberCurrentProfile(
+      TrackingProvider.myAnimeList,
+      'MAL Alice',
+    );
+    await service.save(TrackingProvider.myAnimeList, 'mal-access-b');
+
+    await service.activateProfile(profile!);
+
+    expect(
+      await storage.read(
+        key: TrackingProvider.myAnimeList.refreshTokenStorageKey,
+      ),
+      'mal-refresh-a',
+    );
+    expect(
+      await storage.read(key: TrackingProvider.myAnimeList.expiresAtStorageKey),
+      now.add(const Duration(days: 1)).toIso8601String(),
+    );
+  });
 }
 
 class _FakePairingClient extends TrackingPairingClient {

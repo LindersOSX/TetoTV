@@ -4,7 +4,6 @@ import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -167,7 +166,7 @@ void main() {
     expect(container.read(fillerUnavailableNotifiedSeriesProvider), {1});
   });
 
-  testWidgets('skip alert names the range and starts focused for TV input', (
+  testWidgets('skip notice names the range without blocking replacement', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -175,15 +174,22 @@ void main() {
         home: Builder(
           builder: (context) => Scaffold(
             body: ElevatedButton(
-              onPressed: () => unawaited(
-                showFillerSkipNotification(
-                  context,
-                  const FillerEpisodeNavigationDecision(
-                    episode: 5,
-                    skippedEpisodes: [2, 3, 4],
+              onPressed: () {
+                unawaited(
+                  showFillerSkipNotification(
+                    context,
+                    const FillerEpisodeNavigationDecision(
+                      episode: 5,
+                      skippedEpisodes: [2, 3, 4],
+                    ),
                   ),
-                ),
-              ),
+                );
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const Scaffold(body: Text('Episode 5')),
+                  ),
+                );
+              },
               child: const Text('Open'),
             ),
           ),
@@ -198,19 +204,9 @@ void main() {
       find.text('Skipped filler Episodes 2–4. Playing Episode 5.'),
       findsOneWidget,
     );
-    final continueControl = tester.widget<FocusableActionDetector>(
-      find
-          .ancestor(
-            of: find.text('Continue'),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    expect(continueControl.focusNode?.hasFocus, isTrue);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(find.text('Filler skipped'), findsNothing);
+    expect(find.text('Episode 5'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Continue'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

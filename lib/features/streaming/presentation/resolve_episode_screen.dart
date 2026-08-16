@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -16,17 +15,20 @@ import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
-import 'package:anime_tv/features/streaming/data/hosted_release_source.dart';
+import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
-import 'package:anime_tv/features/streaming/data/stremio_torrent_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
-import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+export 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart'
+    show configuredReleaseSourceProvider;
 
 typedef DebridStreamResolverFactory =
     StreamResolver Function({
@@ -40,26 +42,32 @@ final debridStreamResolverFactoryProvider =
       return createDebridStreamResolver;
     });
 
-final configuredReleaseSourceProvider = Provider<ReleaseSource?>((ref) {
-  final userSources = ref.watch(userTorrentSourcesControllerProvider);
-  final sources = <ReleaseSource>[
-    for (final manifestUrl in userSources.manifestUrls)
-      StremioTorrentReleaseSource(manifestUrl: manifestUrl),
-    if (AppConfig.hasReleaseResolver)
-      HostedReleaseSource(baseUrl: AppConfig.releaseResolverBaseUrl),
-  ];
-  return sources.isEmpty ? null : CompositeReleaseSource(sources);
-});
-
 final webStreamPreflightProvider = Provider<WebStreamPreflight>(
   (_) => const WebStreamValidator().validate,
 );
 
 typedef SeriesPreferencesWriter =
     Future<void> Function(int mediaId, SeriesPlaybackPreferences preferences);
+typedef SeriesPreferencesReader =
+    Future<SeriesPlaybackPreferences> Function(int mediaId);
+typedef ResolveDeviceProfileReader = Future<TvDeviceProfile> Function();
+typedef ResolveFailureCountsReader =
+    Future<Map<String, int>> Function(String deviceKey);
+
+final seriesPreferencesReaderProvider = Provider<SeriesPreferencesReader>(
+  (_) => TetoTvDatabase.instance.seriesPreferences,
+);
 
 final seriesPreferencesWriterProvider = Provider<SeriesPreferencesWriter>(
   (_) => TetoTvDatabase.instance.saveSeriesPreferences,
+);
+
+final resolveDeviceProfileReaderProvider = Provider<ResolveDeviceProfileReader>(
+  (_) => AndroidTvBridge.instance.getDeviceProfile,
+);
+
+final resolveFailureCountsReaderProvider = Provider<ResolveFailureCountsReader>(
+  (_) => TetoTvDatabase.instance.failureCounts,
 );
 
 int tvPlaybackCompatibilityRank(
@@ -67,32 +75,11 @@ int tvPlaybackCompatibilityRank(
   TvDeviceProfile? device,
   int previousFailures = 0,
 }) {
-  final codec = release.codec?.toUpperCase();
-  final codecRank = switch (codec) {
-    'H.264' => 0,
-    null => 1,
-    'HEVC' => 2,
-    'AV1' => 3,
-    _ => 1,
-  };
-  final resolutionPenalty = switch (release.quality?.toLowerCase()) {
-    '4k' || '2160p' => 2,
-    '1440p' => 1,
-    _ => 0,
-  };
-  final unsupportedCodec =
-      device != null && !device.supportsCodec(release.codec) ? 12 : 0;
-  final unsupportedHdr = release.isHdr && device != null && !device.hasHdr
-      ? 8
-      : 0;
-  final softwareOnlyProfile = releaseRequiresSoftwareDecoder(release) ? 6 : 0;
-  return codecRank +
-      resolutionPenalty +
-      (release.isHdr ? 2 : 0) +
-      unsupportedCodec +
-      unsupportedHdr +
-      softwareOnlyProfile +
-      previousFailures * 5;
+  return tvPlaybackCompatibilityScore(
+    release,
+    device: device,
+    previousFailures: previousFailures,
+  );
 }
 
 bool isTvSafeRelease(ReleaseCandidate release) =>
@@ -113,40 +100,14 @@ bool releaseMatchesStreamFilters(
   String hdr = 'any',
   bool allowBatch = true,
 }) {
-  if (language == 'dub' &&
-      !releaseSupportsAudioPreference(release, PlaybackAudioPreference.dub)) {
-    return false;
-  }
-  if (language == 'sub' &&
-      !releaseSupportsAudioPreference(release, PlaybackAudioPreference.sub)) {
-    return false;
-  }
-  if (!allowBatch && release.isBatch) return false;
-  final qualityText = '${release.quality ?? ''} ${release.releaseName}'
-      .toLowerCase();
-  if (quality == 'p2160' &&
-      !qualityText.contains('2160') &&
-      !qualityText.contains('4k')) {
-    return false;
-  }
-  if (quality == 'p1080' && !qualityText.contains('1080')) return false;
-  if (quality == 'p720' && !qualityText.contains('720')) return false;
-  final codecText = '${release.codec ?? ''} ${release.releaseName}'
-      .toLowerCase();
-  if (codec == 'h264' &&
-      !codecText.contains('264') &&
-      !codecText.contains('avc')) {
-    return false;
-  }
-  if (codec == 'hevc' &&
-      !codecText.contains('hevc') &&
-      !codecText.contains('265')) {
-    return false;
-  }
-  if (codec == 'av1' && !codecText.contains('av1')) return false;
-  if (hdr == 'hdr' && !release.isHdr) return false;
-  if (hdr == 'sdr' && release.isHdr) return false;
-  return true;
+  return automaticReleaseMatchesFilters(
+    release,
+    language: language,
+    quality: quality,
+    codec: codec,
+    hdr: hdr,
+    allowBatch: allowBatch,
+  );
 }
 
 int compareStreamReleases(
@@ -158,74 +119,26 @@ int compareStreamReleases(
   String? preferredProvider,
   String? preferredReleaseGroup,
   PlaybackAudioPreference? preferredAudio,
+  DebridStreamSort? rankingPreference,
 }) {
-  if (preferredAudio != null) {
-    final audio = releaseAudioPreferenceRank(
-      left,
-      preferredAudio,
-    ).compareTo(releaseAudioPreferenceRank(right, preferredAudio));
-    if (audio != 0) return audio;
-  }
-  final group = _releaseGroupRank(
+  return compareAutomaticStreamReleases(
     left,
-    preferredReleaseGroup,
-  ).compareTo(_releaseGroupRank(right, preferredReleaseGroup));
-  if (group != 0) return group;
-  final preferred = _providerRank(
-    left,
-    preferredProvider,
-  ).compareTo(_providerRank(right, preferredProvider));
-  if (preferred != 0) return preferred;
-  switch (sortMode) {
-    case 'seeders':
-      final seeders = right.seeders.compareTo(left.seeders);
-      if (seeders != 0) return seeders;
-      break;
-    case 'size':
-      final size = _releaseSizeMb(left).compareTo(_releaseSizeMb(right));
-      if (size != 0) return size;
-      break;
-    default:
-      final compatibility =
-          tvPlaybackCompatibilityRank(
-            left,
-            device: device,
-            previousFailures: failureCounts[left.infoHash.toLowerCase()] ?? 0,
-          ).compareTo(
-            tvPlaybackCompatibilityRank(
-              right,
-              device: device,
-              previousFailures:
-                  failureCounts[right.infoHash.toLowerCase()] ?? 0,
-            ),
-          );
-      if (compatibility != 0) return compatibility;
-      break;
-  }
-  return right.seeders.compareTo(left.seeders);
+    right,
+    device: device,
+    failureCounts: failureCounts,
+    sortMode: sortMode,
+    preferredProvider: preferredProvider,
+    preferredReleaseGroup: preferredReleaseGroup,
+    preferredAudio: preferredAudio,
+    rankingPreference: rankingPreference,
+  );
 }
 
-int webStreamQualityRank(WebStreamResult stream) {
-  final value = '${stream.quality ?? ''} ${stream.title}'.toLowerCase();
-  if (value.contains('4320') || value.contains('8k')) return 7;
-  if (value.contains('2160') || value.contains('4k') || value.contains('uhd')) {
-    return 6;
-  }
-  if (value.contains('1440') || value.contains('2k')) return 5;
-  if (value.contains('1080') || value.contains('full hd')) return 4;
-  if (value.contains('720') || RegExp(r'\bhd\b').hasMatch(value)) return 3;
-  if (value.contains('576')) return 2;
-  if (value.contains('480') || value.contains('360')) return 1;
-  return 0;
-}
+int webStreamQualityRank(WebStreamResult stream) =>
+    automaticWebStreamQualityRank(stream);
 
 int compareWebStreamsByQuality(WebStreamResult left, WebStreamResult right) {
-  final quality = webStreamQualityRank(
-    right,
-  ).compareTo(webStreamQualityRank(left));
-  if (quality != 0) return quality;
-  final provider = left.providerName.compareTo(right.providerName);
-  return provider != 0 ? provider : left.title.compareTo(right.title);
+  return compareAutomaticWebStreamsByQuality(left, right);
 }
 
 int compareWebStreamsByAudioAndQuality(
@@ -233,14 +146,11 @@ int compareWebStreamsByAudioAndQuality(
   WebStreamResult right,
   PlaybackAudioPreference preferredAudio,
 ) {
-  final leftRank = preferredAudio == PlaybackAudioPreference.dub
-      ? (left.isDubbed ? 0 : 1)
-      : (left.isDubbed ? 1 : 0);
-  final rightRank = preferredAudio == PlaybackAudioPreference.dub
-      ? (right.isDubbed ? 0 : 1)
-      : (right.isDubbed ? 1 : 0);
-  final audio = leftRank.compareTo(rightRank);
-  return audio != 0 ? audio : compareWebStreamsByQuality(left, right);
+  return compareAutomaticWebStreamsByAudioAndQuality(
+    left,
+    right,
+    preferredAudio,
+  );
 }
 
 /// Ranks automatic next-episode web candidates without changing the manual
@@ -251,28 +161,16 @@ int compareAutoplayWebStreams(
   WebStreamResult right, {
   required PlaybackAudioPreference preferredAudio,
   String? preferredWebProviderId,
+  WebStreamQualityPreference qualityPreference =
+      WebStreamQualityPreference.bestAvailable,
 }) {
-  final leftAudio = preferredAudio == PlaybackAudioPreference.dub
-      ? (left.isDubbed ? 0 : 1)
-      : (left.isDubbed ? 1 : 0);
-  final rightAudio = preferredAudio == PlaybackAudioPreference.dub
-      ? (right.isDubbed ? 0 : 1)
-      : (right.isDubbed ? 1 : 0);
-  final audio = leftAudio.compareTo(rightAudio);
-  if (audio != 0) return audio;
-
-  final preferredId = _boundedHint(preferredWebProviderId, maxLength: 160);
-  if (preferredId != null) {
-    final provider = (left.providerId == preferredId ? 0 : 1).compareTo(
-      right.providerId == preferredId ? 0 : 1,
-    );
-    if (provider != 0) return provider;
-  }
-  final quality = compareWebStreamsByQuality(left, right);
-  if (quality != 0) return quality;
-  final providerId = left.providerId.compareTo(right.providerId);
-  if (providerId != 0) return providerId;
-  return left.uri.toString().compareTo(right.uri.toString());
+  return compareAutomaticAutoplayWebStreams(
+    left,
+    right,
+    preferredAudio: preferredAudio,
+    preferredWebProviderId: preferredWebProviderId,
+    qualityPreference: qualityPreference,
+  );
 }
 
 /// Automatic next-episode release affinity is deliberately stricter than the
@@ -290,65 +188,22 @@ int compareAutoplayReleases(
   String? existingPreferredProvider,
   String? existingPreferredReleaseGroup,
   PlaybackAudioPreference? preferredAudio,
+  DebridStreamSort? rankingPreference,
 }) {
-  if (preferredAudio != null) {
-    final audio = releaseAudioPreferenceRank(
-      left,
-      preferredAudio,
-    ).compareTo(releaseAudioPreferenceRank(right, preferredAudio));
-    if (audio != 0) return audio;
-  }
-
-  final affinity =
-      _autoplayReleaseAffinityRank(
-        left,
-        preferredProvider: preferredProvider,
-        preferredAuthor: preferredAuthor,
-        preferredSourceId: preferredSourceId,
-      ).compareTo(
-        _autoplayReleaseAffinityRank(
-          right,
-          preferredProvider: preferredProvider,
-          preferredAuthor: preferredAuthor,
-          preferredSourceId: preferredSourceId,
-        ),
-      );
-  if (affinity != 0) return affinity;
-
-  final global = compareStreamReleases(
+  return compareAutomaticAutoplayReleases(
     left,
     right,
     device: device,
     failureCounts: failureCounts,
     sortMode: sortMode,
-    preferredProvider: existingPreferredProvider,
-    preferredReleaseGroup: existingPreferredReleaseGroup,
+    preferredProvider: preferredProvider,
+    preferredAuthor: preferredAuthor,
+    preferredSourceId: preferredSourceId,
+    existingPreferredProvider: existingPreferredProvider,
+    existingPreferredReleaseGroup: existingPreferredReleaseGroup,
     preferredAudio: preferredAudio,
+    rankingPreference: rankingPreference,
   );
-  if (global != 0) return global;
-  return left.infoHash.compareTo(right.infoHash);
-}
-
-int _autoplayReleaseAffinityRank(
-  ReleaseCandidate release, {
-  required String? preferredProvider,
-  required String? preferredAuthor,
-  required String? preferredSourceId,
-}) {
-  final provider = _normalizedProviderHint(preferredProvider);
-  final sourceId = _boundedHint(preferredSourceId, maxLength: 160);
-  final sameProvider =
-      provider != null && _normalizedProviderHint(release.provider) == provider;
-  final author = _normalizedAuthorHint(preferredAuthor);
-  final sameSource = sourceId != null && release.sourceId == sourceId;
-  final sameAuthor =
-      author != null && releaseGroupKey(release.releaseName) == author;
-  if ((sameProvider || sameSource) && sameAuthor) {
-    return 0;
-  }
-  if (sameProvider || sameSource) return 1;
-  if (sameAuthor) return 2;
-  return 3;
 }
 
 String? _normalizedProviderHint(String? value) =>
@@ -374,34 +229,20 @@ String? _boundedHint(String? value, {required int maxLength}) {
   return trimmed;
 }
 
-int _providerRank(ReleaseCandidate release, String? preferredProvider) {
-  if (preferredProvider == null || preferredProvider.isEmpty) return 1;
-  return release.provider?.toLowerCase() == preferredProvider.toLowerCase()
-      ? 0
-      : 1;
-}
-
-int _releaseGroupRank(ReleaseCandidate release, String? preferredGroup) {
-  if (preferredGroup == null || preferredGroup.isEmpty) return 1;
-  return releaseGroupKey(release.releaseName) == preferredGroup.toLowerCase()
-      ? 0
-      : 1;
-}
-
-double _releaseSizeMb(ReleaseCandidate release) {
-  final value = release.sizeLabel?.toUpperCase() ?? '';
-  final amount = double.tryParse(
-    RegExp(r'[\d.]+').firstMatch(value)?.group(0) ?? '',
-  );
-  if (amount == null) return double.maxFinite;
-  if (value.contains('TB')) return amount * 1024 * 1024;
-  if (value.contains('GB')) return amount * 1024;
-  if (value.contains('KB')) return amount / 1024;
-  return amount;
-}
-
 T _enumByName<T extends Enum>(List<T> values, String name, T fallback) {
   return values.where((value) => value.name == name).firstOrNull ?? fallback;
+}
+
+class _AutoplayCandidateTier {
+  const _AutoplayCandidateTier({
+    this.releases = const [],
+    this.web = const [],
+    this.waiting = false,
+  });
+
+  final List<ReleaseCandidate> releases;
+  final List<WebStreamResult> web;
+  final bool waiting;
 }
 
 class ResolveEpisodeScreen extends ConsumerStatefulWidget {
@@ -483,6 +324,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       ref.read(settingsPreferencesProvider).debridStreamsEnabled &&
       _connectedServices.contains(_debridService);
 
+  SettingsPreferences get _streamPreferences =>
+      ref.read(settingsPreferencesProvider);
+
+  DebridStreamSort get _debridRanking => switch (_sortMode) {
+    _StreamSortMode.compatibility => DebridStreamSort.bestQuality,
+    _StreamSortMode.seeders => DebridStreamSort.mostSeeded,
+    _StreamSortMode.largest => DebridStreamSort.largestSize,
+    _StreamSortMode.size => DebridStreamSort.smallestSize,
+  };
+
   PlaybackAudioPreference get _preferredAudio =>
       effectivePlaybackAudioPreference(
         globalPreference: ref.read(settingsPreferencesProvider).preferredAudio,
@@ -503,16 +354,18 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     ]);
     if (!mounted) return;
     final tokenService = ref.read(debridTokenServiceProvider);
-    final preferredDebrid = ref
-        .read(settingsPreferencesProvider)
-        .debridProvider;
+    final readSeriesPreferences = ref.read(seriesPreferencesReaderProvider);
+    final readDeviceProfile = ref.read(resolveDeviceProfileReaderProvider);
+    final readFailureCounts = ref.read(resolveFailureCountsReaderProvider);
+    final globalPreferences = ref.read(settingsPreferencesProvider);
+    final preferredDebrid = globalPreferences.debridProvider;
     final services = DebridService.values;
     final tokensAndProfile = await Future.wait<Object?>([
       for (final service in services) _usableToken(tokenService, service),
-      AndroidTvBridge.instance.getDeviceProfile(),
-      TetoTvDatabase.instance
-          .seriesPreferences(widget.episode.anilistMediaId)
-          .catchError((_) => const SeriesPlaybackPreferences()),
+      readDeviceProfile(),
+      readSeriesPreferences(
+        widget.episode.anilistMediaId,
+      ).catchError((_) => const SeriesPlaybackPreferences()),
     ]);
     final tokens = [
       for (var index = 0; index < services.length; index++)
@@ -523,7 +376,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         tokensAndProfile[services.length + 1] as SeriesPlaybackPreferences;
     Map<String, int> failures = const {};
     try {
-      failures = await TetoTvDatabase.instance.failureCounts(profile.key);
+      failures = await readFailureCounts(profile.key);
     } catch (_) {
       // Compatibility history improves sorting but is never required to find
       // or play a stream. A local database problem must not block discovery.
@@ -565,11 +418,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         preferences.preferredHdrMode,
         _StreamHdrFilter.any,
       );
-      _sortMode = _enumByName(
-        _StreamSortMode.values,
-        preferences.streamSortMode,
-        _StreamSortMode.compatibility,
-      );
+      _sortMode = _pickerSortMode(globalPreferences.debridStreamSort);
       _allowBatchStreams = preferences.allowBatchStreams;
     });
     await _loadConfiguredReleases();
@@ -601,6 +450,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     _preferredWebWaitTimer = null;
     final preferences = ref.read(settingsPreferencesProvider);
     final source = ref.read(configuredReleaseSourceProvider);
+    final releaseSearchCache = ref.read(episodeReleaseSearchCacheProvider);
     final shouldSearchDebrid =
         preferences.debridStreamsEnabled && source != null && _hasDebrid;
     var debridSearchFinished = !shouldSearchDebrid;
@@ -631,9 +481,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _failedResolveHashes.clear();
       _failedAutoplayWebStreams.clear();
     });
-    if (widget.episode.autoPlay &&
-        preferences.webStreamsEnabled &&
-        _boundedHint(widget.preferredWebProviderId, maxLength: 160) != null) {
+    if (widget.episode.autoPlay && preferences.webStreamsEnabled) {
       _preferredWebWaitTimer = Timer(_preferredWebProviderWaitBudget, () {
         if (!mounted || generation != _releaseSearchGeneration) return;
         _preferredWebWaitExpired = true;
@@ -670,9 +518,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     Future<void> loadDebridSources() async {
       if (!shouldSearchDebrid) return;
       try {
-        final progressStream = source is CompositeReleaseSource
-            ? source.searchIncrementally(widget.episode)
-            : searchReleaseSourcesIncrementally([source], widget.episode);
+        final progressStream = releaseSearchCache.watch(
+          widget.episode,
+          refresh: refreshWeb,
+        );
         await for (final progress in progressStream) {
           if (!mounted || generation != _releaseSearchGeneration) return;
           setState(() {
@@ -875,6 +724,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                       existingPreferredReleaseGroup:
                           _seriesPreferences.preferredReleaseGroup,
                       preferredAudio: _preferredAudio,
+                      rankingPreference: _debridRanking,
                     );
                   });
             final directAlternatives = _autoplayWebCandidates(_webStreams)
@@ -908,12 +758,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           );
         }
         final manuallyRanked = _filteredAndSortedReleases(_releases);
-        final recoveryPool = widget.episode.autoPlay
-            ? _autoplayReleaseCandidates(_releases)
-            : <ReleaseCandidate>[
-                ...manuallyRanked,
-                ..._releases.where((item) => !manuallyRanked.contains(item)),
-              ];
+        final recoveryPool = <ReleaseCandidate>[
+          ...manuallyRanked,
+          ..._releases.where((item) => !manuallyRanked.contains(item)),
+        ];
         final next = recoveryPool
             .where(
               (item) =>
@@ -925,7 +773,42 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _failedResolveHashes.length < _maxAutomaticResolveCandidates &&
             (_automaticResolveDeadline == null ||
                 widget.clock().isBefore(_automaticResolveDeadline!));
-        if (!terminalProviderFailure && next != null && withinFailoverBudget) {
+        final hasAutomaticCandidate =
+            _releases.any(
+              (item) =>
+                  !_failedResolveHashes.contains(item.infoHash.toLowerCase()),
+            ) ||
+            _webStreams.any(
+              (stream) =>
+                  !_failedAutoplayWebStreams.contains(_webStreamKey(stream)),
+            );
+        final discoveryPending =
+            (_debridSearchEnabled && !_debridSearchFinished) ||
+            (_webSearchEnabled && !_webSearchFinished);
+        if (widget.episode.autoPlay &&
+            !terminalProviderFailure &&
+            withinFailoverBudget &&
+            (hasAutomaticCandidate || discoveryPending)) {
+          setState(() {
+            _resolving = false;
+            _autoPlayStarted = false;
+            _status = discoveryPending
+                ? 'That release failed. Waiting for other sources…'
+                : 'That release failed. Trying another stream…';
+            _error = null;
+          });
+          Future<void>.microtask(
+            () => _tryStartAutoPlay(
+              generation: _releaseSearchGeneration,
+              allowWebFallback: _debridSearchFinished,
+            ),
+          );
+          return;
+        }
+        if (!widget.episode.autoPlay &&
+            !terminalProviderFailure &&
+            next != null &&
+            withinFailoverBudget) {
           setState(() {
             _resolving = false;
             _status = 'That release failed. Trying another release…';
@@ -1019,18 +902,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       return;
     }
 
+    final tier = _autoplayCandidateTier();
+    if (tier.waiting) return;
+
     final preferredWebProviderId = _boundedHint(
       widget.preferredWebProviderId,
       maxLength: 160,
     );
     if (preferredWebProviderId != null) {
       final exactWebCandidates = _autoplayWebCandidates(
-        _webStreams.where(
+        tier.web.where(
           (stream) =>
               stream.providerId == preferredWebProviderId &&
-              (_preferredAudio == PlaybackAudioPreference.dub
-                  ? stream.isDubbed
-                  : !stream.isDubbed),
+              webStreamAudioPreferenceRank(stream, _preferredAudio) == 0,
         ),
       );
       if (exactWebCandidates.isNotEmpty) {
@@ -1046,50 +930,142 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final allowNonPreferredFallback =
         allowWebFallback || _preferredWebWaitExpired;
 
-    if (!allowWebFallback && !_autoplayDebridExhausted && _hasDebrid) {
-      final exactReleaseCandidates = _exactAutoplayReleaseCandidates(_releases);
+    // Preserve the current source once inside the active strict/fail-open
+    // tier, regardless of the viewer's global class preference. If that one
+    // exact candidate fails, the normal Web/Debrid priority chooses the next
+    // class instead of exhausting unrelated candidates from the old class.
+    if (!_autoplayDebridExhausted && _hasDebrid) {
+      final exactReleaseCandidates = _exactAutoplayReleaseCandidates(
+        tier.releases,
+      );
       if (exactReleaseCandidates.isNotEmpty) {
-        _autoPlayStarted = true;
-        unawaited(
-          _resolveCandidate(
-            exactReleaseCandidates.first,
-            continueAutomaticSequence: _failedResolveHashes.isNotEmpty,
-          ),
-        );
+        _startAutoplayRelease(exactReleaseCandidates);
         return;
       }
     }
 
-    if (allowNonPreferredFallback &&
-        !_autoplayDebridExhausted &&
-        _hasDebrid &&
-        _releases.isNotEmpty) {
-      final candidates = _autoplayReleaseCandidates(_releases);
-      final unfailedCandidates = candidates
-          .where(
-            (release) =>
-                !_failedResolveHashes.contains(release.infoHash.toLowerCase()),
-          )
-          .toList(growable: false);
-      if (unfailedCandidates.isNotEmpty) {
-        _autoPlayStarted = true;
-        unawaited(
-          _resolveCandidate(
-            unfailedCandidates.first,
-            continueAutomaticSequence: _failedResolveHashes.isNotEmpty,
-          ),
-        );
+    // A saved Web-first preference is allowed to start as soon as a usable
+    // Web result arrives. Cross-class audio ranks are compared first, so a
+    // matching Dub/Sub Debrid result still beats a mismatched Web result.
+    if (_streamPreferences.streamSourcePriority ==
+        StreamSourcePriority.webFirst) {
+      final started = _tryStartRankedSourceClass(tier);
+      if (started) return;
+      if (_webSearchEnabled &&
+          !_webSearchFinished &&
+          !_preferredWebWaitExpired) {
         return;
       }
     }
-    if (!allowNonPreferredFallback ||
-        (!_webSearchFinished && !_preferredWebWaitExpired) ||
-        _webStreams.isEmpty) {
-      return;
+
+    if (!allowNonPreferredFallback) return;
+    _tryStartRankedSourceClass(tier);
+  }
+
+  bool _tryStartRankedSourceClass(_AutoplayCandidateTier tier) {
+    final releases = tier.releases;
+    final web = tier.web;
+    final priority = _streamPreferences.streamSourcePriority;
+
+    if (releases.isEmpty && web.isEmpty) return false;
+    if (releases.isEmpty) {
+      final webAudio = webStreamAudioPreferenceRank(web.first, _preferredAudio);
+      if (_debridSearchEnabled &&
+          !_debridSearchFinished &&
+          !_preferredWebWaitExpired &&
+          (priority == StreamSourcePriority.debridFirst || webAudio > 0)) {
+        return false;
+      }
+      _startAutoplayWeb(web);
+      return true;
     }
-    final candidates = _autoplayWebCandidates(_webStreams);
-    if (candidates.isEmpty) return;
-    _startAutoplayWeb(candidates);
+    if (web.isEmpty) {
+      final releaseAudio = releaseAudioPreferenceRank(
+        releases.first,
+        _preferredAudio,
+      );
+      if (_webSearchEnabled &&
+          !_webSearchFinished &&
+          !_preferredWebWaitExpired &&
+          (priority == StreamSourcePriority.webFirst || releaseAudio > 0)) {
+        return false;
+      }
+      _startAutoplayRelease(releases);
+      return true;
+    }
+
+    final sourceOrder = compareStreamSourceClasses(
+      StreamSourceClass.debrid,
+      StreamSourceClass.web,
+      priority,
+      leftAudioRank: releaseAudioPreferenceRank(
+        releases.first,
+        _preferredAudio,
+      ),
+      rightAudioRank: webStreamAudioPreferenceRank(web.first, _preferredAudio),
+    );
+    if (sourceOrder <= 0) {
+      _startAutoplayRelease(releases);
+    } else {
+      _startAutoplayWeb(web);
+    }
+    return true;
+  }
+
+  _AutoplayCandidateTier _autoplayCandidateTier() {
+    final releases = !_autoplayDebridExhausted && _hasDebrid
+        ? _autoplayReleaseCandidates(_releases)
+              .where(
+                (release) => !_failedResolveHashes.contains(
+                  release.infoHash.toLowerCase(),
+                ),
+              )
+              .toList(growable: false)
+        : const <ReleaseCandidate>[];
+    final web = _webSearchEnabled
+        ? _autoplayWebCandidates(_webStreams)
+        : const <WebStreamResult>[];
+    final strictReleases = releases
+        .where(
+          (release) => automaticReleaseMatchesFilters(
+            release,
+            language: _languageFilter.name,
+            quality: _qualityFilter.name,
+            codec: _codecFilter.name,
+            hdr: _hdrFilter.name,
+            allowBatch: _allowBatchStreams,
+          ),
+        )
+        .toList(growable: false);
+    final strictWeb = web
+        .where(
+          (stream) => automaticWebStreamMatchesFilters(
+            stream,
+            language: _languageFilter.name,
+            quality: _qualityFilter.name,
+          ),
+        )
+        .toList(growable: false);
+    if (strictReleases.isNotEmpty || strictWeb.isNotEmpty) {
+      return _AutoplayCandidateTier(releases: strictReleases, web: strictWeb);
+    }
+    final discoveryPending =
+        (_debridSearchEnabled && !_debridSearchFinished) ||
+        (_webSearchEnabled && !_webSearchFinished);
+    if (discoveryPending && !_preferredWebWaitExpired) {
+      return const _AutoplayCandidateTier(waiting: true);
+    }
+    return _AutoplayCandidateTier(releases: releases, web: web);
+  }
+
+  void _startAutoplayRelease(List<ReleaseCandidate> candidates) {
+    _autoPlayStarted = true;
+    unawaited(
+      _resolveCandidate(
+        candidates.first,
+        continueAutomaticSequence: _failedResolveHashes.isNotEmpty,
+      ),
+    );
   }
 
   void _startAutoplayWeb(List<WebStreamResult> candidates) {
@@ -1103,36 +1079,27 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   List<ReleaseCandidate> _autoplayReleaseCandidates(
     Iterable<ReleaseCandidate> input,
   ) {
-    final preferred = _filteredAndSortedReleases(input);
-    final fallback = _filteredAndSortedReleases(
-      input,
-      ignoreOptionalFilters: true,
-    );
-    final combined = <ReleaseCandidate>[
-      ...preferred,
-      ...fallback.where(
-        (candidate) => !preferred.any(
-          (item) =>
-              item.infoHash.toLowerCase() == candidate.infoHash.toLowerCase(),
-        ),
+    return rankAutomaticAutoplayReleases(
+      input.where(
+        (release) =>
+            !_failedResolveHashes.contains(release.infoHash.toLowerCase()),
       ),
-    ];
-    combined.sort(
-      (left, right) => compareAutoplayReleases(
-        left,
-        right,
-        device: _deviceProfile,
-        failureCounts: _failureCounts,
-        sortMode: _sortMode.name,
-        preferredProvider: widget.preferredProvider,
-        preferredAuthor: widget.preferredAuthor,
-        preferredSourceId: widget.preferredSourceId,
-        existingPreferredProvider: _seriesPreferences.preferredReleaseProvider,
-        existingPreferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
-        preferredAudio: _preferredAudio,
-      ),
+      language: _languageFilter.name,
+      quality: _qualityFilter.name,
+      codec: _codecFilter.name,
+      hdr: _hdrFilter.name,
+      allowBatch: _allowBatchStreams,
+      preferredAudio: _preferredAudio,
+      rankingPreference: _debridRanking,
+      device: _deviceProfile,
+      failureCounts: _failureCounts,
+      sortMode: _sortMode.name,
+      preferredProvider: widget.preferredProvider,
+      preferredAuthor: widget.preferredAuthor,
+      preferredSourceId: widget.preferredSourceId,
+      existingPreferredProvider: _seriesPreferences.preferredReleaseProvider,
+      existingPreferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
     );
-    return combined;
   }
 
   List<ReleaseCandidate> _exactAutoplayReleaseCandidates(
@@ -1142,13 +1109,32 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final sourceId = _boundedHint(widget.preferredSourceId, maxLength: 160);
     final author = _normalizedAuthorHint(widget.preferredAuthor);
     if (provider == null && sourceId == null) return const [];
-    final identityMatches = _autoplayReleaseCandidates(input)
+    final ranked = _autoplayReleaseCandidates(input);
+    if (ranked.isEmpty) return const [];
+    final minimumSafety = ranked
+        .map(
+          (release) => automaticPlaybackSafetyScore(
+            release,
+            device: _deviceProfile,
+            previousFailures:
+                _failureCounts[release.infoHash.toLowerCase()] ?? 0,
+          ),
+        )
+        .reduce((left, right) => left < right ? left : right);
+    final identityMatches = ranked
         .where(
           (release) =>
               !_failedResolveHashes.contains(release.infoHash.toLowerCase()) &&
               ((provider != null &&
                       _normalizedProviderHint(release.provider) == provider) ||
                   (sourceId != null && release.sourceId == sourceId)) &&
+              automaticPlaybackSafetyScore(
+                    release,
+                    device: _deviceProfile,
+                    previousFailures:
+                        _failureCounts[release.infoHash.toLowerCase()] ?? 0,
+                  ) ==
+                  minimumSafety &&
               releaseAudioPreferenceRank(release, _preferredAudio) == 0,
         )
         .toList(growable: false);
@@ -1161,24 +1147,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   List<WebStreamResult> _autoplayWebCandidates(
     Iterable<WebStreamResult> input,
   ) {
-    final preferred = _filteredWebStreams(input);
-    final fallback = _filteredWebStreams(input, ignoreOptionalFilters: true);
-    final seen = <String>{};
-    final combined = <WebStreamResult>[];
-    for (final stream in [...preferred, ...fallback]) {
-      final key = _webStreamKey(stream);
-      if (_failedAutoplayWebStreams.contains(key)) continue;
-      if (seen.add(key)) combined.add(stream);
-    }
-    combined.sort(
-      (left, right) => compareAutoplayWebStreams(
-        left,
-        right,
-        preferredAudio: _preferredAudio,
-        preferredWebProviderId: widget.preferredWebProviderId,
+    return rankAutomaticAutoplayWebStreams(
+      input.where(
+        (stream) => !_failedAutoplayWebStreams.contains(_webStreamKey(stream)),
       ),
+      language: _languageFilter.name,
+      quality: _qualityFilter.name,
+      preferredAudio: _preferredAudio,
+      preferredWebProviderId: widget.preferredWebProviderId,
+      qualityPreference: _streamPreferences.webStreamQuality,
     );
-    return combined;
   }
 
   String _webStreamKey(WebStreamResult stream) =>
@@ -1208,8 +1186,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       };
     }).toList();
     result.sort(
-      (left, right) =>
-          compareWebStreamsByAudioAndQuality(left, right, _preferredAudio),
+      (left, right) => compareWebStreamCandidates(
+        left,
+        right,
+        quality: _streamPreferences.webStreamQuality,
+        preferredAudio: _preferredAudio,
+      ),
     );
     return result;
   }
@@ -1375,6 +1357,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             right,
             preferredAudio: preferredAudio,
             preferredWebProviderId: candidate.providerId,
+            qualityPreference: _streamPreferences.webStreamQuality,
           ),
         );
         final playerUri = Uri(
@@ -1440,6 +1423,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       }
     }
     if (!mounted || generation != _releaseSearchGeneration) return;
+    if (automatic && _debridSearchEnabled && !_debridSearchFinished) {
+      setState(() {
+        _resolving = false;
+        _autoPlayStarted = false;
+        _status = 'Web streams failed. Waiting for Debrid sources…';
+        _error = null;
+      });
+      return;
+    }
     final automaticBudgetExpired =
         automatic &&
         ((_automaticResolveDeadline != null &&
@@ -1599,6 +1591,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         preferredProvider: _seriesPreferences.preferredReleaseProvider,
         preferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
         preferredAudio: _preferredAudio,
+        rankingPreference: _debridRanking,
       ),
     );
     return filtered;
@@ -1651,6 +1644,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   void _updatePicker(VoidCallback update) {
     setState(update);
     unawaited(_rememberPickerPreferences());
+  }
+
+  void _updateStreamSort(_StreamSortMode value) {
+    _updatePicker(() => _sortMode = value);
+    unawaited(
+      ref
+          .read(settingsPreferencesProvider.notifier)
+          .setDebridStreamSort(_debridRanking),
+    );
   }
 
   String get _sourceSearchStatus {
@@ -1879,7 +1881,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         hdrFilter: _hdrFilter,
         onHdrChanged: (value) => _updatePicker(() => _hdrFilter = value),
         sortMode: _sortMode,
-        onSortChanged: (value) => _updatePicker(() => _sortMode = value),
+        onSortChanged: _updateStreamSort,
+        sourcePriority: sourcePreferences.streamSourcePriority,
         showAdvancedFilters: _showAdvancedFilters,
         onAdvancedFiltersChanged: (value) =>
             setState(() => _showAdvancedFilters = value),
@@ -2033,7 +2036,15 @@ enum _StreamCodecFilter { any, h264, hevc, av1 }
 
 enum _StreamHdrFilter { any, sdr, hdr }
 
-enum _StreamSortMode { compatibility, seeders, size }
+enum _StreamSortMode { compatibility, seeders, largest, size }
+
+_StreamSortMode _pickerSortMode(DebridStreamSort preference) =>
+    switch (preference) {
+      DebridStreamSort.bestQuality => _StreamSortMode.compatibility,
+      DebridStreamSort.mostSeeded => _StreamSortMode.seeders,
+      DebridStreamSort.largestSize => _StreamSortMode.largest,
+      DebridStreamSort.smallestSize => _StreamSortMode.size,
+    };
 
 class _StreamPicker extends StatelessWidget {
   const _StreamPicker({
@@ -2061,6 +2072,7 @@ class _StreamPicker extends StatelessWidget {
     required this.onHdrChanged,
     required this.sortMode,
     required this.onSortChanged,
+    required this.sourcePriority,
     required this.showAdvancedFilters,
     required this.onAdvancedFiltersChanged,
     required this.allowBatchStreams,
@@ -2097,6 +2109,7 @@ class _StreamPicker extends StatelessWidget {
   final ValueChanged<_StreamHdrFilter> onHdrChanged;
   final _StreamSortMode sortMode;
   final ValueChanged<_StreamSortMode> onSortChanged;
+  final StreamSourcePriority sourcePriority;
   final bool showAdvancedFilters;
   final ValueChanged<bool> onAdvancedFiltersChanged;
   final bool allowBatchStreams;
@@ -2107,6 +2120,84 @@ class _StreamPicker extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback onRefresh;
   final VoidCallback onManual;
+
+  List<Widget> get _debridSlivers => releases.isEmpty
+      ? const []
+      : [
+          const SliverToBoxAdapter(
+            child: _StreamSectionHeader(
+              icon: Icons.cloud_done_rounded,
+              title: 'DEBRID STREAMS',
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+            sliver: SliverList.builder(
+              itemCount: releases.length,
+              findChildIndexCallback: (key) {
+                if (key is! ValueKey<String>) return null;
+                final index = releases.indexWhere(
+                  (release) =>
+                      'debrid:${release.infoHash.toLowerCase()}' == key.value,
+                );
+                return index < 0 ? null : index;
+              },
+              itemBuilder: (context, index) {
+                final release = releases[index];
+                return Padding(
+                  key: ValueKey('debrid:${release.infoHash.toLowerCase()}'),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _ReleaseCard(
+                    release: release,
+                    recommended: index == 0,
+                    onPressed: () => onSelected(release),
+                  ),
+                );
+              },
+            ),
+          ),
+        ];
+
+  List<Widget> get _webSlivers => webStreams.isEmpty
+      ? const []
+      : [
+          const SliverToBoxAdapter(
+            child: _StreamSectionHeader(
+              icon: Icons.language_rounded,
+              title: 'WEB STREAMS',
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+            sliver: SliverList.builder(
+              itemCount: webStreams.length,
+              findChildIndexCallback: (key) {
+                if (key is! ValueKey<String>) return null;
+                final index = webStreams.indexWhere(
+                  (stream) =>
+                      'web:${stream.providerId}:${stream.uri}' == key.value,
+                );
+                return index < 0 ? null : index;
+              },
+              itemBuilder: (context, index) {
+                final stream = webStreams[index];
+                return Padding(
+                  key: ValueKey('web:${stream.providerId}:${stream.uri}'),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _WebStreamCard(
+                    stream: stream,
+                    onPressed: () => onWebSelected(stream),
+                  ),
+                );
+              },
+            ),
+          ),
+        ];
+
+  List<Widget> get _orderedStreamSlivers => switch (sourcePriority) {
+    StreamSourcePriority.debridFirst => [..._debridSlivers, ..._webSlivers],
+    StreamSourcePriority.webFirst => [..._webSlivers, ..._debridSlivers],
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -2305,6 +2396,7 @@ class _StreamPicker extends StatelessWidget {
                       label: switch (value) {
                         _StreamSortMode.compatibility => 'BEST',
                         _StreamSortMode.seeders => 'SEEDERS',
+                        _StreamSortMode.largest => 'LARGEST',
                         _StreamSortMode.size => 'SMALLEST',
                       },
                       selected: sortMode == value,
@@ -2401,83 +2493,7 @@ class _StreamPicker extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   )
-                : CustomScrollView(
-                    slivers: [
-                      if (releases.isNotEmpty) ...[
-                        const SliverToBoxAdapter(
-                          child: _StreamSectionHeader(
-                            icon: Icons.cloud_done_rounded,
-                            title: 'DEBRID STREAMS',
-                          ),
-                        ),
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
-                          sliver: SliverList.builder(
-                            itemCount: releases.length,
-                            findChildIndexCallback: (key) {
-                              if (key is! ValueKey<String>) return null;
-                              final index = releases.indexWhere(
-                                (release) =>
-                                    'debrid:${release.infoHash.toLowerCase()}' ==
-                                    key.value,
-                              );
-                              return index < 0 ? null : index;
-                            },
-                            itemBuilder: (context, index) {
-                              final release = releases[index];
-                              return Padding(
-                                key: ValueKey(
-                                  'debrid:${release.infoHash.toLowerCase()}',
-                                ),
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _ReleaseCard(
-                                  release: release,
-                                  recommended: index == 0,
-                                  onPressed: () => onSelected(release),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                      if (webStreams.isNotEmpty) ...[
-                        const SliverToBoxAdapter(
-                          child: _StreamSectionHeader(
-                            icon: Icons.language_rounded,
-                            title: 'WEB STREAMS',
-                          ),
-                        ),
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
-                          sliver: SliverList.builder(
-                            itemCount: webStreams.length,
-                            findChildIndexCallback: (key) {
-                              if (key is! ValueKey<String>) return null;
-                              final index = webStreams.indexWhere(
-                                (stream) =>
-                                    'web:${stream.providerId}:${stream.uri}' ==
-                                    key.value,
-                              );
-                              return index < 0 ? null : index;
-                            },
-                            itemBuilder: (context, index) {
-                              final stream = webStreams[index];
-                              return Padding(
-                                key: ValueKey(
-                                  'web:${stream.providerId}:${stream.uri}',
-                                ),
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _WebStreamCard(
-                                  stream: stream,
-                                  onPressed: () => onWebSelected(stream),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                : CustomScrollView(slivers: _orderedStreamSlivers),
           ),
         ],
       ),

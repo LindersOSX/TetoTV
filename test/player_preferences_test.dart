@@ -28,6 +28,23 @@ void main() {
     expect(preferMpvForInitialStream(debrid), isFalse);
   });
 
+  test('VLC handoff keeps an inherited timestamp until playback advances', () {
+    expect(
+      effectiveVlcHandoffPosition(
+        observed: const Duration(milliseconds: 900),
+        inherited: const Duration(minutes: 18, seconds: 42),
+      ),
+      const Duration(minutes: 18, seconds: 42),
+    );
+    expect(
+      effectiveVlcHandoffPosition(
+        observed: const Duration(minutes: 18, seconds: 45),
+        inherited: const Duration(minutes: 18, seconds: 42),
+      ),
+      const Duration(minutes: 18, seconds: 45),
+    );
+  });
+
   test('manual Media3 selection is not bounced back to MPV', () {
     const release = ReleaseCandidate(
       infoHash: '0123456789012345678901234567890123456789',
@@ -181,6 +198,42 @@ void main() {
     );
   });
 
+  test(
+    'prepared playback invalidates for any persisted manual audio intent',
+    () {
+      expect(
+        playerAudioIntentChanged(
+          previousLanguage: 'eng',
+          previousPreferenceSet: false,
+          nextLanguage: 'English Dub',
+          nextPreferenceSet: true,
+        ),
+        isTrue,
+        reason: 'making the global default an explicit series choice matters',
+      );
+      expect(
+        playerAudioIntentChanged(
+          previousLanguage: 'spa',
+          previousPreferenceSet: true,
+          nextLanguage: 'fra',
+          nextPreferenceSet: true,
+        ),
+        isTrue,
+        reason: 'exact languages may share the same Dub/Sub fallback class',
+      );
+      expect(
+        playerAudioIntentChanged(
+          previousLanguage: 'eng',
+          previousPreferenceSet: true,
+          nextLanguage: 'English Dub 5.1',
+          nextPreferenceSet: true,
+        ),
+        isFalse,
+        reason: 'equivalent labels normalize to the same persisted intent',
+      );
+    },
+  );
+
   test('series Dub override wins over a global Sub release preference', () {
     expect(
       effectivePlaybackAudioPreference(
@@ -266,6 +319,8 @@ void main() {
   test('recognizes common dual and multi-audio release labels', () {
     expect(releaseAdvertisesMultipleAudio('[Group] Show - Dual Audio'), isTrue);
     expect(releaseAdvertisesMultipleAudio('Show.Multi-Audio.1080p'), isTrue);
+    expect(releaseAdvertisesMultipleAudio('Show [DUAL] 1080p'), isTrue);
+    expect(releaseAdvertisesMultipleAudio('Show ENG+JPN 1080p'), isTrue);
     expect(
       releaseAdvertisesMultipleAudio('Show Japanese Audio 1080p'),
       isFalse,
@@ -286,7 +341,47 @@ void main() {
       vlcAudioTrackSignature(const {1: 'Japanese'}),
       isNot(vlcAudioTrackSignature(const {1: 'Japanese', 2: 'English'})),
     );
+    expect(
+      mediaKitSubtitleTrackSignature(const [
+        SubtitleTrack('1', 'English CC', 'eng'),
+      ]),
+      isNot(
+        mediaKitSubtitleTrackSignature(const [
+          SubtitleTrack('1', 'English CC', 'eng'),
+          SubtitleTrack('2', 'Signs and songs', 'eng'),
+        ]),
+      ),
+    );
+    expect(
+      vlcSubtitleTrackSignature(const {3: 'English CC'}),
+      isNot(
+        vlcSubtitleTrackSignature(const {
+          3: 'English CC',
+          4: 'Signs and songs',
+        }),
+      ),
+    );
   });
+
+  test(
+    'waits for a late embedded caption instead of reporting unavailable',
+    () async {
+      const captions = [SubtitleTrack('4', 'English CC', 'eng')];
+      var reads = 0;
+
+      final tracks = await waitForStableTrackSnapshot<List<SubtitleTrack>>(
+        read: () async => ++reads < 4 ? const [] : captions,
+        signature: mediaKitSubtitleTrackSignature,
+        hasTracks: (tracks) => tracks.isNotEmpty,
+        pollInterval: const Duration(milliseconds: 1),
+        minimumWait: const Duration(milliseconds: 3),
+        maximumWait: const Duration(milliseconds: 10),
+      );
+
+      expect(tracks, captions);
+      expect(reads, greaterThanOrEqualTo(4));
+    },
+  );
 
   test(
     'starts automatic playback on smooth MediaCodec with adaptive fallback',

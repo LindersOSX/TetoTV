@@ -74,6 +74,18 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.debrid.connect',
     );
+    expect(
+      find.byKey(const ValueKey('settings-debrid-stream-sort')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-stream-source-priority')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-web-stream-quality')),
+      findsOneWidget,
+    );
   });
 
   for (final layout in <(String, Size)>[
@@ -893,6 +905,9 @@ void main() {
       'accounts.debrid.connect',
     );
 
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);

@@ -41,6 +41,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.player.Media3PlayerActivity
+import dev.animetv.anime_tv.player.NativePlayerProgressBridge
 import dev.animetv.anime_tv.security.AppDeepLinkPolicy
 import java.io.File
 import java.security.MessageDigest
@@ -105,6 +106,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         DiscordRichPresenceBridge.attach(this, channel)
+        NativePlayerProgressBridge.attach(channel)
         createMediaSession()
         if (!::homeEasterEggAudio.isInitialized) {
             homeEasterEggAudio = HomeEasterEggAudio(this)
@@ -1400,6 +1402,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        if (::channel.isInitialized) NativePlayerProgressBridge.detach(channel)
         pendingLocalMediaResult?.error(
             "LOCAL_MEDIA_PICKER_DESTROYED",
             "The Android TV activity closed before a video was selected.",

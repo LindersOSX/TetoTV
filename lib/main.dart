@@ -6,6 +6,7 @@ import 'package:anime_tv/core/legal/bundled_licenses.dart';
 import 'package:anime_tv/core/performance/performance_monitor.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,14 +50,19 @@ Future<void> main() async {
   };
   MediaKit.ensureInitialized();
   PerformanceMonitor.instance.start();
+  final themeControllerFuture = preloadThemeStudioController();
   final isTelevision = await AndroidTvBridge.instance.isTelevision().timeout(
     const Duration(seconds: 2),
     onTimeout: () => false,
   );
+  final themeController = await themeControllerFuture;
   runApp(
     ProviderScope(
       observers: [AnonymousHandledErrorObserver()],
-      overrides: [isTelevisionProvider.overrideWithValue(isTelevision)],
+      overrides: [
+        isTelevisionProvider.overrideWithValue(isTelevision),
+        themeStudioControllerProvider.overrideWith((_) => themeController),
+      ],
       child: const TetoTvApp(),
     ),
   );

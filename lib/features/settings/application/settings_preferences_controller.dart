@@ -3,6 +3,7 @@ import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -37,8 +38,10 @@ const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
 const _preferredAudioKey = 'player_preferred_audio';
-const _anonymousUsageCountKey = 'privacy_anonymous_usage_count';
 const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
+const _debridStreamSortKey = 'streaming_debrid_sort';
+const _streamSourcePriorityKey = 'streaming_source_priority';
+const _webStreamQualityKey = 'streaming_web_quality_preference';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -208,7 +211,9 @@ class SettingsPreferences {
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.automatic,
     this.preferredAudio = PlaybackAudioPreference.dub,
-    this.anonymousUsageCountEnabled = false,
+    this.debridStreamSort = DebridStreamSort.bestQuality,
+    this.streamSourcePriority = StreamSourcePriority.debridFirst,
+    this.webStreamQuality = WebStreamQualityPreference.bestAvailable,
     this.anonymousCrashReportingEnabled = false,
     this.loaded = false,
   });
@@ -244,7 +249,9 @@ class SettingsPreferences {
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
   final PlaybackAudioPreference preferredAudio;
-  final bool anonymousUsageCountEnabled;
+  final DebridStreamSort debridStreamSort;
+  final StreamSourcePriority streamSourcePriority;
+  final WebStreamQualityPreference webStreamQuality;
   final bool anonymousCrashReportingEnabled;
   final bool loaded;
 
@@ -280,7 +287,9 @@ class SettingsPreferences {
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
     PlaybackAudioPreference? preferredAudio,
-    bool? anonymousUsageCountEnabled,
+    DebridStreamSort? debridStreamSort,
+    StreamSourcePriority? streamSourcePriority,
+    WebStreamQualityPreference? webStreamQuality,
     bool? anonymousCrashReportingEnabled,
     bool? loaded,
   }) => SettingsPreferences(
@@ -317,8 +326,9 @@ class SettingsPreferences {
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
     preferredAudio: preferredAudio ?? this.preferredAudio,
-    anonymousUsageCountEnabled:
-        anonymousUsageCountEnabled ?? this.anonymousUsageCountEnabled,
+    debridStreamSort: debridStreamSort ?? this.debridStreamSort,
+    streamSourcePriority: streamSourcePriority ?? this.streamSourcePriority,
+    webStreamQuality: webStreamQuality ?? this.webStreamQuality,
     anonymousCrashReportingEnabled:
         anonymousCrashReportingEnabled ?? this.anonymousCrashReportingEnabled,
     loaded: loaded ?? this.loaded,
@@ -405,11 +415,13 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_clickSoundsKey),
       _safeRead(_defaultLandingPageKey),
       _safeRead(_preferredPlayerKey),
-      _safeRead(_anonymousUsageCountKey),
       _safeRead(_anonymousCrashReportingKey),
       _safeRead(_preferredAudioKey),
       _safeRead(initialSetupCompletedStorageKey),
       _safeRead(_showFillerIndicatorsKey),
+      _safeRead(_debridStreamSortKey),
+      _safeRead(_streamSourcePriorityKey),
+      _safeRead(_webStreamQualityKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -476,8 +488,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(_builtInKeyboardKey, 10)) {
       final savedKeyboard = valueAt(10);
       final completedLegacySetup =
-          canRestore(initialSetupCompletedStorageKey, 32) &&
-          valueAt(32) == 'true';
+          canRestore(initialSetupCompletedStorageKey, 31) &&
+          valueAt(31) == 'true';
       // The previous release migrated an existing installation with no saved
       // keyboard key to device input. Keep that behavior once onboarding was
       // already completed, while a genuinely empty install gets the new
@@ -569,26 +581,48 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
-    if (canRestore(_anonymousUsageCountKey, 29)) {
+    if (canRestore(_anonymousCrashReportingKey, 29)) {
       restored = restored.copyWith(
-        anonymousUsageCountEnabled: valueAt(29) == 'true',
+        anonymousCrashReportingEnabled: valueAt(29) == 'true',
       );
     }
-    if (canRestore(_anonymousCrashReportingKey, 30)) {
+    if (canRestore(_preferredAudioKey, 30)) {
       restored = restored.copyWith(
-        anonymousCrashReportingEnabled: valueAt(30) == 'true',
+        preferredAudio: PlaybackAudioPreferenceLabel.fromStorage(valueAt(30)),
       );
     }
-    if (canRestore(_preferredAudioKey, 31)) {
-      restored = restored.copyWith(
-        preferredAudio: PlaybackAudioPreferenceLabel.fromStorage(valueAt(31)),
-      );
-    }
-    if (canRestore(_showFillerIndicatorsKey, 33)) {
+    if (canRestore(_showFillerIndicatorsKey, 32)) {
       // Existing installations have no saved value, so absence migrates to
       // the enabled default while an explicit opt-out remains permanent.
       restored = restored.copyWith(
-        showFillerIndicators: valueAt(33) != 'false',
+        showFillerIndicators: valueAt(32) != 'false',
+      );
+    }
+    if (canRestore(_debridStreamSortKey, 33)) {
+      restored = restored.copyWith(
+        debridStreamSort: _enumByName(
+          DebridStreamSort.values,
+          valueAt(33),
+          DebridStreamSort.bestQuality,
+        ),
+      );
+    }
+    if (canRestore(_streamSourcePriorityKey, 34)) {
+      restored = restored.copyWith(
+        streamSourcePriority: _enumByName(
+          StreamSourcePriority.values,
+          valueAt(34),
+          StreamSourcePriority.debridFirst,
+        ),
+      );
+    }
+    if (canRestore(_webStreamQualityKey, 35)) {
+      restored = restored.copyWith(
+        webStreamQuality: _enumByName(
+          WebStreamQualityPreference.values,
+          valueAt(35),
+          WebStreamQualityPreference.bestAvailable,
+        ),
       );
     }
     state = restored.copyWith(loaded: true);
@@ -773,9 +807,19 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_preferredAudioKey: value.name},
   );
 
-  Future<void> setAnonymousUsageCountEnabled(bool value) => _update(
-    state.copyWith(anonymousUsageCountEnabled: value),
-    {_anonymousUsageCountKey: value.toString()},
+  Future<void> setDebridStreamSort(DebridStreamSort value) => _update(
+    state.copyWith(debridStreamSort: value),
+    {_debridStreamSortKey: value.name},
+  );
+
+  Future<void> setStreamSourcePriority(StreamSourcePriority value) => _update(
+    state.copyWith(streamSourcePriority: value),
+    {_streamSourcePriorityKey: value.name},
+  );
+
+  Future<void> setWebStreamQuality(WebStreamQualityPreference value) => _update(
+    state.copyWith(webStreamQuality: value),
+    {_webStreamQualityKey: value.name},
   );
 
   Future<void> setAnonymousCrashReportingEnabled(bool value) => _update(
@@ -917,3 +961,6 @@ int _seekValue(String? value) {
   final parsed = int.tryParse(value ?? '');
   return allowed.contains(parsed) ? parsed! : 10;
 }
+
+T _enumByName<T extends Enum>(List<T> values, String? name, T fallback) =>
+    values.where((value) => value.name == name).firstOrNull ?? fallback;

@@ -13,9 +13,11 @@ import 'package:anime_tv/features/catalog/application/filler_episode_providers.d
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/application/audio_track_selector.dart';
+import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
+import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
@@ -51,6 +53,22 @@ String vlcDecoderLabel(VlcDecoderMode mode) => switch (mode) {
   VlcDecoderMode.hardwareCopy => 'VLC compatibility (recommended)',
   VlcDecoderMode.software => 'VLC software decoding',
 };
+
+/// Keeps the inherited timestamp authoritative until VLC has demonstrably
+/// advanced or completed its delayed seek. This is shared by decoder restarts
+/// and cross-engine handoffs so a black/failed first frame cannot reset an
+/// in-progress episode to zero.
+Duration effectiveVlcHandoffPosition({
+  required Duration observed,
+  Duration? inherited,
+}) {
+  if (inherited != null &&
+      inherited > observed &&
+      observed < const Duration(seconds: 2)) {
+    return inherited;
+  }
+  return observed;
+}
 
 int? preferredVlcTrack(
   Map<int, String> tracks, {
@@ -156,6 +174,7 @@ class VlcTvPlayerScreen extends ConsumerStatefulWidget {
 class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   VlcPlayerController? _controller;
   late final TetoTvDatabase _database;
+  late final NextEpisodePreparationController _nextEpisodePreparation;
   final _rootFocus = FocusNode(debugLabel: 'vlc.player.root');
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
   final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
@@ -167,9 +186,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   bool _controlsVisible = true;
   bool _persistenceReady = false;
   bool _completionHandled = false;
+  bool _prewarmingNextEpisode = false;
+  bool _prewarmedNextEpisode = false;
+  final NextEpisodePrewarmRetryPolicy _prewarmRetry =
+      NextEpisodePrewarmRetryPolicy();
+  late NextEpisodePrewarmSettingsKey _prewarmSettingsKey;
+  bool _preserveNextEpisodePreparation = false;
   final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
   bool _syncHandled = false;
   bool _restarting = false;
+  Future<void>? _restartOperation;
   bool _failingOver = false;
   bool _audioPreferenceApplied = false;
   bool _subtitlePreferenceApplied = false;
@@ -248,6 +274,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   void initState() {
     super.initState();
     _database = ref.read(tetoTvDatabaseProvider);
+    _nextEpisodePreparation = ref.read(
+      nextEpisodePreparationControllerProvider,
+    );
+    _prewarmSettingsKey = NextEpisodePrewarmSettingsKey.fromSettings(
+      ref.read(settingsPreferencesProvider),
+    );
+    ref.listenManual(settingsPreferencesProvider, (_, next) {
+      final key = NextEpisodePrewarmSettingsKey.fromSettings(next);
+      if (key == _prewarmSettingsKey) return;
+      _prewarmSettingsKey = key;
+      _invalidateNextEpisodePreparation();
+    });
     _source = widget.source;
     _release = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
@@ -428,7 +466,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     try {
       await controller.initialize();
     } catch (error) {
-      await _handleEngineFailure('VLC initialization failed: $error');
+      // Let this tracked initialization operation leave the mutation set
+      // before restart waits for that set to drain. Restarting inline here
+      // would make the failed initializer wait on its own completion.
+      Timer.run(() {
+        if (mounted && !_engineHandoffInProgress) {
+          unawaited(_handleEngineFailure('VLC initialization failed: $error'));
+        }
+      });
     }
   }
 
@@ -450,9 +495,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (!mounted || controller != _controller) return;
     final resume = _pendingResume;
     if (resume != null) {
-      await _restoreResume(controller, resume);
-      if (controller == _controller) _pendingResume = null;
-      _showMessage('Resumed at ${_formatDuration(resume)}');
+      final restored = await _restoreResume(controller, resume);
+      if (controller == _controller && restored) _pendingResume = null;
+      _showMessage(
+        restored
+            ? 'Resumed at ${_formatDuration(resume)}'
+            : 'Still restoring ${_formatDuration(resume)}',
+      );
     }
     _persistenceReady = true;
     _scheduleSkipSegmentLoad(controller.value.duration);
@@ -575,12 +624,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     });
   }
 
-  Future<void> _restoreResume(
+  Future<bool> _restoreResume(
     VlcPlayerController controller,
     Duration resume,
   ) async {
     for (var attempt = 0; attempt < 3; attempt++) {
-      if (controller != _controller) return;
+      if (controller != _controller || _engineHandoffInProgress) return false;
       try {
         await controller.seekTo(resume);
       } catch (_) {
@@ -588,9 +637,12 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       }
       await Future<void>.delayed(const Duration(milliseconds: 700));
       if (controller.value.position + const Duration(seconds: 5) >= resume) {
-        return;
+        return true;
       }
     }
+    // Keep _pendingResume intact. If the viewer changes engine before VLC can
+    // seek, the handoff must still carry the exact inherited timestamp.
+    return false;
   }
 
   void _onValueChanged() {
@@ -616,6 +668,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       unawaited(_persistPlayback(value.position));
       unawaited(_updateMediaSession());
       _checkSkips(value.position);
+      _maybePrewarmNextEpisode(
+        position: value.position,
+        duration: value.duration,
+      );
       final threshold = ref
           .read(settingsPreferencesProvider)
           .trackerUpdateThreshold;
@@ -716,10 +772,41 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     bool propagateFailure = false,
   }) {
     if (_engineHandoffInProgress) return Future<void>.value();
-    return _trackControllerMutation(
-      _runRestart(mode, reason: reason, resumePosition: resumePosition),
-      propagateFailure: propagateFailure,
-    );
+    var operation = _restartOperation;
+    if (operation == null) {
+      late final Future<void> created;
+      created =
+          _runRestart(
+            mode,
+            reason: reason,
+            resumePosition: resumePosition,
+          ).whenComplete(() {
+            if (identical(_restartOperation, created)) {
+              _restartOperation = null;
+            }
+          });
+      _restartOperation = created;
+      operation = created;
+    }
+    if (propagateFailure) return operation;
+    return _reportRestartFailure(operation);
+  }
+
+  Future<void> _reportRestartFailure(Future<void> operation) async {
+    try {
+      await operation;
+    } catch (error, stackTrace) {
+      if (mounted && !_engineHandoffInProgress) {
+        unawaited(
+          recordAnonymousHandledError(
+            area: AnonymousErrorArea.playback,
+            error: error,
+            stack: stackTrace,
+          ),
+        );
+        setState(() => _playbackError = error.toString());
+      }
+    }
   }
 
   Future<void> _runRestart(
@@ -730,12 +817,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (_restarting) return;
     _restarting = true;
     final old = _controller;
-    final position = resumePosition ?? old?.value.position ?? Duration.zero;
+    final observedPosition = old?.value.position ?? Duration.zero;
+    final position =
+        resumePosition ??
+        effectiveVlcHandoffPosition(
+          observed: observedPosition,
+          inherited: _pendingResume,
+        );
     _persistenceReady = false;
     _engineInitialized = false;
     _videoWatchdog?.cancel();
     _decoderMode = mode;
-    _pendingResume = position > Duration.zero ? position : null;
+    if (position > Duration.zero) _pendingResume = position;
     _trackDiscoveryTimer?.cancel();
     _trackDiscoveryAttempts = 0;
     _audioPreferenceApplied = false;
@@ -747,6 +840,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       if (_engineHandoffInProgress) return;
       if (old != null) {
         old.removeListener(_onValueChanged);
+        _controllerPendingRelease = old;
+        if (mounted && identical(_controller, old)) {
+          setState(() => _controller = null);
+          // A libVLC texture must leave the tree before its platform view is
+          // disposed. Releasing it while Android is still compositing the old
+          // view is the black-screen/crash path seen during engine changes.
+          await WidgetsBinding.instance.endOfFrame;
+        }
+        await _waitForControllerMutations();
         if (old.value.isInitialized) await old.stop();
         if (old.isReadyToInitialize == true) {
           await _disposeControllerAuthoritatively(old);
@@ -754,10 +856,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         }
       }
       if (!mounted || _engineHandoffInProgress) return;
+      _controllerPendingRelease = null;
       _installController(_createController(_source, mode));
       setState(() => _playbackError = null);
       if (reason != null) _showMessage(reason);
     } finally {
+      if (identical(_controllerPendingRelease, old) &&
+          _releasedControllers.contains(old)) {
+        _controllerPendingRelease = null;
+      }
       _restarting = false;
     }
   }
@@ -1218,16 +1325,45 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _openSubtitleTrackPicker() async {
     final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
+    if (controller == null) {
+      _showMessage('Captions are still loading');
+      return;
+    }
     try {
-      var tracks = await controller.getSpuTracks();
-      for (var attempt = 0; tracks.isEmpty && attempt < 5; attempt++) {
+      if (!controller.value.isInitialized) {
+        _showMessage('Checking embedded and external captions…');
+      }
+      for (
+        var attempt = 0;
+        !controller.value.isInitialized && attempt < 16;
+        attempt++
+      ) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
-        if (!mounted) return;
-        tracks = await controller.getSpuTracks();
+        if (!mounted || controller != _controller) return;
+      }
+      if (!controller.value.isInitialized) {
+        _showMessage('Captions are still loading');
+        return;
+      }
+      _showMessage('Checking embedded and external captions…');
+      var tracks = await waitForStableTrackSnapshot<Map<int, String>>(
+        read: () async {
+          if (!mounted || controller != _controller) return const {};
+          return controller.getSpuTracks();
+        },
+        signature: vlcSubtitleTrackSignature,
+        hasTracks: (tracks) => tracks.keys.any((id) => id >= 0),
+        maximumWait:
+            _currentStream.externalSubtitle != null || widget.subtitle != null
+            ? const Duration(seconds: 4)
+            : const Duration(seconds: 3),
+      );
+      if (!mounted || controller != _controller) return;
+      final current = await controller.getSpuTrack() ?? -1;
+      if (current >= 0 && !tracks.containsKey(current)) {
+        tracks = {...tracks, current: 'Selected external subtitles'};
       }
       final ids = <int>[-1, ...tracks.keys.where((id) => id >= 0)]..sort();
-      final current = await controller.getSpuTrack() ?? -1;
       if (!mounted) return;
       _controlsTimer?.cancel();
       final selected = await showPlayerTrackPicker<int>(
@@ -1296,6 +1432,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }) async {
     final mediaId = widget.anilistMediaId;
     if (mediaId == null) return;
+    final previousAudioPreference = _effectiveAudioPreference;
+    final previousAudioLanguage = _preferences.audioLanguage;
+    final previousAudioPreferenceSet = _preferences.audioPreferenceSet;
     _preferences = _preferences.copyWith(
       audioLanguage: audioLabel == null
           ? _preferences.audioLanguage
@@ -1325,6 +1464,18 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       clearPreferredReleaseGroup: releaseGroupKey(_release.releaseName) == null,
     );
     await _database.saveSeriesPreferences(mediaId, _preferences);
+    final manualAudioIntentChanged =
+        audioPreferenceSet &&
+        playerAudioIntentChanged(
+          previousLanguage: previousAudioLanguage,
+          previousPreferenceSet: previousAudioPreferenceSet,
+          nextLanguage: _preferences.audioLanguage,
+          nextPreferenceSet: _preferences.audioPreferenceSet,
+        );
+    if (manualAudioIntentChanged ||
+        _effectiveAudioPreference != previousAudioPreference) {
+      _invalidateNextEpisodePreparation();
+    }
   }
 
   Future<void> _seekBy(Duration offset) async {
@@ -1375,13 +1526,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Duration _effectiveHandoffPosition() {
     final position = _controller?.value.position ?? Duration.zero;
-    final inherited = _pendingResume;
-    if (inherited != null &&
-        inherited > position &&
-        position < const Duration(seconds: 2)) {
-      return inherited;
-    }
-    return position;
+    return effectiveVlcHandoffPosition(
+      observed: position,
+      inherited: _pendingResume,
+    );
   }
 
   Future<StreamReady?> _resolveRelease(
@@ -1469,6 +1617,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           );
           if (!mounted || _engineHandoffInProgress) return;
           await widget.onStreamAdopted(ready, candidate);
+          _invalidateNextEpisodePreparation();
           return;
         } catch (error) {
           if (!mounted || _engineHandoffInProgress) return;
@@ -1555,6 +1704,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             return false;
           }
           await widget.onStreamAdopted(option.stream, option.release);
+          _invalidateNextEpisodePreparation();
           preparedOption = null;
           return true;
         } catch (_) {
@@ -1697,22 +1847,180 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     await _playNextEpisode();
   }
 
+  NextEpisodePreparationRequest _nextEpisodePreparationRequest() =>
+      NextEpisodePreparationRequest(
+        currentLaunch: PlaybackLaunch(
+          stream: _currentStream,
+          episode: widget.launch.episode,
+          selectedRelease: _release,
+          alternatives: widget.launch.alternatives,
+          directAlternatives: _directStreamOptions,
+        ),
+        seriesPreferences: _preferences,
+        debridService: widget.debridService,
+      );
+
+  void _maybePrewarmNextEpisode({
+    required Duration position,
+    required Duration duration,
+  }) {
+    if (!mounted ||
+        _engineHandoffInProgress ||
+        !_preferences.autoplayNextEpisode ||
+        widget.episode == null ||
+        !shouldPrepareNextEpisode(position: position, duration: duration)) {
+      return;
+    }
+    if (_prewarmedNextEpisode) {
+      if (_nextEpisodePreparation.hasReady(_nextEpisodePreparationRequest())) {
+        return;
+      }
+      _prewarmedNextEpisode = false;
+      _prewarmRetry.resetGeneration();
+    }
+    if (_prewarmingNextEpisode || !_prewarmRetry.canAttempt(DateTime.now())) {
+      return;
+    }
+    unawaited(_prewarmNextEpisode());
+  }
+
+  void _invalidateNextEpisodePreparation() {
+    _prewarmRetry.resetGeneration();
+    _prewarmingNextEpisode = false;
+    _prewarmedNextEpisode = false;
+    final value = _controller?.value;
+    if (value == null) return;
+    _maybePrewarmNextEpisode(
+      position: value.position,
+      duration: value.duration,
+    );
+  }
+
+  Future<void> _prewarmNextEpisode() async {
+    if (!mounted ||
+        _engineHandoffInProgress ||
+        _prewarmingNextEpisode ||
+        _prewarmedNextEpisode ||
+        !_preferences.autoplayNextEpisode ||
+        widget.episode == null) {
+      return;
+    }
+    final generation = _prewarmRetry.generation;
+    _prewarmingNextEpisode = true;
+    final preparation = ref.read(nextEpisodePreparationControllerProvider);
+    try {
+      final outcome = await preparation.warmWithOutcome(
+        _nextEpisodePreparationRequest(),
+      );
+      final prepared = outcome.prepared;
+      if (mounted &&
+          !_engineHandoffInProgress &&
+          _prewarmRetry.isCurrent(generation)) {
+        _prewarmedNextEpisode = prepared != null;
+        if (prepared == null) {
+          if (outcome.isTerminal) {
+            _prewarmRetry.recordTerminal(generation);
+          } else {
+            _prewarmRetry.recordFailure(generation, DateTime.now());
+          }
+        } else {
+          _prewarmRetry.recordSuccess(generation);
+        }
+      }
+    } catch (_) {
+      // Invisible preparation must never affect current playback.
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarmRetry.recordFailure(generation, DateTime.now());
+      }
+    } finally {
+      if (mounted && _prewarmRetry.isCurrent(generation)) {
+        _prewarmingNextEpisode = false;
+      }
+    }
+  }
+
+  Future<bool> _openPreparedNextEpisode(
+    StateController<Set<int>> unavailableNoticeController,
+  ) async {
+    final preparation = ref.read(nextEpisodePreparationControllerProvider);
+    final prepared = await preparation.take(
+      widget.anilistMediaId!,
+      widget.episode!,
+      currentRequest: _nextEpisodePreparationRequest(),
+    );
+    if (prepared == null) return false;
+    if (!mounted || _engineHandoffInProgress) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    final requestedEpisode = widget.episode! + 1;
+    if (prepared.fillerDecision.dataUnavailable &&
+        consumeFillerUnavailableNotice(
+          unavailableNoticeController,
+          widget.anilistMediaId!,
+        )) {
+      showFillerDataUnavailableNotice(context, episode: requestedEpisode);
+    }
+    unawaited(showFillerSkipNotification(context, prepared.fillerDecision));
+    if (!mounted || _engineHandoffInProgress) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    final controller = _controller;
+    final completedPosition =
+        controller != null && controller.value.duration > Duration.zero
+        ? controller.value.duration
+        : controller?.value.position ?? Duration.zero;
+    if (!await _prepareForEngineHandoff(completedPosition)) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    if (!mounted) {
+      await prepared.launch.stream.playbackLease?.close();
+      return true;
+    }
+    _preserveNextEpisodePreparation = true;
+    try {
+      final navigation = GoRouter.of(context).pushReplacement<void>(
+        preparedNextEpisodePlayerLocation(prepared),
+        extra: prepared.launch,
+      );
+      unawaited(
+        navigation.then<void>(
+          (_) {},
+          onError: (Object error, StackTrace stackTrace) async {
+            _preserveNextEpisodePreparation = false;
+            await prepared.launch.stream.playbackLease?.close();
+            if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+          },
+        ),
+      );
+    } catch (_) {
+      _preserveNextEpisodePreparation = false;
+      await prepared.launch.stream.playbackLease?.close();
+      if (mounted) _popPlayerRouteAfterHandoff(Navigator.of(context));
+    }
+    return true;
+  }
+
   Future<void> _playNextEpisode() async {
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
     if (!_nextEpisodeHandoff.tryEnter()) return;
     try {
-      final catalog = ref.read(catalogClientProvider);
-      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final unavailableNoticeController = ref.read(
         fillerUnavailableNotifiedSeriesProvider.notifier,
       );
+      if (await _openPreparedNextEpisode(unavailableNoticeController)) return;
+      if (!mounted) return;
+      final catalog = ref.read(catalogClientProvider);
+      final fillerRepository = ref.read(fillerEpisodeRepositoryProvider);
       final skipFillerEpisodes = _preferences.skipFillerEpisodes;
       final details = await catalog.details(widget.anilistMediaId!);
       if (!mounted) return;
       final requestedEpisode = widget.episode! + 1;
-      if (details.episodes != null && requestedEpisode > details.episodes!) {
+      if (!isEpisodeAvailableForPlayback(details, requestedEpisode)) {
         return;
       }
       final totalEpisodes = episodeNavigationCeiling(
@@ -1728,6 +2036,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         skipEnabled: skipFillerEpisodes,
       );
       if (!mounted) return;
+      final nextEpisode = decision.episode;
+      if (nextEpisode != null &&
+          !isEpisodeAvailableForPlayback(details, nextEpisode)) {
+        return;
+      }
       if (decision.dataUnavailable &&
           consumeFillerUnavailableNotice(
             unavailableNoticeController,
@@ -1735,9 +2048,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           )) {
         showFillerDataUnavailableNotice(context, episode: requestedEpisode);
       }
-      await showFillerSkipNotification(context, decision);
-      if (!mounted || decision.episode == null) return;
-      final nextEpisode = decision.episode!;
+      unawaited(showFillerSkipNotification(context, decision));
+      if (!mounted || nextEpisode == null) return;
       if (!mounted) return;
       final preferredProvider = _release.provider?.trim();
       final preferredSourceId = _release.sourceId.trim();
@@ -1946,6 +2258,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         return;
       }
       await widget.onStreamAdopted(option.stream, option.release);
+      _invalidateNextEpisodePreparation();
     } catch (_) {
       await option.stream.playbackLease?.close();
       _source = previousSource;
@@ -1996,6 +2309,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _initializationWatchdog?.cancel();
     _videoWatchdog?.cancel();
     _trackDiscoveryTimer?.cancel();
+    final restart = _restartOperation;
+    if (restart != null) {
+      try {
+        await restart;
+      } catch (_) {
+        // The handoff below remains the authoritative release retry.
+      }
+    }
     final controller = _controllerPendingRelease ?? _controller;
     _controllerPendingRelease ??= controller;
     if (mounted) {
@@ -2122,10 +2443,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     );
     if (!await _prepareForEngineHandoff(position)) return;
     if (!mounted) return;
-    if (callback != null) {
-      callback(selected, position, stream, release, directStreams);
-    } else {
-      widget.onUseMpv(position, stream, release, directStreams);
+    _preserveNextEpisodePreparation = true;
+    try {
+      if (callback != null) {
+        callback(selected, position, stream, release, directStreams);
+      } else {
+        widget.onUseMpv(position, stream, release, directStreams);
+      }
+    } catch (_) {
+      _preserveNextEpisodePreparation = false;
+      rethrow;
     }
   }
 
@@ -2433,6 +2760,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   @override
   void dispose() {
     _skipLoadTimer?.cancel();
+    if (!_preserveNextEpisodePreparation && widget.episode != null) {
+      final request = _nextEpisodePreparationRequest();
+      unawaited(
+        _nextEpisodePreparation.abandon(
+          request.mediaId,
+          request.currentEpisode,
+          currentRequest: request,
+        ),
+      );
+    }
     final controller = _controllerPendingRelease ?? _controller;
     _trackDiscoveryTimer?.cancel();
     // A timer callback may already be awaiting VLC's track API. Remove its
@@ -2501,10 +2838,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
               children: [
                 if (controller != null && !_engineHandoffInProgress)
                   KeyedSubtree(
-                    // Never replace the Android platform view when initialization
-                    // completes. Re-keying this subtree disposes libVLC's surface
-                    // while its decoder is producing the first frame.
-                    key: const ValueKey('vlc-player-surface'),
+                    // Keep the view stable for one controller, but force a new
+                    // Android platform view when a failed decoder is replaced.
+                    // Reusing the previous AndroidView means the new controller
+                    // never receives onPlatformViewCreated and stays black.
+                    key: ObjectKey(controller),
                     child: Center(
                       child: VlcPlayer(
                         controller: controller,

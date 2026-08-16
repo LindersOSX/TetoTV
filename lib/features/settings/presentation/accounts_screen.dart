@@ -20,6 +20,7 @@ import 'package:anime_tv/features/settings/application/torbox_settings_controlle
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
@@ -58,6 +59,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _webStreamsFocus = FocusNode(debugLabel: 'accounts.streaming.web');
   final _marketplaceFocus = FocusNode(
     debugLabel: 'accounts.streaming.marketplace',
+  );
+  final _debridSortFocus = FocusNode(
+    debugLabel: 'accounts.streaming.debrid-sort',
+  );
+  final _sourcePriorityFocus = FocusNode(
+    debugLabel: 'accounts.streaming.source-priority',
+  );
+  final _webQualityFocus = FocusNode(
+    debugLabel: 'accounts.streaming.web-quality',
   );
   final _localMediaFocus = FocusNode(
     debugLabel: 'accounts.streaming.local-media',
@@ -145,6 +155,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _debridStreamsFocus.dispose();
     _webStreamsFocus.dispose();
     _marketplaceFocus.dispose();
+    _debridSortFocus.dispose();
+    _sourcePriorityFocus.dispose();
+    _webQualityFocus.dispose();
     _localMediaFocus.dispose();
     _customizationFocus.dispose();
     _setupFocus.dispose();
@@ -315,12 +328,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _marketplaceFocus;
     } else if (current == _marketplaceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowDown &&
-          ref.read(appUpdateControllerProvider).developerMode) {
-        target = _localMediaFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _debridSortFocus;
+    } else if (current == _debridSortFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _marketplaceFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _sourcePriorityFocus;
+    } else if (current == _sourcePriorityFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _debridSortFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _webQualityFocus;
+    } else if (current == _webQualityFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _sourcePriorityFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = ref.read(appUpdateControllerProvider).developerMode
+            ? _localMediaFocus
+            : _webQualityFocus;
       }
     } else if (current == _localMediaFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _marketplaceFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _webQualityFocus;
       // Streaming is the end of this tab. Keep focus here instead of pointing
       // at a control which is not mounted while this tab is active.
       if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
@@ -885,6 +908,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         onMarketplace: () =>
                             context.push('/settings/marketplace'),
                       ),
+                      const SizedBox(height: 8),
+                      _StreamRankingPanel(
+                        preferences: preferences,
+                        debridSortFocusNode: _debridSortFocus,
+                        sourcePriorityFocusNode: _sourcePriorityFocus,
+                        webQualityFocusNode: _webQualityFocus,
+                        onDebridSortSelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setDebridStreamSort,
+                        onSourcePrioritySelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setStreamSourcePriority,
+                        onWebQualitySelected: ref
+                            .read(settingsPreferencesProvider.notifier)
+                            .setWebStreamQuality,
+                      ),
                       if (appUpdate.developerMode) ...[
                         const SizedBox(height: 8),
                         _Panel(
@@ -1357,6 +1396,7 @@ class _SettingsSelection<T> extends StatelessWidget {
     required this.options,
     required this.onSelected,
     this.focusNode,
+    super.key,
   });
 
   final String label;
@@ -1775,29 +1815,6 @@ class _CustomizationPanel extends StatelessWidget {
             ],
           ),
           _PreferenceRow(
-            label: 'Community activity',
-            children: [
-              toggle(
-                label: 'Anonymous live count',
-                value: preferences.anonymousUsageCountEnabled,
-                onChanged: controller.setAnonymousUsageCountEnabled,
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 2, bottom: 4),
-            child: Text(
-              'Shares only whether this app session is active or playing. '
-              'TetoTV never sends the show, episode, account, device ID, '
-              'stream provider, or URL.',
-              style: TextStyle(
-                color: context.appPalette.mutedText,
-                fontSize: 10,
-                height: 1.35,
-              ),
-            ),
-          ),
-          _PreferenceRow(
             label: 'Privacy diagnostics',
             children: [
               toggle(
@@ -2056,6 +2073,96 @@ class _StreamingSourcesPanel extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _StreamRankingPanel extends StatelessWidget {
+  const _StreamRankingPanel({
+    required this.preferences,
+    required this.debridSortFocusNode,
+    required this.sourcePriorityFocusNode,
+    required this.webQualityFocusNode,
+    required this.onDebridSortSelected,
+    required this.onSourcePrioritySelected,
+    required this.onWebQualitySelected,
+  });
+
+  final SettingsPreferences preferences;
+  final FocusNode debridSortFocusNode;
+  final FocusNode sourcePriorityFocusNode;
+  final FocusNode webQualityFocusNode;
+  final ValueChanged<DebridStreamSort> onDebridSortSelected;
+  final ValueChanged<StreamSourcePriority> onSourcePrioritySelected;
+  final ValueChanged<WebStreamQualityPreference> onWebQualitySelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MiniSectionLabel('STREAM ORDER'),
+          const SizedBox(height: 7),
+          _SettingsSelection<DebridStreamSort>(
+            key: const ValueKey('settings-debrid-stream-sort'),
+            focusNode: debridSortFocusNode,
+            label: 'Debrid results',
+            value: preferences.debridStreamSort,
+            options: [
+              for (final value in DebridStreamSort.values)
+                _SettingsOption(
+                  value: value,
+                  label: value.displayName,
+                  detail: value.description,
+                ),
+            ],
+            onSelected: onDebridSortSelected,
+          ),
+          const SizedBox(height: 8),
+          _SettingsSelection<StreamSourcePriority>(
+            key: const ValueKey('settings-stream-source-priority'),
+            focusNode: sourcePriorityFocusNode,
+            label: 'Source priority',
+            value: preferences.streamSourcePriority,
+            options: [
+              for (final value in StreamSourcePriority.values)
+                _SettingsOption(
+                  value: value,
+                  label: value.displayName,
+                  detail: value.description,
+                ),
+            ],
+            onSelected: onSourcePrioritySelected,
+          ),
+          const SizedBox(height: 8),
+          _SettingsSelection<WebStreamQualityPreference>(
+            key: const ValueKey('settings-web-stream-quality'),
+            focusNode: webQualityFocusNode,
+            label: 'Preferred Web quality',
+            value: preferences.webStreamQuality,
+            options: [
+              for (final value in WebStreamQualityPreference.values)
+                _SettingsOption(
+                  value: value,
+                  label: value.displayName,
+                  detail: value.description,
+                ),
+            ],
+            onSelected: onWebQualitySelected,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            'Preferences change ranking only. Other usable streams remain '
+            'available for manual choice and automatic failover.',
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 10,
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3702,15 +3809,27 @@ class _TrackingPanelState extends State<_TrackingPanel> {
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
-            child: _TvTextButton(
-              label: widget.username != null ? 'Disconnect' : 'Connect by QR',
-              icon: widget.username == null
-                  ? Icons.qr_code_rounded
-                  : Icons.link_off_rounded,
-              onPressed: widget.username == null
-                  ? widget.onConnect
-                  : widget.onDisconnect,
-              focusNode: widget.focusNode,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _TvTextButton(
+                  label: widget.username == null
+                      ? 'Connect by QR'
+                      : 'Add profile',
+                  icon: widget.username == null
+                      ? Icons.qr_code_rounded
+                      : Icons.person_add_alt_1_rounded,
+                  onPressed: widget.onConnect,
+                  focusNode: widget.focusNode,
+                ),
+                if (widget.username != null)
+                  _TvTextButton(
+                    label: 'Disconnect',
+                    icon: Icons.link_off_rounded,
+                    onPressed: widget.onDisconnect,
+                  ),
+              ],
             ),
           ),
           if (widget.username == null) ...[

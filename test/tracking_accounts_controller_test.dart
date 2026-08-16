@@ -121,6 +121,15 @@ void main() {
     expect(mal.minutesWatched, 59760);
     expect(mal.meanScore, 8.1);
     expect(controller.state.usernames[TrackingProvider.anilist], 'TetoFan');
+    expect(
+      controller.state.savedProfiles[TrackingProvider.anilist]?.single.username,
+      'TetoFan',
+    );
+    expect(anilist.slotId, isNotNull);
+    expect(
+      controller.state.activeProfileIds[TrackingProvider.anilist],
+      anilist.slotId,
+    );
     expect(requests, hasLength(2));
     for (final request in requests) {
       expect(request.followRedirects, isFalse);

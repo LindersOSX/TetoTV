@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,8 +35,10 @@ void main() {
     await controller.setClickSounds(false);
     await controller.setPreferredPlayer(PreferredPlayer.vlc);
     await controller.setPreferredAudio(PlaybackAudioPreference.sub);
+    await controller.setDebridStreamSort(DebridStreamSort.largestSize);
+    await controller.setStreamSourcePriority(StreamSourcePriority.webFirst);
+    await controller.setWebStreamQuality(WebStreamQualityPreference.p720);
     await controller.setDefaultLandingPage(LandingPage.myList);
-    await controller.setAnonymousUsageCountEnabled(false);
     await controller.setAnonymousCrashReportingEnabled(true);
 
     final restored = SettingsPreferencesController(storage);
@@ -63,42 +66,55 @@ void main() {
     expect(restored.state.clickSounds, isFalse);
     expect(restored.state.preferredPlayer, PreferredPlayer.vlc);
     expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
+    expect(restored.state.debridStreamSort, DebridStreamSort.largestSize);
+    expect(restored.state.streamSourcePriority, StreamSourcePriority.webFirst);
+    expect(restored.state.webStreamQuality, WebStreamQualityPreference.p720);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
-    expect(restored.state.anonymousUsageCountEnabled, isFalse);
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
     expect(restored.state.loaded, isTrue);
   });
 
-  test('fresh installs keep anonymous reporting off by default', () async {
-    FlutterSecureStorage.setMockInitialValues({});
-    final controller = SettingsPreferencesController(
-      const FlutterSecureStorage(),
-    );
-    await controller.load();
+  test(
+    'fresh installs keep anonymous crash reporting off by default',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
+      await controller.load();
 
-    expect(controller.state.debridStreamsEnabled, isTrue);
-    expect(controller.state.webStreamsEnabled, isTrue);
-    expect(controller.state.useBuiltInKeyboard, isTrue);
-    expect(controller.state.autoSkipIntros, isFalse);
-    expect(controller.state.autoSkipOutros, isFalse);
-    expect(controller.state.showFillerIndicators, isTrue);
-    expect(controller.state.homeLayout, HomeLayout.cinematic);
-    expect(controller.state.interfaceMode, InterfaceMode.automatic);
-    expect(controller.state.navigationSounds, isTrue);
-    expect(controller.state.clickSounds, isTrue);
-    expect(controller.state.defaultLandingPage, LandingPage.home);
-    expect(controller.state.showMyList, isTrue);
-    expect(controller.state.showDiscover, isTrue);
-    expect(controller.state.showCalendar, isTrue);
-    expect(controller.state.anonymousUsageCountEnabled, isFalse);
-    expect(controller.state.anonymousCrashReportingEnabled, isFalse);
-    expect(controller.state.preferredAudio, PlaybackAudioPreference.dub);
-    expect(controller.state.loaded, isTrue);
-    expect(
-      controller.state.trackerUpdateThreshold,
-      TrackerUpdateThreshold.nearlyFinished,
-    );
-  });
+      expect(controller.state.debridStreamsEnabled, isTrue);
+      expect(controller.state.webStreamsEnabled, isTrue);
+      expect(controller.state.useBuiltInKeyboard, isTrue);
+      expect(controller.state.autoSkipIntros, isFalse);
+      expect(controller.state.autoSkipOutros, isFalse);
+      expect(controller.state.showFillerIndicators, isTrue);
+      expect(controller.state.homeLayout, HomeLayout.cinematic);
+      expect(controller.state.interfaceMode, InterfaceMode.automatic);
+      expect(controller.state.navigationSounds, isTrue);
+      expect(controller.state.clickSounds, isTrue);
+      expect(controller.state.defaultLandingPage, LandingPage.home);
+      expect(controller.state.showMyList, isTrue);
+      expect(controller.state.showDiscover, isTrue);
+      expect(controller.state.showCalendar, isTrue);
+      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+      expect(controller.state.preferredAudio, PlaybackAudioPreference.dub);
+      expect(controller.state.debridStreamSort, DebridStreamSort.bestQuality);
+      expect(
+        controller.state.streamSourcePriority,
+        StreamSourcePriority.debridFirst,
+      );
+      expect(
+        controller.state.webStreamQuality,
+        WebStreamQualityPreference.bestAvailable,
+      );
+      expect(controller.state.loaded, isTrue);
+      expect(
+        controller.state.trackerUpdateThreshold,
+        TrackerUpdateThreshold.nearlyFinished,
+      );
+    },
+  );
 
   test(
     'completed legacy installs without a keyboard choice keep device input',
@@ -170,18 +186,6 @@ void main() {
     await controller.load();
 
     expect(controller.state.useBuiltInKeyboard, isFalse);
-  });
-
-  test('anonymous live counting persists only after explicit opt in', () async {
-    FlutterSecureStorage.setMockInitialValues({});
-    const storage = FlutterSecureStorage();
-    final controller = SettingsPreferencesController(storage);
-
-    await controller.setAnonymousUsageCountEnabled(true);
-    final restored = SettingsPreferencesController(storage);
-    await restored.load();
-
-    expect(restored.state.anonymousUsageCountEnabled, isTrue);
   });
 
   test(
@@ -274,7 +278,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 34, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 36, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

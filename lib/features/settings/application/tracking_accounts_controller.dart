@@ -25,12 +25,16 @@ class TrackingAccountsState {
     this.isLoading = false,
     this.usernames = const {},
     this.profiles = const {},
+    this.savedProfiles = const {},
+    this.activeProfileIds = const {},
     this.errors = const {},
   });
 
   final bool isLoading;
   final Map<TrackingProvider, String> usernames;
   final Map<TrackingProvider, TrackingAccountProfile> profiles;
+  final Map<TrackingProvider, List<StoredTrackingProfile>> savedProfiles;
+  final Map<TrackingProvider, String> activeProfileIds;
   final Map<TrackingProvider, String> errors;
 
   bool isConnected(TrackingProvider provider) =>
@@ -46,6 +50,7 @@ class TrackingAccountProfile {
     this.episodesWatched,
     this.minutesWatched,
     this.meanScore,
+    this.slotId,
   });
 
   final TrackingProvider provider;
@@ -55,6 +60,18 @@ class TrackingAccountProfile {
   final int? episodesWatched;
   final int? minutesWatched;
   final double? meanScore;
+  final String? slotId;
+
+  TrackingAccountProfile copyWith({String? slotId}) => TrackingAccountProfile(
+    provider: provider,
+    username: username,
+    avatarUrl: avatarUrl,
+    animeCount: animeCount,
+    episodesWatched: episodesWatched,
+    minutesWatched: minutesWatched,
+    meanScore: meanScore,
+    slotId: slotId ?? this.slotId,
+  );
 }
 
 class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
@@ -80,16 +97,27 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
       isLoading: true,
       usernames: state.usernames,
       profiles: state.profiles,
+      savedProfiles: state.savedProfiles,
+      activeProfileIds: state.activeProfileIds,
       errors: state.errors,
     );
     final usernames = <TrackingProvider, String>{};
     final profiles = <TrackingProvider, TrackingAccountProfile>{};
+    final activeProfileIds = <TrackingProvider, String>{};
     final errors = <TrackingProvider, String>{};
     for (final provider in TrackingProvider.values) {
       try {
         final token = await _tokenService.accessToken(provider);
         if (token == null || token.isEmpty) continue;
-        final profile = await _profile(provider, token);
+        var profile = await _profile(provider, token);
+        final saved = await _tokenService.rememberCurrentProfile(
+          provider,
+          profile.username,
+        );
+        if (saved != null) {
+          activeProfileIds[provider] = saved.id;
+          profile = profile.copyWith(slotId: saved.id);
+        }
         profiles[provider] = profile;
         usernames[provider] = profile.username;
       } catch (error) {
@@ -97,9 +125,19 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
       }
     }
     if (!mounted || generation != _loadGeneration) return;
+    final stored = await _tokenService.savedProfiles();
+    if (!mounted || generation != _loadGeneration) return;
     state = TrackingAccountsState(
       usernames: usernames,
       profiles: profiles,
+      savedProfiles: {
+        for (final provider in TrackingProvider.values)
+          provider: [
+            for (final profile in stored)
+              if (profile.provider == provider) profile,
+          ],
+      },
+      activeProfileIds: activeProfileIds,
       errors: errors,
     );
   }
@@ -114,6 +152,11 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
         ..remove(provider),
       profiles: Map<TrackingProvider, TrackingAccountProfile>.of(state.profiles)
         ..remove(provider),
+      savedProfiles: Map<TrackingProvider, List<StoredTrackingProfile>>.of(
+        state.savedProfiles,
+      )..remove(provider),
+      activeProfileIds: Map<TrackingProvider, String>.of(state.activeProfileIds)
+        ..remove(provider),
       errors: Map<TrackingProvider, String>.of(state.errors)..remove(provider),
     );
     await _tokenService.clear(provider);
@@ -126,6 +169,36 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
     await _tokenService.save(provider, token);
     _ref.invalidate(trackingHomeProvider);
     await load();
+  }
+
+  Future<bool> switchProfile(StoredTrackingProfile profile) async {
+    final generation = ++_loadGeneration;
+    state = TrackingAccountsState(
+      isLoading: true,
+      usernames: state.usernames,
+      profiles: state.profiles,
+      savedProfiles: state.savedProfiles,
+      activeProfileIds: state.activeProfileIds,
+      errors: state.errors,
+    );
+    try {
+      await _tokenService.activateProfile(profile);
+      if (!mounted || generation != _loadGeneration) return false;
+      _ref.invalidate(trackingHomeProvider);
+      await load();
+      return true;
+    } catch (error) {
+      if (!mounted || generation != _loadGeneration) return false;
+      state = TrackingAccountsState(
+        usernames: state.usernames,
+        profiles: state.profiles,
+        savedProfiles: state.savedProfiles,
+        activeProfileIds: state.activeProfileIds,
+        errors: Map<TrackingProvider, String>.of(state.errors)
+          ..[profile.provider] = error.toString(),
+      );
+      return false;
+    }
   }
 
   Future<TrackingAccountProfile> _profile(

@@ -1,8 +1,24 @@
 import 'dart:io';
 
+import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('nextAiring marks N + 1 unavailable to completion fallback', () {
+    const details = AnimeSummary(
+      id: 7,
+      title: 'Airing Show',
+      description: '',
+      episodes: 12,
+      score: null,
+      nextAiringEpisode: 6,
+    );
+
+    expect(isEpisodeAvailableForPlayback(details, 5), isTrue);
+    expect(isEpisodeAvailableForPlayback(details, 6), isFalse);
+  });
+
   for (final entry in const {
     'MPV': 'lib/features/player/presentation/tv_player_screen.dart',
     'VLC': 'lib/features/player/presentation/vlc_tv_player_screen.dart',
@@ -35,7 +51,25 @@ void main() {
       expect(method, contains('repository: fillerRepository'));
       expect(method, contains('skipEnabled: skipFillerEpisodes'));
       expect(method, contains('showFillerSkipNotification(context, decision)'));
-      expect(method, contains('decision.episode == null'));
+      expect(
+        RegExp(
+          r'unawaited\(\s*showFillerSkipNotification\(context, decision\)',
+        ).hasMatch(method),
+        isTrue,
+      );
+      expect(
+        method,
+        isNot(contains('await showFillerSkipNotification(context, decision)')),
+      );
+      expect(RegExp(r'next(?:Ep|Episode) == null').hasMatch(method), isTrue);
+      expect(
+        RegExp(
+          r'isEpisodeAvailableForPlayback\(details, [^)]+\)',
+        ).allMatches(method).length,
+        greaterThanOrEqualTo(2),
+        reason:
+            '${entry.key} must guard both requested and filler-skipped episodes',
+      );
 
       final firstRefRead = method.indexOf('ref.read(');
       final entryMountedGuard = method.indexOf('if (!mounted');

@@ -444,8 +444,9 @@ void main() {
       'Future<void> _runRestart(',
     );
     _expectInOrder(restart, const [
-      'final position = resumePosition ??',
-      '_pendingResume = position > Duration.zero ? position : null',
+      'final position =',
+      'resumePosition ??',
+      'if (position > Duration.zero) _pendingResume = position',
     ]);
 
     final media3 = _method(_read(players['Media3']!), 'Future<void> _run()');
@@ -547,27 +548,50 @@ void main() {
     ]);
   });
 
-  test('MPV prewarm captures dependencies and guards both async phases', () {
-    final prewarm = _method(
-      _read(players['MPV']!),
-      'Future<void> _prewarmNextEpisode()',
+  test('all engines reuse one owned ready-to-play next episode', () {
+    final mpv = _read(players['MPV']!);
+    final request = _method(
+      mpv,
+      'NextEpisodePreparationRequest _nextEpisodePreparationRequest()',
     );
-    _expectInOrder(prewarm, const [
-      'final userSourcesController = ref.read(',
-      'final tokenService = ref.read(debridTokenServiceProvider)',
-      'final userManifests = await loadPlayerPrewarmSnapshot(',
-      'if (!mounted || _engineHandoffInProgress || userManifests == null)',
-      'await CompositeReleaseSource(sources).search(next)',
-      'if (!mounted || _engineHandoffInProgress) return',
-      'await _resolveRelease(',
-      'tokenService: tokenService',
-      'if (!mounted || _engineHandoffInProgress) return',
-      '_prewarmed = true',
+    _expectInOrder(request, const [
+      'NextEpisodePreparationRequest(',
+      'currentLaunch: PlaybackLaunch(',
+      'stream: _currentStream',
+      'selectedRelease: _currentRelease',
+      'seriesPreferences: _seriesPreferences',
     ]);
-    final afterManifestLoad = prewarm.substring(
-      prewarm.indexOf('final userManifests = await loadPlayerPrewarmSnapshot('),
+    final prewarm = _method(mpv, 'Future<void> _prewarmNextEpisode()');
+    _expectInOrder(prewarm, const [
+      'final preparation = ref.read(nextEpisodePreparationControllerProvider)',
+      'final outcome = await preparation.warmWithOutcome(',
+      '_nextEpisodePreparationRequest()',
+      '_prewarmRetry.isCurrent(generation)',
+      '_prewarmed = prepared != null',
+    ]);
+    for (final entry in players.entries) {
+      final source = _read(entry.value);
+      expect(
+        source,
+        contains('nextEpisodePreparationControllerProvider'),
+        reason: '${entry.key} must share the prepared-launch cache',
+      );
+      expect(
+        source,
+        contains('preparedNextEpisodePlayerLocation(prepared)'),
+        reason: '${entry.key} must bypass the visible resolver when ready',
+      );
+      expect(
+        source,
+        contains('extra: prepared.launch'),
+        reason: '${entry.key} must transfer the typed launch and its lease',
+      );
+    }
+    expect(
+      _read(players['MPV']!),
+      contains('shouldPrepareNextEpisode(position: position'),
     );
-    expect(afterManifestLoad, isNot(contains('ref.read')));
+    expect(_read(players['VLC']!), contains('shouldPrepareNextEpisode('));
   });
 
   test(

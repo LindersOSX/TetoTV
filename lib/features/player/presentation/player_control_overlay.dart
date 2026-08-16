@@ -158,6 +158,19 @@ String canonicalPlayerTrackLanguage({String? language, String? title}) {
   return canonicalPlayerLanguage(title);
 }
 
+/// Whether persisted per-series audio intent changed enough to invalidate a
+/// prepared next episode. The explicit flag matters even when the canonical
+/// language matches the global default.
+bool playerAudioIntentChanged({
+  required String previousLanguage,
+  required bool previousPreferenceSet,
+  required String nextLanguage,
+  required bool nextPreferenceSet,
+}) =>
+    previousPreferenceSet != nextPreferenceSet ||
+    canonicalPlayerLanguage(previousLanguage) !=
+        canonicalPlayerLanguage(nextLanguage);
+
 /// Chooses which observed audio language may be persisted for a series.
 ///
 /// Automatic/default/fallback tracks are observations, not user intent. Once
