@@ -201,6 +201,7 @@ MarketplaceAddon validateAndMergeMarketplaceManifest(
   final manifest = MarketplaceAddon.tryParse(
     decoded,
     repositoryUrl: summary.repositoryUrl,
+    resourceBaseUri: summary.manifestUri,
   );
   if (manifest == null || !marketplaceAddonIdsMatch(manifest.id, summary.id)) {
     throw const FormatException(

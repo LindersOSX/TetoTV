@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
@@ -944,9 +945,49 @@ String redactDiagnosticValue(String value, {int maximum = 500}) {
       .replaceAll(RegExp(r'\b[a-fA-F0-9]{40,}\b'), '[INFO_HASH]')
       .replaceAll(RegExp(r'[\r\n]+'), ' ')
       .trim();
+  redacted = _redactIpv6Addresses(redacted)
+      .replaceAll(
+        RegExp(
+          r'\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b',
+          caseSensitive: false,
+        ),
+        '[EMAIL]',
+      )
+      .replaceAll(
+        RegExp(r'\b(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}\b', caseSensitive: false),
+        '[NETWORK ADDRESS]',
+      )
+      .replaceAll(
+        RegExp(r'(?<![A-Za-z0-9])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9])'),
+        '[NETWORK ADDRESS]',
+      );
   if (redacted.length > maximum) redacted = redacted.substring(0, maximum);
   return redacted;
 }
+
+String _redactIpv6Addresses(String value) => value.replaceAllMapped(
+  // Keep the candidate deliberately broad and let InternetAddress perform the
+  // actual IPv6 validation. This covers compressed, bracketed, numeric-leading,
+  // and IPv4-mapped forms without treating timestamps or ordinary colon text
+  // as network addresses.
+  RegExp(r'(?<![A-Za-z0-9])\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]+\]?(?![A-Za-z0-9])'),
+  (match) {
+    final original = match.group(0)!;
+    var candidate = original;
+    var trailingDots = '';
+    while (candidate.endsWith('.')) {
+      candidate = candidate.substring(0, candidate.length - 1);
+      trailingDots += '.';
+    }
+    if (candidate.startsWith('[') && candidate.endsWith(']')) {
+      candidate = candidate.substring(1, candidate.length - 1);
+    }
+    final address = InternetAddress.tryParse(candidate);
+    return address?.type == InternetAddressType.IPv6
+        ? '[NETWORK ADDRESS]$trailingDots'
+        : original;
+  },
+);
 
 Future<void> saveCheckpointTransaction(
   DatabaseExecutor database,

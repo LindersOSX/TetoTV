@@ -41,6 +41,7 @@ void main() {
     await controller.setWebStreamQuality(WebStreamQualityPreference.p720);
     await controller.setDefaultLandingPage(LandingPage.myList);
     await controller.setAnonymousCrashReportingEnabled(true);
+    await controller.setNavigationChromeSize(NavigationChromeSize.large);
     await controller.setTopNavigationOrder(const [
       TopNavigationDestination.settings,
       TopNavigationDestination.calendar,
@@ -82,6 +83,7 @@ void main() {
     expect(restored.state.webStreamQuality, WebStreamQualityPreference.p720);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
+    expect(restored.state.navigationChromeSize, NavigationChromeSize.large);
     expect(restored.state.topNavigationOrder, [
       TopNavigationDestination.settings,
       TopNavigationDestination.calendar,
@@ -115,6 +117,10 @@ void main() {
       expect(controller.state.defaultLandingPage, LandingPage.home);
       expect(controller.state.showHome, isTrue);
       expect(controller.state.showSettings, isTrue);
+      expect(
+        controller.state.navigationChromeSize,
+        NavigationChromeSize.medium,
+      );
       expect(
         controller.state.settingsEntryPlacement,
         SettingsEntryPlacement.topNavigation,
@@ -458,7 +464,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 40, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 41, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

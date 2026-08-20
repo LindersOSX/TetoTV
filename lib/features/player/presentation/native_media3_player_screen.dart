@@ -122,6 +122,23 @@ Future<bool> applyNativeAudioPreferenceSelection({
   return true;
 }
 
+SeriesPlaybackPreferences applyNativeSubtitlePreferenceResult({
+  required SeriesPlaybackPreferences currentPreferences,
+  required NativePlaybackResult result,
+}) {
+  var next = currentPreferences;
+  final subtitleLanguage = result.subtitleLanguage == null
+      ? null
+      : canonicalPlayerLanguage(result.subtitleLanguage);
+  if (subtitleLanguage != null && subtitleLanguage.isNotEmpty) {
+    next = next.copyWith(subtitleLanguage: subtitleLanguage);
+  }
+  if (result.subtitlesEnabled case final enabled?) {
+    next = next.copyWith(subtitleEnabled: enabled, subtitlePreferenceSet: true);
+  }
+  return next;
+}
+
 /// Orchestrates TetoTV's dedicated native Android player.
 ///
 /// The actual video never enters a Flutter texture. Android Media3 owns a
@@ -417,6 +434,7 @@ class _NativeMedia3PlayerScreenState
           episodeNumber: _episodeNumber,
           artworkUrl: widget.coverImageUrl,
           hasDirectSources: _currentStream.isWebStream,
+          expectedSeekable: _currentStream.debridService != null,
           theme: ref
               .read(themeStudioControllerProvider)
               .palette
@@ -739,9 +757,6 @@ class _NativeMedia3PlayerScreenState
     final audioLanguage = canonicalPlayerTrackLanguage(
       language: result.audioLanguage,
     );
-    final subtitleLanguage = result.subtitleLanguage == null
-        ? null
-        : canonicalPlayerLanguage(result.subtitleLanguage);
     var nextPreferences = _preferences;
     nextPreferences = nextPreferences.copyWith(
       preferredReleaseProvider: _release.provider,
@@ -765,17 +780,10 @@ class _NativeMedia3PlayerScreenState
             : nextPreferences.audioPreferenceSet,
       );
     }
-    if (subtitleLanguage != null && subtitleLanguage.isNotEmpty) {
-      nextPreferences = nextPreferences.copyWith(
-        subtitleLanguage: subtitleLanguage,
-      );
-    }
-    if (result.subtitlesEnabled case final enabled?) {
-      nextPreferences = nextPreferences.copyWith(
-        subtitleEnabled: enabled,
-        subtitlePreferenceSet: true,
-      );
-    }
+    nextPreferences = applyNativeSubtitlePreferenceResult(
+      currentPreferences: nextPreferences,
+      result: result,
+    );
     if (result.highContrastSubtitles case final enabled?) {
       nextPreferences = nextPreferences.copyWith(
         highContrastSubtitles: enabled,

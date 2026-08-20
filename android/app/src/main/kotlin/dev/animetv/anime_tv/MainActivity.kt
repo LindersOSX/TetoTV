@@ -462,6 +462,10 @@ class MainActivity : FlutterActivity() {
                 data["hasDirectSources"] as? Boolean ?: false,
             )
             putExtra(
+                Media3PlayerActivity.EXTRA_EXPECT_SEEKABLE,
+                data["expectedSeekable"] as? Boolean ?: false,
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_TRUSTED_LOCAL_SOURCE,
                 data["trustedLocalSource"] as? Boolean ?: false,
             )
@@ -638,8 +642,7 @@ class MainActivity : FlutterActivity() {
                 )
                 return
             }
-            pending.success(
-                mapOf(
+            val nativeResult = mutableMapOf<String, Any?>(
                     Media3PlayerActivity.RESULT_STATUS to
                         data.getStringExtra(Media3PlayerActivity.RESULT_STATUS),
                     Media3PlayerActivity.RESULT_POSITION_MS to
@@ -679,11 +682,6 @@ class MainActivity : FlutterActivity() {
                         ),
                     Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE to
                         data.getStringExtra(Media3PlayerActivity.RESULT_SUBTITLE_LANGUAGE),
-                    Media3PlayerActivity.RESULT_SUBTITLES_ENABLED to
-                        data.getBooleanExtra(
-                            Media3PlayerActivity.RESULT_SUBTITLES_ENABLED,
-                            false,
-                        ),
                     Media3PlayerActivity.RESULT_SURFACE_READY to
                         data.getBooleanExtra(Media3PlayerActivity.RESULT_SURFACE_READY, false),
                     Media3PlayerActivity.RESULT_MANUFACTURER to
@@ -715,8 +713,15 @@ class MainActivity : FlutterActivity() {
                         data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_MIME),
                     Media3PlayerActivity.RESULT_AUDIO_CODECS to
                         data.getStringExtra(Media3PlayerActivity.RESULT_AUDIO_CODECS),
-                ),
-            )
+                )
+            if (data.hasExtra(Media3PlayerActivity.RESULT_SUBTITLES_ENABLED)) {
+                nativeResult[Media3PlayerActivity.RESULT_SUBTITLES_ENABLED] =
+                    data.getBooleanExtra(
+                        Media3PlayerActivity.RESULT_SUBTITLES_ENABLED,
+                        false,
+                    )
+            }
+            pending.success(nativeResult)
             return
         }
         super.onActivityResult(requestCode, resultCode, data)

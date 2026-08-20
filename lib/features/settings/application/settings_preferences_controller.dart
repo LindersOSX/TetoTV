@@ -32,6 +32,7 @@ const _showCalendarKey = 'navigation_show_calendar';
 const _showSettingsKey = 'navigation_show_settings';
 const _topNavigationOrderKey = 'navigation_top_bar_order';
 const _settingsEntryPlacementKey = 'navigation_settings_entry_placement';
+const _navigationChromeSizeKey = 'navigation_chrome_size';
 const _showHeroKey = 'home_show_featured_hero';
 const _showPosterMetadataKey = 'home_show_poster_metadata';
 const _showCardSubtitlesKey = 'home_show_card_subtitles';
@@ -115,8 +116,22 @@ enum InterfaceMode { automatic, television, phone }
 extension InterfaceModeLabel on InterfaceMode {
   String get displayName => switch (this) {
     InterfaceMode.automatic => 'Automatic',
-    InterfaceMode.television => 'TV',
-    InterfaceMode.phone => 'Phone',
+    InterfaceMode.television => 'Modern Layout',
+    InterfaceMode.phone => 'Classic Layout',
+  };
+}
+
+/// Scales only the permanent TV navigation rail and its brand mark.
+///
+/// This stays separate from [interfaceScale] so people can make the chrome
+/// quieter without shrinking text, cards, dialogs, or playback controls.
+enum NavigationChromeSize { small, medium, large }
+
+extension NavigationChromeSizeLabel on NavigationChromeSize {
+  String get displayName => switch (this) {
+    NavigationChromeSize.small => 'Small',
+    NavigationChromeSize.medium => 'Medium',
+    NavigationChromeSize.large => 'Large',
   };
 }
 
@@ -243,6 +258,7 @@ class SettingsPreferences {
     this.showSettings = true,
     this.topNavigationOrder = defaultTopNavigationOrder,
     this.settingsEntryPlacement = SettingsEntryPlacement.topNavigation,
+    this.navigationChromeSize = NavigationChromeSize.medium,
     this.showHero = true,
     this.showPosterMetadata = true,
     this.showCardSubtitles = true,
@@ -285,6 +301,7 @@ class SettingsPreferences {
   final bool showSettings;
   final List<TopNavigationDestination> topNavigationOrder;
   final SettingsEntryPlacement settingsEntryPlacement;
+  final NavigationChromeSize navigationChromeSize;
   final bool showHero;
   final bool showPosterMetadata;
   final bool showCardSubtitles;
@@ -327,6 +344,7 @@ class SettingsPreferences {
     bool? showSettings,
     List<TopNavigationDestination>? topNavigationOrder,
     SettingsEntryPlacement? settingsEntryPlacement,
+    NavigationChromeSize? navigationChromeSize,
     bool? showHero,
     bool? showPosterMetadata,
     bool? showCardSubtitles,
@@ -370,6 +388,7 @@ class SettingsPreferences {
     topNavigationOrder: topNavigationOrder ?? this.topNavigationOrder,
     settingsEntryPlacement:
         settingsEntryPlacement ?? this.settingsEntryPlacement,
+    navigationChromeSize: navigationChromeSize ?? this.navigationChromeSize,
     showHero: showHero ?? this.showHero,
     showPosterMetadata: showPosterMetadata ?? this.showPosterMetadata,
     showCardSubtitles: showCardSubtitles ?? this.showCardSubtitles,
@@ -501,6 +520,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_showSettingsKey),
       _safeRead(_topNavigationOrderKey),
       _safeRead(_settingsEntryPlacementKey),
+      _safeRead(_navigationChromeSizeKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -726,6 +746,15 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
+    if (canRestore(_navigationChromeSizeKey, 40)) {
+      restored = restored.copyWith(
+        navigationChromeSize: _enumByName(
+          NavigationChromeSize.values,
+          valueAt(40),
+          NavigationChromeSize.medium,
+        ),
+      );
+    }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
@@ -931,6 +960,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         _settingsEntryPlacementKey: value.name,
       });
 
+  Future<void> setNavigationChromeSize(NavigationChromeSize value) => _update(
+    state.copyWith(navigationChromeSize: value),
+    {_navigationChromeSizeKey: value.name},
+  );
+
   Future<void> setShowHero(bool value) => _update(
     state.copyWith(showHero: value),
     {_showHeroKey: value.toString()},
@@ -1013,6 +1047,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _showSettingsKey,
       _topNavigationOrderKey,
       _settingsEntryPlacementKey,
+      _navigationChromeSizeKey,
       _showHeroKey,
       _showPosterMetadataKey,
       _showCardSubtitlesKey,
@@ -1031,6 +1066,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       showSettings: defaults.showSettings,
       topNavigationOrder: defaults.topNavigationOrder,
       settingsEntryPlacement: defaults.settingsEntryPlacement,
+      navigationChromeSize: defaults.navigationChromeSize,
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,

@@ -802,6 +802,7 @@ class AndroidTvBridge {
     int? episodeNumber,
     String? artworkUrl,
     bool hasDirectSources = false,
+    bool expectedSeekable = false,
     Map<String, String> headers = const {},
     bool trustedLocalSource = false,
     bool trustedPlaybackProxy = false,
@@ -853,6 +854,7 @@ class AndroidTvBridge {
           'malMediaId': ?malMediaId,
           'episodeNumber': ?episodeNumber,
           'hasDirectSources': hasDirectSources,
+          if (expectedSeekable) 'expectedSeekable': true,
           if (artworkUrl != null && artworkUrl.isNotEmpty)
             'artworkUrl': artworkUrl,
           if (headers.isNotEmpty) 'headers': headers,

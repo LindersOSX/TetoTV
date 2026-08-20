@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
@@ -15,11 +16,11 @@ import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/streaming/application/user_torrent_sources_controller.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,18 +32,18 @@ void main() {
   ) async {
     await _pumpSetup(tester, const Size(1280, 720));
 
-    expect(find.text('Preferred anime audio'), findsOneWidget);
+    expect(find.text('Preferred player'), findsOneWidget);
+    expect(find.text('Audio & subtitle default'), findsOneWidget);
+    expect(find.text('Anime title language'), findsOneWidget);
     expect(find.text('Automatic skipping'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Subtitled'));
+    await tester.tap(find.text('Media3'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Subtitled'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Skip intros'));
+    await tester.tap(find.text('Romaji'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Skip intros'));
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Skip outros'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Skip outros'));
     await tester.pumpAndSettle();
@@ -51,7 +52,12 @@ void main() {
       tester.element(find.byType(InitialSetupScreen)),
     );
     final preferences = container.read(settingsPreferencesProvider);
+    expect(preferences.preferredPlayer, PreferredPlayer.media3);
     expect(preferences.preferredAudio, PlaybackAudioPreference.sub);
+    expect(
+      container.read(titleLanguagePreferenceProvider),
+      TitleLanguagePreference.romaji,
+    );
     expect(preferences.autoSkipIntros, isTrue);
     expect(preferences.autoSkipOutros, isTrue);
     expect(tester.takeException(), isNull);
@@ -71,8 +77,6 @@ void main() {
         isTrue,
       );
 
-      await tester.ensureVisible(find.text('Device keyboard'));
-      await tester.pumpAndSettle();
       await tester.tap(find.text('Device keyboard'));
       await tester.pumpAndSettle();
 
@@ -83,6 +87,147 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('TV setup fits playback and live layout preview at 960x540', (
+    tester,
+  ) async {
+    await _pumpSetup(tester, const Size(960, 540));
+
+    expect(
+      find.byKey(const ValueKey('setup-tv-fit-without-scroll')),
+      findsWidgets,
+    );
+    expect(find.byType(SingleChildScrollView), findsNothing);
+    for (final label in [
+      'Preferred player',
+      'VLC',
+      'Audio & subtitle default',
+      'Subtitled',
+      'Anime title language',
+      'Romaji',
+      'Device keyboard',
+      'Skip outros',
+    ]) {
+      expect(
+        find.text(label).hitTestable(),
+        findsOneWidget,
+        reason: '$label must be visible without scrolling',
+      );
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'setup.step.0.first-choice',
+    );
+    expect(tester.takeException(), isNull, reason: 'playback step');
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'default preview');
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'setup.step.1.first-choice',
+    );
+    for (final label in [
+      'Screen layout',
+      'Modern Layout',
+      'Classic Layout',
+      'Navigation & logo size',
+      'Small',
+      'Medium',
+      'Large',
+      'Home layout',
+      'Featured hero',
+    ]) {
+      expect(
+        find.text(label).hitTestable(),
+        findsOneWidget,
+        reason: '$label must be visible beside the live preview',
+      );
+    }
+    final previewRail = find.byKey(const ValueKey('setup-preview-modern-rail'));
+    expect(tester.getSize(previewRail).width, 34);
+
+    await tester.tap(find.text('Large'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'large preview');
+    expect(tester.getSize(previewRail).width, 42);
+
+    await tester.tap(find.text('Classic Layout'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'classic preview');
+    expect(previewRail, findsNothing);
+    expect(
+      find.byKey(const ValueKey('setup-preview-classic-header')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Modern Layout'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'modern preview');
+    expect(tester.getSize(previewRail).width, 42);
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'setup.step.2.first-choice',
+    );
+    for (final label in [
+      'Set up streaming',
+      'Debrid provider',
+      'Your sources',
+      'Add sources with phone',
+      'Open Marketplace manually',
+    ]) {
+      expect(
+        find.text(label).hitTestable(),
+        findsOneWidget,
+        reason: '$label must be visible on the Streaming step',
+      );
+    }
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'setup.step.3.first-choice',
+    );
+    for (final label in [
+      'Connect your accounts',
+      'Anime list',
+      'AniList',
+      'MAL',
+      'Discord presence',
+    ]) {
+      expect(
+        find.text(label).hitTestable(),
+        findsOneWidget,
+        reason: '$label must be visible on the Accounts step',
+      );
+    }
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'setup.step.4.first-choice',
+    );
+    for (final label in [
+      'One last choice',
+      'Anonymous crash and error reports',
+      'Do not send',
+      'Allow error reports',
+      'Finish',
+    ]) {
+      expect(
+        find.text(label).hitTestable(),
+        findsOneWidget,
+        reason: '$label must be visible on the Privacy step',
+      );
+    }
+    expect(find.byType(SingleChildScrollView), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('setup asks before enabling crash reports or Discord', (
     tester,
@@ -213,17 +358,14 @@ void main() {
   ) async {
     await _pumpSetup(tester, const Size(960, 540));
 
-    // Continue owns initial focus and keeps it as pages advance.
     for (var index = 0; index < 2; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
     }
 
     _expectSourcesStep(tester);
     expect(tester.takeException(), isNull);
 
-    await tester.ensureVisible(find.text('Add sources with phone'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Add sources with phone'));
     await tester.pumpAndSettle();
     expect(find.byType(SourcePairingDialog), findsOneWidget);
@@ -302,25 +444,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Continue owns initial focus and remote Back returns one step', (
-    tester,
-  ) async {
-    await _pumpSetup(tester, const Size(960, 540));
+  testWidgets(
+    'first choice owns initial focus and remote Back returns a step',
+    (tester) async {
+      await _pumpSetup(tester, const Size(960, 540));
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(find.text('Make it feel right on your TV'), findsOneWidget);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup.step.0.first-choice',
+      );
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.text('Make it feel right on your TV'), findsOneWidget);
 
-    await tester.binding.handlePopRoute();
-    await tester.pumpAndSettle();
-    expect(find.text('Choose your playback defaults'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Choose your playback defaults'), findsOneWidget);
 
-    await tester.binding.handlePopRoute();
-    await tester.pumpAndSettle();
-    expect(find.text('Leave setup?'), findsOneWidget);
-    expect(find.text('Keep setting up'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Leave setup?'), findsOneWidget);
+      expect(find.text('Keep setting up'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Set up later never waits for the quiet device scan', (
     tester,

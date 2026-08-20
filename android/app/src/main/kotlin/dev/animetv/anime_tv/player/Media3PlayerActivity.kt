@@ -156,6 +156,38 @@ internal fun nativeSkipReachesPlaybackEnd(
     endGuardMs: Long = 1_000L,
 ): Boolean = durationMs > 0L && requestedEndMs >= durationMs - endGuardMs
 
+internal fun nativePlaybackErrorRequiresMpv(error: String?): Boolean {
+    val normalized = error.orEmpty().lowercase()
+    return "error_code_parsing_container_unsupported" in normalized ||
+        "none of the available extractors" in normalized ||
+        "nodeclaredbrand" in normalized
+}
+
+internal fun nativeShouldOfferSeekFallback(
+    expectedSeekable: Boolean,
+    seekAttemptSucceeded: Boolean,
+): Boolean = expectedSeekable && !seekAttemptSucceeded
+
+internal inline fun nativeSeekAttemptSucceeded(
+    canSeek: Boolean,
+    seekAttempt: () -> Unit,
+): Boolean = canSeek && runCatching(seekAttempt).isSuccess
+
+internal fun nativeShouldUseMpvForUnsupportedCaptions(
+    embeddedCaptionTrackCount: Int,
+    supportedCaptionTrackCount: Int,
+): Boolean = embeddedCaptionTrackCount > 0 && supportedCaptionTrackCount == 0
+
+internal fun nativeSubtitlesEnabledResult(
+    selectedTextTrack: Boolean,
+    subtitlePreferenceChanged: Boolean,
+    forceMpvCaptionIntent: Boolean,
+): Boolean? = when {
+    forceMpvCaptionIntent -> true
+    subtitlePreferenceChanged -> selectedTextTrack
+    else -> null
+}
+
 internal fun nativeReleaseAdvertisesMultipleAudio(releaseName: String?): Boolean {
     val normalized = releaseName
         .orEmpty()
@@ -370,11 +402,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var autoSkipIntros = false
     private var autoSkipOutros = false
     private var hasDirectSources = false
+    private var expectedSeekable = false
+    private var handoffPositionOverrideMs: Long? = null
     private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
     private var lastAutomaticAudioOverride: TrackSelectionOverride? = null
     private var reassertingPreferredAudioOverride = false
     private var preferredSubtitleOverrideApplied = false
+    private var lastAutomaticSubtitleOverride: TrackSelectionOverride? = null
+    private var reassertingPreferredSubtitleOverride = false
+    private var subtitlePreferenceChanged = false
+    private var forceMpvCaptionIntent = false
     private var backgroundStopped = false
     private var backgroundResumeMs = 0L
     private var dropWindowElapsedMs = 0L
@@ -527,6 +565,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         malMediaId = intent.getIntExtra(EXTRA_MAL_MEDIA_ID, 0).coerceAtLeast(0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0).coerceAtLeast(0)
         hasDirectSources = intent.getBooleanExtra(EXTRA_HAS_DIRECT_SOURCES, false)
+        expectedSeekable = intent.getBooleanExtra(EXTRA_EXPECT_SEEKABLE, false)
         val trustedLocalSource = intent.getBooleanExtra(EXTRA_TRUSTED_LOCAL_SOURCE, false)
         val trustedPlaybackProxy =
             intent.getBooleanExtra(EXTRA_TRUSTED_PLAYBACK_PROXY, false)
@@ -1433,7 +1472,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     if (controlId == R.id.tetotv_player_options) {
                         playerView
                             .findViewById<HorizontalScrollView>(R.id.tetotv_player_controls_scroll)
-                            ?.fullScroll(View.FOCUS_RIGHT)
+                            ?.let { scroll ->
+                                scroll.fullScroll(View.FOCUS_RIGHT)
+                                // Some TV frameworks restore the old scroll
+                                // offset after focus layout. Reassert the exact
+                                // edge on the next traversal frame so Options'
+                                // focus ring and label are always visible.
+                                scroll.post {
+                                    scroll.fullScroll(View.FOCUS_RIGHT)
+                                    setChromeControlHighlighted(container, true)
+                                }
+                            }
                     }
                     val revealInset =
                         (FOCUS_REVEAL_INSET_DP * resources.displayMetrics.density).toInt()
@@ -1487,7 +1536,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         ) return
         setChromeControlAvailable(
             rewindControlContainer,
-            commands.contains(Player.COMMAND_SEEK_BACK),
+            commands.contains(Player.COMMAND_SEEK_BACK) || expectedSeekable,
         )
         setChromeControlAvailable(
             playPauseControlContainer,
@@ -1495,7 +1544,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         )
         setChromeControlAvailable(
             fastForwardControlContainer,
-            commands.contains(Player.COMMAND_SEEK_FORWARD),
+            commands.contains(Player.COMMAND_SEEK_FORWARD) || expectedSeekable,
         )
     }
 
@@ -1727,7 +1776,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 append(')')
             }
         }
-        finishWithResult(STATUS_ERROR)
+        if (nativePlaybackErrorRequiresMpv(terminalError)) {
+            // Bad MP4 brands and unusual torrent containers are an engine
+            // compatibility issue, not a reason to discard the selected
+            // release. MPV resumes the same stream and position immediately.
+            finishWithResult(STATUS_USE_MPV)
+        } else {
+            finishWithResult(STATUS_ERROR)
+        }
     }
 
     override fun onRenderedFirstFrame() {
@@ -1776,7 +1832,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun applyPreferredSubtitleOverride(tracks: Tracks) {
-        if (preferredSubtitleOverrideApplied || !subtitlesEnabled) return
+        if (
+            reassertingPreferredSubtitleOverride ||
+            subtitlePreferenceChanged ||
+            !subtitlesEnabled ||
+            activeTrackDialog != null
+        ) return
         val preferredTags = preferredLanguageTags(preferredSubtitleLanguage).toSet()
         val normalizedPreference = preferredSubtitleLanguage.trim().lowercase()
         var bestGroup: Tracks.Group? = null
@@ -1813,13 +1874,44 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
         val group = bestGroup ?: return
         if (bestTrack < 0 || bestScore < 50) return
-        // Set the guard before changing parameters because that change can
-        // synchronously result in another onTracksChanged callback.
-        preferredSubtitleOverrideApplied = true
+        val override = TrackSelectionOverride(group.mediaTrackGroup, bestTrack)
+        val action = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = preferredSubtitleOverrideApplied,
+            viewerSelectionActive = subtitlePreferenceChanged || activeTrackDialog != null,
+            candidateMatchesPreference = true,
+            candidateMatchesLastOverride = override == lastAutomaticSubtitleOverride,
+            candidateAlreadySelected = group.isTrackSelected(bestTrack),
+        )
+        if (action.markPreferredApplied) preferredSubtitleOverrideApplied = true
+        if (!action.applyOverride) return
+        val overrideStillInstalled = player.trackSelectionParameters.overrides.values
+            .any { installed -> installed == override }
+        if (
+            override == lastAutomaticSubtitleOverride &&
+            !group.isTrackSelected(bestTrack) &&
+            overrideStillInstalled
+        ) {
+            // Some Matroska demuxers replace the text-track snapshot after the
+            // first subtitle sample. Reinstall against the latest group so the
+            // CC button never claims a now-stale override is still visible.
+            reassertingPreferredSubtitleOverride = true
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .build()
+            handler.post {
+                reassertingPreferredSubtitleOverride = false
+                if (!resultSent && !playerCoreReleased) {
+                    applyPreferredSubtitleOverride(player.currentTracks)
+                }
+            }
+            return
+        }
+        lastAutomaticSubtitleOverride = override
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, bestTrack))
+            .setOverrideForType(override)
             .build()
     }
 
@@ -1945,11 +2037,35 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun showTrackPickerNow(trackType: Int, sourceButton: View) {
-        val selectableTracks = player.currentTracks.groups.any { group ->
-            group.type == trackType &&
-                (0 until group.length).any(group::isTrackSupported)
+        val matchingGroups = player.currentTracks.groups.filter { it.type == trackType }
+        val embeddedTrackCount = matchingGroups.sumOf { group -> group.length }
+        val selectableTrackCount = matchingGroups.sumOf { group ->
+            (0 until group.length).count(group::isTrackSupported)
         }
+        val selectableTracks = selectableTrackCount > 0
         if (!selectableTracks) {
+            val unsupportedEmbeddedCaptions = trackType == C.TRACK_TYPE_TEXT &&
+                nativeShouldUseMpvForUnsupportedCaptions(
+                    embeddedCaptionTrackCount = embeddedTrackCount,
+                    supportedCaptionTrackCount = selectableTrackCount,
+                )
+            if (unsupportedEmbeddedCaptions) {
+                // Opening CC is an explicit request to see these embedded
+                // captions. Media3 cannot select the track, so preserve that
+                // enabled intent across the MPV/libass handoff instead of
+                // serializing the renderer's false selected-track state.
+                forceMpvCaptionIntent = true
+                terminalError =
+                    "Media3 cannot render this torrent's embedded caption format; " +
+                    "continuing in MPV for libass caption support."
+                Toast.makeText(
+                    this,
+                    "Opening these captions in MPV",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                finishWithResult(STATUS_USE_MPV)
+                return
+            }
             val message = if (trackType == C.TRACK_TYPE_AUDIO) {
                 R.string.tetotv_player_no_audio_tracks
             } else {
@@ -1968,6 +2084,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             R.string.tetotv_player_select_captions
         }
         val audioSelectionParametersBefore = if (trackType == C.TRACK_TYPE_AUDIO) {
+            player.trackSelectionParameters
+        } else {
+            null
+        }
+        val textSelectionParametersBefore = if (trackType == C.TRACK_TYPE_TEXT) {
             player.trackSelectionParameters
         } else {
             null
@@ -1996,6 +2117,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     // A viewer's explicit choice owns the remainder of this
                     // session, even if the demuxer publishes another snapshot.
                     preferredAudioOverrideApplied = true
+                }
+                if (
+                    trackType == C.TRACK_TYPE_TEXT &&
+                    player.trackSelectionParameters != textSelectionParametersBefore
+                ) {
+                    subtitlePreferenceChanged = true
+                    preferredSubtitleOverrideApplied = true
                 }
                 if (activeTrackDialog === dialog) activeTrackDialog = null
                 consumedNavigationKeyUp = null
@@ -2349,10 +2477,37 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             duration > 0L && candidate > duration -> duration
             else -> candidate
         }
-        player.seekTo(target)
+        if (!seekOrUseMpv(target)) {
+            Toast.makeText(
+                this,
+                "This stream does not expose seeking in Media3",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+        if (resultSent) return
         playerView.showController()
         sourceButton.requestFocus()
         armControllerAutoHide()
+    }
+
+    private fun seekOrUseMpv(targetMs: Long): Boolean {
+        val canSeek = player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+        val seekSucceeded = nativeSeekAttemptSucceeded(canSeek) {
+            player.seekTo(targetMs)
+        }
+        if (seekSucceeded) return true
+        // A renderer can withdraw its command between the availability event
+        // and this click, and vendor players can throw even while advertising
+        // seek. Both paths must reach the same deterministic torrent fallback.
+        if (!nativeShouldOfferSeekFallback(expectedSeekable, seekSucceeded)) return false
+        handoffPositionOverrideMs = targetMs.coerceAtLeast(0L)
+        Toast.makeText(
+            this,
+            "Switching to MPV so this torrent can seek",
+            Toast.LENGTH_SHORT,
+        ).show()
+        finishWithResult(STATUS_USE_MPV)
+        return true
     }
 
     private fun seekPastSkipSegment(segment: NativeSkipSegment, announce: Boolean) {
@@ -2375,7 +2530,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         // view mutation or attempting native teardown twice.
         handler.post {
             if (resultSent || playbackResourcesReleased) return@post
-            val seekSucceeded = runCatching { player.seekTo(target) }.isSuccess
+            val seekSucceeded = seekOrUseMpv(target)
+            if (resultSent) return@post
             if (!seekSucceeded) {
                 autoSkippedSegments.remove(segmentKey)
                 updateSkipSegmentButton()
@@ -3117,7 +3273,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         handler.removeCallbacks(hideControllerRunnable)
         persistCheckpoint()
         val duration = safeDurationMs()
-        val position = safePositionMs()
+        val position = handoffPositionOverrideMs ?: safePositionMs()
         val completed = status == STATUS_COMPLETED ||
             (duration > 0L && position.toDouble() / duration >= 0.93)
         val result = Intent().apply {
@@ -3134,7 +3290,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             putExtra(RESULT_AUDIO_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_AUDIO))
             putExtra(RESULT_AUDIO_PREFERENCE_SET, audioPreferenceChanged)
             putExtra(RESULT_SUBTITLE_LANGUAGE, selectedTrackLanguage(C.TRACK_TYPE_TEXT))
-            putExtra(RESULT_SUBTITLES_ENABLED, hasSelectedTextTrack())
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = hasSelectedTextTrack(),
+                subtitlePreferenceChanged = subtitlePreferenceChanged,
+                forceMpvCaptionIntent = status == STATUS_USE_MPV && forceMpvCaptionIntent,
+            )?.let { putExtra(RESULT_SUBTITLES_ENABLED, it) }
             putExtra(RESULT_SURFACE_READY, surfaceReady)
             putExtra(RESULT_MANUFACTURER, Build.MANUFACTURER)
             putExtra(RESULT_MODEL, Build.MODEL)
@@ -3252,6 +3412,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_MAL_MEDIA_ID = "malMediaId"
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
         const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
+        const val EXTRA_EXPECT_SEEKABLE = "expectedSeekable"
         const val EXTRA_TRUSTED_LOCAL_SOURCE = "trustedLocalSource"
         const val EXTRA_TRUSTED_PLAYBACK_PROXY = "trustedPlaybackProxy"
         const val EXTRA_THEME_BACKGROUND_COLOR = "themeBackgroundColor"

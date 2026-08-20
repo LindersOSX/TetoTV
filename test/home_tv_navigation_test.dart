@@ -5,6 +5,8 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -15,6 +17,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Modern Layout rail sizes stay compact and increase predictably', () {
+    expect(homeNavigationRailWidth(1280, NavigationChromeSize.small), 62);
+    expect(homeNavigationRailWidth(1280, NavigationChromeSize.medium), 72);
+    expect(homeNavigationRailWidth(1280, NavigationChromeSize.large), 86);
+  });
+
   testWidgets('normalized 1080p TV canvas keeps fallback hero in bounds', (
     tester,
   ) async {
@@ -215,6 +223,105 @@ void main() {
         FocusManager.instance.primaryFocus?.debugLabel,
         'home.shelf.Continue watching.item.0',
       );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'profile stays fixed and focusing it restores the sponsored hero',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final now = DateTime(2026, 8, 20);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _StaticTrackingAccountsController(
+                const TrackingAccountsState(
+                  profiles: {
+                    TrackingProvider.anilist: TrackingAccountProfile(
+                      provider: TrackingProvider.anilist,
+                      username: 'Fixed profile',
+                    ),
+                  },
+                ),
+              ),
+            ),
+            trendingAnimeProvider.overrideWith(
+              (_) async => const [
+                AnimeSummary(
+                  id: 1,
+                  title: 'Featured',
+                  description: 'Featured description',
+                  episodes: 12,
+                  score: 8.4,
+                ),
+              ],
+            ),
+            seasonalAnimeProvider.overrideWith((_) async => const []),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            recentPlaybackProvider.overrideWith(
+              (_) async => [
+                for (var index = 0; index < 5; index++)
+                  PlaybackCheckpoint(
+                    anilistMediaId: 100 + index,
+                    episode: index + 1,
+                    title: 'History show $index',
+                    position: const Duration(minutes: 5),
+                    duration: const Duration(minutes: 24),
+                    updatedAt: now.subtract(Duration(minutes: index)),
+                  ),
+              ],
+            ),
+            dismissedContinueWatchingProvider.overrideWith(
+              (_) async => const <int>{},
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final scrollFinder = find.byKey(const ValueKey('home-scroll-content'));
+      final scrollView = tester.widget<SingleChildScrollView>(scrollFinder);
+      final controller = scrollView.controller!;
+      expect(controller.position.maxScrollExtent, greaterThan(0));
+
+      final profileFinder = find.byKey(const ValueKey('home-fixed-profile'));
+      final fixedProfileTop = tester.getTopLeft(profileFinder).dy;
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      expect(controller.offset, greaterThan(0));
+      expect(tester.getTopLeft(profileFinder).dy, fixedProfileTop);
+
+      final profileDetector = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: profileFinder,
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      profileDetector.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(controller.offset, closeTo(0, .5));
+      expect(tester.getTopLeft(profileFinder).dy, fixedProfileTop);
       expect(tester.takeException(), isNull);
     },
   );

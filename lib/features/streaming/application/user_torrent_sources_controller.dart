@@ -97,6 +97,35 @@ class UserTorrentSourcesController
     return null;
   }
 
+  Future<BulkSourceAddResult> addAll(String input) async {
+    final candidates = splitSourceUrlInput(input);
+    if (candidates.isEmpty) {
+      return const BulkSourceAddResult(
+        added: 0,
+        duplicates: 0,
+        rejected: ['Enter at least one Torrent source manifest URL.'],
+      );
+    }
+    var added = 0;
+    var duplicates = 0;
+    final rejected = <String>[];
+    for (final candidate in candidates) {
+      final error = await add(candidate);
+      if (error == null) {
+        added++;
+      } else if (error.contains('already added')) {
+        duplicates++;
+      } else {
+        rejected.add(error);
+      }
+    }
+    return BulkSourceAddResult(
+      added: added,
+      duplicates: duplicates,
+      rejected: List.unmodifiable(rejected),
+    );
+  }
+
   Future<void> remove(String url) async {
     await load();
     final next = List<String>.unmodifiable(

@@ -686,6 +686,51 @@ void main() {
     expect(media3, contains('skipDurationStabilityRunnable'));
   });
 
+  test('MPV exposes skip intro above every visible transport control', () {
+    final source = _read(
+      'lib/features/player/presentation/tv_player_screen.dart',
+    );
+    final handleKey = _methodSlice(
+      source,
+      'KeyEventResult _handleKey',
+      'Future<void> _seekBy',
+    );
+
+    _expectInOrder(handleKey, const [
+      'key == LogicalKeyboardKey.arrowUp',
+      '_canSkipNow',
+      '_activeSkip != null',
+      '_skipControlFocus.requestFocus()',
+    ]);
+    expect(handleKey, contains('key == LogicalKeyboardKey.arrowDown'));
+    expect(handleKey, contains('_skipControlFocus.hasPrimaryFocus'));
+    expect(handleKey, contains('_playControlFocus.requestFocus()'));
+  });
+
+  test('Media3 routes every torrent seek through the guarded MPV handoff', () {
+    final source = _read(
+      'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+      'Media3PlayerActivity.kt',
+    );
+
+    expect(
+      RegExp(r'player\.seekTo\(').allMatches(source),
+      hasLength(1),
+      reason: 'no transport or skip path may bypass seekOrUseMpv',
+    );
+    expect(source, contains('setOnClickListener { seekRelative(-'));
+    expect(source, contains('setOnClickListener { seekRelative(seekForward'));
+    expect(source, contains('KeyEvent.KEYCODE_J -> seekRelative(-'));
+    expect(source, contains('KeyEvent.KEYCODE_L -> seekRelative('));
+    expect(
+      RegExp(r'seekOrUseMpv\(target\)').allMatches(source),
+      hasLength(2),
+      reason: 'transport and intro/outro skip must share the same fallback',
+    );
+    expect(source, contains('handoffPositionOverrideMs = targetMs'));
+    expect(source, contains('finishWithResult(STATUS_USE_MPV)'));
+  });
+
   test('Media3 destroys network metadata resources off the main thread', () {
     final source = File(
       'android/app/src/main/kotlin/dev/animetv/anime_tv/player/Media3PlayerActivity.kt',

@@ -217,18 +217,18 @@ installed app signed by a different key. Public releases use one universal ARM
 APK containing both supported application ABIs.
 
 Public and Beta updates now use anonymous GitHub requests. No Beta key, GitHub
-token, Render update-broker URL, or update-specific Dart define is required for
+token, update-proxy URL, or update-specific Dart define is required for
 either APK. Build both channel artifacts from the same reviewed commit and
 production signing identity:
 
 ```powershell
 New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
 
-# Beta 2.0.10
+# Beta 2.0.11
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.10 --build-number 410001
+  --build-name 2.0.11 --build-number 410001
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v2.0.10-universal.apk
+  .\build\fire-tv\TetoTV-v2.0.11-universal.apk
 
 # Public 1.0.2, built from the same reviewed commit and signing key
 flutter build apk --release --target-platform android-arm,android-arm64 `

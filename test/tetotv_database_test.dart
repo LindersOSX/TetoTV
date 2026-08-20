@@ -171,6 +171,22 @@ void main() {
       ),
     );
   });
+
+  test('diagnostic text redacts email and IPv4/IPv6 network identity', () {
+    final redacted = redactDiagnosticValue(
+      'peers 2001:db8:85a3::8a2e:370:7334 and [::ffff:192.0.2.128]. '
+      'Reporter user@example.com connected through 192.168.1.20. '
+      'Keep timestamp 12:34:56 for troubleshooting.',
+    );
+
+    expect(redacted, isNot(contains('2001:db8:85a3::8a2e:370:7334')));
+    expect(redacted, isNot(contains('::ffff:192.0.2.128')));
+    expect(redacted, isNot(contains('user@example.com')));
+    expect(redacted, isNot(contains('192.168.1.20')));
+    expect('[NETWORK ADDRESS]'.allMatches(redacted), hasLength(3));
+    expect(redacted, contains('[EMAIL]'));
+    expect(redacted, contains('12:34:56'));
+  });
 }
 
 class _RecordingDatabase implements Database {

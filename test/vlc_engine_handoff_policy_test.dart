@@ -5,28 +5,65 @@ import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart'
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('vendored VLC texture lifecycle is safe below Android API 26', () {
+  test('vendored VLC has one registry-owned texture release path', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
-    final source = File(
+    final textureSource = File(
       'third_party/flutter_vlc_player/android/src/main/java/'
       'software/solid/fluttervlcplayer/VLCTextureView.java',
     ).readAsStringSync();
-    final executableSource = source
+    final playerSource = File(
+      'third_party/flutter_vlc_player/android/src/main/java/'
+      'software/solid/fluttervlcplayer/FlutterVlcPlayer.java',
+    ).readAsStringSync();
+    final executableTextureSource = textureSource
         .replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '')
         .replaceAll(RegExp(r'//.*'), '');
+    final disposeStart = playerSource.indexOf('public void dispose()');
+    final disposeEnd = playerSource.indexOf('// VLC Player', disposeStart);
+    final disposeSource = playerSource.substring(disposeStart, disposeEnd);
 
     expect(
       pubspec,
       contains('path: third_party/flutter_vlc_player'),
       reason: 'The release build must consume the patched in-repo package.',
     );
-    expect(source, contains('Build.VERSION.SDK_INT >= Build.VERSION_CODES.O'));
-    expect(source, contains('isSurfaceTextureReleased(mSurfaceTexture)'));
     expect(
-      RegExp(r'\.isReleased\(\)').allMatches(executableSource),
-      hasLength(1),
-      reason: 'Only the SDK-gated helper may call the API 26 method.',
+      RegExp(r'\.release\(\)').allMatches(executableTextureSource),
+      isEmpty,
+      reason: 'The view must not release Flutter\'s registry-owned texture.',
     );
+    expect(
+      RegExp(r'textureEntry::release').allMatches(playerSource),
+      hasLength(1),
+    );
+    expect(
+      disposeSource.indexOf('textureView.setMediaPlayer(null)'),
+      lessThan(disposeSource.indexOf('currentPlayer::release')),
+    );
+    expect(
+      disposeSource.indexOf('currentPlayer::release'),
+      lessThan(disposeSource.indexOf('textureEntry::release')),
+      reason:
+          'libVLC must release native vout before Flutter destroys texture.',
+    );
+    expect(disposeSource, contains('if (isDisposed || isDisposing)'));
+    expect(disposeSource, contains('try {'));
+    expect(disposeSource, contains('} finally {'));
+    expect(
+      disposeSource.indexOf('currentLibVLC::release'),
+      lessThan(disposeSource.indexOf('isDisposed = true')),
+    );
+    for (final cleanup in [
+      'stop VLC MediaPlayer',
+      'detach VLC video output',
+      'release VLC MediaPlayer',
+      'dispose VLC TextureView',
+      'release Flutter texture entry',
+      'release LibVLC',
+    ]) {
+      expect(disposeSource, contains('runCleanupStep("$cleanup"'));
+    }
+    expect(playerSource, contains('catch (RuntimeException error)'));
   });
 
   test('live VLC handoffs avoid immediately reclaiming MediaCodec', () {

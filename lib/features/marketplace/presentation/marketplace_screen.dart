@@ -35,10 +35,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     debugLabel: 'Marketplace: Add sources with phone',
   );
   final FocusNode _addManifestFocus = FocusNode(
-    debugLabel: 'Marketplace: Add Torrent source manifest',
+    debugLabel: 'Marketplace: Add Torrent source manifests',
   );
   final FocusNode _addRepositoryFocus = FocusNode(
-    debugLabel: 'Marketplace: Add Marketplace repository',
+    debugLabel: 'Marketplace: Add Marketplace repositories',
   );
   final Map<String, FocusNode> _dynamicFocusNodes = {};
 
@@ -357,7 +357,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                   ),
                                   _MarketplaceButton(
                                     icon: Icons.add_link_rounded,
-                                    label: 'Add Torrent source manifest',
+                                    label: 'Add Torrent source manifests',
                                     focusNode: _addManifestFocus,
                                     onPressed: () => _addTorrentSource(
                                       context,
@@ -366,7 +366,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                   ),
                                   _MarketplaceButton(
                                     icon: Icons.playlist_add_rounded,
-                                    label: 'Add Marketplace repository',
+                                    label: 'Add Marketplace repositories',
                                     focusNode: _addRepositoryFocus,
                                     onPressed: () =>
                                         _addRepository(context, controller),
@@ -1090,33 +1090,52 @@ Future<void> _addRepository(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Add Marketplace repository'),
+        title: const Text('Add Marketplace repositories'),
         content: SizedBox(
           width: 680,
-          child: TvTextInput(
-            controller: input,
-            autofocus: true,
-            labelText: 'HTTPS catalog URL',
-            hintText: 'https://example.com/marketplace.json',
-            keyboardTitle: 'Repository URL',
-            onSubmitted: (_) => Navigator.pop(context, true),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Paste or enter up to 32 public HTTPS catalog links. Separate multiple links with spaces or put one on each line.',
+              ),
+              const SizedBox(height: 14),
+              TvTextInput(
+                controller: input,
+                autofocus: true,
+                labelText: 'HTTPS catalog links',
+                hintText: 'https://example.com/marketplace.json',
+                keyboardTitle: 'Repository links',
+              ),
+            ],
           ),
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () => _pasteSourceLinks(input),
+            icon: const Icon(Icons.content_paste_rounded),
+            label: const Text('PASTE LINKS'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('CANCEL'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('ADD'),
+            child: const Text('ADD ALL'),
           ),
         ],
       ),
     );
     if (accepted != true || !context.mounted) return;
-    final error = await controller.addRepository(input.text.trim());
-    if (error != null && context.mounted) _notice(context, error);
+    final result = await controller.addRepositories(input.text);
+    if (context.mounted) {
+      final detail = result.rejected.isEmpty
+          ? result.summary
+          : '${result.summary} ${result.rejected.first}';
+      _notice(context, detail);
+    }
   } finally {
     input.dispose();
   }
@@ -1132,7 +1151,7 @@ Future<void> _addTorrentSource(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Add torrent source'),
+        title: const Text('Add torrent source manifests'),
         content: SizedBox(
           width: 680,
           child: Column(
@@ -1140,38 +1159,57 @@ Future<void> _addTorrentSource(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Only add a Torrent source manifest you trust and use it for content you are authorized to access.',
+                'Paste or enter multiple Torrent source manifests you trust. Separate links with spaces or put one on each line. Only use sources for content you are authorized to access.',
               ),
               const SizedBox(height: 14),
               TvTextInput(
                 controller: input,
                 autofocus: true,
-                labelText: 'HTTPS manifest URL',
+                labelText: 'HTTPS manifest links',
                 hintText: 'https://example.com/addon/manifest.json',
-                keyboardTitle: 'Torrent manifest URL',
-                onSubmitted: (_) => Navigator.pop(context, true),
+                keyboardTitle: 'Torrent manifest links',
               ),
             ],
           ),
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () => _pasteSourceLinks(input),
+            icon: const Icon(Icons.content_paste_rounded),
+            label: const Text('PASTE LINKS'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('CANCEL'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('ADD'),
+            child: const Text('ADD ALL'),
           ),
         ],
       ),
     );
     if (accepted != true || !context.mounted) return;
-    final error = await controller.add(input.text.trim());
-    if (error != null && context.mounted) _notice(context, error);
+    final result = await controller.addAll(input.text);
+    if (context.mounted) {
+      final detail = result.rejected.isEmpty
+          ? result.summary
+          : '${result.summary} ${result.rejected.first}';
+      _notice(context, detail);
+    }
   } finally {
     input.dispose();
   }
+}
+
+Future<void> _pasteSourceLinks(TextEditingController controller) async {
+  final data = await Clipboard.getData(Clipboard.kTextPlain);
+  final value = data?.text?.trim();
+  if (value == null || value.isEmpty) return;
+  controller.value = TextEditingValue(
+    text: value,
+    selection: TextSelection.collapsed(offset: value.length),
+  );
 }
 
 Future<void> _confirmInstall(

@@ -13,6 +13,65 @@ import 'package:go_router/go_router.dart';
 
 enum MainNavigationDestination { home, myList, discover, calendar }
 
+/// The shared width contract for the Modern Layout navigation rail.
+///
+/// Medium is intentionally about one third narrower than the previous rail at
+/// common TV canvas sizes. The logo is only slightly larger than an action,
+/// keeping the brand visible without overpowering the content.
+double homeNavigationRailWidth(
+  double viewportWidth,
+  NavigationChromeSize size,
+) {
+  final widthStep = viewportWidth >= 1500
+      ? 2
+      : viewportWidth >= 1100
+      ? 1
+      : 0;
+  return switch ((size, widthStep)) {
+    (NavigationChromeSize.small, 0) => 56,
+    (NavigationChromeSize.small, 1) => 62,
+    (NavigationChromeSize.small, _) => 68,
+    (NavigationChromeSize.medium, 0) => 64,
+    (NavigationChromeSize.medium, 1) => 72,
+    (NavigationChromeSize.medium, _) => 80,
+    (NavigationChromeSize.large, 0) => 76,
+    (NavigationChromeSize.large, 1) => 86,
+    (NavigationChromeSize.large, _) => 96,
+  };
+}
+
+extension _NavigationChromeMetrics on NavigationChromeSize {
+  double get actionWidth => switch (this) {
+    NavigationChromeSize.small => 30,
+    NavigationChromeSize.medium => 38,
+    NavigationChromeSize.large => 48,
+  };
+
+  double get actionHeight => switch (this) {
+    NavigationChromeSize.small => 28,
+    NavigationChromeSize.medium => 36,
+    NavigationChromeSize.large => 44,
+  };
+
+  double get iconSize => switch (this) {
+    NavigationChromeSize.small => 17,
+    NavigationChromeSize.medium => 20,
+    NavigationChromeSize.large => 25,
+  };
+
+  double get logoSize => switch (this) {
+    NavigationChromeSize.small => 34,
+    NavigationChromeSize.medium => 42,
+    NavigationChromeSize.large => 52,
+  };
+
+  double get actionGap => switch (this) {
+    NavigationChromeSize.small => 5,
+    NavigationChromeSize.medium => 7,
+    NavigationChromeSize.large => 8,
+  };
+}
+
 /// Home's fixed TV rail. The existing [MainNavigationBar] remains available
 /// to compact layouts and the other top-level screens, while Home can match the
 /// reference's icon-first 10-foot layout without changing those screens.
@@ -26,6 +85,7 @@ class HomeSideNavigation extends ConsumerStatefulWidget {
     this.autofocusActive = false,
     this.onHomePressed,
     this.homeFocusNode,
+    this.onFocusChanged,
     this.width = 104,
     super.key,
   });
@@ -38,6 +98,7 @@ class HomeSideNavigation extends ConsumerStatefulWidget {
   final bool autofocusActive;
   final VoidCallback? onHomePressed;
   final FocusNode? homeFocusNode;
+  final ValueChanged<bool>? onFocusChanged;
   final double width;
 
   @override
@@ -205,6 +266,7 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         ? widget.activeDestination
         : _nearestVisibleDestination();
     _recoverDetachedFocusAfterBuild();
+    final chromeSize = widget.preferences.navigationChromeSize;
 
     return Container(
       key: const ValueKey('main-navigation'),
@@ -217,9 +279,9 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
       ),
       child: Column(
         children: [
-          const SizedBox(height: 14),
-          const _HomeRailWordmark(),
-          const SizedBox(height: 10),
+          SizedBox(height: chromeSize.actionGap + 5),
+          _HomeRailWordmark(size: chromeSize),
+          SizedBox(height: chromeSize.actionGap + 2),
           Expanded(
             child: Align(
               alignment: Alignment.topCenter,
@@ -232,6 +294,7 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
                       _HomeRailAction(
                         key: _navigationKey(destination),
                         destination: destination,
+                        chromeSize: chromeSize,
                         active: destination == widget.activeDestination,
                         autofocus:
                             widget.autofocusActive &&
@@ -239,9 +302,10 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
                         focusNode: _nodeFor(destination),
                         onKeyEvent: (_, event) =>
                             _handleNavigationKey(destination, event),
+                        onFocusChanged: widget.onFocusChanged,
                         onPressed: () => _activateDestination(destination),
                       ),
-                      const SizedBox(height: 8),
+                      SizedBox(height: chromeSize.actionGap),
                     ],
                   ],
                 ),
@@ -276,7 +340,9 @@ IconData _navigationIcon(TopNavigationDestination destination) =>
     };
 
 class _HomeRailWordmark extends StatelessWidget {
-  const _HomeRailWordmark();
+  const _HomeRailWordmark({required this.size});
+
+  final NavigationChromeSize size;
 
   @override
   Widget build(BuildContext context) {
@@ -285,15 +351,15 @@ class _HomeRailWordmark extends StatelessWidget {
       label: 'Teto TV',
       image: true,
       child: SizedBox(
-        width: 104,
-        height: 90,
+        width: size.logoSize,
+        height: size.logoSize,
         child: Stack(
           alignment: Alignment.center,
           children: [
             Image.asset(
               'assets/branding/tetotv_icon.png',
-              width: 88,
-              height: 88,
+              width: size.logoSize,
+              height: size.logoSize,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.medium,
             ),
@@ -321,19 +387,23 @@ class _HomeRailWordmark extends StatelessWidget {
 class _HomeRailAction extends StatelessWidget {
   const _HomeRailAction({
     required this.destination,
+    required this.chromeSize,
     required this.active,
     required this.autofocus,
     required this.focusNode,
     required this.onKeyEvent,
+    this.onFocusChanged,
     required this.onPressed,
     super.key,
   });
 
   final TopNavigationDestination destination;
+  final NavigationChromeSize chromeSize;
   final bool active;
   final bool autofocus;
   final FocusNode focusNode;
   final FocusOnKeyEventCallback onKeyEvent;
+  final ValueChanged<bool>? onFocusChanged;
   final VoidCallback onPressed;
 
   @override
@@ -345,6 +415,7 @@ class _HomeRailAction extends StatelessWidget {
         autofocus: autofocus,
         focusNode: focusNode,
         onKeyEvent: onKeyEvent,
+        onFocusChanged: onFocusChanged,
         onPressed: onPressed,
         borderRadius: BorderRadius.circular(8),
         focusScale: 1.035,
@@ -354,8 +425,8 @@ class _HomeRailAction extends StatelessWidget {
           button: true,
           excludeSemantics: true,
           child: Container(
-            width: 52,
-            height: 48,
+            width: chromeSize.actionWidth,
+            height: chromeSize.actionHeight,
             decoration: BoxDecoration(
               color: active
                   ? context.appPalette.accent.withValues(alpha: .19)
@@ -373,7 +444,7 @@ class _HomeRailAction extends StatelessWidget {
               color: active
                   ? context.appPalette.accentBright
                   : context.appPalette.primaryText,
-              size: 27,
+              size: chromeSize.iconSize,
             ),
           ),
         ),
@@ -388,12 +459,14 @@ class HomeProfileSwitcher extends ConsumerWidget {
     required this.preferences,
     this.focusNode,
     this.onKeyEvent,
+    this.onFocusChanged,
     super.key,
   });
 
   final SettingsPreferences preferences;
   final FocusNode? focusNode;
   final FocusOnKeyEventCallback? onKeyEvent;
+  final ValueChanged<bool>? onFocusChanged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -428,6 +501,7 @@ class HomeProfileSwitcher extends ConsumerWidget {
         showSettings: showSettings,
         focusNode: focusNode,
         onKeyEvent: onKeyEvent,
+        onFocusChanged: onFocusChanged,
         onSwitch: (profile) async {
           final switched = await ref
               .read(trackingAccountsControllerProvider.notifier)
@@ -677,6 +751,7 @@ class _TrackerProfileMenuButton extends StatelessWidget {
     required this.onSettings,
     this.focusNode,
     this.onKeyEvent,
+    this.onFocusChanged,
   });
 
   final TrackingAccountProfile profile;
@@ -689,6 +764,7 @@ class _TrackerProfileMenuButton extends StatelessWidget {
   final VoidCallback onSettings;
   final FocusNode? focusNode;
   final FocusOnKeyEventCallback? onKeyEvent;
+  final ValueChanged<bool>? onFocusChanged;
 
   Future<void> _openMenu(BuildContext context) async {
     final box = context.findRenderObject() as RenderBox?;
@@ -820,6 +896,7 @@ class _TrackerProfileMenuButton extends StatelessWidget {
         child: TvFocusable(
           focusNode: focusNode,
           onKeyEvent: onKeyEvent,
+          onFocusChanged: onFocusChanged,
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
           borderRadius: BorderRadius.circular(9),
           focusScale: 1.02,

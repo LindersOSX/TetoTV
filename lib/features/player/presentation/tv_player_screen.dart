@@ -2890,6 +2890,25 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_engineHandoffInProgress) return KeyEventResult.handled;
 
     final key = event.logicalKey;
+    if (event is KeyDownEvent && _controlsVisible) {
+      if (key == LogicalKeyboardKey.arrowUp &&
+          _canSkipNow &&
+          _activeSkip != null &&
+          !_skipControlFocus.hasPrimaryFocus) {
+        // The skip action floats above the transport row. Give every control
+        // the same one-press route to it instead of requiring the viewer to
+        // traverse horizontally to the far edge of the HUD first.
+        _skipControlFocus.requestFocus();
+        _showControls();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowDown &&
+          _skipControlFocus.hasPrimaryFocus) {
+        _playControlFocus.requestFocus();
+        _showControls();
+        return KeyEventResult.handled;
+      }
+    }
     if (consumeHiddenPlayerHudDownRepeat(
       key: key,
       isRepeat: event is KeyRepeatEvent,

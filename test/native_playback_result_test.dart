@@ -62,6 +62,62 @@ void main() {
     expect(result.subtitleBackgroundColor, 0x99000000);
   });
 
+  test(
+    'unsupported-caption MPV handoff preserves intent without breaking manual off',
+    () {
+      final fallback = NativePlaybackResult.fromMap(<Object?, Object?>{
+        'status': 'use_mpv',
+        'subtitlesEnabled': true,
+        'error':
+            'Media3 cannot render this torrent embedded caption format; '
+            'continuing in MPV for libass caption support.',
+      });
+      final enabled = applyNativeSubtitlePreferenceResult(
+        currentPreferences: const SeriesPlaybackPreferences(
+          subtitleEnabled: false,
+          subtitlePreferenceSet: true,
+        ),
+        result: fallback,
+      );
+
+      expect(enabled.subtitleEnabled, isTrue);
+      expect(enabled.subtitlePreferenceSet, isTrue);
+
+      final manualOff = applyNativeSubtitlePreferenceResult(
+        currentPreferences: enabled,
+        result: NativePlaybackResult.fromMap(const <Object?, Object?>{
+          'status': 'exit',
+          'subtitlesEnabled': false,
+        }),
+      );
+      expect(manualOff.subtitleEnabled, isFalse);
+      expect(manualOff.subtitlePreferenceSet, isTrue);
+    },
+  );
+
+  test(
+    'an unchanged native subtitle observation preserves existing intent',
+    () {
+      final result = NativePlaybackResult.fromMap(const <Object?, Object?>{
+        'status': 'use_mpv',
+        'subtitleLanguage': 'eng',
+      });
+      expect(result.subtitlesEnabled, isNull);
+
+      const existing = SeriesPlaybackPreferences(
+        subtitleEnabled: true,
+        subtitlePreferenceSet: true,
+      );
+      final preserved = applyNativeSubtitlePreferenceResult(
+        currentPreferences: existing,
+        result: result,
+      );
+
+      expect(preserved.subtitleEnabled, isTrue);
+      expect(preserved.subtitlePreferenceSet, isTrue);
+    },
+  );
+
   test('parses session-scoped native playback progress', () {
     final progress = NativePlaybackProgress.fromMap(<Object?, Object?>{
       'checkpointKey': '15125:9',

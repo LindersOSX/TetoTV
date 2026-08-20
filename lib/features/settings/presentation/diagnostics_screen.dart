@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:anime_tv/core/diagnostics/diagnostics_exporter.dart';
 import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
@@ -123,7 +122,77 @@ class _DiagnosticsBody extends StatelessWidget {
             .toList()
           ..sort();
     return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: palette.primaryText.withValues(alpha: .08),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'SUPPORT REPORT',
+                style: TextStyle(
+                  color: palette.accentBright,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'A complete bounded dump of device capabilities, player health, performance timings, provider health, and the recent diagnostic ring. Account identity, credentials, URLs, file paths, and network addresses are removed before it leaves the TV.',
+                style: TextStyle(color: palette.mutedText),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 9,
+                runSpacing: 9,
+                children: [
+                  _SendDiagnosticsAction(data: data),
+                  _DiagnosticsAction(
+                    label: 'Copy full report',
+                    icon: Icons.copy_rounded,
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: _reportText(data)),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Full redacted report copied.'),
+                        ),
+                      );
+                    },
+                  ),
+                  _DiagnosticsAction(
+                    label: 'Export full report',
+                    icon: Icons.file_download_outlined,
+                    onPressed: () async {
+                      final file = await const DiagnosticsExporter().export();
+                      await Clipboard.setData(ClipboardData(text: file.path));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Saved report: ${file.path}')),
+                      );
+                    },
+                  ),
+                  _DiagnosticsAction(
+                    label: 'Device calibration',
+                    icon: Icons.tune_rounded,
+                    onPressed: () => context.push('/settings/device-setup'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
         Wrap(
           spacing: 10,
           runSpacing: 10,
@@ -202,49 +271,6 @@ class _DiagnosticsBody extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 9,
-          runSpacing: 9,
-          children: [
-            _DiagnosticsAction(
-              label: 'Device calibration',
-              icon: Icons.tune_rounded,
-              onPressed: () => context.push('/settings/device-setup'),
-            ),
-            _DiagnosticsAction(
-              label: 'Copy summary',
-              icon: Icons.copy_rounded,
-              onPressed: () async {
-                final summary = const JsonEncoder.withIndent('  ').convert({
-                  'app': data.version.name,
-                  'build': data.version.code,
-                  'device': data.profile.toJson(),
-                  'diagnostics': data.database,
-                });
-                await Clipboard.setData(ClipboardData(text: summary));
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Redacted diagnostics copied.')),
-                );
-              },
-            ),
-            _SendDiagnosticsAction(data: data),
-            _DiagnosticsAction(
-              label: 'Export report',
-              icon: Icons.file_download_outlined,
-              primary: true,
-              onPressed: () async {
-                final file = await const DiagnosticsExporter().export();
-                await Clipboard.setData(ClipboardData(text: file.path));
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Saved report: ${file.path}')),
-                );
-              },
-            ),
-          ],
-        ),
         const SizedBox(height: 30),
       ],
     );
@@ -270,7 +296,7 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Send diagnostic report?'),
         content: const Text(
-          'This posts a bounded, redacted technical report to TetoTV’s private Discord support channel. It includes the app build, device capabilities, and recent redacted failures. Saved credentials and direct stream URLs are excluded.',
+          'This posts the complete bounded, redacted technical dump shown in Diagnostics to TetoTV’s private Discord support channel. It includes the app build, device capabilities, player and provider health, performance timings, and recent failures. Account identity, credentials, direct stream URLs, file paths, and network addresses are excluded.',
         ),
         actions: [
           TextButton(
@@ -335,6 +361,14 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
     onPressed: _send,
   );
 }
+
+String _reportText(_DiagnosticsViewData data) => buildRedactedDiagnosticsText(
+  version: data.version,
+  profile: data.profile,
+  isTelevision: data.isTelevision,
+  diagnostics: data.database,
+  generatedAt: DateTime.now().toUtc(),
+);
 
 class _DiagnosticCard extends StatelessWidget {
   const _DiagnosticCard({

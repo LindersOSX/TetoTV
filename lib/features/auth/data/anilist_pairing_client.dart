@@ -8,9 +8,8 @@ class TrackingPairingClient {
       _dio = Dio(
         BaseOptions(
           baseUrl: '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/',
-          // Render's free tier may cold-start after the TV opens pairing.
-          // Keep this finite, but long enough that a valid QR flow does not
-          // fail before the broker finishes waking up.
+          // Keep the initial QR flow tolerant of a companion service restart,
+          // while retaining finite deadlines on every request.
           connectTimeout: const Duration(seconds: 20),
           receiveTimeout: const Duration(seconds: 45),
           followRedirects: false,

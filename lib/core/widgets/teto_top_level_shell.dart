@@ -4,6 +4,7 @@ import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
 typedef TetoTopLevelBuilder =
     Widget Function(BuildContext context, TetoTopLevelLayout layout);
@@ -84,11 +85,10 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final usesTvRail = !context.isCompactWidth && size.width >= 840;
-    final railWidth = size.width >= 1600
-        ? 140.0
-        : size.width >= 1200
-        ? 104.0
-        : 92.0;
+    final railWidth = homeNavigationRailWidth(
+      size.width,
+      widget.preferences.navigationChromeSize,
+    );
     final responsive = context.responsiveScreenPadding;
     final safeAreaMinimum = usesTvRail
         ? EdgeInsets.zero
@@ -107,62 +107,72 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
       focusRail: _focusRail,
     );
 
-    return Scaffold(
-      key: ValueKey('teto-top-level-${widget.activeDestination.name}'),
-      resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
-      backgroundColor: context.appPalette.background,
-      body: SafeArea(
-        minimum: safeAreaMinimum,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            const Positioned.fill(child: _TetoDestinationBackdrop()),
-            if (usesTvRail) ...[
-              Positioned.fill(
-                left: railWidth,
-                child: Padding(
+    final canPop = Navigator.of(context).canPop();
+    return PopScope(
+      canPop: canPop,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) GoRouter.maybeOf(context)?.go('/');
+      },
+      child: Scaffold(
+        key: ValueKey('teto-top-level-${widget.activeDestination.name}'),
+        resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+        backgroundColor: context.appPalette.background,
+        body: SafeArea(
+          minimum: safeAreaMinimum,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const Positioned.fill(child: _TetoDestinationBackdrop()),
+              if (usesTvRail) ...[
+                Positioned.fill(
+                  left: railWidth,
+                  child: Padding(
+                    padding: contentPadding,
+                    child: widget.builder(context, layout),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: HomeSideNavigation(
+                    preferences: widget.preferences,
+                    activeDestination: widget.activeDestination,
+                    activeFocusNode: _railFocusNode,
+                    autofocusActive: widget.autofocusRail,
+                    onActivePressed: widget.onActiveDestinationPressed ?? () {},
+                    onExitRight: _focusContent,
+                    width: railWidth,
+                  ),
+                ),
+                Positioned(
+                  right: size.width >= 1400 ? 30 : 22,
+                  top: 12,
+                  child: RepaintBoundary(
+                    key: const ValueKey('top-level-fixed-profile'),
+                    child: HomeProfileSwitcher(
+                      preferences: widget.preferences,
+                      focusNode: _profileFocusNode,
+                      onKeyEvent: (_, event) {
+                        final returnsToContent =
+                            event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                            event.logicalKey == LogicalKeyboardKey.arrowDown;
+                        if (!returnsToContent) return KeyEventResult.ignored;
+                        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                          _focusContent();
+                        }
+                        return KeyEventResult.handled;
+                      },
+                    ),
+                  ),
+                ),
+              ] else
+                Padding(
                   padding: contentPadding,
                   child: widget.builder(context, layout),
                 ),
-              ),
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                child: HomeSideNavigation(
-                  preferences: widget.preferences,
-                  activeDestination: widget.activeDestination,
-                  activeFocusNode: _railFocusNode,
-                  autofocusActive: widget.autofocusRail,
-                  onActivePressed: widget.onActiveDestinationPressed ?? () {},
-                  onExitRight: _focusContent,
-                  width: railWidth,
-                ),
-              ),
-              Positioned(
-                right: size.width >= 1400 ? 30 : 22,
-                top: 12,
-                child: HomeProfileSwitcher(
-                  preferences: widget.preferences,
-                  focusNode: _profileFocusNode,
-                  onKeyEvent: (_, event) {
-                    final returnsToContent =
-                        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-                        event.logicalKey == LogicalKeyboardKey.arrowDown;
-                    if (!returnsToContent) return KeyEventResult.ignored;
-                    if (event is KeyDownEvent || event is KeyRepeatEvent) {
-                      _focusContent();
-                    }
-                    return KeyEventResult.handled;
-                  },
-                ),
-              ),
-            ] else
-              Padding(
-                padding: contentPadding,
-                child: widget.builder(context, layout),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

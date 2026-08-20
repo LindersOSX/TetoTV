@@ -6,7 +6,7 @@ Public/Beta choice is stored locally in encrypted preferences and can be
 changed later.
 
 Both channels use anonymous GitHub release requests. App updates do not use the
-TetoTV Render broker, a GitHub token, a shared Beta key, or any other update
+TetoTV companion service, a GitHub token, a shared Beta key, or any other update
 credential. The repository selected by the channel is the trust boundary.
 
 ### Legacy migration window
@@ -40,8 +40,8 @@ Beta reads the latest completed release from:
 https://api.github.com/repos/LindersOSX/TetoTV/releases/latest
 ```
 
-The current Beta source build is `v2.0.10`, with the user-facing name
-**TetoTV 2.0.10 Beta**. The repository determines that this is the Beta channel;
+The current Beta source build is `v2.0.11`, with the user-facing name
+**TetoTV 2.0.11 Beta**. The repository determines that this is the Beta channel;
 the client does not require GitHub's `prerelease` field to be `true`. Publish a
 normal, non-draft release so GitHub's `/releases/latest` endpoint can return it.
 
@@ -53,7 +53,7 @@ latest endpoint supplies the version, title, release notes, publication time,
 and release assets. The updater chooses an APK whose name ends in
 `-universal.apk` (case-insensitive) before considering another `.apk` asset.
 It downloads the selected file directly from that asset's
-`browser_download_url`; APK bytes never pass through Render.
+`browser_download_url`; APK bytes never pass through a TetoTV proxy.
 
 Developer-mode release history also comes anonymously from the selected
 repository's GitHub releases API. Drafts, malformed versions, releases outside
@@ -69,7 +69,7 @@ TV.
 
 ## Switching and rollback
 
-Public `1.0.2` and Beta `2.0.10` use Android `versionCode` `410001`, the same
+Public `1.0.2` and Beta `2.0.11` use Android `versionCode` `410001`, the same
 application ID, and the same production signer. This lets Developer mode move
 between compatible completed Public 1.x and Beta 2.x releases even when the
 target's user-facing SemVer is lower. Once the installed major family matches
@@ -101,5 +101,5 @@ Before publishing either channel:
    progress, verification, and Android installer launch on phone, Android TV,
    and Fire TV test targets.
 
-No Beta update key or GitHub token belongs in a Dart define, APK, Render
+No Beta update key or GitHub token belongs in a Dart define, APK, companion
 environment, app preference, command line, or release artifact.

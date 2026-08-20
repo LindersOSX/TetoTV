@@ -171,6 +171,43 @@ void main() {
   );
 
   test(
+    'artwork DNS failures stay local while real network state errors report',
+    () async {
+      final client = _CrashClient();
+      final platform = _CrashPlatform();
+      final reporter = AnonymousCrashReporter(client, platform);
+      reporter.setEnabled(true);
+
+      await reporter.record(
+        kind: 'flutter',
+        error: Exception(
+          "ClientException with SocketException: Failed host lookup: 's4.anilist.co'",
+        ),
+      );
+      await reporter.recordHandled(
+        area: AnonymousErrorArea.applicationState,
+        error: Exception(
+          "ClientException: Failed host lookup: 'cdn.myanimelist.net'",
+        ),
+      );
+
+      expect(client.reports, isEmpty);
+      expect(platform.stored, isEmpty);
+
+      await reporter.record(
+        kind: 'platform',
+        error: Exception(
+          "DioException: Failed host lookup: 'graphql.anilist.co'",
+        ),
+        stack: StackTrace.fromString('CatalogController.refresh'),
+      );
+
+      expect(client.reports, hasLength(1));
+      expect(client.reports.single.message, contains('Failed host lookup'));
+    },
+  );
+
+  test(
     'handled reports are deduplicated and capped per rolling window',
     () async {
       final client = _CrashClient();

@@ -68,6 +68,28 @@ void main() {
     expect(releaseGroupKey('Show - 02'), isNull);
   });
 
+  test('torrent picker search matches release metadata with AND terms', () {
+    const release = ReleaseCandidate(
+      infoHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      magnetUri: 'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      releaseName: '[SubsPlease] Example Show - 07',
+      seeders: 25,
+      sourceId: 'community-source',
+      provider: 'Community Marketplace',
+      quality: '1080p',
+      codec: 'HEVC',
+      sizeLabel: '1.4 GB',
+      isHdr: true,
+      hasSubtitles: true,
+    );
+
+    expect(releaseMatchesTorrentSearch(release, ''), isTrue);
+    expect(releaseMatchesTorrentSearch(release, 'subsplease 1080p'), isTrue);
+    expect(releaseMatchesTorrentSearch(release, 'community hevc hdr'), isTrue);
+    expect(releaseMatchesTorrentSearch(release, 'dub'), isFalse);
+    expect(releaseMatchesTorrentSearch(release, 'different group'), isFalse);
+  });
+
   test(
     'autoplay affinity prefers provider plus author, then provider, then rank',
     () {
@@ -778,6 +800,88 @@ void main() {
     expect(launch.stream.isWebStream, isFalse);
     expect(launch.selectedRelease.infoHash, exactDebrid.infoHash);
   });
+
+  testWidgets(
+    'torrent search keeps controls visible and restores focus after zero matches',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _FakeReleaseSource(),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text('Dubbed release'));
+
+      expect(find.text('Search torrents'), findsOneWidget);
+      expect(find.text('ALL'), findsOneWidget);
+      expect(find.text('SUB'), findsOneWidget);
+      expect(find.text('DUB'), findsOneWidget);
+      expect(find.text('More filters'), findsOneWidget);
+      expect(find.text('Refresh'), findsOneWidget);
+      expect(find.text('Magnet'), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.text('Magnet'),
+          matching: find.byType(SingleChildScrollView),
+        ),
+        findsNothing,
+      );
+
+      final input = tester.widget<TvTextInput>(find.byType(TvTextInput));
+      final inputFocus = input.focusNode!;
+      inputFocus.requestFocus();
+      await tester.pump();
+      expect(inputFocus.hasFocus, isTrue);
+
+      input.controller.text = 'no-such-torrent';
+      input.onChanged?.call(input.controller.text);
+      await tester.pump();
+
+      expect(find.text('Dubbed release'), findsNothing);
+      expect(find.text('No torrents match this local search.'), findsOneWidget);
+      expect(find.text('Clear search'), findsOneWidget);
+      expect(inputFocus.hasFocus, isTrue);
+
+      await tester.tap(find.text('Clear search'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Dubbed release'), findsOneWidget);
+      expect(find.text('No torrents match this local search.'), findsNothing);
+      expect(input.controller.text, isEmpty);
+      expect(inputFocus.hasFocus, isTrue);
+
+      await tester.tap(find.text('SUB'));
+      await tester.pump();
+      final filteredInput = tester.widget<TvTextInput>(
+        find.byType(TvTextInput),
+      );
+      filteredInput.controller.text = 'dubbed';
+      filteredInput.onChanged?.call(filteredInput.controller.text);
+      await tester.pump();
+      expect(find.text('Dubbed release'), findsNothing);
+      expect(
+        find.text('No torrents match this local search.'),
+        findsNothing,
+        reason: 'the language filter, not the local search, hid this result',
+      );
+    },
+  );
 
   testWidgets('shows resolver errors and debounces repeated activation', (
     tester,

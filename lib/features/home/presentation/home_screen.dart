@@ -209,6 +209,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!focused) return;
     _lastContentWasHero = true;
     _lastFocusedShelf = null;
+    unawaited(_restoreSponsoredHero());
+  }
+
+  Future<void> _restoreSponsoredHero() async {
+    if (!mounted ||
+        !ref.read(settingsPreferencesProvider).showHero ||
+        !_scrollController.hasClients ||
+        _scrollController.offset <= .5) {
+      return;
+    }
+    await _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   void _rememberShelfFocus(HomeShelf shelf, int column) {
@@ -723,11 +738,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     } else {
       _hasVisibleNavigationAction = true;
     }
-    final railWidth = screenSize.width >= 1600
-        ? 140.0
-        : screenSize.width >= 1200
-        ? 104.0
-        : 92.0;
+    final railWidth = homeNavigationRailWidth(
+      screenSize.width,
+      preferences.navigationChromeSize,
+    );
     final heroHeight = (screenSize.height * .51).clamp(300.0, 500.0);
 
     List<Widget> buildShelves({required bool tvNavigation}) {
@@ -808,6 +822,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               Positioned.fill(
                 left: railWidth,
                 child: SingleChildScrollView(
+                  key: const ValueKey('home-scroll-content'),
                   controller: _scrollController,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -831,28 +846,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   autofocusActive: !preferences.showHero,
                   onHomePressed: _handleHomeActivation,
                   onExitRight: _restoreContentFocus,
+                  onFocusChanged: (focused) {
+                    if (focused) unawaited(_restoreSponsoredHero());
+                  },
                 ),
               ),
               Positioned(
                 right: screenSize.width >= 1400 ? 30 : 22,
                 top: 12,
-                child: HomeProfileSwitcher(
-                  preferences: preferences,
-                  focusNode: _profileFocus,
-                  onKeyEvent: (_, event) {
-                    final directional =
-                        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-                        event.logicalKey == LogicalKeyboardKey.arrowDown;
-                    if (!directional) return KeyEventResult.ignored;
-                    if (event is KeyDownEvent || event is KeyRepeatEvent) {
-                      _focusHero(resetScroll: false);
-                    }
-                    return KeyEventResult.handled;
-                  },
+                child: RepaintBoundary(
+                  key: const ValueKey('home-fixed-profile'),
+                  child: HomeProfileSwitcher(
+                    preferences: preferences,
+                    focusNode: _profileFocus,
+                    onFocusChanged: (focused) {
+                      if (focused) unawaited(_restoreSponsoredHero());
+                    },
+                    onKeyEvent: (_, event) {
+                      final directional =
+                          event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                          event.logicalKey == LogicalKeyboardKey.arrowDown;
+                      if (!directional) return KeyEventResult.ignored;
+                      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                        _focusHero(resetScroll: false);
+                      }
+                      return KeyEventResult.handled;
+                    },
+                  ),
                 ),
               ),
             ] else
               SingleChildScrollView(
+                key: const ValueKey('home-scroll-content'),
                 controller: _scrollController,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,

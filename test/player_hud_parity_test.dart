@@ -397,6 +397,9 @@ void main() {
         'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
         'Media3PlayerActivity.kt',
       ).readAsStringSync();
+      final controls = File(
+        'android/app/src/main/res/layout/tetotv_player_controls.xml',
+      ).readAsStringSync();
 
       expect(media3, contains('audioTrackButton.isEnabled = true'));
       expect(media3, contains('captionTrackButton.isEnabled = true'));
@@ -412,6 +415,24 @@ void main() {
       expect(media3, contains('R.string.tetotv_player_no_caption_tracks'));
       expect(media3, contains('Player.COMMAND_SEEK_BACK'));
       expect(media3, contains('Player.COMMAND_SEEK_FORWARD'));
+      expect(controls, contains('android:focusable="false"'));
+      expect(
+        controls,
+        contains('android:descendantFocusability="afterDescendants"'),
+      );
+      expect(
+        RegExp(
+          r'scroll\.post\s*\{\s*scroll\.fullScroll\(View\.FOCUS_RIGHT\)',
+        ).hasMatch(media3),
+        isTrue,
+        reason: 'the post-layout correction must use the real scroll end',
+      );
+      expect(
+        media3,
+        isNot(contains('scroll.maxScrollAmount')),
+        reason: 'getMaxScrollAmount is an arrow step, not the maximum X',
+      );
+      expect(media3, contains('setChromeControlHighlighted(container, true)'));
     },
   );
 

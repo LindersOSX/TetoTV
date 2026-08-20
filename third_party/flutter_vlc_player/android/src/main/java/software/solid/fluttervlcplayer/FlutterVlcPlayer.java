@@ -47,6 +47,7 @@ final class FlutterVlcPlayer implements PlatformView {
     private List<String> options;
     private List<RendererDiscoverer> rendererDiscoverers = new ArrayList<>();
     private List<RendererItem> rendererItems = new ArrayList<>();
+    private boolean isDisposing = false;
     private boolean isDisposed = false;
 
     // Platform view
@@ -57,25 +58,50 @@ final class FlutterVlcPlayer implements PlatformView {
 
     @Override
     public void dispose() {
-        if (isDisposed)
+        if (isDisposed || isDisposing)
             return;
-        //
-        textureView.dispose();
-        textureEntry.release();
-        mediaEventChannel.setStreamHandler(null);
-        rendererEventChannel.setStreamHandler(null);
-        if (mediaPlayer != null) {
-            mediaPlayer.stop();
-            mediaPlayer.setEventListener(null);
-            mediaPlayer.getVLCVout().detachViews();
-            mediaPlayer.release();
+        // Reserve teardown against a re-entrant dispose, but do not claim that
+        // ownership was released until every cleanup step has been attempted.
+        isDisposing = true;
+        try {
+            runCleanupStep("clear media event channel", () -> mediaEventChannel.setStreamHandler(null));
+            runCleanupStep("clear renderer event channel", () -> rendererEventChannel.setStreamHandler(null));
+
+            final MediaPlayer currentPlayer = mediaPlayer;
             mediaPlayer = null;
-        }
-        if (libVLC != null) {
-            libVLC.release();
+            if (currentPlayer != null) {
+                runCleanupStep("stop VLC MediaPlayer", currentPlayer::stop);
+                runCleanupStep("clear VLC event listener", () -> currentPlayer.setEventListener(null));
+            }
+            // libVLC must relinquish the video output before Flutter releases
+            // its registry texture. Each later owner is still released if an
+            // earlier native VLC operation throws.
+            runCleanupStep("detach VLC video output", () -> textureView.setMediaPlayer(null));
+            if (currentPlayer != null) {
+                runCleanupStep("release VLC MediaPlayer", currentPlayer::release);
+            }
+            runCleanupStep("dispose VLC TextureView", textureView::dispose);
+            runCleanupStep("release Flutter texture entry", textureEntry::release);
+
+            final LibVLC currentLibVLC = libVLC;
             libVLC = null;
+            if (currentLibVLC != null) {
+                runCleanupStep("release LibVLC", currentLibVLC::release);
+            }
+        } finally {
+            isDisposed = true;
+            isDisposing = false;
         }
-        isDisposed = true;
+    }
+
+    private void runCleanupStep(String name, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (RuntimeException error) {
+            // PlatformView disposal cannot leave a later Surface/texture owner
+            // untouched merely because an earlier libVLC call failed.
+            Log.e(TAG, "VLC cleanup failed while attempting to " + name, error);
+        }
     }
 
     // VLC Player

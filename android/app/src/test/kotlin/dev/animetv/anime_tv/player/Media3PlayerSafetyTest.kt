@@ -3,6 +3,7 @@ package dev.animetv.anime_tv.player
 import java.util.concurrent.Executor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -209,5 +210,118 @@ class Media3PlayerSafetyTest {
 
         assertFalse(action.applyOverride)
         assertFalse(action.markPreferredApplied)
+    }
+
+    @Test
+    fun `unsupported torrent container errors use same-stream MPV fallback`() {
+        assertTrue(
+            nativePlaybackErrorRequiresMpv(
+                "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED: sniff failures: [NoDeclaredBrand]",
+            ),
+        )
+        assertTrue(
+            nativePlaybackErrorRequiresMpv(
+                "None of the available extractors could read the stream",
+            ),
+        )
+        assertFalse(nativePlaybackErrorRequiresMpv("ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"))
+    }
+
+    @Test
+    fun `torrent seek remains actionable through MPV when Media3 disables it`() {
+        assertTrue(
+            nativeShouldOfferSeekFallback(
+                expectedSeekable = true,
+                seekAttemptSucceeded = false,
+            ),
+        )
+        assertFalse(
+            nativeShouldOfferSeekFallback(
+                expectedSeekable = false,
+                seekAttemptSucceeded = false,
+            ),
+        )
+        assertFalse(
+            nativeShouldOfferSeekFallback(
+                expectedSeekable = true,
+                seekAttemptSucceeded = true,
+            ),
+        )
+
+        assertFalse(nativeSeekAttemptSucceeded(canSeek = false) { error("must not run") })
+        assertFalse(nativeSeekAttemptSucceeded(canSeek = true) { error("command lost") })
+        assertTrue(nativeSeekAttemptSucceeded(canSeek = true) {})
+    }
+
+    @Test
+    fun `embedded unsupported captions use MPV while a missing caption track does not`() {
+        assertTrue(
+            nativeShouldUseMpvForUnsupportedCaptions(
+                embeddedCaptionTrackCount = 2,
+                supportedCaptionTrackCount = 0,
+            ),
+        )
+        assertFalse(
+            nativeShouldUseMpvForUnsupportedCaptions(
+                embeddedCaptionTrackCount = 0,
+                supportedCaptionTrackCount = 0,
+            ),
+        )
+        assertFalse(
+            nativeShouldUseMpvForUnsupportedCaptions(
+                embeddedCaptionTrackCount = 2,
+                supportedCaptionTrackCount = 1,
+            ),
+        )
+
+        assertTrue(
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = false,
+                subtitlePreferenceChanged = false,
+                forceMpvCaptionIntent = true,
+            ) == true,
+        )
+        assertFalse(
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = false,
+                subtitlePreferenceChanged = true,
+                forceMpvCaptionIntent = false,
+            ) ?: true,
+        )
+        assertTrue(
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = true,
+                subtitlePreferenceChanged = true,
+                forceMpvCaptionIntent = false,
+            ) == true,
+        )
+        assertNull(
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = false,
+                subtitlePreferenceChanged = false,
+                forceMpvCaptionIntent = false,
+            ),
+        )
+        assertNull(
+            nativeSubtitlesEnabledResult(
+                selectedTextTrack = true,
+                subtitlePreferenceChanged = false,
+                forceMpvCaptionIntent = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `preferred captions are reasserted after a Matroska group replacement`() {
+        val action = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = true,
+            viewerSelectionActive = false,
+            candidateMatchesPreference = true,
+            candidateMatchesLastOverride = true,
+            candidateAlreadySelected = false,
+        )
+
+        assertTrue(action.applyOverride)
+        assertTrue(action.markPreferredApplied)
     }
 }

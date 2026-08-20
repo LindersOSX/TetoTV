@@ -94,6 +94,9 @@
             android:clipChildren="false"
             android:clipToPadding="false"
             android:fillViewport="false"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:descendantFocusability="afterDescendants"
             android:overScrollMode="never"
             android:scrollbars="none">
 

@@ -1,6 +1,9 @@
 # TetoTV privacy disclosure
 
-Effective date: August 16, 2026
+Effective date: August 20, 2026
+
+The stable public copy is available without an account or authentication at
+<https://tetotv-bot.wisp.uno/privacy>.
 
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
@@ -169,7 +172,7 @@ from being sent.
 
 Other bounded diagnostics stay on the device unless the user explicitly
 copies, exports, or chooses **Send to support** and confirms the disclosure.
-That explicit send posts a maximum 10,000-character report over HTTPS to
+That explicit send posts a maximum 480,000-character redacted JSON report over HTTPS to
 <https://tetotv-bot.wisp.uno>. The receiver validates and redacts it again,
 posts it through the bot to the private diagnostic support channel, and returns
 an opaque per-report reference only after Discord accepts the message. A retry
@@ -180,8 +183,9 @@ channel configuration.
 Manually sent or exported reports contain app/build and
 playback-capability information, bounded performance/failure events, Android
 version, manufacturer/model, and provider identifiers. TetoTV redacts
-credentials, signed URLs, magnets, hashes, and common token formats before
-storage and again before sending or export. Users should still review a
+account identity, credentials, signed URLs, magnets, hashes, file paths,
+network addresses, and common token formats before storage and again before
+sending or export. Users should still review a
 manually exported report before sharing it through another app.
 
 ## Security and user choices
