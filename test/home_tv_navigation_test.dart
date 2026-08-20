@@ -17,11 +17,112 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('Modern Layout rail sizes stay compact and increase predictably', () {
-    expect(homeNavigationRailWidth(1280, NavigationChromeSize.small), 62);
-    expect(homeNavigationRailWidth(1280, NavigationChromeSize.medium), 72);
-    expect(homeNavigationRailWidth(1280, NavigationChromeSize.large), 86);
+  test('Modern Layout rail metrics scale on common TV canvases', () {
+    const expectedWidths = <int, List<double>>{
+      960: [48, 60, 72],
+      1280: [48, 60, 72],
+      1680: [48, 60, 72],
+    };
+
+    for (final MapEntry(key: viewport, value: widths)
+        in expectedWidths.entries) {
+      final metrics = [
+        for (final size in NavigationChromeSize.values)
+          homeNavigationRailMetrics(size),
+      ];
+      expect(metrics.map((value) => value.width), widths);
+      expect([
+        for (final size in NavigationChromeSize.values)
+          homeNavigationRailWidth(viewport.toDouble(), size),
+      ], widths);
+      expect(metrics[0].logoSize, lessThan(metrics[1].logoSize));
+      expect(metrics[1].logoSize, lessThan(metrics[2].logoSize));
+      expect(metrics[0].actionWidth, lessThan(metrics[1].actionWidth));
+      expect(metrics[1].actionWidth, lessThan(metrics[2].actionWidth));
+      for (final value in metrics) {
+        expect(value.width, greaterThan(value.logoSize));
+        expect(value.logoSize, greaterThan(value.actionWidth));
+        expect((value.width - value.logoSize) / 2, value.actionGap + 2);
+      }
+    }
   });
+
+  testWidgets(
+    'Home rail background, divider, and content inset follow chrome size',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final settings = _RailSettingsController();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith((_) => settings),
+            trendingAnimeProvider.overrideWith((_) async => const []),
+            seasonalAnimeProvider.overrideWith((_) async => const []),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            recentPlaybackProvider.overrideWith((_) async => const []),
+            dismissedContinueWatchingProvider.overrideWith(
+              (_) async => const <int>{},
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+
+      final measuredWidths = <double>[];
+      for (final size in NavigationChromeSize.values) {
+        await settings.setNavigationChromeSize(size);
+        await tester.pump();
+
+        final expected = homeNavigationRailMetrics(size);
+        final railFinder = find.byKey(const ValueKey('main-navigation'));
+        final rail = tester.widget<Container>(railFinder);
+        final decoration = rail.decoration! as BoxDecoration;
+        final border = decoration.border! as Border;
+        final contentRegion = tester.widget<Positioned>(
+          find.byKey(const ValueKey('home-tv-content-region')),
+        );
+
+        measuredWidths.add(tester.getSize(railFinder).width);
+        expect(tester.getSize(railFinder).width, expected.width);
+        expect(contentRegion.left, expected.width);
+        expect(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('home-scroll-content')))
+              .dx,
+          expected.width,
+        );
+        expect(border.right.style, BorderStyle.solid);
+        expect(border.right.width, greaterThan(0));
+        expect(
+          tester.getCenter(find.byKey(const ValueKey('main-nav-wordmark'))).dx,
+          (expected.width - border.right.width) / 2,
+        );
+        expect(
+          tester.getCenter(find.byKey(const ValueKey('main-nav-home'))).dx,
+          (expected.width - border.right.width) / 2,
+        );
+      }
+
+      expect(measuredWidths[0], lessThan(measuredWidths[1]));
+      expect(measuredWidths[1], lessThan(measuredWidths[2]));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('normalized 1080p TV canvas keeps fallback hero in bounds', (
     tester,
@@ -497,6 +598,15 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+}
+
+class _RailSettingsController extends SettingsPreferencesController {
+  _RailSettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(showHero: false, loaded: true);
+  }
+
+  @override
+  Future<void> load() async {}
 }
 
 class _StaticTrackingAccountsController extends TrackingAccountsController {

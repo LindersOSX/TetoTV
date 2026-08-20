@@ -72,11 +72,11 @@ void main() {
     expect(find.byKey(const ValueKey('main-nav-discover')), findsOneWidget);
     expect(
       tester.getSize(find.byKey(const ValueKey('main-navigation'))).width,
-      72,
+      60,
     );
     expect(
       tester.getTopLeft(find.text('Destination content')).dx,
-      greaterThan(72),
+      greaterThan(60),
     );
 
     final backdrop = tester.widget<DecoratedBox>(
@@ -98,6 +98,90 @@ void main() {
     expect(FocusManager.instance.primaryFocus, same(firstContentFocus));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'submenu rail surface, divider, and content offset share chrome metrics',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final contentFocusNodes = <FocusNode>[];
+
+      for (final viewport in const [960.0, 1280.0, 1680.0]) {
+        tester.view.physicalSize = Size(viewport, 720);
+        final measuredWidths = <double>[];
+
+        for (final size in NavigationChromeSize.values) {
+          final firstContentFocus = FocusNode(
+            debugLabel: 'test.$viewport.${size.name}.content',
+          );
+          contentFocusNodes.add(firstContentFocus);
+          await tester.pumpWidget(
+            ProviderScope(
+              key: ValueKey('$viewport-${size.name}'),
+              child: MaterialApp(
+                theme: AppTheme.dark,
+                home: TetoTopLevelShell(
+                  preferences: SettingsPreferences(
+                    navigationChromeSize: size,
+                    loaded: true,
+                  ),
+                  activeDestination: TopNavigationDestination.discover,
+                  firstContentFocusNode: firstContentFocus,
+                  builder: (_, _) => const SizedBox.expand(
+                    key: ValueKey('test-submenu-content'),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+
+          final expected = homeNavigationRailMetrics(size);
+          final railFinder = find.byKey(const ValueKey('main-navigation'));
+          final rail = tester.widget<Container>(railFinder);
+          final decoration = rail.decoration! as BoxDecoration;
+          final border = decoration.border! as Border;
+          final contentRegion = tester.widget<Positioned>(
+            find.byKey(const ValueKey('top-level-tv-content-region')),
+          );
+
+          measuredWidths.add(tester.getSize(railFinder).width);
+          expect(tester.getSize(railFinder).width, expected.width);
+          expect(contentRegion.left, expected.width);
+          expect(
+            tester
+                .getTopLeft(find.byKey(const ValueKey('test-submenu-content')))
+                .dx,
+            expected.width + (viewport >= 1400 ? 34 : 28),
+          );
+          expect(border.right.style, BorderStyle.solid);
+          expect(border.right.width, greaterThan(0));
+          expect(
+            tester
+                .getCenter(find.byKey(const ValueKey('main-nav-wordmark')))
+                .dx,
+            (expected.width - border.right.width) / 2,
+          );
+          expect(
+            tester
+                .getCenter(find.byKey(const ValueKey('main-nav-discover')))
+                .dx,
+            (expected.width - border.right.width) / 2,
+          );
+        }
+
+        expect(measuredWidths[0], lessThan(measuredWidths[1]));
+        expect(measuredWidths[1], lessThan(measuredWidths[2]));
+      }
+
+      await tester.pumpWidget(const SizedBox());
+      for (final node in contentFocusNodes) {
+        node.dispose();
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('compact destinations keep responsive insets without a TV rail', (
     tester,

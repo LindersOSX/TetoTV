@@ -13,64 +13,75 @@ import 'package:go_router/go_router.dart';
 
 enum MainNavigationDestination { home, myList, discover, calendar }
 
-/// The shared width contract for the Modern Layout navigation rail.
+/// The shared geometry contract for the Modern Layout navigation rail.
 ///
-/// Medium is intentionally about one third narrower than the previous rail at
-/// common TV canvas sizes. The logo is only slightly larger than an action,
-/// keeping the brand visible without overpowering the content.
-double homeNavigationRailWidth(
-  double viewportWidth,
-  NavigationChromeSize size,
-) {
-  final widthStep = viewportWidth >= 1500
-      ? 2
-      : viewportWidth >= 1100
-      ? 1
-      : 0;
-  return switch ((size, widthStep)) {
-    (NavigationChromeSize.small, 0) => 56,
-    (NavigationChromeSize.small, 1) => 62,
-    (NavigationChromeSize.small, _) => 68,
-    (NavigationChromeSize.medium, 0) => 64,
-    (NavigationChromeSize.medium, 1) => 72,
-    (NavigationChromeSize.medium, _) => 80,
-    (NavigationChromeSize.large, 0) => 76,
-    (NavigationChromeSize.large, 1) => 86,
-    (NavigationChromeSize.large, _) => 96,
-  };
+/// Keeping the black rail surface, divider, logo, and actions in one immutable
+/// value prevents the surrounding content inset from drifting away from the
+/// selected Small/Medium/Large chrome size.
+@immutable
+class HomeNavigationRailMetrics {
+  const HomeNavigationRailMetrics({
+    required this.width,
+    required this.actionWidth,
+    required this.actionHeight,
+    required this.iconSize,
+    required this.logoSize,
+    required this.actionGap,
+  });
+
+  final double width;
+  final double actionWidth;
+  final double actionHeight;
+  final double iconSize;
+  final double logoSize;
+  final double actionGap;
 }
 
-extension _NavigationChromeMetrics on NavigationChromeSize {
-  double get actionWidth => switch (this) {
+/// Resolves all rail geometry from the persisted chrome size.
+///
+/// The black surface wraps the logo with a small gutter based on the action
+/// spacing. It therefore changes with Small/Medium/Large but does not become
+/// disproportionately wide merely because the TV canvas is wider.
+HomeNavigationRailMetrics homeNavigationRailMetrics(NavigationChromeSize size) {
+  final double actionWidth = switch (size) {
     NavigationChromeSize.small => 30,
     NavigationChromeSize.medium => 38,
     NavigationChromeSize.large => 48,
   };
-
-  double get actionHeight => switch (this) {
+  final double actionHeight = switch (size) {
     NavigationChromeSize.small => 28,
     NavigationChromeSize.medium => 36,
     NavigationChromeSize.large => 44,
   };
-
-  double get iconSize => switch (this) {
+  final double iconSize = switch (size) {
     NavigationChromeSize.small => 17,
     NavigationChromeSize.medium => 20,
     NavigationChromeSize.large => 25,
   };
-
-  double get logoSize => switch (this) {
+  final double logoSize = switch (size) {
     NavigationChromeSize.small => 34,
     NavigationChromeSize.medium => 42,
     NavigationChromeSize.large => 52,
   };
-
-  double get actionGap => switch (this) {
+  final double actionGap = switch (size) {
     NavigationChromeSize.small => 5,
     NavigationChromeSize.medium => 7,
     NavigationChromeSize.large => 8,
   };
+  final width = logoSize + ((actionGap + 2) * 2);
+
+  return HomeNavigationRailMetrics(
+    width: width,
+    actionWidth: actionWidth,
+    actionHeight: actionHeight,
+    iconSize: iconSize,
+    logoSize: logoSize,
+    actionGap: actionGap,
+  );
 }
+
+double homeNavigationRailWidth(double _, NavigationChromeSize size) =>
+    homeNavigationRailMetrics(size).width;
 
 /// Home's fixed TV rail. The existing [MainNavigationBar] remains available
 /// to compact layouts and the other top-level screens, while Home can match the
@@ -86,7 +97,7 @@ class HomeSideNavigation extends ConsumerStatefulWidget {
     this.onHomePressed,
     this.homeFocusNode,
     this.onFocusChanged,
-    this.width = 104,
+    required this.metrics,
     super.key,
   });
 
@@ -99,7 +110,7 @@ class HomeSideNavigation extends ConsumerStatefulWidget {
   final VoidCallback? onHomePressed;
   final FocusNode? homeFocusNode;
   final ValueChanged<bool>? onFocusChanged;
-  final double width;
+  final HomeNavigationRailMetrics metrics;
 
   @override
   ConsumerState<HomeSideNavigation> createState() => _HomeSideNavigationState();
@@ -266,11 +277,11 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         ? widget.activeDestination
         : _nearestVisibleDestination();
     _recoverDetachedFocusAfterBuild();
-    final chromeSize = widget.preferences.navigationChromeSize;
+    final metrics = widget.metrics;
 
     return Container(
       key: const ValueKey('main-navigation'),
-      width: widget.width,
+      width: metrics.width,
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: .96),
         border: Border(
@@ -279,9 +290,9 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
       ),
       child: Column(
         children: [
-          SizedBox(height: chromeSize.actionGap + 5),
-          _HomeRailWordmark(size: chromeSize),
-          SizedBox(height: chromeSize.actionGap + 2),
+          SizedBox(height: metrics.actionGap + 5),
+          _HomeRailWordmark(metrics: metrics),
+          SizedBox(height: metrics.actionGap + 2),
           Expanded(
             child: Align(
               alignment: Alignment.topCenter,
@@ -294,7 +305,7 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
                       _HomeRailAction(
                         key: _navigationKey(destination),
                         destination: destination,
-                        chromeSize: chromeSize,
+                        metrics: metrics,
                         active: destination == widget.activeDestination,
                         autofocus:
                             widget.autofocusActive &&
@@ -305,7 +316,7 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
                         onFocusChanged: widget.onFocusChanged,
                         onPressed: () => _activateDestination(destination),
                       ),
-                      SizedBox(height: chromeSize.actionGap),
+                      SizedBox(height: metrics.actionGap),
                     ],
                   ],
                 ),
@@ -340,9 +351,9 @@ IconData _navigationIcon(TopNavigationDestination destination) =>
     };
 
 class _HomeRailWordmark extends StatelessWidget {
-  const _HomeRailWordmark({required this.size});
+  const _HomeRailWordmark({required this.metrics});
 
-  final NavigationChromeSize size;
+  final HomeNavigationRailMetrics metrics;
 
   @override
   Widget build(BuildContext context) {
@@ -351,15 +362,15 @@ class _HomeRailWordmark extends StatelessWidget {
       label: 'Teto TV',
       image: true,
       child: SizedBox(
-        width: size.logoSize,
-        height: size.logoSize,
+        width: metrics.logoSize,
+        height: metrics.logoSize,
         child: Stack(
           alignment: Alignment.center,
           children: [
             Image.asset(
               'assets/branding/tetotv_icon.png',
-              width: size.logoSize,
-              height: size.logoSize,
+              width: metrics.logoSize,
+              height: metrics.logoSize,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.medium,
             ),
@@ -387,7 +398,7 @@ class _HomeRailWordmark extends StatelessWidget {
 class _HomeRailAction extends StatelessWidget {
   const _HomeRailAction({
     required this.destination,
-    required this.chromeSize,
+    required this.metrics,
     required this.active,
     required this.autofocus,
     required this.focusNode,
@@ -398,7 +409,7 @@ class _HomeRailAction extends StatelessWidget {
   });
 
   final TopNavigationDestination destination;
-  final NavigationChromeSize chromeSize;
+  final HomeNavigationRailMetrics metrics;
   final bool active;
   final bool autofocus;
   final FocusNode focusNode;
@@ -425,8 +436,8 @@ class _HomeRailAction extends StatelessWidget {
           button: true,
           excludeSemantics: true,
           child: Container(
-            width: chromeSize.actionWidth,
-            height: chromeSize.actionHeight,
+            width: metrics.actionWidth,
+            height: metrics.actionHeight,
             decoration: BoxDecoration(
               color: active
                   ? context.appPalette.accent.withValues(alpha: .19)
@@ -444,7 +455,7 @@ class _HomeRailAction extends StatelessWidget {
               color: active
                   ? context.appPalette.accentBright
                   : context.appPalette.primaryText,
-              size: chromeSize.iconSize,
+              size: metrics.iconSize,
             ),
           ),
         ),
