@@ -760,6 +760,7 @@ Map<String, dynamic> _calendarMedia(int id) => {
   'duration': 24,
   'synonyms': <String>[],
   'nextAiringEpisode': {'episode': id + 1},
+  'isAdult': false,
 };
 
 Map<String, dynamic> _catalogMedia(int id, {String? title}) => {

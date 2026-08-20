@@ -203,6 +203,7 @@ class AppReleaseInfo {
     required this.name,
     required this.asset,
     this.notes = '',
+    this.releasedAtUtc,
   });
 
   final String tagName;
@@ -210,6 +211,12 @@ class AppReleaseInfo {
   final String name;
   final AppReleaseAsset asset;
   final String notes;
+
+  /// The date GitHub published this release, normalized to UTC.
+  ///
+  /// Older or malformed API payloads can omit a trustworthy date, so this is
+  /// nullable instead of substituting an epoch that would mislead the user.
+  final DateTime? releasedAtUtc;
 }
 
 abstract class AppReleaseSource {
@@ -371,6 +378,7 @@ class GitHubAppReleaseSource implements AppReleaseSource {
       name: data['name'] as String? ?? tag,
       asset: asset,
       notes: data['body'] as String? ?? '',
+      releasedAtUtc: _parseGitHubReleaseDate(data),
     );
   }
 
@@ -551,6 +559,48 @@ String? _optionalString(Object? value) {
   if (value is! String) return null;
   final result = value.trim();
   return result.isEmpty ? null : result;
+}
+
+DateTime? _parseGitHubReleaseDate(Map<String, dynamic> data) {
+  for (final field in const ['published_at', 'created_at']) {
+    final raw = _optionalString(data[field]);
+    if (raw == null) continue;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed != null) return parsed.toUtc();
+  }
+  return null;
+}
+
+/// Formats an updater release date without relying on the device locale data
+/// bundle, which is not guaranteed to be installed on every Android TV.
+String? formatAppReleaseDate(DateTime? releasedAtUtc) {
+  if (releasedAtUtc == null) return null;
+  final date = releasedAtUtc.toUtc();
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${months[date.month - 1]} ${date.day}, ${date.year}';
+}
+
+/// The version/date label shared by the latest-release and history UI.
+String appReleaseDisplayLabel(
+  AppReleaseInfo release,
+  AppUpdateChannel channel,
+) {
+  final version = channel.versionLabel(release.version);
+  final date = formatAppReleaseDate(release.releasedAtUtc);
+  return date == null ? version : '$version • $date';
 }
 
 void _validateReleaseHistoryOrder(List<AppReleaseInfo> releases) {

@@ -253,15 +253,19 @@ internal fun nativePreferredAudioOverrideAction(
     viewerSelectionActive: Boolean,
     candidateMatchesPreference: Boolean,
     candidateMatchesLastOverride: Boolean,
+    candidateAlreadySelected: Boolean,
 ): NativePreferredAudioOverrideAction {
-    if (preferredAlreadyApplied || viewerSelectionActive) {
+    if (viewerSelectionActive || (preferredAlreadyApplied && candidateAlreadySelected)) {
         return NativePreferredAudioOverrideAction(
             applyOverride = false,
             markPreferredApplied = false,
         )
     }
     return NativePreferredAudioOverrideAction(
-        applyOverride = !candidateMatchesLastOverride,
+        // A demuxer may replace its Tracks snapshot while retaining an old
+        // override object. Reapply when the requested Dub/Sub track is no
+        // longer actually selected, even if the prior override compares equal.
+        applyOverride = !candidateMatchesLastOverride || !candidateAlreadySelected,
         markPreferredApplied = candidateMatchesPreference,
     )
 }
@@ -369,6 +373,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
     private var lastAutomaticAudioOverride: TrackSelectionOverride? = null
+    private var reassertingPreferredAudioOverride = false
     private var preferredSubtitleOverrideApplied = false
     private var backgroundStopped = false
     private var backgroundResumeMs = 0L
@@ -1967,6 +1972,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         } else {
             null
         }
+        val audioLanguageBefore = if (trackType == C.TRACK_TYPE_AUDIO) {
+            nativeCanonicalTrackLanguage(selectedTrackLanguage(C.TRACK_TYPE_AUDIO), null)
+        } else {
+            null
+        }
         try {
             val dialog = TrackSelectionDialogBuilder(this, getString(title), player, trackType)
                 .setTheme(R.style.NativePlayerTrackDialogTheme)
@@ -1997,11 +2007,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         // picker was dismissed without changing anything.
                         applyPreferredAudioOverride(player.currentTracks)
                     } else {
-                        // Flutter owns series preferences and next-episode
-                        // preparation. Publish an explicit, session-scoped
-                        // selection immediately instead of waiting until the
-                        // native Activity eventually returns.
-                        publishPlaybackProgress(includeManualAudioSelection = true)
+                        // TrackSelectionDialog updates parameters before the
+                        // renderer exposes its new selected track. Wait a
+                        // bounded moment so Flutter receives English/Dub rather
+                        // than persisting the outgoing Japanese track.
+                        publishManualAudioSelectionWhenReady(audioLanguageBefore)
                     }
                     playerView.showController()
                     sourceButton.requestFocus()
@@ -2676,7 +2686,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun applyPreferredAudioOverride(tracks: Tracks) {
-        if (preferredAudioOverrideApplied || audioPreferenceChanged || activeTrackDialog != null) {
+        if (
+            reassertingPreferredAudioOverride ||
+            audioPreferenceChanged ||
+            activeTrackDialog != null
+        ) {
             return
         }
         val preferredTags = preferredLanguageTags(preferredAudioLanguage).toSet()
@@ -2755,14 +2769,66 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             viewerSelectionActive = audioPreferenceChanged || activeTrackDialog != null,
             candidateMatchesPreference = usePreferred,
             candidateMatchesLastOverride = override == lastAutomaticAudioOverride,
+            candidateAlreadySelected = group.isTrackSelected(track),
         )
         if (action.markPreferredApplied) preferredAudioOverrideApplied = true
         if (!action.applyOverride) return
+        val overrideStillInstalled = player.trackSelectionParameters.overrides.values
+            .any { installed -> installed == override }
+        if (
+            override == lastAutomaticAudioOverride &&
+            !group.isTrackSelected(track) &&
+            overrideStillInstalled
+        ) {
+            // Assigning an equal parameter object is a no-op. Clear the stale
+            // snapshot override for one event turn, then install it against
+            // the latest MediaTrackGroup so the requested Dub becomes active.
+            reassertingPreferredAudioOverride = true
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .build()
+            handler.post {
+                reassertingPreferredAudioOverride = false
+                if (!resultSent && !playerCoreReleased) {
+                    applyPreferredAudioOverride(player.currentTracks)
+                }
+            }
+            return
+        }
         lastAutomaticAudioOverride = override
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setOverrideForType(override)
             .build()
+    }
+
+    private fun publishManualAudioSelectionWhenReady(
+        previousLanguage: String?,
+        attempt: Int = 0,
+    ) {
+        if (resultSent || playerCoreReleased || isFinishing || isDestroyed) return
+        val selectedLanguage = nativeCanonicalTrackLanguage(
+            selectedTrackLanguage(C.TRACK_TYPE_AUDIO),
+            null,
+        )
+        if (
+            selectedLanguage != null &&
+            (selectedLanguage != previousLanguage || attempt >= MANUAL_AUDIO_PUBLISH_MAX_POLLS)
+        ) {
+            publishPlaybackProgress(includeManualAudioSelection = true)
+            return
+        }
+        if (attempt >= MANUAL_AUDIO_PUBLISH_MAX_POLLS) {
+            publishPlaybackProgress(includeManualAudioSelection = true)
+            return
+        }
+        handler.postDelayed(
+            {
+                publishManualAudioSelectionWhenReady(previousLanguage, attempt + 1)
+            },
+            MANUAL_AUDIO_PUBLISH_POLL_MS,
+        )
     }
 
     override fun onVideoDecoderInitialized(
@@ -3259,6 +3325,8 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
         private const val AUDIO_TRACK_POLL_MS = 250L
+        private const val MANUAL_AUDIO_PUBLISH_POLL_MS = 125L
+        private const val MANUAL_AUDIO_PUBLISH_MAX_POLLS = 8
         private const val AUDIO_TRACK_DEFAULT_WAIT_MS = 2_000L
         private const val AUDIO_TRACK_ADVERTISED_WAIT_MS = 5_000L
         private const val CAPTION_TRACK_WAIT_MS = 3_000L

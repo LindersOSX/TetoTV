@@ -1303,6 +1303,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         if (details.seasonYear != null) 'year': details.seasonYear.toString(),
         if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
         if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
+        if (details.titleEnglish != null) 'titleEnglish': details.titleEnglish!,
+        if (details.titleRomaji != null) 'titleRomaji': details.titleRomaji!,
+        if (details.status != null) 'status': details.status!,
+        if (details.format != null) 'format': details.format!,
+        if (details.episodes != null)
+          'episodeCount': details.episodes.toString(),
+        if (details.isAdult) 'isAdult': '1',
       };
       final completedPosition = _player.state.duration > Duration.zero
           ? _player.state.duration

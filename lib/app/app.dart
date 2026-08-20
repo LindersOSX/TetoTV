@@ -17,8 +17,9 @@ class TetoTvApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final preferences = ref.watch(settingsPreferencesProvider);
-    final appPalette = ref.watch(themeStudioControllerProvider).palette;
+    final appPalette = ref.watch(
+      themeStudioControllerProvider.select((state) => state.palette),
+    );
     final isTelevision = ref.watch(isTelevisionProvider);
     ref.watch(trackingOutboxFlushProvider);
     // Rich Presence is opt-in. Watching the controller only restores an
@@ -31,26 +32,40 @@ class TetoTvApp extends ConsumerWidget {
       title: 'TetoTV',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkFor(appPalette),
+      // A settings write must never interpolate the whole application through
+      // Material's fallback colors. Theme Studio already previews its own
+      // palette changes explicitly, so swapping the inherited theme in one
+      // frame is both clearer and prevents the brief black-text flash seen on
+      // the default dark palette.
+      themeAnimationDuration: Duration.zero,
       routerConfig: appRouter,
       builder: (context, child) {
-        final mq = MediaQuery.of(context);
-        final content = InteractionSoundScope(
-          navigationEnabled: preferences.navigationSounds,
-          clickEnabled: preferences.clickSounds,
-          child: TvShortcuts(child: child ?? const SizedBox.shrink()),
-        );
-        final scale = interfaceCanvasScale(
-          logicalWidth: mq.size.width,
-          physicalWidth: View.of(context).physicalSize.width,
-          detectedTelevision: isTelevision,
-          mode: preferences.interfaceMode,
-          userScale: preferences.interfaceScale,
-        );
+        // Keep frequently changing preferences below MaterialApp. Rebuilding
+        // this Consumer updates scaling/sounds without reconstructing
+        // ThemeData and restarting Material's inherited-theme transition.
+        return Consumer(
+          builder: (context, ref, _) {
+            final preferences = ref.watch(settingsPreferencesProvider);
+            final mq = MediaQuery.of(context);
+            final content = InteractionSoundScope(
+              navigationEnabled: preferences.navigationSounds,
+              clickEnabled: preferences.clickSounds,
+              child: TvShortcuts(child: child ?? const SizedBox.shrink()),
+            );
+            final scale = interfaceCanvasScale(
+              logicalWidth: mq.size.width,
+              physicalWidth: View.of(context).physicalSize.width,
+              detectedTelevision: isTelevision,
+              mode: preferences.interfaceMode,
+              userScale: preferences.interfaceScale,
+            );
 
-        return InterfaceScaleViewport(
-          mediaQuery: mq,
-          scale: scale,
-          child: content,
+            return InterfaceScaleViewport(
+              mediaQuery: mq,
+              scale: scale,
+              child: content,
+            );
+          },
         );
       },
     );

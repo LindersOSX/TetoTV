@@ -44,6 +44,49 @@ enum VlcDecoderMode { hardwareCopy, software }
 
 typedef _VlcMenuResult = ({String type, Object value});
 
+const vlcPlatformCommandTimeout = Duration(seconds: 12);
+const vlcInteractiveCommandTimeout = Duration(seconds: 3);
+const vlcHandoffDrainTimeout = Duration(seconds: 2);
+const vlcReleaseCommandTimeout = Duration(seconds: 5);
+
+bool vlcReleaseRequiresSoftware(String releaseName) => RegExp(
+  r'(?:hi10p|high[ ._-]?10|10[ ._-]?bit|yuv420p10)',
+).hasMatch(releaseName.toLowerCase());
+
+/// A live decoder handoff starts libVLC in software mode. Re-entering a second
+/// MediaCodec instance immediately after MPV or Media3 releases its surface is
+/// the black-screen path on several Fire TV and inexpensive Android TV SoCs.
+VlcDecoderMode initialVlcDecoderMode({
+  required Duration? inheritedPosition,
+  required String releaseName,
+}) => inheritedPosition != null || vlcReleaseRequiresSoftware(releaseName)
+    ? VlcDecoderMode.software
+    : VlcDecoderMode.hardwareCopy;
+
+/// Drains platform-channel work without letting one wedged native VLC command
+/// trap Back or an engine switch forever. Late completions are harmless because
+/// every continuation also verifies the active controller identity.
+Future<bool> waitForVlcOperationsToDrain({
+  required Iterable<Future<void>> Function() snapshot,
+  Duration timeout = vlcHandoffDrainTimeout,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (true) {
+    final operations = List<Future<void>>.of(snapshot());
+    if (operations.isEmpty) return true;
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) return false;
+    try {
+      await Future.wait(operations).timeout(remaining);
+      // Let each tracked wrapper run its finally block and remove itself from
+      // the source set before taking the next snapshot.
+      await Future<void>.delayed(Duration.zero);
+    } on TimeoutException {
+      return false;
+    }
+  }
+}
+
 HwAcc vlcHwAccForMode(VlcDecoderMode mode) => switch (mode) {
   VlcDecoderMode.hardwareCopy => HwAcc.decoding,
   VlcDecoderMode.software => HwAcc.disabled,
@@ -342,8 +385,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         ),
       );
     }
-    if (_releaseRequiresSoftware(_release)) {
-      _decoderMode = VlcDecoderMode.software;
+    _decoderMode = initialVlcDecoderMode(
+      inheritedPosition: widget.initialPosition,
+      releaseName: _release.releaseName,
+    );
+    if (widget.initialPosition != null) {
+      // Give the previous native surface one frame plus a short firmware
+      // release window before libVLC claims audio/video output.
+      await WidgetsBinding.instance.endOfFrame;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
     }
     if (!mounted || _engineHandoffInProgress) return;
     _installController(_createController(_source, _decoderMode));
@@ -353,13 +403,6 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         'External subtitles were blocked because they were unsafe or unsupported.',
       );
     }
-  }
-
-  bool _releaseRequiresSoftware(ReleaseCandidate release) {
-    final name = release.releaseName.toLowerCase();
-    return RegExp(
-      r'(?:hi10p|high[ ._-]?10|10[ ._-]?bit|yuv420p10)',
-    ).hasMatch(name);
   }
 
   VlcPlayerController _createController(String source, VlcDecoderMode mode) {
@@ -464,7 +507,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return;
     }
     try {
-      await controller.initialize();
+      await controller.initialize().timeout(vlcPlatformCommandTimeout);
     } catch (error) {
       // Let this tracked initialization operation leave the mutation set
       // before restart waits for that set to drain. Restarting inline here
@@ -849,7 +892,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           await WidgetsBinding.instance.endOfFrame;
         }
         await _waitForControllerMutations();
-        if (old.value.isInitialized) await old.stop();
+        if (old.value.isInitialized) {
+          await old.stop().timeout(vlcReleaseCommandTimeout);
+        }
         if (old.isReadyToInitialize == true) {
           await _disposeControllerAuthoritatively(old);
           _releasedControllers.add(old);
@@ -875,7 +920,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }) async {
     final guardedOperation = (() async {
       try {
-        await operation;
+        await operation.timeout(vlcPlatformCommandTimeout);
       } catch (error, stackTrace) {
         if (!propagateFailure && mounted && !_engineHandoffInProgress) {
           unawaited(
@@ -899,9 +944,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _waitForControllerMutations() async {
-    while (_controllerMutationOperations.isNotEmpty) {
-      await Future.wait(List<Future<void>>.of(_controllerMutationOperations));
-    }
+    await waitForVlcOperationsToDrain(
+      snapshot: () => _controllerMutationOperations,
+    );
   }
 
   Future<void> _persistPlayback(
@@ -1235,7 +1280,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     operation =
         (() async {
           try {
-            await controller.seekTo(target);
+            await controller
+                .seekTo(target)
+                .timeout(vlcInteractiveCommandTimeout);
             return true;
           } catch (_) {
             return false;
@@ -1262,7 +1309,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       final tracks = await waitForStableTrackSnapshot<Map<int, String>>(
         read: () async {
           if (!mounted || controller != _controller) return const {};
-          return controller.getAudioTracks();
+          return controller.getAudioTracks().timeout(
+            vlcInteractiveCommandTimeout,
+          );
         },
         signature: vlcAudioTrackSignature,
         hasTracks: (tracks) => tracks.keys.any((id) => id >= 0),
@@ -1279,7 +1328,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _showMessage('This file has no selectable embedded audio tracks');
         return;
       }
-      final current = await controller.getAudioTrack() ?? ids.first;
+      final current =
+          await controller.getAudioTrack().timeout(
+            vlcInteractiveCommandTimeout,
+          ) ??
+          ids.first;
       if (!mounted) return;
       _controlsTimer?.cancel();
       final selected = await showPlayerTrackPicker<int>(
@@ -1309,7 +1362,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             .toList(growable: false),
       );
       if (!mounted || selected == null) return;
-      await controller.setAudioTrack(selected);
+      await controller
+          .setAudioTrack(selected)
+          .timeout(vlcInteractiveCommandTimeout);
       _audioPreferenceApplied = true;
       await _saveTrackPreferences(
         audioLabel: tracks[selected],
@@ -1349,7 +1404,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       var tracks = await waitForStableTrackSnapshot<Map<int, String>>(
         read: () async {
           if (!mounted || controller != _controller) return const {};
-          return controller.getSpuTracks();
+          return controller.getSpuTracks().timeout(
+            vlcInteractiveCommandTimeout,
+          );
         },
         signature: vlcSubtitleTrackSignature,
         hasTracks: (tracks) => tracks.keys.any((id) => id >= 0),
@@ -1359,7 +1416,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             : const Duration(seconds: 3),
       );
       if (!mounted || controller != _controller) return;
-      final current = await controller.getSpuTrack() ?? -1;
+      final current =
+          await controller.getSpuTrack().timeout(
+            vlcInteractiveCommandTimeout,
+          ) ??
+          -1;
       if (current >= 0 && !tracks.containsKey(current)) {
         tracks = {...tracks, current: 'Selected external subtitles'};
       }
@@ -1392,7 +1453,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             .toList(growable: false),
       );
       if (!mounted || selected == null) return;
-      await controller.setSpuTrack(selected);
+      await controller
+          .setSpuTrack(selected)
+          .timeout(vlcInteractiveCommandTimeout);
       _subtitlePreferenceApplied = true;
       await _saveTrackPreferences(
         subtitleLabel: selected == -1 ? null : tracks[selected],
@@ -1417,7 +1480,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     const labels = ['Picture: Original', 'Picture: 16:9', 'Picture: 4:3'];
     _videoAspectIndex = (_videoAspectIndex + 1) % values.length;
     try {
-      await controller.setVideoAspectRatio(values[_videoAspectIndex]);
+      await controller
+          .setVideoAspectRatio(values[_videoAspectIndex])
+          .timeout(vlcInteractiveCommandTimeout);
       _showMessage(labels[_videoAspectIndex]);
     } catch (_) {
       _showMessage('This device cannot change picture mode');
@@ -1504,7 +1569,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _queuedSeekTarget = null;
         final activeController = _controller;
         if (activeController == null) return;
-        await activeController.seekTo(target);
+        await activeController
+            .seekTo(target)
+            .timeout(vlcInteractiveCommandTimeout);
       }
     } catch (_) {
       _queuedSeekTarget = null;
@@ -1521,7 +1588,13 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
 
   Future<void> _waitForSeekDrain() async {
     final drain = _seekDrainCompleter;
-    if (drain != null) await drain.future;
+    if (drain != null) {
+      try {
+        await drain.future.timeout(vlcHandoffDrainTimeout);
+      } on TimeoutException {
+        _queuedSeekTarget = null;
+      }
+    }
   }
 
   Duration _effectiveHandoffPosition() {
@@ -1607,7 +1680,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
               _audioPreference,
             ),
           );
-          _decoderMode = _releaseRequiresSoftware(candidate)
+          _decoderMode = vlcReleaseRequiresSoftware(candidate.releaseName)
               ? VlcDecoderMode.software
               : VlcDecoderMode.hardwareCopy;
           await _restart(
@@ -1691,7 +1764,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           _currentStream = option.stream;
           _release = option.release;
           _source = option.stream.uri.toString();
-          _decoderMode = _releaseRequiresSoftware(option.release)
+          _decoderMode = vlcReleaseRequiresSoftware(option.release.releaseName)
               ? VlcDecoderMode.software
               : VlcDecoderMode.hardwareCopy;
           await _restart(
@@ -2075,6 +2148,14 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           if (details.seasonYear != null) 'year': details.seasonYear.toString(),
           if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
           if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
+          if (details.titleEnglish != null)
+            'titleEnglish': details.titleEnglish!,
+          if (details.titleRomaji != null) 'titleRomaji': details.titleRomaji!,
+          if (details.status != null) 'status': details.status!,
+          if (details.format != null) 'format': details.format!,
+          if (details.episodes != null)
+            'episodeCount': details.episodes.toString(),
+          if (details.isAdult) 'isAdult': '1',
         },
       ).toString();
       final controller = _controller;
@@ -2111,9 +2192,24 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   void _playOrPause() {
     final controller = _controller;
     if (controller == null) return;
-    unawaited(
-      controller.value.isPlaying ? controller.pause() : controller.play(),
-    );
+    if (!controller.value.isInitialized) {
+      _showMessage('VLC is still opening the stream');
+      return;
+    }
+    unawaited(_runPlaybackToggle(controller));
+  }
+
+  Future<void> _runPlaybackToggle(VlcPlayerController controller) async {
+    try {
+      final operation = controller.value.isPlaying
+          ? controller.pause()
+          : controller.play();
+      await operation.timeout(vlcInteractiveCommandTimeout);
+    } catch (_) {
+      if (_canApplyTracksTo(controller)) {
+        _showMessage('VLC did not respond. You can still press Back to exit.');
+      }
+    }
   }
 
   Stream<WebStreamSearchProgress> _webSourceSearch({bool refresh = false}) =>
@@ -2244,7 +2340,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             candidate.stream.uri != previousStream.uri,
       ),
     );
-    _decoderMode = _releaseRequiresSoftware(option.release)
+    _decoderMode = vlcReleaseRequiresSoftware(option.release.releaseName)
         ? VlcDecoderMode.software
         : VlcDecoderMode.hardwareCopy;
     try {
@@ -2361,7 +2457,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         if (!_releasedControllers.contains(controller)) {
           if (controller.value.isInitialized) {
             try {
-              await controller.stop();
+              await controller.stop().timeout(vlcReleaseCommandTimeout);
             } catch (_) {
               // The render gate may already have released the native view;
               // controller.dispose() below still clears the platform registry.
@@ -2408,14 +2504,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     final viewId = controller.viewId;
     if (_disposeAttemptedControllers.add(controller)) {
       try {
-        await controller.dispose();
+        await controller.dispose().timeout(vlcReleaseCommandTimeout);
         return;
       } catch (error, stackTrace) {
         if (viewId == null) {
           Error.throwWithStackTrace(error, stackTrace);
         }
         try {
-          await VlcPlayerPlatform.instance.dispose(viewId);
+          await VlcPlayerPlatform.instance
+              .dispose(viewId)
+              .timeout(vlcReleaseCommandTimeout);
           return;
         } catch (_) {
           Error.throwWithStackTrace(error, stackTrace);
@@ -2425,7 +2523,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     if (viewId == null) {
       throw StateError('VLC player release could not be retried safely.');
     }
-    await VlcPlayerPlatform.instance.dispose(viewId);
+    await VlcPlayerPlatform.instance
+        .dispose(viewId)
+        .timeout(vlcReleaseCommandTimeout);
   }
 
   Future<void> _handoffTo(PreferredPlayer selected) async {
@@ -2726,7 +2826,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         // Do not let a failed native pause strand Back behind the confirmation
         // guard. The user must still be able to release and exit a bad decoder.
         try {
-          await controller?.pause();
+          final pause = controller?.pause();
+          if (pause != null) {
+            await pause.timeout(vlcInteractiveCommandTimeout);
+          }
         } catch (_) {}
       }
       if (!mounted) return;
@@ -2748,7 +2851,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     } else {
       if (wasPlaying) {
         try {
-          await controller?.play();
+          final play = controller?.play();
+          if (play != null) {
+            await play.timeout(vlcInteractiveCommandTimeout);
+          }
         } catch (_) {
           // Keep the HUD usable if the decoder cannot resume after cancellation.
         }
@@ -2844,15 +2950,19 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     // never receives onPlatformViewCreated and stays black.
                     key: ObjectKey(controller),
                     child: Center(
-                      child: VlcPlayer(
-                        controller: controller,
-                        aspectRatio: 16 / 9,
-                        // flutter_vlc_player owns a TextureRegistry surface. Its
-                        // AndroidView/virtual-display path keeps that surface alive
-                        // across the controller's asynchronous initialization;
-                        // hybrid composition abandons it on several TV runtimes.
-                        virtualDisplay: true,
-                        placeholder: const ColoredBox(color: Colors.black),
+                      child: ExcludeFocus(
+                        // AndroidView must never take D-pad/Back ownership from
+                        // the Flutter player route on TV remotes.
+                        child: VlcPlayer(
+                          controller: controller,
+                          aspectRatio: 16 / 9,
+                          // flutter_vlc_player owns a TextureRegistry surface. Its
+                          // AndroidView/virtual-display path keeps that surface alive
+                          // across the controller's asynchronous initialization;
+                          // hybrid composition abandons it on several TV runtimes.
+                          virtualDisplay: true,
+                          placeholder: const ColoredBox(color: Colors.black),
+                        ),
                       ),
                     ),
                   ),

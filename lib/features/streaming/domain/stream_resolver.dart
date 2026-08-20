@@ -8,6 +8,12 @@ class EpisodeReference {
     this.malMediaId,
     this.year,
     this.alternativeTitles = const [],
+    this.titleEnglish,
+    this.titleRomaji,
+    this.status,
+    this.format,
+    this.episodeCount,
+    this.isAdult = false,
     this.coverImageUrl,
     this.startFromBeginning = false,
     this.autoPlay = false,
@@ -19,6 +25,12 @@ class EpisodeReference {
   final String title;
   final int episode;
   final List<String> alternativeTitles;
+  final String? titleEnglish;
+  final String? titleRomaji;
+  final String? status;
+  final String? format;
+  final int? episodeCount;
+  final bool isAdult;
   final String? coverImageUrl;
   final bool startFromBeginning;
   final bool autoPlay;

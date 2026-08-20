@@ -36,15 +36,17 @@ the same origin in TetoTV's on-screen QR setup, or set it as
 `AUTH_BROKER_BASE_URL` in the Flutter JSON configuration before building. Do
 not copy either provider client secret into Flutter configuration.
 
-The current production app deliberately uses two deployments of this broker:
-`https://tetotv-auth.onrender.com` remains the AniList/MyAnimeList OAuth origin,
-while `https://tetotv-updates-lindows.onrender.com` handles source pairing,
-and optional crash-report relay. App updates do not pass through either
-deployment. Keep tracker callback registrations pointed at the auth origin.
+The current production app uses this deployment only for AniList/MyAnimeList
+OAuth at `https://tetotv-auth.onrender.com`. Phone-assisted source pairing,
+anonymous crash ingestion, and explicit diagnostic sharing are served by the
+Wispbyte Discord-bot process at `https://tetotv-bot.wisp.uno`. App updates go
+directly to public GitHub Releases. Keep tracker callback registrations pointed
+at the auth origin until both provider developer consoles and the Wispbyte host
+have been configured for the replacement OAuth callbacks.
 
-## Anonymous crash-report relay
+## Legacy anonymous crash-report relay
 
-The companion-services deployment can accept the app's optional, anonymous crash
+Older deployments can accept the app's optional, anonymous crash
 reports and relay them to the separately hosted Discord bot. Configure these
 server-only values on that deployment:
 
@@ -81,9 +83,11 @@ The `/pair` page supports both QR deep links and manual TV-code entry.
 MyAnimeList refresh tokens rotate through the broker and remain encrypted in
 the Android Keystore between refreshes.
 
-## Companion source entry
+## Legacy-compatible companion source entry
 
-TetoTV can also create a ten-minute code for `/source-pair`, letting a user
+This broker retains the version 2 protocol for backward compatibility. Current
+TetoTV builds create the ten-minute `/source-pair` code on
+`https://tetotv-bot.wisp.uno`, letting a user
 paste long Marketplace repository and Torrent source manifest URLs on a phone or PC.
 The browser receives only the human code. The 256-bit device code stays on the
 TV, and the first valid browser submission wins. An authenticated device poll
@@ -124,8 +128,9 @@ TV acknowledges persistence or the session expires. Authenticated redelivery
 is allowed after a network interruption. The TV independently repeats HTTPS,
 DNS, private-address, type, and capacity validation before persisting anything.
 
-Source pairings and rate limits are process-local memory. Keep a Render deploy
-at one instance, or move these maps to an atomic shared TTL store before
+Source pairings and rate limits are process-local memory. Keep either legacy
+broker or the canonical Wispbyte bot at one instance, or move these maps to an
+atomic shared TTL store before
 horizontal scaling; otherwise a create, browser submit, and device poll may
 reach different instances. Request sizes, URL lengths, live sessions, and
 per-address create/submit/poll rates are bounded in `server.mjs`.

@@ -945,6 +945,8 @@ void main() {
     expect(find.text('Streaming'), findsOneWidget);
     expect(find.text('Appearance'), findsNothing);
     expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    expect(find.text('10-foot layout'), findsNothing);
+    expect(find.text('Denser handheld layout'), findsNothing);
     final container = ProviderScope.containerOf(
       tester.element(find.byType(AccountsScreen)),
     );
@@ -1017,8 +1019,8 @@ void main() {
       );
       expect(container.read(settingsPreferencesProvider).topNavigationOrder, [
         TopNavigationDestination.home,
-        TopNavigationDestination.search,
         TopNavigationDestination.myList,
+        TopNavigationDestination.search,
         TopNavigationDestination.discover,
         TopNavigationDestination.calendar,
         TopNavigationDestination.settings,
@@ -1028,7 +1030,7 @@ void main() {
         const ValueKey('settings-top-navigation-toggle-home'),
       );
       await tester.ensureVisible(homeToggle);
-      await tester.tap(homeToggle);
+      tester.widget<TvFocusable>(homeToggle).onPressed();
       await tester.pumpAndSettle();
       expect(container.read(settingsPreferencesProvider).showHome, isFalse);
 
@@ -1036,7 +1038,7 @@ void main() {
         const ValueKey('settings-top-navigation-toggle-settings'),
       );
       await tester.ensureVisible(settingsToggle);
-      await tester.tap(settingsToggle);
+      tester.widget<TvFocusable>(settingsToggle).onPressed();
       await tester.pump();
       expect(container.read(settingsPreferencesProvider).showSettings, isTrue);
       expect(

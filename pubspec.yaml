@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.9+410001
+version: 2.0.10+410001
 
 environment:
   sdk: ^3.12.2
@@ -15,7 +15,8 @@ dependencies:
   dio: ^5.11.0
   flutter_riverpod: ^2.6.1
   flutter_secure_storage: ^10.3.1
-  flutter_vlc_player: 7.4.4
+  flutter_vlc_player:
+    path: third_party/flutter_vlc_player
   flutter_vlc_player_platform_interface: ^2.0.5
   go_router: ^17.3.0
   media_kit: ^1.2.6
@@ -34,10 +35,10 @@ dependencies:
   flutter_js:
     path: third_party/flutter_js
 
-# flutter_vlc_player 7.4.4 was published with Android Pigeon channels from its
-# release tag but pub.dev's platform-interface archive contains the older
-# channel names. Pin the matching official tag source so Dart and Android use
-# the same generated protocol.
+# The vendored flutter_vlc_player 7.4.4 package was published with Android
+# Pigeon channels from its release tag, but pub.dev's platform-interface
+# archive contains the older channel names. Pin the matching official tag
+# source so Dart and Android use the same generated protocol.
 dependency_overrides:
   flutter_vlc_player_platform_interface:
     git:

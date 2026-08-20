@@ -667,6 +667,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       year: anime.seasonYear,
       title: anime.title,
       alternativeTitles: alternativeTitles.toList(growable: false),
+      titleEnglish: anime.titleEnglish,
+      titleRomaji: anime.titleRomaji,
+      status: anime.status,
+      format: anime.format,
+      episodeCount: anime.episodes,
+      isAdult: anime.isAdult,
       coverImageUrl: anime.coverImageUrl,
       episode: episode,
     );
@@ -1519,6 +1525,12 @@ void _openEpisode(
         if (restart) 'restart': '1',
         if (alternativeTitles.isNotEmpty)
           'synonyms': alternativeTitles.join('|'),
+        if (anime.titleEnglish != null) 'titleEnglish': anime.titleEnglish!,
+        if (anime.titleRomaji != null) 'titleRomaji': anime.titleRomaji!,
+        if (anime.status != null) 'status': anime.status!,
+        if (anime.format != null) 'format': anime.format!,
+        if (anime.episodes != null) 'episodeCount': '${anime.episodes}',
+        if (anime.isAdult) 'isAdult': '1',
       },
     ).toString(),
   );

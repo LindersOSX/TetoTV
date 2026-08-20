@@ -119,7 +119,14 @@ void main() {
         controller.state.settingsEntryPlacement,
         SettingsEntryPlacement.topNavigation,
       );
-      expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
+      expect(controller.state.topNavigationOrder, const [
+        TopNavigationDestination.home,
+        TopNavigationDestination.search,
+        TopNavigationDestination.myList,
+        TopNavigationDestination.discover,
+        TopNavigationDestination.calendar,
+        TopNavigationDestination.settings,
+      ]);
       expect(controller.state.showMyList, isTrue);
       expect(controller.state.showDiscover, isTrue);
       expect(controller.state.showCalendar, isTrue);
@@ -141,6 +148,29 @@ void main() {
       );
     },
   );
+
+  test('stored custom top navigation order survives the new default', () async {
+    const customOrder = <TopNavigationDestination>[
+      TopNavigationDestination.calendar,
+      TopNavigationDestination.settings,
+      TopNavigationDestination.discover,
+      TopNavigationDestination.myList,
+      TopNavigationDestination.search,
+      TopNavigationDestination.home,
+    ];
+    FlutterSecureStorage.setMockInitialValues({
+      'navigation_top_bar_order': customOrder
+          .map((destination) => destination.name)
+          .join(','),
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(controller.state.topNavigationOrder, customOrder);
+  });
 
   test(
     'completed legacy installs without a keyboard choice keep device input',

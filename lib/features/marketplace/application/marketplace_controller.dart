@@ -59,7 +59,7 @@ class MarketplaceState {
 
   InstalledStreamingAddon? installedById(String id) {
     for (final addon in installed) {
-      if (addon.manifest.id == id) return addon;
+      if (marketplaceAddonIdsMatch(addon.manifest.id, id)) return addon;
     }
     return null;
   }
@@ -143,18 +143,23 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     for (final result in results) {
       if (result.error != null) errors[result.repository.url] = result.error!;
       for (final addon in result.addons) {
-        combined.putIfAbsent(addon.id, () => addon);
+        combined.putIfAbsent(
+          marketplaceAddonIdentityKey(addon.id),
+          () => addon,
+        );
       }
     }
     var catalog = combined.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     final installedIds = state.installed
-        .map((addon) => addon.manifest.id)
+        .map((addon) => marketplaceAddonIdentityKey(addon.manifest.id))
         .toSet();
     if (installedIds.isNotEmpty) {
       catalog = await Future.wait(
         catalog.map((addon) async {
-          if (!installedIds.contains(addon.id)) return addon;
+          if (!installedIds.contains(marketplaceAddonIdentityKey(addon.id))) {
+            return addon;
+          }
           try {
             return await _client.manifest(addon);
           } catch (_) {
@@ -261,7 +266,9 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
       await _store.install(installed);
       state = state.copyWith(
         installed: [
-          ...state.installed.where((item) => item.manifest.id != addon.id),
+          ...state.installed.where(
+            (item) => !marketplaceAddonIdsMatch(item.manifest.id, addon.id),
+          ),
           installed,
         ]..sort((a, b) => a.manifest.name.compareTo(b.manifest.name)),
         clearBusyAddon: true,
@@ -273,15 +280,19 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }
 
   Future<void> setAddonEnabled(String id, bool enabled) async {
-    await _store.setEnabled(id, enabled);
-    if (enabled) await _store.clearProviderHealth(id);
+    final storedId = state.installedById(id)?.manifest.id ?? id;
+    await _store.setEnabled(storedId, enabled);
+    if (enabled) await _store.clearProviderHealth(storedId);
     state = state.copyWith(
       installed: [
         for (final item in state.installed)
-          if (item.manifest.id == id) item.copyWith(enabled: enabled) else item,
+          if (marketplaceAddonIdsMatch(item.manifest.id, id))
+            item.copyWith(enabled: enabled)
+          else
+            item,
       ],
       providerHealth: enabled
-          ? ({...state.providerHealth}..remove(id))
+          ? ({...state.providerHealth}..remove(storedId))
           : state.providerHealth,
     );
   }
@@ -297,8 +308,14 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         const EpisodeReference(
           anilistMediaId: 5114,
           malMediaId: 5114,
-          title: 'Fullmetal Alchemist Brotherhood',
+          title: 'Fullmetal Alchemist: Brotherhood',
+          titleEnglish: 'Fullmetal Alchemist: Brotherhood',
+          titleRomaji: 'Hagane no Renkinjutsushi: Fullmetal Alchemist',
           alternativeTitles: ['Hagane no Renkinjutsushi Fullmetal Alchemist'],
+          year: 2009,
+          status: 'FINISHED',
+          format: 'TV',
+          episodeCount: 64,
           episode: 1,
         ),
       );
@@ -319,7 +336,9 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         state = state.copyWith(
           providerMessages: {
             ...state.providerMessages,
-            id: 'Runtime ready - the test title is not available here',
+            id:
+                'Runtime loaded • playback not verified because the built-in '
+                'test title is unavailable here',
           },
           clearBusyAddon: true,
         );
@@ -345,11 +364,12 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }
 
   Future<void> uninstall(String id) async {
-    await _store.uninstall(id);
-    await _store.clearProviderHealth(id);
+    final storedId = state.installedById(id)?.manifest.id ?? id;
+    await _store.uninstall(storedId);
+    await _store.clearProviderHealth(storedId);
     state = state.copyWith(
       installed: state.installed
-          .where((item) => item.manifest.id != id)
+          .where((item) => !marketplaceAddonIdsMatch(item.manifest.id, id))
           .toList(),
     );
   }
@@ -362,7 +382,7 @@ bool addonProvenanceMatches(
   InstalledStreamingAddon installed,
   MarketplaceAddon candidate,
 ) =>
-    installed.manifest.id == candidate.id &&
+    marketplaceAddonIdsMatch(installed.manifest.id, candidate.id) &&
     installed.manifest.repositoryUrl == candidate.repositoryUrl;
 
 bool _installedAddonNeedsRefresh(
@@ -409,9 +429,5 @@ int _compareVersions(String left, String right) {
 }
 
 String _message(Object error) {
-  final text = error.toString().replaceFirst(
-    RegExp(r'^[A-Za-z]+Exception:\s*'),
-    '',
-  );
-  return text.length > 180 ? '${text.substring(0, 180)}…' : text;
+  return seanimeProviderFailureMessage(error);
 }

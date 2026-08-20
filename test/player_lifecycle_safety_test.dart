@@ -373,7 +373,7 @@ void main() {
     );
     _expectInOrder(confirmExit, const [
       '_controlsTimer?.cancel()',
-      'await controller?.pause()',
+      'await pause.timeout(vlcInteractiveCommandTimeout)',
       'exit = await showPlayerExitConfirmation(context)',
       '_confirmingExit = false',
       'final position = _effectiveHandoffPosition()',

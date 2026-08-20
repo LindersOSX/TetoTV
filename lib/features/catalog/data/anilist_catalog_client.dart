@@ -42,6 +42,7 @@ class AniListCatalogClient {
             seasonYear
             duration
             synonyms
+            isAdult
             nextAiringEpisode { episode }
           }
         }
@@ -88,6 +89,7 @@ class AniListCatalogClient {
             seasonYear
             duration
             synonyms
+            isAdult
             nextAiringEpisode { episode }
           }
         }
@@ -125,6 +127,7 @@ class AniListCatalogClient {
             seasonYear
             duration
             synonyms
+            isAdult
             nextAiringEpisode { episode }
           }
         }
@@ -166,6 +169,7 @@ class AniListCatalogClient {
           seasonYear
           duration
           synonyms
+          isAdult
           nextAiringEpisode { episode }
           studios(isMain: true) { nodes { id name } }
           staff(perPage: 10, sort: RELEVANCE) {
@@ -200,6 +204,7 @@ class AniListCatalogClient {
                 seasonYear
                 duration
                 synonyms
+                isAdult
                 nextAiringEpisode { episode }
               }
             }
@@ -238,7 +243,7 @@ class AniListCatalogClient {
             id idMal title { userPreferred english romaji }
             description(asHtml: false) episodes averageScore genres
             coverImage { extraLarge } bannerImage format status season
-            seasonYear duration synonyms nextAiringEpisode { episode }
+            seasonYear duration synonyms isAdult nextAiringEpisode { episode }
           }
         }
       }
@@ -319,7 +324,7 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
             }
           }
         }
@@ -366,7 +371,7 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
             }
           }
         }
@@ -390,7 +395,7 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
             }
           }
         }
@@ -556,6 +561,7 @@ class AniListCatalogClient {
       seasonYear: item['seasonYear'] as int?,
       durationMinutes: item['duration'] as int?,
       nextAiringEpisode: airing?['episode'] as int?,
+      isAdult: item['isAdult'] == true,
       relatedAnime: _mapRelations(item['relations']),
       studios: _mapStudios(item['studios']),
       staff: _mapStaff(item['staff']),

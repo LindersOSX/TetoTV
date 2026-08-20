@@ -18,14 +18,14 @@ class WebPlaybackProxyLimits {
   const WebPlaybackProxyLimits({
     this.maximumConcurrentRequests = 6,
     this.maximumSessionRequests = 4,
-    this.maximumTotalSessionRequests = 4096,
-    this.maximumManifestBytes = 256 * 1024,
+    this.maximumTotalSessionRequests = 16 * 1024,
+    this.maximumManifestBytes = 1024 * 1024,
     this.maximumSubtitleBytes = 256 * 1024,
     this.maximumKeyBytes = 1024 * 1024,
     this.maximumSegmentBytes = 256 * 1024 * 1024,
     this.maximumProgressiveBytes = 32 * 1024 * 1024 * 1024,
-    this.maximumManifestReferences = 512,
-    this.maximumNestedManifests = 24,
+    this.maximumManifestReferences = 8 * 1024,
+    this.maximumNestedManifests = 32,
     this.maximumManifestDepth = 4,
     this.maximumRedirects = 4,
     this.preparationTimeout = const Duration(seconds: 20),
@@ -331,12 +331,14 @@ class WebPlaybackProxy {
       switch (kind) {
         case _RootResourceKind.hls:
           final budget = _ManifestBudget(limits);
+          state.manifestBudget = budget;
           playback = await _prepareHlsManifest(
             state,
             root,
             budget: budget,
             preparation: preparation,
             depth: 0,
+            ancestors: const {},
           );
         case _RootResourceKind.progressive:
           playback = _registerUpstreamResource(
@@ -523,13 +525,18 @@ class WebPlaybackProxy {
     required _ManifestBudget budget,
     required _PreparationBudget preparation,
     required int depth,
+    required Set<Uri> ancestors,
+    String? tokenOverride,
   }) async {
     preparation.check();
     if (depth > limits.maximumManifestDepth) {
       throw const FormatException('The HLS nesting limit was exceeded.');
     }
+    if (ancestors.contains(manifest.uri)) {
+      throw const FormatException('Recursive HLS manifests are not allowed.');
+    }
     budget.addManifest(manifest.uri);
-    final token = _opaqueToken();
+    final token = tokenOverride ?? _opaqueToken();
     if (!state.activeManifestUris.add(manifest.uri)) {
       throw const FormatException('Recursive HLS manifests are not allowed.');
     }
@@ -624,6 +631,7 @@ class WebPlaybackProxy {
             depth: depth,
             nestedManifest: nestedManifest,
             keyResource: tag == '#EXT-X-KEY' || tag == '#EXT-X-SESSION-KEY',
+            ancestors: ancestors,
           );
           rewritten.add(
             original.replaceRange(uriMatch.start, uriMatch.end, 'URI="$local"'),
@@ -641,6 +649,7 @@ class WebPlaybackProxy {
           depth: depth,
           nestedManifest: nextLineIsManifest,
           keyResource: false,
+          ancestors: ancestors,
         );
         rewritten.add(local.toString());
         mediaReferences++;
@@ -679,47 +688,31 @@ class WebPlaybackProxy {
     required int depth,
     required bool nestedManifest,
     required bool keyResource,
+    required Set<Uri> ancestors,
   }) async {
     preparation.check();
     budget.addReference();
     final target = _resolvePublicHttps(parent.uri, rawReference);
-    await preparation.wait(upstream.validateTarget(target));
     final crossOrigin = !_sameOrigin(parent.uri, target);
     final scopedHeaders = crossOrigin
         ? sanitizeAddonHeaders(parent.requestHeaders, stripCredentials: true)
         : parent.requestHeaders;
     if (nestedManifest || target.path.toLowerCase().endsWith('.m3u8')) {
-      final nestedResponse = await preparation.wait(
-        upstream.fetch(target, headers: scopedHeaders),
-      );
-      try {
-        _requireSuccess(nestedResponse.statusCode);
-        final nested = await preparation.wait(
-          _readLoadedBytes(
-            nestedResponse,
-            limits.maximumManifestBytes,
-            allowTruncation: false,
-          ),
-        );
-        preparation.check();
-        if (!nested.text.trimLeft().startsWith('#EXTM3U')) {
-          throw const FormatException(
-            'A nested HLS reference did not return HLS.',
-          );
-        }
-        final resource = await preparation.wait(
-          _prepareHlsManifest(
-            state,
-            nested,
-            budget: budget,
-            preparation: preparation,
-            depth: depth + 1,
-          ),
-        );
-        return _resourceUri(state.id, resource.token);
-      } finally {
-        await nestedResponse.close();
+      final nextAncestors = {...ancestors, parent.uri};
+      if (nextAncestors.contains(target)) {
+        throw const FormatException('Recursive HLS manifests are not allowed.');
       }
+      budget.addManifest(target);
+      final resource = _ProxyResource.deferredManifest(
+        token: _opaqueToken(),
+        uri: target,
+        headers: Map.unmodifiable(sanitizeAddonHeaders(scopedHeaders)),
+        depth: depth + 1,
+        ancestors: Set.unmodifiable(nextAncestors),
+        maximumBytes: limits.maximumManifestBytes,
+      );
+      state.resources[resource.token] = resource;
+      return _resourceUri(state.id, resource.token);
     }
     preparation.check();
     final resource = _registerUpstreamResource(
@@ -872,7 +865,13 @@ class WebPlaybackProxy {
     session.totalRequests++;
     session.lastAccessedAt = _clock();
     try {
-      if (resource.cachedBytes != null) {
+      if (resource.isDeferredManifest) {
+        final materialized = await _materializeDeferredManifest(
+          session,
+          resource,
+        );
+        await _serveCached(request, materialized);
+      } else if (resource.cachedBytes != null) {
         await _serveCached(request, resource);
       } else {
         await _serveUpstream(request, session, resource);
@@ -889,6 +888,75 @@ class WebPlaybackProxy {
         _sessions.remove(session.id);
         session.close();
       }
+    }
+  }
+
+  Future<_ProxyResource> _materializeDeferredManifest(
+    _ProxySessionState session,
+    _ProxyResource resource,
+  ) {
+    final active = resource.manifestPreparation;
+    if (active != null) return active;
+    late final Future<_ProxyResource> operation;
+    operation = _loadDeferredManifest(session, resource).whenComplete(() {
+      if (identical(resource.manifestPreparation, operation)) {
+        resource.manifestPreparation = null;
+      }
+    });
+    resource.manifestPreparation = operation;
+    return operation;
+  }
+
+  Future<_ProxyResource> _loadDeferredManifest(
+    _ProxySessionState session,
+    _ProxyResource resource,
+  ) async {
+    final uri = resource.upstreamUri;
+    final depth = resource.manifestDepth;
+    final budget = session.manifestBudget;
+    if (uri == null || depth == null || budget == null || session.closed) {
+      throw const FormatException('The HLS session is no longer available.');
+    }
+    final preparation = _PreparationBudget(
+      clock: _clock,
+      deadline: _clock().add(limits.preparationTimeout),
+    );
+    final response = await preparation.wait(
+      upstream.fetch(uri, headers: resource.headers),
+    );
+    session.activeUpstreams.add(response);
+    try {
+      _requireSuccess(response.statusCode);
+      final nested = await preparation.wait(
+        _readLoadedBytes(
+          response,
+          limits.maximumManifestBytes,
+          allowTruncation: false,
+        ),
+      );
+      if (!nested.text.trimLeft().startsWith('#EXTM3U')) {
+        throw const FormatException(
+          'A nested HLS reference did not return HLS.',
+        );
+      }
+      final materialized = await preparation.wait(
+        _prepareHlsManifest(
+          session,
+          nested,
+          budget: budget,
+          preparation: preparation,
+          depth: depth,
+          ancestors: resource.manifestAncestors,
+          tokenOverride: resource.token,
+        ),
+      );
+      if (session.closed) {
+        throw const FormatException('The HLS session is no longer available.');
+      }
+      return materialized;
+    } finally {
+      session.activeUpstreams.remove(response);
+      await response.close();
     }
   }
 
@@ -1103,13 +1171,15 @@ class _LoadedBytes {
 }
 
 class _ProxyResource {
-  const _ProxyResource._({
+  _ProxyResource._({
     required this.token,
     required this.contentType,
     required this.maximumBytes,
     this.cachedBytes,
     this.upstreamUri,
     this.headers = const {},
+    this.manifestDepth,
+    this.manifestAncestors = const {},
   });
 
   factory _ProxyResource.cached({
@@ -1137,12 +1207,34 @@ class _ProxyResource {
     maximumBytes: maximumBytes,
   );
 
+  factory _ProxyResource.deferredManifest({
+    required String token,
+    required Uri uri,
+    required Map<String, String> headers,
+    required int depth,
+    required Set<Uri> ancestors,
+    required int maximumBytes,
+  }) => _ProxyResource._(
+    token: token,
+    upstreamUri: uri,
+    headers: headers,
+    contentType: 'application/vnd.apple.mpegurl',
+    maximumBytes: maximumBytes,
+    manifestDepth: depth,
+    manifestAncestors: ancestors,
+  );
+
   final String token;
   final Uri? upstreamUri;
   final Map<String, String> headers;
   final List<int>? cachedBytes;
   final String contentType;
   final int maximumBytes;
+  final int? manifestDepth;
+  final Set<Uri> manifestAncestors;
+  Future<_ProxyResource>? manifestPreparation;
+
+  bool get isDeferredManifest => manifestDepth != null && cachedBytes == null;
 }
 
 class _ProxySessionState {
@@ -1159,6 +1251,7 @@ class _ProxySessionState {
   final Map<String, String> upstreamResourceTokens = {};
   final Set<Uri> activeManifestUris = {};
   final Set<WebProxyUpstreamResponse> activeUpstreams = {};
+  _ManifestBudget? manifestBudget;
   int activeRequests = 0;
   int totalRequests = 0;
   int retainCount = 1;

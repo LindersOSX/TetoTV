@@ -956,6 +956,12 @@ EpisodeReference _episodeReference(AnimeSummary details, int episode) {
     title: details.title,
     episode: episode,
     alternativeTitles: alternatives.toList(growable: false),
+    titleEnglish: details.titleEnglish,
+    titleRomaji: details.titleRomaji,
+    status: details.status,
+    format: details.format,
+    episodeCount: details.episodes,
+    isAdult: details.isAdult,
     coverImageUrl: details.coverImageUrl,
     autoPlay: true,
   );

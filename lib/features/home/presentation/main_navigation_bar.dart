@@ -1,15 +1,448 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 enum MainNavigationDestination { home, myList, discover, calendar }
+
+/// Home's fixed TV rail. The existing [MainNavigationBar] remains available
+/// to compact layouts and the other top-level screens, while Home can match the
+/// reference's icon-first 10-foot layout without changing those screens.
+class HomeSideNavigation extends ConsumerStatefulWidget {
+  const HomeSideNavigation({
+    required this.preferences,
+    required this.onExitRight,
+    this.activeDestination = TopNavigationDestination.home,
+    this.activeFocusNode,
+    this.onActivePressed,
+    this.autofocusActive = false,
+    this.onHomePressed,
+    this.homeFocusNode,
+    this.width = 104,
+    super.key,
+  });
+
+  final SettingsPreferences preferences;
+  final VoidCallback onExitRight;
+  final TopNavigationDestination activeDestination;
+  final FocusNode? activeFocusNode;
+  final VoidCallback? onActivePressed;
+  final bool autofocusActive;
+  final VoidCallback? onHomePressed;
+  final FocusNode? homeFocusNode;
+  final double width;
+
+  @override
+  ConsumerState<HomeSideNavigation> createState() => _HomeSideNavigationState();
+}
+
+class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
+  final _repeatGate = TvDirectionalRepeatGate();
+  bool _focusRecoveryScheduled = false;
+  final _fallbackNodes = <TopNavigationDestination, FocusNode>{
+    for (final destination in TopNavigationDestination.values)
+      destination: FocusNode(debugLabel: 'home.navigation.${destination.name}'),
+  };
+  List<TopNavigationDestination> _visibleDestinations = const [];
+  TopNavigationDestination? _activeFocusDestination;
+
+  TopNavigationDestination? _nearestVisibleDestination() {
+    if (_visibleDestinations.isEmpty) return null;
+    final order = widget.preferences.topNavigationOrder;
+    final activeIndex = order.indexOf(widget.activeDestination);
+    if (activeIndex < 0) return _visibleDestinations.first;
+    for (var distance = 1; distance < order.length; distance++) {
+      final after = activeIndex + distance;
+      if (after < order.length && _visibleDestinations.contains(order[after])) {
+        return order[after];
+      }
+      final before = activeIndex - distance;
+      if (before >= 0 && _visibleDestinations.contains(order[before])) {
+        return order[before];
+      }
+    }
+    return _visibleDestinations.first;
+  }
+
+  void _recoverDetachedFocusAfterBuild() {
+    if (!widget.autofocusActive || _focusRecoveryScheduled) return;
+    _focusRecoveryScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusRecoveryScheduled = false;
+      if (!mounted || !widget.autofocusActive) return;
+      final primary = FocusManager.instance.primaryFocus;
+      if (primary != null && primary.context != null) return;
+      final destination = _activeFocusDestination;
+      if (destination == null) {
+        widget.onExitRight();
+      } else {
+        _nodeFor(destination).requestFocus();
+      }
+    });
+  }
+
+  FocusNode _nodeFor(TopNavigationDestination destination) {
+    if (destination == _activeFocusDestination) {
+      final activeNode =
+          widget.activeFocusNode ??
+          (widget.activeDestination == TopNavigationDestination.home
+              ? widget.homeFocusNode
+              : null);
+      if (activeNode != null) return activeNode;
+    }
+    if (destination == TopNavigationDestination.home &&
+        widget.homeFocusNode != null) {
+      return widget.homeFocusNode!;
+    }
+    return _fallbackNodes[destination]!;
+  }
+
+  KeyEventResult _handleNavigationKey(
+    TopNavigationDestination destination,
+    KeyEvent event,
+  ) {
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+        if (_repeatGate.accept(event)) widget.onExitRight();
+      } else if (event is KeyUpEvent) {
+        _repeatGate.accept(event);
+      }
+      return KeyEventResult.handled;
+    }
+    final offset = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => -1,
+      LogicalKeyboardKey.arrowDown => 1,
+      LogicalKeyboardKey.arrowLeft => 0,
+      _ => null,
+    };
+    if (offset == null) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _repeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (offset == 0 || !_repeatGate.accept(event)) {
+      return KeyEventResult.handled;
+    }
+    final current = _visibleDestinations.indexOf(destination);
+    if (current < 0) return KeyEventResult.handled;
+    final next = (current + offset).clamp(0, _visibleDestinations.length - 1);
+    if (next != current) _nodeFor(_visibleDestinations[next]).requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  void _activateDestination(TopNavigationDestination destination) {
+    if (destination == widget.activeDestination &&
+        widget.onActivePressed != null) {
+      widget.onActivePressed!();
+      return;
+    }
+    switch (destination) {
+      case TopNavigationDestination.search:
+        context.push('/search');
+      case TopNavigationDestination.home:
+        (widget.onHomePressed ?? () => context.go('/'))();
+      case TopNavigationDestination.myList:
+        context.go('/my-list');
+      case TopNavigationDestination.discover:
+        context.go('/discover');
+      case TopNavigationDestination.calendar:
+        context.go('/calendar');
+      case TopNavigationDestination.settings:
+        context.push('/settings/accounts');
+    }
+  }
+
+  @override
+  void dispose() {
+    _repeatGate.reset();
+    for (final entry in _fallbackNodes.entries) {
+      if (entry.key == TopNavigationDestination.home &&
+          identical(entry.value, widget.homeFocusNode)) {
+        continue;
+      }
+      entry.value.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accounts = ref.watch(trackingAccountsControllerProvider);
+    final hasProfile = accounts.profiles.isNotEmpty;
+    final settingsInProfileMenu =
+        hasProfile &&
+        !accounts.isLoading &&
+        widget.preferences.settingsEntryPlacement ==
+            SettingsEntryPlacement.profileMenu;
+    _visibleDestinations = widget.preferences.topNavigationOrder
+        .where(
+          (destination) =>
+              widget.preferences.isTopNavigationDestinationVisible(
+                destination,
+              ) &&
+              (destination != TopNavigationDestination.settings ||
+                  !settingsInProfileMenu),
+        )
+        .toList(growable: false);
+    // Settings may deliberately live under the profile menu. When that makes
+    // the current destination absent from the rail, attach the screen-owned
+    // focus node to the nearest deterministic visible action instead. LEFT
+    // from Settings content can then enter the rail without resurrecting the
+    // hidden Settings icon or landing on a detached FocusNode.
+    _activeFocusDestination =
+        _visibleDestinations.contains(widget.activeDestination)
+        ? widget.activeDestination
+        : _nearestVisibleDestination();
+    _recoverDetachedFocusAfterBuild();
+
+    return Container(
+      key: const ValueKey('main-navigation'),
+      width: widget.width,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .96),
+        border: Border(
+          right: BorderSide(color: Colors.white.withValues(alpha: .11)),
+        ),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 14),
+          const _HomeRailWordmark(),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final destination in _visibleDestinations) ...[
+                      _HomeRailAction(
+                        key: _navigationKey(destination),
+                        destination: destination,
+                        active: destination == widget.activeDestination,
+                        autofocus:
+                            widget.autofocusActive &&
+                            destination == _activeFocusDestination,
+                        focusNode: _nodeFor(destination),
+                        onKeyEvent: (_, event) =>
+                            _handleNavigationKey(destination, event),
+                        onPressed: () => _activateDestination(destination),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+}
+
+Key _navigationKey(TopNavigationDestination destination) =>
+    switch (destination) {
+      TopNavigationDestination.search => const ValueKey('main-nav-search'),
+      TopNavigationDestination.home => const ValueKey('main-nav-home'),
+      TopNavigationDestination.myList => const ValueKey('main-nav-my-list'),
+      TopNavigationDestination.discover => const ValueKey('main-nav-discover'),
+      TopNavigationDestination.calendar => const ValueKey('main-nav-calendar'),
+      TopNavigationDestination.settings => const ValueKey('main-nav-settings'),
+    };
+
+IconData _navigationIcon(TopNavigationDestination destination) =>
+    switch (destination) {
+      TopNavigationDestination.search => Icons.search_rounded,
+      TopNavigationDestination.home => Icons.home_rounded,
+      TopNavigationDestination.myList => Icons.video_library_rounded,
+      TopNavigationDestination.discover => Icons.explore_rounded,
+      TopNavigationDestination.calendar => Icons.calendar_month_rounded,
+      TopNavigationDestination.settings => Icons.settings_rounded,
+    };
+
+class _HomeRailWordmark extends StatelessWidget {
+  const _HomeRailWordmark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      key: const ValueKey('main-nav-wordmark'),
+      label: 'Teto TV',
+      image: true,
+      child: SizedBox(
+        width: 104,
+        height: 90,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.asset(
+              'assets/branding/tetotv_icon.png',
+              width: 88,
+              height: 88,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
+            ),
+            const Positioned(
+              left: 0,
+              top: 0,
+              child: Offstage(
+                child: Text('Teto', key: ValueKey('main-nav-wordmark-teto')),
+              ),
+            ),
+            const Positioned(
+              right: 0,
+              top: 0,
+              child: Offstage(
+                child: Text('TV', key: ValueKey('main-nav-wordmark-tv')),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeRailAction extends StatelessWidget {
+  const _HomeRailAction({
+    required this.destination,
+    required this.active,
+    required this.autofocus,
+    required this.focusNode,
+    required this.onKeyEvent,
+    required this.onPressed,
+    super.key,
+  });
+
+  final TopNavigationDestination destination;
+  final bool active;
+  final bool autofocus;
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = destination.displayName;
+    return Tooltip(
+      message: label,
+      child: TvFocusable(
+        autofocus: autofocus,
+        focusNode: focusNode,
+        onKeyEvent: onKeyEvent,
+        onPressed: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        focusScale: 1.035,
+        child: Semantics(
+          label: label,
+          selected: active,
+          button: true,
+          excludeSemantics: true,
+          child: Container(
+            width: 52,
+            height: 48,
+            decoration: BoxDecoration(
+              color: active
+                  ? context.appPalette.accent.withValues(alpha: .19)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: active
+                    ? context.appPalette.accentBright
+                    : Colors.transparent,
+                width: 1.2,
+              ),
+            ),
+            child: Icon(
+              _navigationIcon(destination),
+              color: active
+                  ? context.appPalette.accentBright
+                  : context.appPalette.primaryText,
+              size: 27,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The far-right shared-TV identity control used by Home's cinematic shell.
+class HomeProfileSwitcher extends ConsumerWidget {
+  const HomeProfileSwitcher({
+    required this.preferences,
+    this.focusNode,
+    this.onKeyEvent,
+    super.key,
+  });
+
+  final SettingsPreferences preferences;
+  final FocusNode? focusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accounts = ref.watch(trackingAccountsControllerProvider);
+    final profiles = [
+      for (final provider in TrackingProvider.values)
+        ?accounts.profiles[provider],
+    ];
+    final activeProfile = profiles
+        .where((profile) => profile.provider == preferences.trackingProvider)
+        .firstOrNull;
+    final primaryProfile = activeProfile ?? profiles.firstOrNull;
+    if (primaryProfile == null) return const SizedBox.shrink();
+    final savedProfiles = [
+      for (final provider in TrackingProvider.values)
+        ...?accounts.savedProfiles[provider],
+    ];
+    final showSettings =
+        !accounts.isLoading &&
+        preferences.settingsEntryPlacement ==
+            SettingsEntryPlacement.profileMenu;
+
+    return SizedBox(
+      key: const ValueKey('home-profile-switcher'),
+      width: 210,
+      height: 48,
+      child: _TrackerProfileMenuButton(
+        profile: primaryProfile,
+        savedProfiles: savedProfiles,
+        activeProfileIds: accounts.activeProfileIds,
+        isLoading: accounts.isLoading,
+        showSettings: showSettings,
+        focusNode: focusNode,
+        onKeyEvent: onKeyEvent,
+        onSwitch: (profile) async {
+          final switched = await ref
+              .read(trackingAccountsControllerProvider.notifier)
+              .switchProfile(profile);
+          if (!switched) return;
+          await ref
+              .read(settingsPreferencesProvider.notifier)
+              .setTrackingProvider(profile.provider);
+        },
+        onManage: () => context.push('/settings/accounts?section=tracking'),
+        onSettings: () => context.push('/settings/accounts'),
+      ),
+    );
+  }
+}
 
 /// Keeps primary navigation stable while presenting the active shared-TV
 /// tracker identity as a compact menu at the far right of the row.
@@ -242,6 +675,8 @@ class _TrackerProfileMenuButton extends StatelessWidget {
     required this.onSwitch,
     required this.onManage,
     required this.onSettings,
+    this.focusNode,
+    this.onKeyEvent,
   });
 
   final TrackingAccountProfile profile;
@@ -252,6 +687,8 @@ class _TrackerProfileMenuButton extends StatelessWidget {
   final Future<void> Function(StoredTrackingProfile profile) onSwitch;
   final VoidCallback onManage;
   final VoidCallback onSettings;
+  final FocusNode? focusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   Future<void> _openMenu(BuildContext context) async {
     final box = context.findRenderObject() as RenderBox?;
@@ -381,6 +818,8 @@ class _TrackerProfileMenuButton extends StatelessWidget {
             'Open statistics and switch profiles${showSettings ? ', or open Settings' : ''}.',
         excludeSemantics: true,
         child: TvFocusable(
+          focusNode: focusNode,
+          onKeyEvent: onKeyEvent,
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
           borderRadius: BorderRadius.circular(9),
           focusScale: 1.02,

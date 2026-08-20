@@ -1,5 +1,7 @@
 {
   "AUTH_BROKER_BASE_URL": "https://your-real-broker.example",
+  "SOURCE_PAIRING_BROKER_BASE_URL": "https://your-source-pairing-receiver.example",
   "CRASH_REPORT_BASE_URL": "https://your-crash-receiver.example",
+  "DIAGNOSTIC_REPORT_BASE_URL": "https://your-diagnostic-receiver.example",
   "RELEASE_RESOLVER_BASE_URL": ""
 }

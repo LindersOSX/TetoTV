@@ -112,6 +112,71 @@ void main() {
     );
   });
 
+  test('searches dedicated English and Romaji titles for legacy providers', () {
+    expect(
+      seanimeProviderSearchTitles(
+        const EpisodeReference(
+          anilistMediaId: 1,
+          title: 'English Display',
+          titleEnglish: 'English Display',
+          titleRomaji: 'Dedicated Romaji',
+          alternativeTitles: ['English Display', 'Alternate'],
+          episode: 1,
+        ),
+      ),
+      ['English Display', 'Dedicated Romaji', 'Alternate'],
+    );
+  });
+
+  test('keeps all bounded media synonyms beyond the search-attempt cap', () {
+    final episode = EpisodeReference(
+      anilistMediaId: 1,
+      title: 'Primary',
+      titleEnglish: 'English',
+      titleRomaji: 'Romaji',
+      alternativeTitles: [
+        'Alias 1',
+        'Alias 2',
+        'Alias 3',
+        'Alias 4',
+        'Site-specific alias',
+      ],
+      episode: 1,
+    );
+
+    expect(seanimeProviderSearchTitles(episode), hasLength(5));
+    expect(
+      seanimeProviderMediaSynonyms(episode),
+      contains('Site-specific alias'),
+    );
+    expect(seanimeProviderMediaSynonyms(episode), isNot(contains('Primary')));
+  });
+
+  test('provider stream errors are actionable and hide Dart prefixes', () {
+    final message = seanimeProviderFailureMessage(
+      StateError(
+        'NO_STREAM: The provider found the episode but returned no compatible stream.',
+      ),
+    );
+
+    expect(
+      isSeanimeProviderNoStream(StateError('NO_STREAM: unavailable')),
+      isTrue,
+    );
+    expect(message, contains('provider found the episode'));
+    expect(message, isNot(contains('Bad state')));
+    expect(message, isNot(contains('NO_STREAM')));
+
+    final workerMessage = seanimeProviderFailureMessage(
+      StateError(
+        'Bad state: NO_STREAM: The provider found the episode but returned no compatible stream.',
+      ),
+    );
+    expect(workerMessage, contains('provider found the episode'));
+    expect(workerMessage, isNot(contains('Bad state')));
+    expect(workerMessage, isNot(contains('NO_STREAM')));
+  });
+
   test('bounds Seanime request timeouts to the remaining runtime', () {
     expect(addonRequestTimeout(0.05), const Duration(milliseconds: 100));
     expect(addonRequestTimeout(2), const Duration(seconds: 2));

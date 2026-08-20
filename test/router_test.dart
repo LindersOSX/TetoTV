@@ -26,6 +26,30 @@ void main() {
     expect(paths, contains('/settings/notices'));
   });
 
+  test('resolve route preserves Seanime catalog metadata', () {
+    final episode = resolveEpisodeReferenceFromQuery({
+      'anilistId': '42',
+      'malId': '84',
+      'episode': '3',
+      'title': 'Display Title',
+      'titleEnglish': 'English Title',
+      'titleRomaji': 'Romaji Title',
+      'synonyms': 'Alternate One|Alternate Two',
+      'status': 'FINISHED',
+      'format': 'ONA',
+      'episodeCount': '12',
+      'isAdult': '1',
+    })!;
+
+    expect(episode.titleEnglish, 'English Title');
+    expect(episode.titleRomaji, 'Romaji Title');
+    expect(episode.alternativeTitles, ['Alternate One', 'Alternate Two']);
+    expect(episode.status, 'FINISHED');
+    expect(episode.format, 'ONA');
+    expect(episode.episodeCount, 12);
+    expect(episode.isAdult, isTrue);
+  });
+
   test('typed player routes allow only declared cross-class fallbacks', () {
     const episode = EpisodeReference(
       anilistMediaId: 1,

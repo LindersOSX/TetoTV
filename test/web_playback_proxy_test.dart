@@ -64,10 +64,13 @@ void main() {
   });
 
   group('WebPlaybackProxy', () {
-    test('uses a 20 second preparation budget and a 32 GiB media cap', () {
+    test('keeps adaptive HLS and progressive playback explicitly bounded', () {
       const limits = WebPlaybackProxyLimits();
       expect(limits.preparationTimeout, const Duration(seconds: 20));
       expect(limits.maximumProgressiveBytes, 32 * 1024 * 1024 * 1024);
+      expect(limits.maximumManifestBytes, 1024 * 1024);
+      expect(limits.maximumManifestReferences, 8 * 1024);
+      expect(limits.maximumTotalSessionRequests, 16 * 1024);
     });
 
     test(
@@ -307,6 +310,135 @@ void main() {
         await session.close();
       },
     );
+
+    test(
+      'loads only the selected Auto rendition and accepts realistic VOD segment counts',
+      () async {
+        final root = Uri.parse('https://provider.example/master.m3u8');
+        final renditions = List<Uri>.generate(
+          4,
+          (index) =>
+              Uri.parse('https://provider.example/${index + 1}080p.m3u8'),
+        );
+        final segmentCount = 900;
+        final nestedFetches = <Uri>[];
+        final upstream = _fakeUpstream((request) async {
+          if (request.uri == root) {
+            return _textResponse(
+              request,
+              '#EXTM3U\n${renditions.indexed.map((entry) => '#EXT-X-STREAM-INF:BANDWIDTH=${(entry.$1 + 1) * 1000}\n${entry.$2.pathSegments.last}').join('\n')}\n',
+            );
+          }
+          if (renditions.contains(request.uri)) {
+            nestedFetches.add(request.uri);
+            return _textResponse(
+              request,
+              '#EXTM3U\n#EXT-X-TARGETDURATION:2\n'
+              '${List<String>.generate(segmentCount, (index) => '#EXTINF:2,\nsegment-$index.ts').join('\n')}\n'
+              '#EXT-X-ENDLIST\n',
+            );
+          }
+          return _response(
+            request,
+            contentType: 'video/mp2t',
+            bytes: [7, 8, 9],
+          );
+        });
+        final proxy = WebPlaybackProxy(upstream: upstream);
+        addTearDown(proxy.close);
+
+        final session = await proxy.prepare(uri: root);
+        expect(
+          nestedFetches,
+          isEmpty,
+          reason: 'preparation must not expand every Auto-quality rendition',
+        );
+        final master = utf8.decode(
+          (await _localRequest(session.playbackUri)).body,
+        );
+        final selectedRendition = Uri.parse(
+          master.split('\n').firstWhere((line) => line.startsWith('http://')),
+        );
+        final media = utf8.decode(
+          (await _localRequest(selectedRendition)).body,
+        );
+
+        expect(nestedFetches, [renditions.first]);
+        expect(
+          RegExp(r'^http://', multiLine: true).allMatches(media),
+          hasLength(segmentCount),
+        );
+        final firstSegment = Uri.parse(
+          media.split('\n').firstWhere((line) => line.startsWith('http://')),
+        );
+        expect((await _localRequest(firstSegment)).body, [7, 8, 9]);
+        expect(nestedFetches, [renditions.first]);
+        await session.close();
+      },
+    );
+
+    test('blocks recursive graphs in lazily loaded HLS manifests', () async {
+      final root = Uri.parse('https://provider.example/master.m3u8');
+      final nested = Uri.parse('https://provider.example/nested.m3u8');
+      final upstream = _fakeUpstream((request) async {
+        if (request.uri == root) {
+          return _textResponse(
+            request,
+            '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nnested.m3u8\n',
+          );
+        }
+        expect(request.uri, nested);
+        return _textResponse(
+          request,
+          '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nmaster.m3u8\n',
+        );
+      });
+      final proxy = WebPlaybackProxy(upstream: upstream);
+      addTearDown(proxy.close);
+
+      final session = await proxy.prepare(uri: root);
+      final master = utf8.decode(
+        (await _localRequest(session.playbackUri)).body,
+      );
+      final nestedLocal = Uri.parse(
+        master.split('\n').firstWhere((line) => line.startsWith('http://')),
+      );
+      expect((await _localRequest(nestedLocal)).status, HttpStatus.badGateway);
+      await session.close();
+    });
+
+    test('revalidates a lazy HLS target before any upstream request', () async {
+      final root = Uri.parse('https://provider.example/master.m3u8');
+      final nested = Uri.parse('https://provider.example/nested.m3u8');
+      var nestedFetches = 0;
+      final upstream = PinnedPublicWebProxyUpstream(
+        targetValidator: (uri) async {
+          if (uri == nested) {
+            throw const FormatException('Host rebound to a private address.');
+          }
+        },
+        hopFetcher: (request) async {
+          if (request.uri == nested) nestedFetches++;
+          return _textResponse(
+            request,
+            '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nnested.m3u8\n',
+          );
+        },
+      );
+      final proxy = WebPlaybackProxy(upstream: upstream);
+      addTearDown(proxy.close);
+
+      final session = await proxy.prepare(uri: root);
+      final master = utf8.decode(
+        (await _localRequest(session.playbackUri)).body,
+      );
+      final nestedLocal = Uri.parse(
+        master.split('\n').firstWhere((line) => line.startsWith('http://')),
+      );
+      expect((await _localRequest(nestedLocal)).status, HttpStatus.badGateway);
+      expect(nestedFetches, 0);
+      await session.close();
+    });
 
     test('rejects private nested HLS references and live playlists', () async {
       Future<void> expectRejected(String manifest) async {

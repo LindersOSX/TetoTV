@@ -23,8 +23,13 @@ the same as legal, store, or codec certification.
   pre-2.0.5 clients; new builds must never call it. After migration adoption is
   verified, deploy the broker cleanup and confirm `/v1/app-updates/*` and all
   update-specific secrets are gone.
-- Deploy exactly one broker instance while pairing state is process-local, or
+- Deploy exactly one Wispbyte bot process while phone-source pairing state is
+  process-local, verify `/v1/source-pairings/health` advertises protocol 2, or
   move pairing/rate-limit state to an atomic shared TTL store before scaling.
+- Confirm the Wispbyte bot can attach files in the server-side diagnostic
+  channel, then exercise **Diagnostics > Send to support** and verify the app
+  receives the same opaque reference shown in Discord. Never put the bot token,
+  incident secret, or channel routing configuration in the APK.
 - Obtain any required AniList authorization for a client that also integrates
   MAL, and confirm the current terms for every metadata, tracking, skip-time,
   and debrid service.

@@ -47,7 +47,18 @@ class SourcePairingClient implements SourcePairingApi {
   @override
   Future<void> ensureReady() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('health');
+      late final Response<Map<String, dynamic>> response;
+      try {
+        // The Wispbyte bot keeps source pairing independent from Discord's
+        // gateway status. Older brokers expose only the root health route, so
+        // retain a strict 404-only fallback for compatibility.
+        response = await _dio.get<Map<String, dynamic>>(
+          'v1/source-pairings/health',
+        );
+      } on DioException catch (error) {
+        if (error.response?.statusCode != 404) rethrow;
+        response = await _dio.get<Map<String, dynamic>>('health');
+      }
       final data = response.data ?? const <String, dynamic>{};
       final protocolVersion = switch (data['source_pairing_version']) {
         final int value => value,

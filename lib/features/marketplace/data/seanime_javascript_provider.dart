@@ -101,7 +101,14 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'userConfig': addon.manifest.userConfigDefaults,
         'domRuntime': domRuntime,
         'title': episode.title,
-        'titles': episode.alternativeTitles,
+        'titles': seanimeProviderSearchTitles(episode),
+        'synonyms': seanimeProviderMediaSynonyms(episode),
+        'titleEnglish': episode.titleEnglish,
+        'titleRomaji': episode.titleRomaji,
+        'status': episode.status,
+        'format': episode.format,
+        'episodeCount': episode.episodeCount,
+        'isAdult': episode.isAdult,
         'episode': episode.episode,
         'anilistId': episode.anilistMediaId,
         'malId': episode.malMediaId,
@@ -168,6 +175,75 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
 
 bool isSeanimeProviderNoMatch(Object error) =>
     error.toString().contains('NO_MATCH:');
+
+/// Ordered title queries for older Seanime providers that inspect only
+/// `SearchOptions.query` instead of the richer `SearchOptions.media` object.
+List<String> seanimeProviderSearchTitles(EpisodeReference episode) {
+  final values = <String?>[
+    episode.title,
+    episode.titleEnglish,
+    episode.titleRomaji,
+    ...episode.alternativeTitles,
+  ];
+  final seen = <String>{};
+  final result = <String>[];
+  for (final value in values) {
+    final title = value?.trim();
+    if (title == null || title.isEmpty || !seen.add(title.toLowerCase())) {
+      continue;
+    }
+    result.add(title);
+    if (result.length == 5) break;
+  }
+  return result;
+}
+
+/// Full bounded alias set for Seanime's `Media.synonyms`. This is separate
+/// from the five actual search attempts because providers may inspect a
+/// later/site-specific alias themselves (AnimeAV1 is one such provider).
+List<String> seanimeProviderMediaSynonyms(EpisodeReference episode) {
+  final values = <String?>[
+    episode.titleEnglish,
+    episode.titleRomaji,
+    ...episode.alternativeTitles,
+  ];
+  final primary = episode.title.trim().toLowerCase();
+  final seen = <String>{primary};
+  final result = <String>[];
+  for (final value in values) {
+    final title = value?.trim();
+    if (title == null || title.isEmpty || !seen.add(title.toLowerCase())) {
+      continue;
+    }
+    result.add(title);
+    if (result.length == 32) break;
+  }
+  return result;
+}
+
+bool isSeanimeProviderNoStream(Object error) =>
+    error.toString().contains('NO_STREAM:');
+
+/// Converts provider/runtime failures into bounded user-facing copy without
+/// leaking Dart's implementation prefix (`Bad state:`) into the stream UI.
+String seanimeProviderFailureMessage(Object error) {
+  var value = error.toString().replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+  final implementationPrefix = RegExp(
+    r'^(?:Bad state|StateError|Exception):\s*',
+    caseSensitive: false,
+  );
+  while (implementationPrefix.hasMatch(value)) {
+    value = value.replaceFirst(implementationPrefix, '').trimLeft();
+  }
+  if (value.startsWith('NO_STREAM:')) {
+    value =
+        'This provider found the episode but could not return a compatible '
+        'stream. It may need an update or a different server.';
+  } else if (value.startsWith('NO_MATCH:')) {
+    value = 'This provider has no matching title or episode.';
+  }
+  return value.length > 180 ? '${value.substring(0, 180)}…' : value;
+}
 
 class HlsStreamVariant {
   const HlsStreamVariant({
@@ -664,7 +740,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           };
           const settings = typeof provider.getSettings === 'function'
             ? ((await providerCall(() => provider.getSettings())) || {}) : {};
-          const titles = ${jsonEncode([input['title'], ...((input['titles'] as List?) ?? const [])])}
+          const titles = ${jsonEncode((input['titles'] as List?) ?? const [])}
             .filter(Boolean).filter((title, index, all) =>
               all.findIndex(other => String(other).toLowerCase() === String(title).toLowerCase()) === index
             ).slice(0, 5);
@@ -675,19 +751,19 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const releaseYear = ${input['year'] ?? 0};
           const media = {
             id: ${input['anilistId']},
-            status: 'NOT_YET_RELEASED',
-            format: 'TV',
-            englishTitle: titles[0] || '',
-            romajiTitle: titles[1] || titles[0] || '',
-            nativeTitle: titles[2] || '',
-            episodeCount: -1,
-            synonyms: titles.slice(1),
-            isAdult: false,
+            status: ${jsonEncode(input['status'] ?? 'NOT_YET_RELEASED')},
+            format: ${jsonEncode(input['format'] ?? 'TV')},
+            romajiTitle: ${jsonEncode(input['titleRomaji'])} || titles[0] || '',
+            episodeCount: ${input['episodeCount'] ?? -1},
+            synonyms: ${jsonEncode((input['synonyms'] as List?) ?? const [])},
+            isAdult: ${input['isAdult'] == true},
           };
+          const englishTitle = ${jsonEncode(input['titleEnglish'])};
+          if (englishTitle) media.englishTitle = englishTitle;
           const malMediaId = ${input['malId'] ?? 'null'};
           if (malMediaId != null) media.idMal = malMediaId;
           if (releaseYear > 0) {
-            media.startDate = {year: releaseYear, month: null, day: null};
+            media.startDate = {year: releaseYear};
           }
           const modes = settings.supportsDub ? [false, true] : [false];
           const output = [];

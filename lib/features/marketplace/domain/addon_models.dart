@@ -1,6 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// Stable identity used for add-on ownership, persistence, and updates.
+///
+/// Seanime repositories in the wild occasionally change only the ASCII
+/// casing of an ID between the catalog and manifest. IDs are restricted to
+/// ASCII letters, numbers, dots, underscores, and hyphens, so lower-casing is
+/// deterministic and does not broaden the accepted identifier grammar.
+String marketplaceAddonIdentityKey(String id) => id.trim().toLowerCase();
+
+bool marketplaceAddonIdsMatch(String left, String right) =>
+    marketplaceAddonIdentityKey(left) == marketplaceAddonIdentityKey(right);
+
 class AddonRepository {
   const AddonRepository({
     required this.url,
@@ -109,7 +120,14 @@ class MarketplaceAddon {
     final json = value.map((key, value) => MapEntry('$key', value));
     final id = _clean(json['id'], 80);
     final name = _clean(json['name'], 120);
-    final manifest = safePublicHttpsUri(json['manifestURI']);
+    final manifest = safePublicHttpsUri(
+      _firstValue(json, const [
+        'manifestURI',
+        'manifestUri',
+        'manifestURL',
+        'manifestUrl',
+      ]),
+    );
     if (id == null ||
         name == null ||
         manifest == null ||
@@ -123,16 +141,42 @@ class MarketplaceAddon {
       author: _clean(json['author'], 120) ?? 'Unknown',
       manifestUri: manifest,
       repositoryUrl: repositoryUrl,
-      language: (_clean(json['language'], 24) ?? '').toLowerCase(),
+      language: _normalizedAddonLanguage(json['language']),
       type: (_clean(json['type'], 48) ?? '').toLowerCase(),
-      locale: (_clean(json['lang'], 12) ?? 'unknown').toLowerCase(),
+      locale:
+          (_clean(_firstValue(json, const ['lang', 'locale']), 12) ?? 'unknown')
+              .toLowerCase(),
       version: _clean(json['version'], 32),
       iconUri: safePublicHttpsUri(json['icon']),
-      payloadUri: safePublicHttpsUri(json['payloadURI']),
+      payloadUri: safePublicHttpsUri(
+        _firstValue(json, const [
+          'payloadURI',
+          'payloadUri',
+          'payloadURL',
+          'payloadUrl',
+        ]),
+      ),
       inlinePayload: _cleanPayload(json['payload']),
       userConfigDefaults: _userConfigDefaults(json['userConfig']),
     );
   }
+}
+
+Object? _firstValue(Map<String, Object?> json, List<String> keys) {
+  for (final key in keys) {
+    final value = json[key];
+    if (value != null) return value;
+  }
+  return null;
+}
+
+String _normalizedAddonLanguage(Object? value) {
+  final language = (_clean(value, 24) ?? '').toLowerCase();
+  return switch (language) {
+    'js' => 'javascript',
+    'ts' => 'typescript',
+    _ => language,
+  };
 }
 
 Map<String, String> _userConfigDefaults(Object? value) {

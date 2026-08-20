@@ -4,19 +4,16 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('production service endpoints remain independently configurable', () {
     expect(AppConfig.authBrokerBaseUrl, 'https://tetotv-auth.onrender.com');
-    expect(
-      AppConfig.sourcePairingBrokerBaseUrl,
-      'https://tetotv-updates-lindows.onrender.com',
-    );
+    expect(AppConfig.sourcePairingBrokerBaseUrl, 'https://tetotv-bot.wisp.uno');
     expect(
       AppConfig.sourcePairingBrokerBaseUrl,
       isNot(AppConfig.authBrokerBaseUrl),
     );
     expect(AppConfig.crashReportBaseUrl, 'https://tetotv-bot.wisp.uno');
-    expect(
-      AppConfig.crashReportBaseUrl,
-      isNot(AppConfig.sourcePairingBrokerBaseUrl),
-    );
+    expect(AppConfig.crashReportBaseUrl, AppConfig.sourcePairingBrokerBaseUrl);
+    expect(AppConfig.diagnosticReportBaseUrl, 'https://tetotv-bot.wisp.uno');
+    expect(AppConfig.diagnosticReportBaseUrl, AppConfig.crashReportBaseUrl);
     expect(AppConfig.hasCrashReportEndpoint, isTrue);
+    expect(AppConfig.hasDiagnosticReportEndpoint, isTrue);
   });
 }

@@ -120,14 +120,17 @@ apply. TetoTV does not bundle or recommend a streaming-source repository.
 
 ## Pairing broker
 
-The TetoTV HTTPS broker adapts TV-friendly OAuth and phone-assisted source
-entry:
+TetoTV uses separate HTTPS services for TV-friendly tracker OAuth and
+phone-assisted source entry:
 
 - OAuth pairing holds the minimum one-time state and token material needed to
   deliver a completed login to the requesting device.
 - Phone-assisted source entry holds submitted URLs in volatile memory for up
   to ten minutes. They are deleted after the authenticated device confirms
-  local processing or when the session expires.
+  local processing or when the session expires. This flow is hosted in the
+  Wispbyte TetoTV bot service at <https://tetotv-bot.wisp.uno>; the service does
+  not fetch submitted source URLs, and the app independently validates a public
+  HTTPS destination before saving or fetching it.
 - App updates do not pass through this broker. Public and Beta release metadata
   are requested anonymously from their respective public GitHub repositories,
   and the signed universal APK is downloaded directly from GitHub's release
@@ -164,13 +167,22 @@ Discord process ordinary connection/request metadata under their own policies.
 Disabling reporting deletes any queued unsent report and prevents later crashes
 from being sent.
 
-Other bounded diagnostics stay on the device unless the user explicitly copies
-or shares a report. Manually exported reports contain app/build and
+Other bounded diagnostics stay on the device unless the user explicitly
+copies, exports, or chooses **Send to support** and confirms the disclosure.
+That explicit send posts a maximum 10,000-character report over HTTPS to
+<https://tetotv-bot.wisp.uno>. The receiver validates and redacts it again,
+posts it through the bot to the private diagnostic support channel, and returns
+an opaque per-report reference only after Discord accepts the message. A retry
+of the same button press is acknowledged without creating a duplicate post.
+The app does not contain the Discord bot token, incident secret, or destination
+channel configuration.
+
+Manually sent or exported reports contain app/build and
 playback-capability information, bounded performance/failure events, Android
 version, manufacturer/model, and provider identifiers. TetoTV redacts
 credentials, signed URLs, magnets, hashes, and common token formats before
-storage and again before export. Users should still review a manually exported
-report before sharing it.
+storage and again before sending or export. Users should still review a
+manually exported report before sharing it through another app.
 
 ## Security and user choices
 

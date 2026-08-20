@@ -95,6 +95,42 @@ void main() {
     );
   });
 
+  test('falls back to the legacy root health route only on 404', () async {
+    final paths = <String>[];
+    final dio = _stubDio((options, handler) {
+      paths.add(options.path);
+      if (options.path.endsWith('v1/source-pairings/health')) {
+        handler.reject(
+          DioException.badResponse(
+            statusCode: 404,
+            requestOptions: options,
+            response: Response<void>(requestOptions: options, statusCode: 404),
+          ),
+        );
+        return;
+      }
+      handler.resolve(
+        Response(
+          requestOptions: options,
+          statusCode: 200,
+          data: <String, dynamic>{
+            'status': 'ok',
+            'source_pairing': true,
+            'source_pairing_version': 2,
+          },
+        ),
+      );
+    });
+    final client = SourcePairingClient(
+      baseUrl: 'https://auth.example.com',
+      dio: dio,
+    );
+
+    await client.ensureReady();
+
+    expect(paths, ['v1/source-pairings/health', 'health']);
+  });
+
   test('rejects unknown poll status instead of polling forever', () async {
     final dio = _stubDio((options, handler) {
       handler.resolve(

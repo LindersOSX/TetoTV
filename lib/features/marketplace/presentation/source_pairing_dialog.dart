@@ -159,7 +159,7 @@ class _SourcePairingBody extends StatelessWidget {
     SourcePairingStage.starting => const _CenteredStatus(
       busy: true,
       title: 'Creating a private one-time code…',
-      body: 'The HTTPS pairing service may take a moment to wake up.',
+      body: 'Keep this screen open while TetoTV creates the secure phone link.',
     ),
     SourcePairingStage.waiting => _WaitingForSources(session: state.session!),
     SourcePairingStage.validating => _CenteredStatus(

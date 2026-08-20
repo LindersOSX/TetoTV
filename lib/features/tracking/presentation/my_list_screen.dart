@@ -4,6 +4,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
+import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -11,6 +12,7 @@ import 'package:anime_tv/features/settings/application/display_preferences_contr
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -24,8 +26,15 @@ class MyListScreen extends ConsumerStatefulWidget {
 class _MyListScreenState extends ConsumerState<MyListScreen> {
   TrackingListStatus _status = TrackingListStatus.watching;
   final Map<TrackingListStatus, TrackingListResult> _lastUsableResults = {};
+  final _firstStatusFocus = FocusNode(debugLabel: 'my-list.status.watching');
   bool _updating = false;
   bool _refreshing = false;
+
+  @override
+  void dispose() {
+    _firstStatusFocus.dispose();
+    super.dispose();
+  }
 
   Future<void> _refresh() async {
     if (_refreshing) return;
@@ -163,184 +172,206 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final sort = ref.watch(myListSortProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
-    return Scaffold(
-      backgroundColor: context.appPalette == AppThemePalette.defaults
-          ? Colors.black
-          : context.appPalette.background,
-      body: SafeArea(
-        minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return TetoTopLevelShell(
+      preferences: preferences,
+      activeDestination: TopNavigationDestination.myList,
+      firstContentFocusNode: _firstStatusFocus,
+      autofocusRail: true,
+      builder: (context, layout) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!layout.usesTvRail)
             MainNavigationBar(
               active: MainNavigationDestination.myList,
               preferences: preferences,
               autofocusActive: true,
             ),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final tabs = Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final status in TrackingListStatus.values) ...[
-                      _StatusTab(
-                        status: status,
-                        selected: status == _status,
-                        onPressed: () => setState(() => _status = status),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                  ],
-                );
-                if (constraints.maxWidth < 1400) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'My List',
-                            style: Theme.of(context).textTheme.headlineSmall,
-                          ),
-                          const Spacer(),
-                          _RefreshButton(
-                            refreshing: _refreshing,
-                            compact: true,
-                            onPressed: _refresh,
-                          ),
-                          const SizedBox(width: 8),
-                          _SortButton(
-                            sort: sort,
-                            compact: true,
-                            onPressed: () => _chooseSort(sort),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: tabs,
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    Text(
-                      'My List',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(width: 22),
-                    tabs,
-                    const Spacer(),
-                    _RefreshButton(
-                      refreshing: _refreshing,
-                      onPressed: _refresh,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final tabs = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final status in TrackingListStatus.values) ...[
+                    _StatusTab(
+                      status: status,
+                      selected: status == _status,
+                      focusNode: status == TrackingListStatus.watching
+                          ? _firstStatusFocus
+                          : null,
+                      autofocus: false,
+                      onKeyEvent:
+                          status == TrackingListStatus.watching &&
+                              layout.usesTvRail
+                          ? (_, event) {
+                              if (event.logicalKey !=
+                                  LogicalKeyboardKey.arrowLeft) {
+                                return KeyEventResult.ignored;
+                              }
+                              if (event is KeyDownEvent ||
+                                  event is KeyRepeatEvent) {
+                                layout.focusRail();
+                              }
+                              return KeyEventResult.handled;
+                            }
+                          : null,
+                      onPressed: () => setState(() => _status = status),
                     ),
                     const SizedBox(width: 8),
-                    _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
+                  ],
+                ],
+              );
+              if (constraints.maxWidth < 1400) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'My List',
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
+                                fontSize: layout.usesTvRail ? 30 : null,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                        const Spacer(),
+                        _RefreshButton(
+                          refreshing: _refreshing,
+                          compact: true,
+                          onPressed: _refresh,
+                        ),
+                        const SizedBox(width: 8),
+                        _SortButton(
+                          sort: sort,
+                          compact: true,
+                          onPressed: () => _chooseSort(sort),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: tabs,
+                    ),
                   ],
                 );
-              },
-            ),
-            const SizedBox(height: 18),
-            Expanded(
-              child: Stack(
+              }
+              return Row(
                 children: [
+                  Text(
+                    'My List',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontSize: layout.usesTvRail ? 30 : null,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 22),
+                  tabs,
+                  const Spacer(),
+                  _RefreshButton(refreshing: _refreshing, onPressed: _refresh),
+                  const SizedBox(width: 8),
+                  _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 18),
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: list.when(
+                    loading: () => Center(
+                      child: CircularProgressIndicator(
+                        color: context.appPalette.accentBright,
+                      ),
+                    ),
+                    error: (error, _) => _ListMessage(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Could not load ${_status.displayName}',
+                      body: error.toString(),
+                    ),
+                    data: (result) {
+                      if (!result.allAttemptedFailed) {
+                        _lastUsableResults[_status] = result;
+                      }
+                      final previous = _lastUsableResults[_status];
+                      final visibleItems = result.allAttemptedFailed
+                          ? previous?.items ?? const <HomeTrackedAnime>[]
+                          : result.items;
+                      if (visibleItems.isEmpty && result.allAttemptedFailed) {
+                        return _ListMessage(
+                          icon: Icons.cloud_off_rounded,
+                          title: 'Trackers could not be refreshed',
+                          body:
+                              '${result.failedProviderNames} could not be '
+                              'reached. Check the connection or account, '
+                              'then choose Refresh.',
+                        );
+                      }
+                      if (visibleItems.isEmpty) {
+                        return _ListMessage(
+                          icon: Icons.video_library_outlined,
+                          title: '${_status.displayName} is empty',
+                          body:
+                              'Connect AniList or MAL, or change '
+                              'a title to this status.',
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (result.hasFailures)
+                            _TrackerWarningBanner(
+                              message: result.allAttemptedFailed
+                                  ? '${result.failedProviderNames} could not '
+                                        'be refreshed. Showing the previous '
+                                        'results.'
+                                  : '${result.failedProviderNames} could not '
+                                        'be refreshed. Showing data from the '
+                                        'tracker that responded.',
+                            ),
+                          Expanded(
+                            child: _TrackedShelf(
+                              items: sortMyListItems(visibleItems, sort),
+                              titlePreference: titlePreference,
+                              onPressed: _open,
+                              onManage: (item) =>
+                                  _manage(item, titlePreference),
+                              preferences: preferences,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                if (_updating)
                   Positioned.fill(
-                    child: list.when(
-                      loading: () => Center(
+                    child: ColoredBox(
+                      color: Color(0x99000000),
+                      child: Center(
                         child: CircularProgressIndicator(
                           color: context.appPalette.accentBright,
                         ),
                       ),
-                      error: (error, _) => _ListMessage(
-                        icon: Icons.cloud_off_rounded,
-                        title: 'Could not load ${_status.displayName}',
-                        body: error.toString(),
-                      ),
-                      data: (result) {
-                        if (!result.allAttemptedFailed) {
-                          _lastUsableResults[_status] = result;
-                        }
-                        final previous = _lastUsableResults[_status];
-                        final visibleItems = result.allAttemptedFailed
-                            ? previous?.items ?? const <HomeTrackedAnime>[]
-                            : result.items;
-                        if (visibleItems.isEmpty && result.allAttemptedFailed) {
-                          return _ListMessage(
-                            icon: Icons.cloud_off_rounded,
-                            title: 'Trackers could not be refreshed',
-                            body:
-                                '${result.failedProviderNames} could not be '
-                                'reached. Check the connection or account, '
-                                'then choose Refresh.',
-                          );
-                        }
-                        if (visibleItems.isEmpty) {
-                          return _ListMessage(
-                            icon: Icons.video_library_outlined,
-                            title: '${_status.displayName} is empty',
-                            body:
-                                'Connect AniList or MAL, or change '
-                                'a title to this status.',
-                          );
-                        }
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (result.hasFailures)
-                              _TrackerWarningBanner(
-                                message: result.allAttemptedFailed
-                                    ? '${result.failedProviderNames} could not '
-                                          'be refreshed. Showing the previous '
-                                          'results.'
-                                    : '${result.failedProviderNames} could not '
-                                          'be refreshed. Showing data from the '
-                                          'tracker that responded.',
-                              ),
-                            Expanded(
-                              child: _TrackedShelf(
-                                items: sortMyListItems(visibleItems, sort),
-                                titlePreference: titlePreference,
-                                onPressed: _open,
-                                onManage: (item) =>
-                                    _manage(item, titlePreference),
-                                preferences: preferences,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
                     ),
                   ),
-                  if (_updating)
-                    Positioned.fill(
-                      child: ColoredBox(
-                        color: Color(0x99000000),
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            color: context.appPalette.accentBright,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(bottom: 18),
+            child: Text(
+              'Select to view episodes. Hold OK or press Menu for quick '
+              'watchlist actions.',
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 12,
               ),
             ),
-            Padding(
-              padding: EdgeInsets.only(bottom: 18),
-              child: Text(
-                'Select to view episodes. Hold OK or press Menu for quick '
-                'watchlist actions.',
-                style: TextStyle(
-                  color: context.appPalette.mutedText,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -351,16 +382,25 @@ class _StatusTab extends StatelessWidget {
     required this.status,
     required this.selected,
     required this.onPressed,
+    this.focusNode,
+    this.autofocus = false,
+    this.onKeyEvent,
   });
 
   final TrackingListStatus status;
   final bool selected;
   final VoidCallback onPressed;
+  final FocusNode? focusNode;
+  final bool autofocus;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       onPressed: onPressed,
+      focusNode: focusNode,
+      autofocus: autofocus,
+      onKeyEvent: onKeyEvent,
       focusScale: 1.03,
       borderRadius: BorderRadius.circular(99),
       child: Container(
@@ -368,13 +408,20 @@ class _StatusTab extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected
               ? context.appPalette.accent
-              : context.appPalette.surface,
+              : context.appPalette.surface.withValues(alpha: .92),
           borderRadius: BorderRadius.circular(99),
+          border: Border.all(
+            color: selected
+                ? context.appPalette.accentBright
+                : context.appPalette.primaryText.withValues(alpha: .1),
+          ),
         ),
         child: Text(
           status.displayName,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: selected
+                ? contrastForeground(context.appPalette.accent)
+                : context.appPalette.primaryText,
             fontWeight: FontWeight.w800,
             fontSize: 13,
           ),
@@ -569,6 +616,10 @@ class _TrackedShelf extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final metrics = _myListPosterMetrics(
+      context,
+      dense: preferences.homeLayout == HomeLayout.compact,
+    );
     return ListView.separated(
       scrollDirection: Axis.horizontal,
       clipBehavior: Clip.none,
@@ -578,18 +629,28 @@ class _TrackedShelf extends StatelessWidget {
           SizedBox(width: 10 * preferences.contentDensity.spacingScale),
       itemBuilder: (context, index) {
         final item = items[index];
+        final totalEpisodes = item.tracked.totalEpisodes;
+        final progress = totalEpisodes == null || totalEpisodes <= 0
+            ? null
+            : (item.tracked.progress / totalEpisodes).clamp(0.0, 1.0);
         return Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: 126 * preferences.thumbnailScale,
-            height: 238 * preferences.thumbnailScale,
+            width: metrics.width * preferences.thumbnailScale,
+            height: metrics.height * preferences.thumbnailScale,
             child: TvFocusable(
               onPressed: () => onPressed(item),
               onLongPress: () => onManage(item),
               focusScale: 1.025,
               borderRadius: BorderRadius.circular(8),
-              child: ColoredBox(
-                color: Colors.black,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: context.appPalette.surface.withValues(alpha: .94),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: context.appPalette.primaryText.withValues(alpha: .1),
+                  ),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -620,7 +681,15 @@ class _TrackedShelf extends StatelessWidget {
                                 horizontal: 7,
                                 vertical: 4,
                               ),
-                              color: const Color(0xE6000000),
+                              decoration: BoxDecoration(
+                                color: const Color(0xE6000000),
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(
+                                  color: context.appPalette.accent.withValues(
+                                    alpha: .5,
+                                  ),
+                                ),
+                              ),
                               child: Text(
                                 item.provider.displayName,
                                 style: TextStyle(
@@ -641,8 +710,8 @@ class _TrackedShelf extends StatelessWidget {
                         item.tracked.displayTitle(titlePreference),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: context.appPalette.primaryText,
                           fontSize: 11,
                           height: 1.05,
                           fontWeight: FontWeight.w800,
@@ -663,6 +732,23 @@ class _TrackedShelf extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (progress != null) ...[
+                      const SizedBox(height: 5),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(99),
+                          child: LinearProgressIndicator(
+                            minHeight: 3,
+                            value: progress,
+                            color: context.appPalette.accentBright,
+                            backgroundColor: context.appPalette.primaryText
+                                .withValues(alpha: .12),
+                          ),
+                        ),
+                      ),
+                    ] else
+                      const SizedBox(height: 6),
                   ],
                 ),
               ),
@@ -672,6 +758,24 @@ class _TrackedShelf extends StatelessWidget {
       },
     );
   }
+}
+
+({double height, double width}) _myListPosterMetrics(
+  BuildContext context, {
+  required bool dense,
+}) {
+  final screenWidth = MediaQuery.sizeOf(context).width;
+  if (screenWidth >= 1600) {
+    return (height: dense ? 238 : 278, width: dense ? 144 : 166);
+  }
+  if (screenWidth >= 1200) {
+    return (height: dense ? 205 : 240, width: dense ? 118 : 138);
+  }
+  final compact = context.isCompactWidth;
+  return (
+    height: dense ? (compact ? 198 : 170) : (compact ? 238 : 205),
+    width: dense ? (compact ? 104 : 88) : (compact ? 126 : 106),
+  );
 }
 
 class _StatusDialog extends StatelessWidget {

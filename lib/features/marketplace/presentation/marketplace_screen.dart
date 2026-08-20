@@ -418,7 +418,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                             icon: Icons.hub_outlined,
                             title: 'Marketplace repositories',
                             subtitle:
-                                'Catalogs are cached locally. Disabling one keeps installed addons.',
+                                'TetoTV imports Seanime online-stream providers. Manga and UI plugins are ignored because they cannot supply playback streams. Catalogs are cached locally.',
                           ),
                           SliverList.builder(
                             itemCount: state.repositories.length,

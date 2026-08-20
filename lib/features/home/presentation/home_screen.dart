@@ -5,6 +5,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
@@ -17,12 +18,14 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/tracking_status_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -49,8 +52,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   final _heroFocus = FocusNode(debugLabel: 'home.watch-now');
   final _homeNavFocus = FocusNode(debugLabel: 'home.navigation.home');
+  final _profileFocus = FocusNode(debugLabel: 'home.profile-switcher');
   final _scrollController = ScrollController();
+  final _verticalRepeatGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
+  final Map<HomeShelf, GlobalKey<_MediaShelfState>> _shelfKeys = {
+    for (final shelf in HomeShelf.values)
+      shelf: GlobalKey<_MediaShelfState>(debugLabel: 'home.${shelf.name}'),
+  };
   bool _catalogFocusSettled = false;
+  bool _hasVisibleNavigationAction = true;
   Timer? _heroTimer;
   Timer? _homeEasterEggTimer;
   late final AnimationController _homeEasterEggAnimation;
@@ -62,6 +74,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   DateTime? _lastHomeActivation;
   bool _homeRefreshInProgress = false;
   bool _showHomeEasterEgg = false;
+  bool _lastContentWasHero = true;
+  HomeShelf? _lastFocusedShelf;
+  int _lastFocusedColumn = 0;
+  List<HomeShelf> _focusableShelfOrder = const [];
 
   @override
   void initState() {
@@ -169,14 +185,135 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
-  void _focusHero() {
+  void _focusHero({bool resetScroll = true}) {
     if (!mounted) return;
     if (_heroFocus.context != null) {
       _heroFocus.requestFocus();
     } else {
-      _homeNavFocus.requestFocus();
+      _focusNavigationChrome();
     }
-    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    if (resetScroll && _scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
+
+  void _focusNavigationChrome() {
+    if (_hasVisibleNavigationAction && _homeNavFocus.context != null) {
+      _homeNavFocus.requestFocus();
+    } else if (_profileFocus.context != null) {
+      _profileFocus.requestFocus();
+    }
+  }
+
+  void _rememberHeroFocus(bool focused) {
+    if (!focused) return;
+    _lastContentWasHero = true;
+    _lastFocusedShelf = null;
+  }
+
+  void _rememberShelfFocus(HomeShelf shelf, int column) {
+    _lastContentWasHero = false;
+    _lastFocusedShelf = shelf;
+    _lastFocusedColumn = column;
+  }
+
+  void _focusShelf(HomeShelf shelf, {int? preferredColumn}) {
+    if (!mounted) return;
+    final key = _shelfKeys[shelf];
+    final state = key?.currentState;
+    if (state == null || !state.requestFocus(preferredIndex: preferredColumn)) {
+      return;
+    }
+    final rowContext = key?.currentContext;
+    if (rowContext != null) {
+      unawaited(
+        Scrollable.ensureVisible(
+          rowContext,
+          alignment: .62,
+          duration: const Duration(milliseconds: 190),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+  }
+
+  void _restoreContentFocus() {
+    final shelf = _lastFocusedShelf;
+    if (!_lastContentWasHero &&
+        shelf != null &&
+        _focusableShelfOrder.contains(shelf)) {
+      _focusShelf(shelf, preferredColumn: _lastFocusedColumn);
+      return;
+    }
+    final preferences = ref.read(settingsPreferencesProvider);
+    if (preferences.showHero && _heroFocus.context != null) {
+      _focusHero(resetScroll: false);
+      return;
+    }
+    if (_focusableShelfOrder.isNotEmpty) {
+      _focusShelf(_focusableShelfOrder.first);
+    }
+  }
+
+  KeyEventResult _handleShelfVerticalKey(
+    KeyEvent event, {
+    required int rowIndex,
+    required int column,
+    required bool showHero,
+  }) {
+    final direction = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => -1,
+      LogicalKeyboardKey.arrowDown => 1,
+      _ => 0,
+    };
+    if (direction == 0) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _verticalRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (!_verticalRepeatGate.accept(event)) return KeyEventResult.handled;
+
+    final targetRow = rowIndex + direction;
+    if (targetRow < 0) {
+      if (showHero) {
+        _focusHero(resetScroll: false);
+      } else {
+        _focusNavigationChrome();
+      }
+      return KeyEventResult.handled;
+    }
+    if (targetRow >= _focusableShelfOrder.length) {
+      return KeyEventResult.handled;
+    }
+    _focusShelf(_focusableShelfOrder[targetRow], preferredColumn: column);
+    return KeyEventResult.handled;
+  }
+
+  Future<void> _openShelfItem(HomeShelf shelf, _ShelfItem item) async {
+    final route =
+        item.route ??
+        (item.animeId == null
+            ? Uri(
+                path: '/search',
+                queryParameters: {'q': item.title},
+              ).toString()
+            : '/anime/${item.animeId}');
+    await context.push(route);
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusShelf(shelf);
+    });
+  }
+
+  Future<void> _openHero(String route) async {
+    await context.push(route);
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusHero(resetScroll: false);
+    });
   }
 
   void _handleHomeActivation() {
@@ -419,6 +556,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void dispose() {
     _heroFocus.dispose();
     _homeNavFocus.dispose();
+    _profileFocus.dispose();
+    _verticalRepeatGate.reset();
     _scrollController.dispose();
     _heroTimer?.cancel();
     _homeEasterEggTimer?.cancel();
@@ -455,6 +594,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final enabledShelves = ref.watch(homeShelfPreferencesProvider);
     final shelfOrder = ref.watch(homeShelfOrderProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
+    final accounts = ref.watch(trackingAccountsControllerProvider);
     final dismissedIds =
         ref.watch(dismissedContinueWatchingProvider).valueOrNull ??
         const <int>{};
@@ -508,122 +648,152 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
         )
         .toList(growable: false);
-    final shelfSlivers = <Widget>[];
+    final shelfRows = <_HomeShelfRow>[];
     for (final shelf in shelfOrder) {
       if (!enabledShelves.contains(shelf)) continue;
       switch (shelf) {
         case HomeShelf.tracking:
-          shelfSlivers.add(
-            SliverToBoxAdapter(
-              child: _MediaShelf(
-                title: shelf.displayName,
-                items: watchingItems,
-                preferences: preferences,
-                onManage: _manageShelfItem,
-              ),
-            ),
+          shelfRows.add(
+            _HomeShelfRow(shelf: shelf, items: watchingItems, landscape: true),
           );
           break;
         case HomeShelf.history:
           if (historyItems != null && historyItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: historyItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: historyItems));
           }
           break;
         case HomeShelf.recentlyReleased:
           if (seasonalAsync.isLoading) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelfSkeleton(
-                  title: shelf.displayName,
-                  preferences: preferences,
-                ),
-              ),
+            shelfRows.add(
+              _HomeShelfRow(shelf: shelf, items: const [], loading: true),
             );
           } else if (seasonalItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: seasonalItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: seasonalItems));
           }
           break;
         case HomeShelf.trending:
           if (trendingItems != null && trendingItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: trendingItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: trendingItems));
           }
           break;
         case HomeShelf.planned:
           if (plannedItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: plannedItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: plannedItems));
           }
           break;
         case HomeShelf.airing:
           if (airingItems != null && airingItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: airingItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: airingItems));
           }
           break;
         case HomeShelf.completed:
           if (completedItems != null && completedItems.isNotEmpty) {
-            shelfSlivers.add(
-              SliverToBoxAdapter(
-                child: _MediaShelf(
-                  title: shelf.displayName,
-                  items: completedItems,
-                  preferences: preferences,
-                  onManage: _manageShelfItem,
-                ),
-              ),
-            );
+            shelfRows.add(_HomeShelfRow(shelf: shelf, items: completedItems));
           }
           break;
       }
     }
 
+    final focusableRows = shelfRows
+        .where((row) => !row.loading && row.items.isNotEmpty)
+        .toList(growable: false);
+    _focusableShelfOrder = focusableRows
+        .map((row) => row.shelf)
+        .toList(growable: false);
+
     final responsivePadding = context.responsiveScreenPadding;
     final contentHorizontalPadding = EdgeInsets.only(
       left: responsivePadding.left,
       right: responsivePadding.right,
+    );
+    final screenSize = MediaQuery.sizeOf(context);
+    final useTvRail = !context.isCompactWidth && screenSize.width >= 840;
+    if (useTvRail) {
+      final settingsInProfileMenu =
+          accounts.profiles.isNotEmpty &&
+          !accounts.isLoading &&
+          preferences.settingsEntryPlacement ==
+              SettingsEntryPlacement.profileMenu;
+      _hasVisibleNavigationAction = preferences.topNavigationOrder.any(
+        (destination) =>
+            preferences.isTopNavigationDestinationVisible(destination) &&
+            (destination != TopNavigationDestination.settings ||
+                !settingsInProfileMenu),
+      );
+    } else {
+      _hasVisibleNavigationAction = true;
+    }
+    final railWidth = screenSize.width >= 1600
+        ? 140.0
+        : screenSize.width >= 1200
+        ? 104.0
+        : 92.0;
+    final heroHeight = (screenSize.height * .51).clamp(300.0, 500.0);
+
+    List<Widget> buildShelves({required bool tvNavigation}) {
+      return [
+        for (final row in shelfRows)
+          Padding(
+            padding: tvNavigation
+                ? EdgeInsets.fromLTRB(
+                    screenSize.width >= 1400 ? 34 : 28,
+                    0,
+                    screenSize.width >= 1400 ? 34 : 28,
+                    0,
+                  )
+                : contentHorizontalPadding,
+            child: row.loading
+                ? _MediaShelfSkeleton(
+                    title: row.shelf.displayName,
+                    preferences: preferences,
+                  )
+                : _MediaShelf(
+                    key: _shelfKeys[row.shelf],
+                    title: row.shelf.displayName,
+                    items: row.items,
+                    preferences: preferences,
+                    landscape: row.landscape,
+                    onManage: _manageShelfItem,
+                    onOpen: (item) => _openShelfItem(row.shelf, item),
+                    onFocused: (column) =>
+                        _rememberShelfFocus(row.shelf, column),
+                    onLeftEdge: tvNavigation ? _focusNavigationChrome : null,
+                    onVerticalKey: (event, column) => _handleShelfVerticalKey(
+                      event,
+                      rowIndex: _focusableShelfOrder.indexOf(row.shelf),
+                      column: column,
+                      showHero: preferences.showHero,
+                    ),
+                  ),
+          ),
+      ];
+    }
+
+    final heroRoute = hero == null ? '/search?q=Frieren' : '/anime/${hero.id}';
+    final heroPanel = _HeroPanel(
+      anime: hero,
+      isLoading: trendingAsync.isLoading,
+      focusNode: _heroFocus,
+      titlePreference: titlePreference,
+      preferences: preferences,
+      activeIndex: activeHeroIndex,
+      itemCount: heroItems.length,
+      height: useTvRail ? heroHeight : null,
+      onOpen: () => _openHero(heroRoute),
+      onFocusChanged: _rememberHeroFocus,
+      onMoveLeft: useTvRail ? _focusNavigationChrome : null,
+      onMoveUp: useTvRail
+          ? () {
+              if (_profileFocus.context != null) {
+                _profileFocus.requestFocus();
+              } else {
+                _focusNavigationChrome();
+              }
+            }
+          : null,
+      onMoveDown: _focusableShelfOrder.isEmpty
+          ? null
+          : () => _focusShelf(_focusableShelfOrder.first),
     );
 
     return Scaffold(
@@ -634,51 +804,84 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                SliverPadding(
-                  padding: contentHorizontalPadding,
-                  sliver: SliverToBoxAdapter(
-                    child: MainNavigationBar(
-                      active: MainNavigationDestination.home,
-                      preferences: preferences,
-                      homeFocusNode: _homeNavFocus,
-                      autofocusActive: !preferences.showHero,
-                      onHomePressed: _handleHomeActivation,
-                    ),
+            if (useTvRail) ...[
+              Positioned.fill(
+                left: railWidth,
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (preferences.showHero) heroPanel,
+                      if (!preferences.showHero) const SizedBox(height: 12),
+                      ...buildShelves(tvNavigation: true),
+                      const SizedBox(height: 46),
+                    ],
                   ),
                 ),
-                if (preferences.showHero)
-                  SliverPadding(
-                    padding: contentHorizontalPadding,
-                    sliver: SliverToBoxAdapter(
-                      child: _HeroPanel(
-                        anime: hero,
-                        isLoading: trendingAsync.isLoading,
-                        focusNode: _heroFocus,
-                        titlePreference: titlePreference,
+              ),
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: HomeSideNavigation(
+                  preferences: preferences,
+                  width: railWidth,
+                  homeFocusNode: _homeNavFocus,
+                  autofocusActive: !preferences.showHero,
+                  onHomePressed: _handleHomeActivation,
+                  onExitRight: _restoreContentFocus,
+                ),
+              ),
+              Positioned(
+                right: screenSize.width >= 1400 ? 30 : 22,
+                top: 12,
+                child: HomeProfileSwitcher(
+                  preferences: preferences,
+                  focusNode: _profileFocus,
+                  onKeyEvent: (_, event) {
+                    final directional =
+                        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                        event.logicalKey == LogicalKeyboardKey.arrowDown;
+                    if (!directional) return KeyEventResult.ignored;
+                    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                      _focusHero(resetScroll: false);
+                    }
+                    return KeyEventResult.handled;
+                  },
+                ),
+              ),
+            ] else
+              SingleChildScrollView(
+                controller: _scrollController,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: contentHorizontalPadding,
+                      child: MainNavigationBar(
+                        active: MainNavigationDestination.home,
                         preferences: preferences,
-                        activeIndex: activeHeroIndex,
-                        itemCount: heroItems.length,
+                        homeFocusNode: _homeNavFocus,
+                        autofocusActive: !preferences.showHero,
+                        onHomePressed: _handleHomeActivation,
                       ),
                     ),
-                  ),
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: preferences.homeLayout == HomeLayout.compact
-                        ? 10
-                        : 18,
-                  ),
+                    if (preferences.showHero)
+                      Padding(
+                        padding: contentHorizontalPadding,
+                        child: heroPanel,
+                      ),
+                    SizedBox(
+                      height: preferences.homeLayout == HomeLayout.compact
+                          ? 10
+                          : 18,
+                    ),
+                    ...buildShelves(tvNavigation: false),
+                    const SizedBox(height: 42),
+                  ],
                 ),
-                for (final shelfSliver in shelfSlivers)
-                  SliverPadding(
-                    padding: contentHorizontalPadding,
-                    sliver: shelfSliver,
-                  ),
-                const SliverToBoxAdapter(child: SizedBox(height: 42)),
-              ],
-            ),
+              ),
             if (_showHomeEasterEgg)
               Positioned.fill(
                 child: IgnorePointer(
@@ -720,6 +923,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 }
 
+class _HomeShelfRow {
+  const _HomeShelfRow({
+    required this.shelf,
+    required this.items,
+    this.loading = false,
+    this.landscape = false,
+  });
+
+  final HomeShelf shelf;
+  final List<_ShelfItem> items;
+  final bool loading;
+  final bool landscape;
+}
+
 class _HeroPanel extends StatelessWidget {
   const _HeroPanel({
     required this.focusNode,
@@ -728,6 +945,12 @@ class _HeroPanel extends StatelessWidget {
     required this.isLoading,
     required this.activeIndex,
     required this.itemCount,
+    required this.onOpen,
+    this.height,
+    this.onFocusChanged,
+    this.onMoveLeft,
+    this.onMoveUp,
+    this.onMoveDown,
     this.anime,
   });
 
@@ -738,15 +961,23 @@ class _HeroPanel extends StatelessWidget {
   final bool isLoading;
   final int activeIndex;
   final int itemCount;
+  final double? height;
+  final VoidCallback onOpen;
+  final ValueChanged<bool>? onFocusChanged;
+  final VoidCallback? onMoveLeft;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
 
   @override
   Widget build(BuildContext context) {
-    final route = anime == null ? '/search?q=Frieren' : '/anime/${anime!.id}';
     final compact = context.isCompactWidth;
     final dense = preferences.homeLayout == HomeLayout.compact;
+    final cinematicTv = height != null && !compact;
+    final shortTvHero = cinematicTv && height! < 360;
+    final sectionGap = shortTvHero ? 8.0 : 14.0;
     return Container(
       key: const ValueKey('home-hero'),
-      height: dense ? (compact ? 270 : 224) : (compact ? 340 : 292),
+      height: height ?? (dense ? (compact ? 270 : 224) : (compact ? 340 : 292)),
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(color: context.appPalette.surface),
       child: Stack(
@@ -804,18 +1035,16 @@ class _HeroPanel extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.fromLTRB(
-              compact ? 15 : 18,
-              compact ? 18 : 22,
-              compact ? 15 : 24,
-              compact ? 16 : 22,
+              cinematicTv ? 34 : (compact ? 15 : 18),
+              shortTvHero ? 36 : (cinematicTv ? 74 : (compact ? 18 : 22)),
+              cinematicTv ? 28 : (compact ? 15 : 24),
+              shortTvHero ? 24 : (cinematicTv ? 41 : (compact ? 16 : 22)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _Eyebrow(text: 'FEATURED NOW'),
-                const SizedBox(height: 8),
                 SizedBox(
-                  width: compact ? double.infinity : 620,
+                  width: compact ? double.infinity : 560,
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 260),
                     transitionBuilder: (child, animation) =>
@@ -827,15 +1056,39 @@ class _HeroPanel extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        fontSize: compact ? 30 : 40,
-                        height: 1,
+                        fontSize: cinematicTv
+                            ? (shortTvHero ? 38 : (dense ? 38 : 48))
+                            : (compact ? 30 : 40),
+                        height: .98,
+                        fontWeight: FontWeight.w900,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: sectionGap),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 7,
+                  children: [
+                    if (anime?.season case final season?)
+                      _HeroInfoChip(
+                        text:
+                            '${_titleCaseLabel(season)}'
+                            '${anime?.seasonYear == null ? '' : ' ${anime!.seasonYear}'}',
+                      )
+                    else if (anime?.seasonYear case final year?)
+                      _HeroInfoChip(text: '$year'),
+                    if (anime?.episodes case final episodes?)
+                      _HeroInfoChip(text: '$episodes episodes'),
+                    if (anime?.format case final format?)
+                      _HeroInfoChip(text: format.replaceAll('_', ' ')),
+                    if (anime?.status case final status?)
+                      _HeroInfoChip(text: status.replaceAll('_', ' ')),
+                  ],
+                ),
+                SizedBox(height: sectionGap),
                 SizedBox(
-                  width: compact ? double.infinity : 610,
+                  width: compact ? double.infinity : 590,
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 260),
                     transitionBuilder: (child, animation) =>
@@ -846,11 +1099,11 @@ class _HeroPanel extends StatelessWidget {
                           ? anime!.description
                           : 'An elven mage retraces a legendary journey and '
                                 'discovers what the brief lives of her friends meant.',
-                      maxLines: dense ? 2 : (compact ? 5 : 4),
+                      maxLines: dense ? 2 : (compact ? 4 : 2),
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: context.appPalette.primaryText,
-                        height: 1.32,
+                        height: 1.38,
                       ),
                     ),
                   ),
@@ -866,7 +1119,21 @@ class _HeroPanel extends StatelessWidget {
                       autofocus: true,
                       icon: Icons.play_arrow_rounded,
                       label: 'Watch now',
-                      onPressed: () => context.push(route),
+                      onPressed: onOpen,
+                      onFocusChanged: onFocusChanged,
+                      onKeyEvent: (_, event) {
+                        final callback = switch (event.logicalKey) {
+                          LogicalKeyboardKey.arrowLeft => onMoveLeft,
+                          LogicalKeyboardKey.arrowUp => onMoveUp,
+                          LogicalKeyboardKey.arrowDown => onMoveDown,
+                          _ => null,
+                        };
+                        if (callback == null) return KeyEventResult.ignored;
+                        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                          callback();
+                        }
+                        return KeyEventResult.handled;
+                      },
                     ),
                     SizedBox(width: compact ? 2 : 16),
                     if (anime?.score case final score?)
@@ -880,8 +1147,6 @@ class _HeroPanel extends StatelessWidget {
                       _HeroMeta(text: '$year'),
                     if (anime?.durationMinutes case final minutes?)
                       _HeroMeta(text: '$minutes min'),
-                    if (anime?.episodes case final episodes?)
-                      _HeroMeta(text: '$episodes episodes'),
                   ],
                 ),
               ],
@@ -895,6 +1160,20 @@ class _HeroPanel extends StatelessWidget {
                 children: [
                   for (var index = 0; index < itemCount; index++)
                     _HeroDot(active: index == activeIndex),
+                ],
+              ),
+            ),
+          if (!compact && anime?.genres.isNotEmpty == true)
+            Positioned(
+              right: 24,
+              bottom: 58,
+              child: Row(
+                children: [
+                  for (final genre in anime!.genres.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: _HeroInfoChip(text: genre),
+                    ),
                 ],
               ),
             ),
@@ -935,6 +1214,32 @@ class _HeroMeta extends StatelessWidget {
   }
 }
 
+class _HeroInfoChip extends StatelessWidget {
+  const _HeroInfoChip({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .52),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: Colors.white.withValues(alpha: .14)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: context.appPalette.accentBright,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
 class _HeroDot extends StatelessWidget {
   const _HeroDot({this.active = false});
 
@@ -954,65 +1259,171 @@ class _HeroDot extends StatelessWidget {
   }
 }
 
-class _MediaShelf extends StatelessWidget {
+({double height, double width}) _posterCardMetrics(
+  BuildContext context, {
+  required bool dense,
+}) {
+  final compact = context.isCompactWidth;
+  final screenWidth = MediaQuery.sizeOf(context).width;
+  if (screenWidth >= 1600) {
+    return (height: dense ? 238 : 278, width: dense ? 144 : 166);
+  }
+  if (screenWidth >= 1200) {
+    return (height: dense ? 205 : 240, width: dense ? 118 : 138);
+  }
+  return (
+    height: dense ? (compact ? 198 : 170) : (compact ? 238 : 205),
+    width: dense ? (compact ? 104 : 88) : (compact ? 126 : 106),
+  );
+}
+
+class _MediaShelf extends StatefulWidget {
   const _MediaShelf({
     required this.title,
     required this.items,
     required this.preferences,
+    required this.onOpen,
+    required this.onFocused,
+    required this.onVerticalKey,
+    this.landscape = false,
+    this.onLeftEdge,
     this.onManage,
+    super.key,
   });
 
   final String title;
   final List<_ShelfItem> items;
   final SettingsPreferences preferences;
+  final ValueChanged<_ShelfItem> onOpen;
+  final ValueChanged<int> onFocused;
+  final KeyEventResult Function(KeyEvent event, int column) onVerticalKey;
+  final bool landscape;
+  final VoidCallback? onLeftEdge;
   final ValueChanged<_ShelfItem>? onManage;
 
   @override
+  State<_MediaShelf> createState() => _MediaShelfState();
+}
+
+class _MediaShelfState extends State<_MediaShelf> {
+  late final TvShelfFocusController _focusController;
+  double _itemExtent = 0;
+  double _itemSpacing = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusController = TvShelfFocusController(
+      debugLabel: 'home.shelf.${widget.title}',
+      itemCount: widget.items.length,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _MediaShelf oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _focusController.syncItemCount(widget.items.length);
+  }
+
+  bool requestFocus({int? preferredIndex}) {
+    final focused = _focusController.requestFocus(
+      preferredIndex: preferredIndex,
+    );
+    if (!focused) return false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _itemExtent <= 0) return;
+      _focusController.reveal(
+        index: _focusController.selectedIndex,
+        itemExtent: _itemExtent,
+        spacing: _itemSpacing,
+      );
+    });
+    return true;
+  }
+
+  @override
+  void dispose() {
+    _focusController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final compact = context.isCompactWidth;
-    final dense = preferences.homeLayout == HomeLayout.compact;
-    final posterHeight = dense
-        ? (compact ? 198.0 : 170.0)
-        : (compact ? 238.0 : 205.0);
-    final posterWidth = dense
-        ? (compact ? 104.0 : 88.0)
-        : (compact ? 126.0 : 106.0);
-    final cardHeight = posterHeight * preferences.thumbnailScale;
-    final artworkHeight =
-        cardHeight - (preferences.showCardSubtitles ? 60.0 : 46.0);
+    final dense = widget.preferences.homeLayout == HomeLayout.compact;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final posterMetrics = _posterCardMetrics(context, dense: dense);
+    final spacing = 12 * widget.preferences.contentDensity.spacingScale;
+    final width = widget.landscape
+        ? (screenWidth >= 1600
+                  ? (dense ? 304.0 : 350.0)
+                  : dense
+                  ? 238.0
+                  : 278.0) *
+              widget.preferences.thumbnailScale
+        : posterMetrics.width * widget.preferences.thumbnailScale;
+    final cardHeight = widget.landscape
+        ? width * 9 / 16
+        : posterMetrics.height * widget.preferences.thumbnailScale;
+    final artworkHeight = widget.landscape
+        ? cardHeight
+        : cardHeight - (widget.preferences.showCardSubtitles ? 60.0 : 46.0);
+    _itemExtent = width;
+    _itemSpacing = spacing;
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 12 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
-          SizedBox(height: 9 * preferences.contentDensity.spacingScale),
+          Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
+          SizedBox(
+            height:
+                (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
+                widget.preferences.contentDensity.spacingScale,
+          ),
           SizedBox(
             height: cardHeight,
             child: ListView.separated(
+              controller: _focusController.scrollController,
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
-              itemCount: items.length,
-              separatorBuilder: (_, _) =>
-                  SizedBox(width: 10 * preferences.contentDensity.spacingScale),
+              itemCount: widget.items.length,
+              separatorBuilder: (_, _) => SizedBox(width: spacing),
               itemBuilder: (context, index) {
-                final item = items[index];
+                final item = widget.items[index];
                 return _PosterCard(
                   item: item,
-                  width: posterWidth * preferences.thumbnailScale,
+                  width: width,
                   artworkHeight: artworkHeight,
-                  preferences: preferences,
-                  onPressed: () => item.route != null
-                      ? context.push(item.route!)
-                      : item.animeId == null
-                      ? context.push(
-                          Uri(
-                            path: '/search',
-                            queryParameters: {'q': item.title},
-                          ).toString(),
-                        )
-                      : context.push('/anime/${item.animeId}'),
-                  onLongPress: onManage == null ? null : () => onManage!(item),
+                  preferences: widget.preferences,
+                  landscape: widget.landscape,
+                  focusNode: _focusController.focusNodeAt(index),
+                  onFocusChanged: (focused) {
+                    if (!focused) return;
+                    _focusController.rememberIndex(index);
+                    _focusController.reveal(
+                      index: index,
+                      itemExtent: width,
+                      spacing: spacing,
+                    );
+                    widget.onFocused(index);
+                  },
+                  onKeyEvent: (_, event) {
+                    final horizontal = _focusController.handleHorizontalKey(
+                      event,
+                      currentIndex: index,
+                      itemExtent: width,
+                      spacing: spacing,
+                      onLeftEdge: widget.onLeftEdge,
+                    );
+                    if (horizontal == KeyEventResult.handled) {
+                      return horizontal;
+                    }
+                    return widget.onVerticalKey(event, index);
+                  },
+                  onPressed: () => widget.onOpen(item),
+                  onLongPress: widget.onManage == null
+                      ? null
+                      : () => widget.onManage!(item),
                 );
               },
             ),
@@ -1031,16 +1442,10 @@ class _MediaShelfSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = context.isCompactWidth;
     final dense = preferences.homeLayout == HomeLayout.compact;
-    final posterHeight = dense
-        ? (compact ? 198.0 : 170.0)
-        : (compact ? 238.0 : 205.0);
-    final posterWidth = dense
-        ? (compact ? 104.0 : 88.0)
-        : (compact ? 126.0 : 106.0);
-    final width = posterWidth * preferences.thumbnailScale;
-    final cardHeight = posterHeight * preferences.thumbnailScale;
+    final posterMetrics = _posterCardMetrics(context, dense: dense);
+    final width = posterMetrics.width * preferences.thumbnailScale;
+    final cardHeight = posterMetrics.height * preferences.thumbnailScale;
     final artworkHeight =
         cardHeight - (preferences.showCardSubtitles ? 60.0 : 46.0);
     return Padding(
@@ -1049,7 +1454,11 @@ class _MediaShelfSkeleton extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title, style: Theme.of(context).textTheme.titleLarge),
-          SizedBox(height: 9 * preferences.contentDensity.spacingScale),
+          SizedBox(
+            height:
+                (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
+                preferences.contentDensity.spacingScale,
+          ),
           SizedBox(
             height: cardHeight,
             child: ListView.separated(
@@ -1119,6 +1528,10 @@ class _PosterCard extends StatelessWidget {
     required this.artworkHeight,
     required this.onPressed,
     required this.preferences,
+    required this.focusNode,
+    required this.onFocusChanged,
+    required this.onKeyEvent,
+    this.landscape = false,
     this.onLongPress,
   });
 
@@ -1128,12 +1541,20 @@ class _PosterCard extends StatelessWidget {
   final double width;
   final double artworkHeight;
   final SettingsPreferences preferences;
+  final FocusNode focusNode;
+  final ValueChanged<bool> onFocusChanged;
+  final FocusOnKeyEventCallback onKeyEvent;
+  final bool landscape;
 
   @override
   Widget build(BuildContext context) {
+    if (landscape) return _buildLandscape(context);
     return SizedBox(
       width: width,
       child: TvFocusable(
+        focusNode: focusNode,
+        onFocusChanged: onFocusChanged,
+        onKeyEvent: onKeyEvent,
         onPressed: onPressed,
         onLongPress: onLongPress,
         focusScale: 1.025,
@@ -1241,6 +1662,100 @@ class _PosterCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildLandscape(BuildContext context) {
+    final episodeMatch = RegExp(
+      r'Episode\s+(\d+)',
+      caseSensitive: false,
+    ).firstMatch(item.subtitle);
+    return SizedBox(
+      width: width,
+      child: TvFocusable(
+        focusNode: focusNode,
+        onFocusChanged: onFocusChanged,
+        onKeyEvent: onKeyEvent,
+        onPressed: onPressed,
+        onLongPress: onLongPress,
+        focusScale: 1.025,
+        borderRadius: BorderRadius.circular(8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Stack(
+            key: ValueKey('home-continue-card-${item.animeId ?? item.title}'),
+            fit: StackFit.expand,
+            children: [
+              NetworkArtwork(url: item.coverImageUrl, cacheWidth: 560),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.transparent, Color(0xF2000000)],
+                    stops: [.34, 1],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: item.progress == null ? 12 : 19,
+                child: Text(
+                  item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: context.appPalette.primaryText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    shadows: const [Shadow(color: Colors.black, blurRadius: 8)],
+                  ),
+                ),
+              ),
+              if (episodeMatch?.group(1) case final episode?)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: .82),
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Text(
+                      'EP $episode',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              if (item.progress case final progress?)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 8,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 4,
+                      backgroundColor: Colors.white24,
+                      color: context.appPalette.accentBright,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _TvButton extends StatelessWidget {
@@ -1250,6 +1765,8 @@ class _TvButton extends StatelessWidget {
     required this.onPressed,
     this.autofocus = false,
     this.focusNode,
+    this.onFocusChanged,
+    this.onKeyEvent,
   });
 
   final IconData icon;
@@ -1257,12 +1774,16 @@ class _TvButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool autofocus;
   final FocusNode? focusNode;
+  final ValueChanged<bool>? onFocusChanged;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       autofocus: autofocus,
       focusNode: focusNode,
+      onFocusChanged: onFocusChanged,
+      onKeyEvent: onKeyEvent,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(99),
       focusScale: 1.03,
@@ -1286,25 +1807,6 @@ class _TvButton extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _Eyebrow extends StatelessWidget {
-  const _Eyebrow({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: context.appPalette.accentBright,
-        fontSize: 11,
-        fontWeight: FontWeight.w900,
-        letterSpacing: 1.6,
       ),
     );
   }
@@ -1598,6 +2100,12 @@ bool _isTrackedAnime(AnimeSummary anime, List<HomeTrackedAnime> tracked) {
 
 String _normalizedAnimeTitle(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+
+String _titleCaseLabel(String value) {
+  final normalized = value.trim().replaceAll('_', ' ').toLowerCase();
+  if (normalized.isEmpty) return value;
+  return '${normalized[0].toUpperCase()}${normalized.substring(1)}';
+}
 
 String _shortDuration(Duration duration) {
   final minutes = duration.inMinutes;

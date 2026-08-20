@@ -167,6 +167,7 @@ void main() {
       expect(_authorization(request), isNull);
       expect(release.version, '1.0.2');
       expect(release.notes, 'Notes for 1.0.2');
+      expect(release.releasedAtUtc, DateTime.utc(2026, 8, 16, 19, 24, 30));
       expect(release.asset.name, 'TetoTV-v1.0.2-universal.apk');
       expect(
         release.asset.publicUrl,
@@ -200,7 +201,73 @@ void main() {
       );
       expect(_authorization(request), isNull);
       expect(release.version, '2.0.5');
+      expect(release.releasedAtUtc, DateTime.utc(2026, 8, 16, 19, 24, 30));
       expect(release.asset.name, endsWith('-universal.apk'));
+    });
+
+    test('release date prefers published_at and safely falls back', () async {
+      final published = await GitHubAppReleaseSource(
+        _metadataDio(
+          (_) => _githubRelease(
+            '1.0.2',
+            repository: tetoTvPublicReleaseRepository,
+            publishedAt: '2026-08-16T14:24:30-05:00',
+            createdAt: '2026-08-14T01:02:03Z',
+          ),
+        ),
+      ).latest(deviceAbis: const []);
+      expect(published.releasedAtUtc, DateTime.utc(2026, 8, 16, 19, 24, 30));
+
+      final created = await GitHubAppReleaseSource(
+        _metadataDio(
+          (_) => _githubRelease(
+            '1.0.2',
+            repository: tetoTvPublicReleaseRepository,
+            publishedAt: 'not-a-date',
+            createdAt: '2026-08-14T01:02:03Z',
+          ),
+        ),
+      ).latest(deviceAbis: const []);
+      expect(created.releasedAtUtc, DateTime.utc(2026, 8, 14, 1, 2, 3));
+
+      final missing = await GitHubAppReleaseSource(
+        _metadataDio(
+          (_) => _githubRelease(
+            '1.0.2',
+            repository: tetoTvPublicReleaseRepository,
+            publishedAt: null,
+            createdAt: 'invalid',
+          ),
+        ),
+      ).latest(deviceAbis: const []);
+      expect(missing.releasedAtUtc, isNull);
+    });
+
+    test('Public and Beta version labels include a clear release date', () {
+      final publicRelease = AppReleaseInfo(
+        tagName: 'v1.0.2',
+        version: '1.0.2',
+        name: 'TetoTV 1.0.2',
+        asset: _directRelease.asset,
+        releasedAtUtc: DateTime.utc(2026, 8, 16, 23, 59),
+      );
+      final betaRelease = AppReleaseInfo(
+        tagName: 'v2.0.10',
+        version: '2.0.10',
+        name: 'TetoTV 2.0.10',
+        asset: _directRelease.asset,
+        releasedAtUtc: DateTime.utc(2026, 8, 16, 23, 59),
+      );
+
+      expect(
+        appReleaseDisplayLabel(publicRelease, AppUpdateChannel.public),
+        '1.0.2 • Aug 16, 2026',
+      );
+      expect(
+        appReleaseDisplayLabel(betaRelease, AppUpdateChannel.beta),
+        '2.0.10 Beta • Aug 16, 2026',
+      );
+      expect(formatAppReleaseDate(null), isNull);
     });
 
     test('Beta does not require the GitHub prerelease flag', () async {
@@ -280,6 +347,10 @@ void main() {
         expect(request?.uri.queryParameters['per_page'], '20');
         expect(_authorization(request), isNull);
         expect(releases.map((item) => item.version), ['1.0.2', '1.0.1']);
+        expect(
+          releases.map((item) => item.releasedAtUtc),
+          everyElement(DateTime.utc(2026, 8, 16, 19, 24, 30)),
+        );
       },
     );
 
@@ -315,6 +386,10 @@ void main() {
         expect(request?.uri.path, '/repos/LindersOSX/TetoTV/releases');
         expect(_authorization(request), isNull);
         expect(releases.map((item) => item.version), ['2.0.5', '2.0.4']);
+        expect(
+          releases.map((item) => item.releasedAtUtc),
+          everyElement(DateTime.utc(2026, 8, 16, 19, 24, 30)),
+        );
       },
     );
 
@@ -1065,12 +1140,16 @@ Map<String, dynamic> _githubRelease(
   required String repository,
   bool draft = false,
   bool prerelease = false,
+  String? publishedAt = '2026-08-16T19:24:30Z',
+  String? createdAt,
 }) => <String, dynamic>{
   'tag_name': 'v$version',
   'name': 'TetoTV $version',
   'body': 'Notes for $version',
   'draft': draft,
   'prerelease': prerelease,
+  'published_at': ?publishedAt,
+  'created_at': ?createdAt,
   'assets': [
     _githubAsset(
       version: version,

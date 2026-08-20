@@ -100,10 +100,15 @@ void main() {
               if ($getUserPreference('baseUrl') !== 'https://example.com/catalog/') {
                 throw new Error('user config defaults were not injected');
               }
-              if (input.year !== 0 || input.media.status !== 'NOT_YET_RELEASED' ||
-                  input.media.format !== 'TV' || input.media.episodeCount !== -1 ||
-                  input.media.isAdult !== false || input.media.startDate !== undefined) {
-                throw new Error('Seanime search/media defaults are incompatible');
+              if (input.year !== 2024 || input.media.status !== 'FINISHED' ||
+                  input.media.format !== 'ONA' || input.media.episodeCount !== 12 ||
+                  input.media.isAdult !== false || input.media.startDate.year !== 2024 ||
+                  Object.keys(input.media.startDate).length !== 1 ||
+                  input.media.englishTitle !== 'Fixture Anime' ||
+                  input.media.romajiTitle !== 'Fixture Anime Romaji' ||
+                  input.media.synonyms.includes('Fixture Anime') ||
+                  !input.media.synonyms.includes('Fixture Alternate')) {
+                throw new Error('Seanime search/media metadata is incompatible');
               }
               const $ = LoadDoc(`
                 <main>
@@ -212,6 +217,13 @@ void main() {
             const EpisodeReference(
               anilistMediaId: 1,
               title: 'Fixture Anime',
+              titleEnglish: 'Fixture Anime',
+              titleRomaji: 'Fixture Anime Romaji',
+              alternativeTitles: ['Fixture Anime Romaji', 'Fixture Alternate'],
+              status: 'FINISHED',
+              format: 'ONA',
+              episodeCount: 12,
+              year: 2024,
               episode: 2,
             ),
           );

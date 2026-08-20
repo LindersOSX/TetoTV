@@ -35,6 +35,8 @@ void main() {
     expect(result.streams.single.providerName, 'Working');
     expect(result.failures, hasLength(1));
     expect(result.failures.single.providerName, 'Broken');
+    expect(result.failures.single.message, 'offline');
+    expect(result.failures.single.message, isNot(contains('Bad state')));
   });
 
   test('duplicate stream URLs are collapsed across providers', () async {

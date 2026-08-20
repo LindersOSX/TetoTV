@@ -157,6 +157,7 @@ class Media3PlayerSafetyTest {
             viewerSelectionActive = false,
             candidateMatchesPreference = false,
             candidateMatchesLastOverride = false,
+            candidateAlreadySelected = false,
         )
         assertTrue(provisional.applyOverride)
         assertFalse(provisional.markPreferredApplied)
@@ -166,6 +167,7 @@ class Media3PlayerSafetyTest {
             viewerSelectionActive = false,
             candidateMatchesPreference = false,
             candidateMatchesLastOverride = true,
+            candidateAlreadySelected = true,
         )
         assertFalse(repeatedSnapshot.applyOverride)
         assertFalse(repeatedSnapshot.markPreferredApplied)
@@ -175,9 +177,24 @@ class Media3PlayerSafetyTest {
             viewerSelectionActive = false,
             candidateMatchesPreference = true,
             candidateMatchesLastOverride = false,
+            candidateAlreadySelected = false,
         )
         assertTrue(preferredArrives.applyOverride)
         assertTrue(preferredArrives.markPreferredApplied)
+    }
+
+    @Test
+    fun `preferred dub is reasserted when a later snapshot selects Japanese`() {
+        val action = nativePreferredAudioOverrideAction(
+            preferredAlreadyApplied = true,
+            viewerSelectionActive = false,
+            candidateMatchesPreference = true,
+            candidateMatchesLastOverride = true,
+            candidateAlreadySelected = false,
+        )
+
+        assertTrue(action.applyOverride)
+        assertTrue(action.markPreferredApplied)
     }
 
     @Test
@@ -187,6 +204,7 @@ class Media3PlayerSafetyTest {
             viewerSelectionActive = true,
             candidateMatchesPreference = true,
             candidateMatchesLastOverride = false,
+            candidateAlreadySelected = false,
         )
 
         assertFalse(action.applyOverride)

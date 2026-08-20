@@ -6,11 +6,16 @@ abstract final class AppConfig {
 
   static const sourcePairingBrokerBaseUrl = String.fromEnvironment(
     'SOURCE_PAIRING_BROKER_BASE_URL',
-    defaultValue: 'https://tetotv-updates-lindows.onrender.com',
+    defaultValue: 'https://tetotv-bot.wisp.uno',
   );
 
   static const crashReportBaseUrl = String.fromEnvironment(
     'CRASH_REPORT_BASE_URL',
+    defaultValue: 'https://tetotv-bot.wisp.uno',
+  );
+
+  static const diagnosticReportBaseUrl = String.fromEnvironment(
+    'DIAGNOSTIC_REPORT_BASE_URL',
     defaultValue: 'https://tetotv-bot.wisp.uno',
   );
 
@@ -23,6 +28,8 @@ abstract final class AppConfig {
       sourcePairingBrokerBaseUrl.trim().isNotEmpty;
   static bool get hasCrashReportEndpoint =>
       crashReportBaseUrl.trim().isNotEmpty;
+  static bool get hasDiagnosticReportEndpoint =>
+      diagnosticReportBaseUrl.trim().isNotEmpty;
   static bool get hasReleaseResolver =>
       releaseResolverBaseUrl.trim().isNotEmpty;
 }

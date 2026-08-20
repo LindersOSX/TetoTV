@@ -4,6 +4,7 @@ import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -73,12 +74,22 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     });
   }
 
-  KeyEventResult _handleNavigation(FocusNode _, KeyEvent event) {
+  KeyEventResult _handleNavigation(
+    FocusNode _,
+    KeyEvent event, {
+    TetoTopLevelLayout? layout,
+  }) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
+    if (layout?.usesTvRail == true &&
+        current == _backFocus &&
+        key == LogicalKeyboardKey.arrowLeft) {
+      layout!.focusRail();
+      return KeyEventResult.handled;
+    }
     if (current == _backFocus && key == LogicalKeyboardKey.arrowRight) {
       (_resetFocus.context == null ? _filtersFocus : _resetFocus)
           .requestFocus();
@@ -144,114 +155,117 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
     final summary = _filterSummary(_filters);
-    return Focus(
-      onKeyEvent: _handleNavigation,
-      child: Scaffold(
-        backgroundColor: context.appPalette == AppThemePalette.defaults
-            ? Colors.black
-            : context.appPalette.background,
-        body: SafeArea(
-          minimum: context.responsiveScreenPadding.copyWith(top: 0, bottom: 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+    return TetoTopLevelShell(
+      preferences: preferences,
+      activeDestination: TopNavigationDestination.discover,
+      firstContentFocusNode: _backFocus,
+      builder: (context, layout) => Focus(
+        onKeyEvent: (node, event) =>
+            _handleNavigation(node, event, layout: layout),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!layout.usesTvRail)
               MainNavigationBar(
                 active: MainNavigationDestination.discover,
                 preferences: preferences,
               ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _HeaderButton(
+                  focusNode: _backFocus,
+                  icon: Icons.arrow_back_rounded,
+                  label: context.isCompactWidth ? null : 'Back',
+                  onPressed: () => _returnToPreviousOrHome(context),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Discover',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              fontSize: layout.usesTvRail ? 30 : null,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      Text(
+                        summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: context.appPalette.mutedText),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_hasFilters(_filters)) ...[
                   _HeaderButton(
-                    focusNode: _backFocus,
-                    icon: Icons.arrow_back_rounded,
-                    label: context.isCompactWidth ? null : 'Back',
-                    onPressed: () => _returnToPreviousOrHome(context),
+                    focusNode: _resetFocus,
+                    icon: Icons.filter_alt_off_rounded,
+                    label: context.isCompactWidth ? null : 'Reset',
+                    onPressed: _reset,
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Discover',
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        Text(
-                          summary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: context.appPalette.mutedText),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_hasFilters(_filters)) ...[
-                    _HeaderButton(
-                      focusNode: _resetFocus,
-                      icon: Icons.filter_alt_off_rounded,
-                      label: context.isCompactWidth ? null : 'Reset',
-                      onPressed: _reset,
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  _HeaderButton(
-                    focusNode: _filtersFocus,
-                    icon: Icons.tune_rounded,
-                    label: context.isCompactWidth ? null : 'Filters',
-                    autofocus: true,
-                    onPressed: _openFilters,
-                  ),
+                  const SizedBox(width: 8),
                 ],
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: FutureBuilder<List<AnimeSummary>>(
-                  future: _results,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState != ConnectionState.done) {
-                      return Center(
-                        child: CircularProgressIndicator(
-                          color: context.appPalette.accentBright,
-                        ),
-                      );
-                    }
-                    if (snapshot.hasError) {
-                      return _DiscoverError(
-                        message: snapshot.error.toString(),
-                        onRetry: () => setState(() => _results = _discover()),
-                        onReset: _reset,
-                      );
-                    }
-                    final items = snapshot.data ?? const <AnimeSummary>[];
-                    if (items.isEmpty) {
-                      return Center(
-                        child: Text(
-                          'No anime matched these filters.',
-                          style: TextStyle(color: context.appPalette.mutedText),
-                        ),
-                      );
-                    }
-                    return CatalogGrid(
-                      items: items,
-                      titlePreference: titlePreference,
-                      autofocus: false,
-                      firstFocusNode: _firstResultFocus,
-                      onNavigateUpFromFirstRow: () =>
-                          _focusAndReveal(_filtersFocus, towardEnd: false),
-                      onLongPress: (anime) => unawaited(
-                        manageCatalogTrackingStatus(
-                          context: context,
-                          ref: ref,
-                          anime: anime,
-                        ),
+                _HeaderButton(
+                  focusNode: _filtersFocus,
+                  icon: Icons.tune_rounded,
+                  label: context.isCompactWidth ? null : 'Filters',
+                  autofocus: true,
+                  onPressed: _openFilters,
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: FutureBuilder<List<AnimeSummary>>(
+                future: _results,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return Center(
+                      child: CircularProgressIndicator(
+                        color: context.appPalette.accentBright,
                       ),
                     );
-                  },
-                ),
+                  }
+                  if (snapshot.hasError) {
+                    return _DiscoverError(
+                      message: snapshot.error.toString(),
+                      onRetry: () => setState(() => _results = _discover()),
+                      onReset: _reset,
+                    );
+                  }
+                  final items = snapshot.data ?? const <AnimeSummary>[];
+                  if (items.isEmpty) {
+                    return Center(
+                      child: Text(
+                        'No anime matched these filters.',
+                        style: TextStyle(color: context.appPalette.mutedText),
+                      ),
+                    );
+                  }
+                  return CatalogGrid(
+                    items: items,
+                    titlePreference: titlePreference,
+                    autofocus: false,
+                    firstFocusNode: _firstResultFocus,
+                    onNavigateUpFromFirstRow: () =>
+                        _focusAndReveal(_filtersFocus, towardEnd: false),
+                    onLongPress: (anime) => unawaited(
+                      manageCatalogTrackingStatus(
+                        context: context,
+                        ref: ref,
+                        anime: anime,
+                      ),
+                    ),
+                  );
+                },
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

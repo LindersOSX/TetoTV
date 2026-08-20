@@ -9,10 +9,13 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
+import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,7 +33,9 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _queryController = TextEditingController();
+  final _backFocusNode = FocusNode(debugLabel: 'search.back');
   final _searchFocusNode = FocusNode(debugLabel: 'search_input');
+  final _voiceFocusNode = FocusNode(debugLabel: 'search.voice');
   final _firstResultFocusNode = FocusNode(debugLabel: 'search.result.first');
   Timer? _debounce;
   AsyncValue<List<AnimeSummary>> _results = const AsyncData([]);
@@ -52,7 +57,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void dispose() {
     _debounce?.cancel();
     _queryController.dispose();
+    _backFocusNode.dispose();
     _searchFocusNode.dispose();
+    _voiceFocusNode.dispose();
     _firstResultFocusNode.dispose();
     super.dispose();
   }
@@ -155,110 +162,207 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Future<void> _manageAnime(AnimeSummary anime) =>
       manageCatalogTrackingStatus(context: context, ref: ref, anime: anime);
 
+  KeyEventResult _handleHeaderNavigation(
+    KeyEvent event,
+    TetoTopLevelLayout layout,
+  ) {
+    final key = event.logicalKey;
+    final directional =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) return KeyEventResult.handled;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+
+    final current = FocusManager.instance.primaryFocus;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (current == _backFocusNode) {
+        if (!layout.usesTvRail) return KeyEventResult.ignored;
+        layout.focusRail();
+        return KeyEventResult.handled;
+      }
+      if (current == _searchFocusNode) {
+        _backFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (current == _voiceFocusNode) {
+        _searchFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (current == _backFocusNode) {
+        _searchFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (current == _searchFocusNode) {
+        _voiceFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
+    }
+    if (key == LogicalKeyboardKey.arrowDown &&
+        (_results.valueOrNull?.isNotEmpty ?? false) &&
+        _firstResultFocusNode.context != null) {
+      _firstResultFocusNode.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
-    return Scaffold(
+    final preferences = ref.watch(settingsPreferencesProvider);
+    return TetoTopLevelShell(
+      preferences: preferences,
+      activeDestination: TopNavigationDestination.search,
+      firstContentFocusNode: _backFocusNode,
+      onActiveDestinationPressed: _searchFocusNode.requestFocus,
       resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        minimum: context.responsiveScreenPadding,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final back = TvFocusable(
-                  onPressed: context.pop,
-                  borderRadius: BorderRadius.circular(10),
-                  child: ColoredBox(
-                    color: context.appPalette.surface,
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: Icon(Icons.arrow_back_rounded, size: 20),
-                    ),
-                  ),
-                );
-                final input = TvTextInput(
-                  focusNode: _searchFocusNode,
-                  controller: _queryController,
-                  labelText: 'Search',
-                  hintText: 'Title, synonym, or Japanese name',
-                  keyboardTitle: 'Search anime',
-                  autofocus: true,
-                  onChanged: _queueSearch,
-                  onSubmitted: _submitSearch,
-                );
-                final voice = TvFocusable(
-                  onPressed: () => unawaited(_voiceSearch()),
-                  borderRadius: BorderRadius.circular(12),
-                  focusScale: 1.03,
-                  child: Container(
-                    width: 52,
-                    height: 52,
-                    alignment: Alignment.center,
-                    color: context.appPalette.surface,
-                    child: Icon(
-                      _voiceSearching
-                          ? Icons.graphic_eq_rounded
-                          : Icons.mic_rounded,
-                      color: context.appPalette.accentBright,
-                      size: 25,
-                    ),
-                  ),
-                );
-                if (constraints.maxWidth < 620) {
-                  return Column(
-                    children: [
-                      Row(
-                        children: [
-                          back,
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Search anime',
-                              style: Theme.of(context).textTheme.titleLarge,
+      builder: (context, layout) {
+        final responsivePadding = context.responsiveScreenPadding;
+        return Padding(
+          padding: layout.usesTvRail
+              ? EdgeInsets.zero
+              : EdgeInsets.only(
+                  top: responsivePadding.top,
+                  bottom: responsivePadding.bottom,
+                ),
+          child: Focus(
+            canRequestFocus: false,
+            onKeyEvent: (_, event) => _handleHeaderNavigation(event, layout),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final back = TvFocusable(
+                      focusNode: _backFocusNode,
+                      onPressed: () => _returnToPreviousOrHome(context),
+                      borderRadius: BorderRadius.circular(10),
+                      focusScale: 1.02,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: context.appPalette.surface.withValues(
+                            alpha: .92,
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: context.appPalette.primaryText.withValues(
+                              alpha: .11,
                             ),
                           ),
-                          voice,
-                        ],
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.arrow_back_rounded, size: 20),
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      input,
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    back,
-                    const SizedBox(width: 18),
-                    Text(
-                      'Search anime',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(width: 28),
-                    Expanded(child: input),
-                    const SizedBox(width: 10),
-                    voice,
-                  ],
-                );
-              },
+                    );
+                    final input = TvTextInput(
+                      focusNode: _searchFocusNode,
+                      controller: _queryController,
+                      labelText: 'Search',
+                      hintText: 'Title, synonym, or Japanese name',
+                      keyboardTitle: 'Search anime',
+                      autofocus: true,
+                      onChanged: _queueSearch,
+                      onSubmitted: _submitSearch,
+                    );
+                    final voice = TvFocusable(
+                      focusNode: _voiceFocusNode,
+                      onPressed: () => unawaited(_voiceSearch()),
+                      borderRadius: BorderRadius.circular(12),
+                      focusScale: 1.02,
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: context.appPalette.surface.withValues(
+                            alpha: .92,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: context.appPalette.primaryText.withValues(
+                              alpha: .11,
+                            ),
+                          ),
+                        ),
+                        child: Icon(
+                          _voiceSearching
+                              ? Icons.graphic_eq_rounded
+                              : Icons.mic_rounded,
+                          color: context.appPalette.accentBright,
+                          size: 25,
+                        ),
+                      ),
+                    );
+                    if (constraints.maxWidth < 620) {
+                      return Column(
+                        children: [
+                          Row(
+                            children: [
+                              back,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Search anime',
+                                  style: Theme.of(context).textTheme.titleLarge,
+                                ),
+                              ),
+                              voice,
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          input,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        back,
+                        const SizedBox(width: 18),
+                        Text(
+                          'Search anime',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                fontSize: layout.usesTvRail ? 30 : null,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                        const SizedBox(width: 28),
+                        Expanded(child: input),
+                        const SizedBox(width: 10),
+                        voice,
+                      ],
+                    );
+                  },
+                ),
+                SizedBox(height: context.isCompactWidth ? 20 : 34),
+                Text(
+                  !_hasSearched
+                      ? 'Start typing to search anime'
+                      : 'Results for “${_queryController.text.trim()}”',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 18),
+                Expanded(child: _resultsBody(titlePreference, layout)),
+              ],
             ),
-            SizedBox(height: context.isCompactWidth ? 20 : 34),
-            Text(
-              !_hasSearched
-                  ? 'Start typing to search anime'
-                  : 'Results for “${_queryController.text.trim()}”',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 18),
-            Expanded(child: _resultsBody(titlePreference)),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
-  Widget _resultsBody(TitleLanguagePreference titlePreference) {
+  Widget _resultsBody(
+    TitleLanguagePreference titlePreference,
+    TetoTopLevelLayout layout,
+  ) {
     return _results.when(
       loading: () => Center(
         child: CircularProgressIndicator(
@@ -286,6 +390,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   body: 'Search results will appear here.',
                 );
         }
+        // Keep the denser touch-first phone presentation unchanged. Expanded
+        // layouts use CatalogGrid for deterministic remote movement, focus
+        // restoration after details, and an explicit escape to the TV rail.
         if (context.isCompactWidth) {
           return GridView.builder(
             padding: const EdgeInsets.fromLTRB(2, 2, 2, 24),
@@ -308,21 +415,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             },
           );
         }
-        return ListView.separated(
-          scrollDirection: Axis.horizontal,
-          clipBehavior: Clip.none,
-          itemCount: items.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 9),
-          itemBuilder: (context, index) {
-            final anime = items[index];
-            return _SearchCard(
-              anime: anime,
-              titlePreference: titlePreference,
-              focusNode: index == 0 ? _firstResultFocusNode : null,
-              onPressed: () => context.push('/anime/${anime.id}'),
-              onLongPress: () => unawaited(_manageAnime(anime)),
-            );
-          },
+        return CatalogGrid(
+          items: items,
+          titlePreference: titlePreference,
+          autofocus: false,
+          firstFocusNode: _firstResultFocusNode,
+          onNavigateLeftFromFirstColumn: layout.usesTvRail
+              ? layout.focusRail
+              : null,
+          onNavigateUpFromFirstRow: _searchFocusNode.requestFocus,
+          onLongPress: (anime) => unawaited(_manageAnime(anime)),
         );
       },
     );
@@ -388,9 +490,6 @@ class _SearchCard extends StatelessWidget {
                   ),
                 ),
                 Padding(
-                  // Keep card copy clear of TvFocusable's three-pixel
-                  // foreground focus ring. The artwork intentionally remains
-                  // full bleed, while text needs an inset on both sides.
                   padding: const EdgeInsets.fromLTRB(6, 7, 6, 3),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -428,6 +527,14 @@ class _SearchCard extends StatelessWidget {
       ),
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
 }
 
 class _SearchMessage extends StatelessWidget {

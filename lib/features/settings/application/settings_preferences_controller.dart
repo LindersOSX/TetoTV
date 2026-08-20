@@ -118,12 +118,6 @@ extension InterfaceModeLabel on InterfaceMode {
     InterfaceMode.television => 'TV',
     InterfaceMode.phone => 'Phone',
   };
-
-  String get description => switch (this) {
-    InterfaceMode.automatic => 'Match this device',
-    InterfaceMode.television => '10-foot layout',
-    InterfaceMode.phone => 'Denser handheld layout',
-  };
 }
 
 enum LandingPage { home, search, myList, discover, calendar }
@@ -167,8 +161,8 @@ extension SettingsEntryPlacementLabel on SettingsEntryPlacement {
 }
 
 const defaultTopNavigationOrder = <TopNavigationDestination>[
-  TopNavigationDestination.search,
   TopNavigationDestination.home,
+  TopNavigationDestination.search,
   TopNavigationDestination.myList,
   TopNavigationDestination.discover,
   TopNavigationDestination.calendar,

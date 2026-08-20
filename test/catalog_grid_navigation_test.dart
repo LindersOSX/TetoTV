@@ -4,6 +4,7 @@ import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   final items = [
@@ -58,4 +59,95 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('held horizontal input is throttled without leaking traversal', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 640,
+            height: 700,
+            child: CatalogGrid(
+              items: [
+                ...items,
+                for (var index = 5; index < 12; index++)
+                  AnimeSummary(
+                    id: index + 1,
+                    title: 'Repeat result ${index + 1}',
+                    description: '',
+                    episodes: 12,
+                    score: 8,
+                  ),
+              ],
+              titlePreference: TitleLanguagePreference.romaji,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'catalog.result.1');
+
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'catalog.result.1');
+
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 80)),
+    );
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'catalog.result.2');
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('returning from details restores the exact catalog card', (
+    tester,
+  ) async {
+    late final GoRouter router;
+    router = GoRouter(
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (_, _) => Scaffold(
+            body: SizedBox(
+              width: 640,
+              height: 700,
+              child: CatalogGrid(
+                items: items,
+                titlePreference: TitleLanguagePreference.romaji,
+              ),
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/anime/:id',
+          builder: (_, state) =>
+              Scaffold(body: Text('Details ${state.pathParameters['id']}')),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'catalog.result.1');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Details 2'), findsOneWidget);
+
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'catalog.result.1');
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -102,16 +102,7 @@ class MarketplaceClient {
       maximumBytes: _maxManifestBytes,
     );
     final decoded = jsonDecode(manifestPayload);
-    final manifest = MarketplaceAddon.tryParse(
-      decoded,
-      repositoryUrl: summary.repositoryUrl,
-    );
-    if (manifest == null || manifest.id != summary.id) {
-      throw const FormatException(
-        'The addon manifest is invalid or its ID changed.',
-      );
-    }
-    return summary.mergeManifest(manifest);
+    return validateAndMergeMarketplaceManifest(summary, decoded);
   }
 
   Future<String> _getText(Uri uri, {required int maximumBytes}) async {
@@ -144,25 +135,79 @@ class MarketplaceClient {
   }
 
   List<MarketplaceAddon> _parseCatalog(String payload, String repositoryUrl) {
-    if (utf8.encode(payload).length > _maxCatalogBytes) {
-      throw const FormatException('Repository catalog is too large.');
-    }
-    final decoded = jsonDecode(payload);
-    if (decoded is! List) {
-      throw const FormatException('Repository catalog must be a JSON list.');
-    }
-    final unique = <String, MarketplaceAddon>{};
-    for (final entry in decoded.take(1000)) {
-      final addon = MarketplaceAddon.tryParse(
-        entry,
-        repositoryUrl: repositoryUrl,
-      );
-      if (addon != null && addon.isOnlineStreamProvider) {
-        unique[addon.id] = addon;
-      }
-    }
-    return unique.values.toList(growable: false);
+    return parseMarketplaceCatalog(payload, repositoryUrl: repositoryUrl);
   }
+}
+
+/// Parses both Seanime's canonical top-level list and common named wrappers
+/// used by independently maintained repositories. The executable manifest is
+/// still fetched and validated separately, so accepting a wrapper does not
+/// weaken the repository/code trust boundary.
+List<MarketplaceAddon> parseMarketplaceCatalog(
+  String payload, {
+  required String repositoryUrl,
+}) {
+  if (utf8.encode(payload).length > MarketplaceClient._maxCatalogBytes) {
+    throw const FormatException('Repository catalog is too large.');
+  }
+  final decoded = jsonDecode(payload);
+  final entries = switch (decoded) {
+    final List<dynamic> values => values,
+    final Map<dynamic, dynamic> wrapper => _catalogEntriesFromWrapper(wrapper),
+    _ => null,
+  };
+  if (entries == null) {
+    throw const FormatException(
+      'Repository catalog must be a JSON list or contain an addons/providers list.',
+    );
+  }
+  final unique = <String, MarketplaceAddon>{};
+  for (final entry in entries.take(1000)) {
+    final addon = MarketplaceAddon.tryParse(
+      entry,
+      repositoryUrl: repositoryUrl,
+    );
+    if (addon != null && addon.isOnlineStreamProvider) {
+      unique.putIfAbsent(marketplaceAddonIdentityKey(addon.id), () => addon);
+    }
+  }
+  return unique.values.toList(growable: false);
+}
+
+List<dynamic>? _catalogEntriesFromWrapper(Map<dynamic, dynamic> wrapper) {
+  Map<dynamic, dynamic> current = wrapper;
+  for (var depth = 0; depth < 8; depth++) {
+    for (final key in const ['addons', 'providers', 'extensions', 'items']) {
+      final value = current[key];
+      if (value is List) return value;
+    }
+    final data = current['data'];
+    if (data is List) return data;
+    if (data is! Map) return null;
+    current = data;
+  }
+  return null;
+}
+
+/// Seanime add-on IDs are case-sensitive in JavaScript only by convention.
+/// Repositories in the wild already contain casing-only catalog/manifest
+/// drift (for example `animeAV1` versus `animeav1`). Treating that as the same
+/// identity keeps the original repository provenance while avoiding a false
+/// install rejection.
+MarketplaceAddon validateAndMergeMarketplaceManifest(
+  MarketplaceAddon summary,
+  Object? decoded,
+) {
+  final manifest = MarketplaceAddon.tryParse(
+    decoded,
+    repositoryUrl: summary.repositoryUrl,
+  );
+  if (manifest == null || !marketplaceAddonIdsMatch(manifest.id, summary.id)) {
+    throw const FormatException(
+      'The addon manifest is invalid or its ID changed.',
+    );
+  }
+  return summary.mergeManifest(manifest);
 }
 
 bool _looksLikeProvider(String payload) =>

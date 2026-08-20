@@ -54,12 +54,11 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
-    expect(find.text('Teto'), findsOneWidget);
-    expect(find.text('TV'), findsOneWidget);
+    expect(find.byType(Image), findsWidgets);
     expect(find.text('Continue watching'), findsOneWidget);
     expect(find.text('Watch now'), findsOneWidget);
-    expect(find.text('My List'), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('main-nav-my-list')), findsOneWidget);
+    expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
   });
 
   testWidgets('renders the home shell without overflow on a phone', (
@@ -469,8 +468,8 @@ void main() {
     expect(heroPanel, findsOneWidget);
     expect(tester.getTopLeft(find.byType(Scaffold).first), Offset.zero);
     expect(tester.getSize(find.byType(Scaffold).first).width, 1280);
-    expect(tester.getTopLeft(heroPanel).dx, 34);
-    expect(tester.getSize(heroPanel).width, 1212);
+    expect(tester.getTopLeft(heroPanel).dx, 104);
+    expect(tester.getSize(heroPanel).width, 1176);
     expect(
       tester.getSize(shortArtwork).height,
       tester.getSize(longArtwork).height,
@@ -610,7 +609,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Set up TetoTV'), findsNothing);
     expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
-    expect(find.text('Teto'), findsOneWidget);
-    expect(find.text('TV'), findsOneWidget);
+    expect(find.byType(Image), findsWidgets);
   });
 }

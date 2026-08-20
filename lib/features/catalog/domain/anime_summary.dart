@@ -20,6 +20,7 @@ class AnimeSummary {
     this.seasonYear,
     this.durationMinutes,
     this.nextAiringEpisode,
+    this.isAdult = false,
     this.relatedAnime = const [],
     this.studios = const [],
     this.staff = const [],
@@ -44,6 +45,7 @@ class AnimeSummary {
   final int? seasonYear;
   final int? durationMinutes;
   final int? nextAiringEpisode;
+  final bool isAdult;
   final List<RelatedAnime> relatedAnime;
   final List<AnimeStudio> studios;
   final List<AnimePerson> staff;

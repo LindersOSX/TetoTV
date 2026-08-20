@@ -204,6 +204,160 @@ void main() {
     },
   );
 
+  testWidgets(
+    'TV search shares the cinematic shell and has explicit rail focus exits',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final client = _DeferredCatalogClient();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [catalogClientProvider.overrideWithValue(client)],
+          child: const MaterialApp(home: SearchScreen(initialQuery: 'focus')),
+        ),
+      );
+      await tester.pump();
+      client.complete('focus', [
+        _anime(21, 'First focus result'),
+        _anime(22, 'Second focus result'),
+      ]);
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('teto-top-level-search')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('teto-top-level-backdrop')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('main-navigation')), findsOneWidget);
+      expect(find.byKey(const ValueKey('main-nav-search')), findsOneWidget);
+
+      final back = _focusNode('search.back');
+      back.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'top-level.active-navigation',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(back));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'search.result.first',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'catalog.result.1',
+      );
+
+      _focusNode('search.result.first').requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'top-level.active-navigation',
+      );
+
+      _focusNode('search.result.first').requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'search_input');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('compact search preserves its stacked phone header', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: SearchScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('teto-top-level-search')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('teto-top-level-backdrop')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('main-navigation')), findsNothing);
+    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+    expect(find.byType(TvTextInput), findsOneWidget);
+    expect(find.byIcon(Icons.mic_rounded), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(TvTextInput)).dy,
+      greaterThan(tester.getBottomLeft(find.text('Search anime')).dy),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Search Back pops history and otherwise returns Home', (
+    tester,
+  ) async {
+    Future<void> pumpRouter(String initialLocation) async {
+      final router = GoRouter(
+        initialLocation: initialLocation,
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, _) => const Scaffold(body: Text('Home fallback')),
+          ),
+          GoRoute(
+            path: '/origin',
+            builder: (context, _) => Scaffold(
+              body: TextButton(
+                onPressed: () => context.push('/search'),
+                child: const Text('Open search'),
+              ),
+            ),
+          ),
+          GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        ProviderScope(child: MaterialApp.router(routerConfig: router)),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await pumpRouter('/origin');
+    await tester.tap(find.text('Open search'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('Open search'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await pumpRouter('/search');
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('Home fallback'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('focused long result titles stay inside the card', (
     tester,
   ) async {
@@ -336,6 +490,12 @@ bool _focusedControl(WidgetTester tester, Finder label) {
   return tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus ??
       false;
 }
+
+FocusNode _focusNode(String debugLabel) => FocusManager
+    .instance
+    .rootScope
+    .descendants
+    .singleWhere((node) => node.debugLabel == debugLabel);
 
 AnimeSummary _anime(int id, String title) => AnimeSummary(
   id: id,

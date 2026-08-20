@@ -101,15 +101,25 @@ class AddonStore {
 
   Future<void> install(InstalledStreamingAddon addon) async {
     final db = await database.database;
-    await db.insert('installed_addons', {
-      'id': addon.manifest.id,
-      'manifest_json': jsonEncode(addon.manifest.toJson()),
-      'payload': addon.payload,
-      'enabled': addon.enabled ? 1 : 0,
-      'repository_url': addon.manifest.repositoryUrl,
-      'installed_at': addon.installedAt.millisecondsSinceEpoch,
-      'updated_at': addon.updatedAt.millisecondsSinceEpoch,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.transaction((txn) async {
+      // SQLite's TEXT primary key is case-sensitive. Remove only a
+      // casing-equivalent legacy row in the same transaction so an upstream
+      // ID casing correction updates rather than duplicates the provider.
+      await txn.delete(
+        'installed_addons',
+        where: 'id = ? COLLATE NOCASE AND id != ?',
+        whereArgs: [addon.manifest.id, addon.manifest.id],
+      );
+      await txn.insert('installed_addons', {
+        'id': addon.manifest.id,
+        'manifest_json': jsonEncode(addon.manifest.toJson()),
+        'payload': addon.payload,
+        'enabled': addon.enabled ? 1 : 0,
+        'repository_url': addon.manifest.repositoryUrl,
+        'installed_at': addon.installedAt.millisecondsSinceEpoch,
+        'updated_at': addon.updatedAt.millisecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   Future<void> setEnabled(String id, bool enabled) async {

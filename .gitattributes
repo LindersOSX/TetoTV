@@ -5,3 +5,4 @@ third_party/flutter_js/android/src/main/c/** text eol=lf whitespace=-trailing-sp
 assets/legal/native/** text eol=lf whitespace=-trailing-space
 tool/release/native_playback_manifest.json text eol=lf
 tool/release/verify_native_redistribution.ps1 text eol=crlf
+third_party/flutter_vlc_player/** -whitespace

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -16,6 +17,7 @@ class CatalogGrid extends StatefulWidget {
     required this.titlePreference,
     this.autofocus = true,
     this.firstFocusNode,
+    this.onNavigateLeftFromFirstColumn,
     this.onNavigateUpFromFirstRow,
     this.onLongPress,
     super.key,
@@ -25,6 +27,7 @@ class CatalogGrid extends StatefulWidget {
   final TitleLanguagePreference titlePreference;
   final bool autofocus;
   final FocusNode? firstFocusNode;
+  final VoidCallback? onNavigateLeftFromFirstColumn;
   final VoidCallback? onNavigateUpFromFirstRow;
   final ValueChanged<AnimeSummary>? onLongPress;
 
@@ -40,8 +43,10 @@ class _CatalogGridState extends State<CatalogGrid> {
 
   final List<FocusNode> _focusNodes = [];
   final ScrollController _scrollController = ScrollController();
+  final TvDirectionalRepeatGate _repeatGate = TvDirectionalRepeatGate();
   int? _pendingFocusIndex;
   int _focusRequestGeneration = 0;
+  int _lastFocusedIndex = 0;
 
   @override
   void initState() {
@@ -61,6 +66,14 @@ class _CatalogGridState extends State<CatalogGrid> {
         FocusNode(debugLabel: 'catalog.result.${_focusNodes.length}'),
       );
     }
+    while (_focusNodes.length > widget.items.length) {
+      _focusNodes.removeLast().dispose();
+    }
+    if (widget.items.isEmpty) {
+      _lastFocusedIndex = 0;
+    } else {
+      _lastFocusedIndex = _lastFocusedIndex.clamp(0, widget.items.length - 1);
+    }
   }
 
   FocusNode _focusNodeAt(int index) {
@@ -76,12 +89,30 @@ class _CatalogGridState extends State<CatalogGrid> {
     required double cardMainAxisExtent,
     required KeyEvent event,
   }) {
+    final key = event.logicalKey;
+    final directional =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _repeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (!_repeatGate.accept(event)) {
+      // Always consume throttled repeats. Falling through would let the global
+      // geometric policy perform an extra move behind the explicit grid.
+      return KeyEventResult.handled;
+    }
+    if (widget.items.isEmpty) {
       return KeyEventResult.ignored;
     }
 
     final originIndex = _pendingFocusIndex ?? index;
-    final key = event.logicalKey;
     if (key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowRight) {
       final right = key == LogicalKeyboardKey.arrowRight;
@@ -101,6 +132,10 @@ class _CatalogGridState extends State<CatalogGrid> {
           crossAxisCount: crossAxisCount,
           cardMainAxisExtent: cardMainAxisExtent,
         );
+      } else if (key == LogicalKeyboardKey.arrowLeft) {
+        // A top-level TV destination can expose its rail as the physical
+        // LEFT escape target without giving up this grid's explicit row math.
+        widget.onNavigateLeftFromFirstColumn?.call();
       }
       // A horizontal edge is still handled. Letting the global geometric
       // policy search beyond the row can move focus into the header (or out
@@ -143,6 +178,27 @@ class _CatalogGridState extends State<CatalogGrid> {
     }
 
     return KeyEventResult.ignored;
+  }
+
+  Future<void> _openDetails(
+    AnimeSummary anime, {
+    required int index,
+    required int crossAxisCount,
+    required double cardMainAxisExtent,
+  }) async {
+    _lastFocusedIndex = index;
+    await context.push('/anime/${anime.id}');
+    if (!mounted || widget.items.isEmpty) return;
+    final restoreIndex = _lastFocusedIndex.clamp(0, widget.items.length - 1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusAndReveal(
+        restoreIndex,
+        towardEnd: false,
+        crossAxisCount: crossAxisCount,
+        cardMainAxisExtent: cardMainAxisExtent,
+      );
+    });
   }
 
   void _focusAndReveal(
@@ -235,6 +291,7 @@ class _CatalogGridState extends State<CatalogGrid> {
 
   @override
   void dispose() {
+    _repeatGate.reset();
     _scrollController.dispose();
     for (final node in _focusNodes) {
       node.dispose();
@@ -278,13 +335,23 @@ class _CatalogGridState extends State<CatalogGrid> {
             return TvFocusable(
               focusNode: _focusNodeAt(index),
               autofocus: widget.autofocus && index == 0,
+              onFocusChanged: (focused) {
+                if (focused) _lastFocusedIndex = index;
+              },
               onKeyEvent: (_, event) => _handleCardKey(
                 index: index,
                 crossAxisCount: crossAxisCount,
                 cardMainAxisExtent: cardMainAxisExtent,
                 event: event,
               ),
-              onPressed: () => context.push('/anime/${anime.id}'),
+              onPressed: () => unawaited(
+                _openDetails(
+                  anime,
+                  index: index,
+                  crossAxisCount: crossAxisCount,
+                  cardMainAxisExtent: cardMainAxisExtent,
+                ),
+              ),
               onLongPress: widget.onLongPress == null
                   ? null
                   : () => widget.onLongPress!(anime),

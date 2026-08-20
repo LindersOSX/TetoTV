@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/core/diagnostics/diagnostics_exporter.dart';
+import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -32,11 +33,13 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       AndroidTvBridge.instance.getDeviceProfile(refresh: true),
       AndroidTvBridge.instance.getAppVersion(),
       TetoTvDatabase.instance.diagnosticsSnapshot(),
+      AndroidTvBridge.instance.isTelevision(refresh: true),
     ]);
     return _DiagnosticsViewData(
       profile: values[0] as TvDeviceProfile,
       version: values[1] as AppVersionInfo,
       database: values[2] as Map<String, Object?>,
+      isTelevision: values[3] as bool,
     );
   }
 
@@ -226,6 +229,7 @@ class _DiagnosticsBody extends StatelessWidget {
                 );
               },
             ),
+            _SendDiagnosticsAction(data: data),
             _DiagnosticsAction(
               label: 'Export report',
               icon: Icons.file_download_outlined,
@@ -245,6 +249,91 @@ class _DiagnosticsBody extends StatelessWidget {
       ],
     );
   }
+}
+
+class _SendDiagnosticsAction extends StatefulWidget {
+  const _SendDiagnosticsAction({required this.data});
+
+  final _DiagnosticsViewData data;
+
+  @override
+  State<_SendDiagnosticsAction> createState() => _SendDiagnosticsActionState();
+}
+
+class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
+  bool _sending = false;
+
+  Future<void> _send() async {
+    if (_sending) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Send diagnostic report?'),
+        content: const Text(
+          'This posts a bounded, redacted technical report to TetoTV’s private Discord support channel. It includes the app build, device capabilities, and recent redacted failures. Saved credentials and direct stream URLs are excluded.',
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Send report'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _sending = true);
+    try {
+      final data = widget.data;
+      final report = ExplicitDiagnosticsReport.fromSnapshot(
+        version: data.version,
+        profile: data.profile,
+        isTelevision: data.isTelevision,
+        diagnostics: data.database,
+      );
+      final acknowledgement = await ExplicitDiagnosticsReportClient().send(
+        report,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            acknowledgement.duplicate
+                ? 'Diagnostic report was already received. Reference: ${acknowledgement.reference}'
+                : 'Diagnostic report sent. Reference: ${acknowledgement.reference}',
+          ),
+        ),
+      );
+    } on DiagnosticsShareException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The diagnostic report could not be sent. Try again shortly.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _DiagnosticsAction(
+    label: _sending ? 'Sending…' : 'Send to support',
+    icon: _sending ? Icons.hourglass_top_rounded : Icons.send_rounded,
+    primary: true,
+    onPressed: _send,
+  );
 }
 
 class _DiagnosticCard extends StatelessWidget {
@@ -367,9 +456,11 @@ class _DiagnosticsViewData {
     required this.profile,
     required this.version,
     required this.database,
+    required this.isTelevision,
   });
 
   final TvDeviceProfile profile;
   final AppVersionInfo version;
   final Map<String, Object?> database;
+  final bool isTelevision;
 }

@@ -480,8 +480,7 @@ Future<WebStreamAggregation> aggregateWebStreamingProviders(
 }
 
 String _shortMessage(Object error) {
-  final value = error.toString().replaceAll(RegExp(r'[\r\n]+'), ' ');
-  return value.length > 160 ? '${value.substring(0, 160)}…' : value;
+  return seanimeProviderFailureMessage(error);
 }
 
 class _WebProviderOutcome {

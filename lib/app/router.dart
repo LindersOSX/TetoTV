@@ -191,12 +191,8 @@ final appRouter = GoRouter(
       path: '/resolve',
       builder: (context, state) {
         final query = state.uri.queryParameters;
-        final anilistMediaId = positiveRouteInt(query['anilistId']);
-        final episodeValue = query['episode'];
-        final episode = episodeValue == null
-            ? 1
-            : positiveRouteInt(episodeValue);
-        if (anilistMediaId == null || episode == null) {
+        final episode = resolveEpisodeReferenceFromQuery(query);
+        if (episode == null) {
           return const _InvalidRouteScreen();
         }
         return ResolveEpisodeScreen(
@@ -204,22 +200,7 @@ final appRouter = GoRouter(
           preferredAuthor: query['preferredAuthor'],
           preferredSourceId: query['preferredSourceId'],
           preferredWebProviderId: query['preferredWebProviderId'],
-          episode: EpisodeReference(
-            anilistMediaId: anilistMediaId,
-            malMediaId: positiveRouteInt(query['malId']),
-            year: positiveRouteInt(query['year']),
-            title: query['title'] ?? 'Anime',
-            episode: episode,
-            alternativeTitles:
-                query['synonyms']
-                    ?.split('|')
-                    .where((value) => value.isNotEmpty)
-                    .toList(growable: false) ??
-                const [],
-            coverImageUrl: query['cover'],
-            startFromBeginning: query['restart'] == '1',
-            autoPlay: query['autoplay'] == '1',
-          ),
+          episode: episode,
         );
       },
     ),
@@ -254,6 +235,35 @@ final appRouter = GoRouter(
     ),
   ],
 );
+
+EpisodeReference? resolveEpisodeReferenceFromQuery(Map<String, String> query) {
+  final anilistMediaId = positiveRouteInt(query['anilistId']);
+  final episodeValue = query['episode'];
+  final episode = episodeValue == null ? 1 : positiveRouteInt(episodeValue);
+  if (anilistMediaId == null || episode == null) return null;
+  return EpisodeReference(
+    anilistMediaId: anilistMediaId,
+    malMediaId: positiveRouteInt(query['malId']),
+    year: positiveRouteInt(query['year']),
+    title: query['title'] ?? 'Anime',
+    episode: episode,
+    alternativeTitles:
+        query['synonyms']
+            ?.split('|')
+            .where((value) => value.isNotEmpty)
+            .toList(growable: false) ??
+        const [],
+    titleEnglish: query['titleEnglish'],
+    titleRomaji: query['titleRomaji'],
+    status: query['status'],
+    format: query['format'],
+    episodeCount: positiveRouteInt(query['episodeCount']),
+    isAdult: query['isAdult'] == '1',
+    coverImageUrl: query['cover'],
+    startFromBeginning: query['restart'] == '1',
+    autoPlay: query['autoplay'] == '1',
+  );
+}
 
 int? positiveRouteInt(String? value) {
   final parsed = int.tryParse(value ?? '');

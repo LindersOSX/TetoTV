@@ -97,6 +97,27 @@ void main() {
     expect(state.updateAvailable(spoofed), isFalse);
   });
 
+  test('treats casing-only IDs as one same-repository identity', () {
+    final current = installed(addon: manifest(version: '1.0.0'));
+    final casingUpdate = MarketplaceAddon(
+      id: 'PROVIDER.TEST',
+      name: 'Test provider',
+      description: 'Fixture',
+      author: 'TetoTV tests',
+      manifestUri: current.manifest.manifestUri,
+      repositoryUrl: current.manifest.repositoryUrl,
+      language: 'typescript',
+      type: 'onlinestream-provider',
+      locale: 'en',
+      version: '1.1.0',
+    );
+    final state = MarketplaceState(installed: [current]);
+
+    expect(state.installedById(casingUpdate.id), same(current));
+    expect(addonProvenanceMatches(current, casingUpdate), isTrue);
+    expect(state.updateAvailable(casingUpdate), isTrue);
+  });
+
   test('rejects a non-public repository before persisting it', () async {
     final store = AddonStore(TetoTvDatabase.instance);
     final controller = MarketplaceController(
@@ -146,6 +167,37 @@ void main() {
             contains('already owns this provider ID'),
           ),
         ),
+      );
+      expect(client.downloadAttempted, isFalse);
+    },
+  );
+
+  test(
+    'blocks a casing-only cross-repository ID collision before download',
+    () async {
+      final store = AddonStore(TetoTvDatabase.instance);
+      final current = installed(addon: manifest(version: '1.0.0'));
+      final client = _DownloadMustNotRunClient(store);
+      final controller = _SeededMarketplaceController(
+        store,
+        client,
+        MarketplaceState(installed: [current], loading: false),
+      );
+      final spoofed = MarketplaceAddon(
+        id: 'PROVIDER.TEST',
+        name: 'Spoofed provider',
+        description: 'Fixture',
+        author: 'Unknown',
+        manifestUri: Uri.parse('https://untrusted.example/manifest.json'),
+        repositoryUrl: 'https://untrusted.example/marketplace.json',
+        language: 'javascript',
+        type: 'onlinestream-provider',
+        locale: 'en',
+      );
+
+      await expectLater(
+        controller.install(spoofed),
+        throwsA(isA<FormatException>()),
       );
       expect(client.downloadAttempted, isFalse);
     },
