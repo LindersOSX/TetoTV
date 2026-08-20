@@ -85,10 +85,10 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final usesTvRail = !context.isCompactWidth && size.width >= 840;
-    final railWidth = homeNavigationRailWidth(
-      size.width,
+    final railMetrics = homeNavigationRailMetrics(
       widget.preferences.navigationChromeSize,
     );
+    final railWidth = railMetrics.width;
     final responsive = context.responsiveScreenPadding;
     final safeAreaMinimum = usesTvRail
         ? EdgeInsets.zero
@@ -125,6 +125,7 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
               const Positioned.fill(child: _TetoDestinationBackdrop()),
               if (usesTvRail) ...[
                 Positioned.fill(
+                  key: const ValueKey('top-level-tv-content-region'),
                   left: railWidth,
                   child: Padding(
                     padding: contentPadding,
@@ -142,7 +143,7 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
                     autofocusActive: widget.autofocusRail,
                     onActivePressed: widget.onActiveDestinationPressed ?? () {},
                     onExitRight: _focusContent,
-                    width: railWidth,
+                    metrics: railMetrics,
                   ),
                 ),
                 Positioned(

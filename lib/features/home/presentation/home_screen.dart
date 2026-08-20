@@ -738,10 +738,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     } else {
       _hasVisibleNavigationAction = true;
     }
-    final railWidth = homeNavigationRailWidth(
-      screenSize.width,
+    final railMetrics = homeNavigationRailMetrics(
       preferences.navigationChromeSize,
     );
+    final railWidth = railMetrics.width;
     final heroHeight = (screenSize.height * .51).clamp(300.0, 500.0);
 
     List<Widget> buildShelves({required bool tvNavigation}) {
@@ -820,6 +820,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           children: [
             if (useTvRail) ...[
               Positioned.fill(
+                key: const ValueKey('home-tv-content-region'),
                 left: railWidth,
                 child: SingleChildScrollView(
                   key: const ValueKey('home-scroll-content'),
@@ -841,7 +842,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 bottom: 0,
                 child: HomeSideNavigation(
                   preferences: preferences,
-                  width: railWidth,
+                  metrics: railMetrics,
                   homeFocusNode: _homeNavFocus,
                   autofocusActive: !preferences.showHero,
                   onHomePressed: _handleHomeActivation,
