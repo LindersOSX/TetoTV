@@ -2,9 +2,9 @@
 
 AniList currently documents authorization-code and implicit OAuth grants, but
 not RFC 8628 device authorization. MyAnimeList uses OAuth authorization code
-with PKCE but likewise needs a registered application/callback. The implemented
-Node broker in [`broker/`](../broker/) adapts both providers to a TV-friendly QR
-flow without embedding client secrets in the APK.
+with PKCE but likewise needs a registered application/callback. The Wispbyte
+companion process used by the Discord bot adapts both providers to a TV-friendly
+QR flow without embedding client secrets in the APK.
 
 ## Flow
 
@@ -17,9 +17,9 @@ flow without embedding client secrets in the APK.
    - a 10-minute expiry.
 3. The TV displays `verification_uri_complete` as a QR code and also shows the
    user code for manual entry.
-4. The phone opens the broker. The broker binds the pairing to an HTTP-only
-   session cookie, then redirects to the selected provider's authorization
-   endpoint with a cryptographically random `state` and PKCE where supported.
+4. The phone opens the companion page, confirms the TV code, and is redirected
+   to the selected provider with a cryptographically random `state` and PKCE
+   where supported.
 5. The provider redirects back to the broker with an authorization code. The
    broker validates `state` and exchanges the code using the registered
    credentials and exact redirect URI.
@@ -44,7 +44,7 @@ The broker starts AniList authorization with:
 ```text
 https://anilist.co/api/v2/oauth/authorize
   ?client_id=...
-  &redirect_uri=https%3A%2F%2Ftetotv-auth.onrender.com%2Foauth%2Fanilist%2Fcallback
+  &redirect_uri=https%3A%2F%2Ftetotv-bot.wisp.uno%2Foauth%2Fanilist%2Fcallback
   &response_type=code
   &state=...
 ```
@@ -61,7 +61,7 @@ settings.
 MyAnimeList is registered with:
 
 ```text
-https://tetotv-auth.onrender.com/oauth/myanimelist/callback
+https://tetotv-bot.wisp.uno/oauth/myanimelist/callback
 ```
 
 The broker uses PKCE for the authorization-code exchange. The client secret,
@@ -76,8 +76,8 @@ when the registered client has one, remains server-side.
   "pairing_id": "public-random-id",
   "device_code": "at-least-256-bits-of-entropy",
   "user_code": "KUMO-7F4K",
-  "verification_uri": "https://tetotv-auth.onrender.com/pair",
-  "verification_uri_complete": "https://tetotv-auth.onrender.com/pair?code=KUMO-7F4K",
+  "verification_uri": "https://tetotv-bot.wisp.uno/pair",
+  "verification_uri_complete": "https://tetotv-bot.wisp.uno/pair?code=KUMO-7F4K",
   "expires_at": "2026-07-31T00:00:00Z",
   "interval": 5
 }
@@ -112,26 +112,27 @@ not issue one.
 ## Finish the provider link
 
 1. Register the two callback URLs above in the provider developer consoles.
-2. Copy `broker/.env.example` to `broker/.env` and add the issued client
-   credentials.
-3. Deploy `broker/` at the same HTTPS origin used in the callback URLs.
-4. Either enter that HTTPS origin on TetoTV's pairing screen, or set
-   `AUTH_BROKER_BASE_URL` in `config/dev.json` to bake it into the APK.
-5. For a preconfigured APK, build with `flutter build apk --release
-   --dart-define-from-file=.\config\dev.json`.
+2. Add `ANILIST_CLIENT_ID`, `ANILIST_CLIENT_SECRET`, `MAL_CLIENT_ID`, and
+   `MAL_CLIENT_SECRET` to the Wispbyte bot environment. Never place them in the
+   Flutter configuration or APK.
+3. Deploy the Discord-bot companion process with
+   `PUBLIC_BASE_URL=https://tetotv-bot.wisp.uno`.
+4. Confirm `/health` reports both providers as `true` and lists the exact two
+   callback URLs before publishing an APK.
+5. TetoTV defaults to that Wispbyte origin. `AUTH_BROKER_BASE_URL` remains only
+   as a developer/self-host override.
 
-If no broker URL is compiled into the APK, **Accounts > AniList/MyAnimeList >
-Connect by QR** now opens a one-time setup panel. Paste the public HTTPS origin
-with TetoTV's on-screen keyboard, choose **Save and connect**, and the address
-is stored in Android's encrypted storage. The same broker is used for both
+If a developer builds without a companion origin, **Accounts >
+AniList/MyAnimeList > Connect by QR** opens a one-time self-host setup panel.
+The address is stored in Android's encrypted storage and used for both
 trackers. A local `localhost` URL will not work from a phone scanning the TV.
 
 The APK never needs either provider client secret.
 
-The broker rate-limits by IP, returns `429` with `Retry-After`, binds state to
-one pairing, uses strict CSP, and expires all state. The included implementation
-uses an in-memory single-instance TTL store. Replace it with an encrypted shared
-TTL store before horizontally scaling the broker.
+The Wispbyte companion rate-limits by pseudonymous address buckets, returns
+`429` with `Retry-After`, binds state to one pairing, uses strict CSP, and
+expires all state. It uses an in-memory single-instance TTL store. Replace it
+with an encrypted shared TTL store before horizontally scaling the service.
 
 For a public product, review AniList's API terms and request authorization if
 the application could be considered a competing tracker. Significant,

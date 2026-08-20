@@ -18,7 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
-  testWidgets('Discover Back returns Home when opened as a top-level route', (
+  testWidgets('Discover system Back returns Home without a header arrow', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 720);
@@ -45,7 +45,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     expect(find.text('Home destination'), findsOneWidget);
@@ -283,7 +284,10 @@ void main() {
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.back');
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
@@ -375,10 +379,20 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(
-        _focusedResult(tester, 'Production Result 7'),
-        isTrue,
-        reason: 'Left at the row edge must retain a visible focus ring.',
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'top-level.active-navigation',
+        reason: 'Left at the first column must return to the active rail item.',
       );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'discover.filters',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_focusedResult(tester, 'Production Result 7'), isTrue);
 
       // Keep moving through rows that are well beyond GridView's cache. Each
       // lazy card must be built, revealed, and focused without losing the

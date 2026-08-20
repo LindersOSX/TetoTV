@@ -72,11 +72,11 @@ void main() {
     expect(find.byKey(const ValueKey('main-nav-discover')), findsOneWidget);
     expect(
       tester.getSize(find.byKey(const ValueKey('main-navigation'))).width,
-      104,
+      72,
     );
     expect(
       tester.getTopLeft(find.text('Destination content')).dx,
-      greaterThan(104),
+      greaterThan(72),
     );
 
     final backdrop = tester.widget<DecoratedBox>(
@@ -287,7 +287,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'calendar.back');
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'calendar.refresh');
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(FocusManager.instance.primaryFocus?.debugLabel, contains('.item.0'));

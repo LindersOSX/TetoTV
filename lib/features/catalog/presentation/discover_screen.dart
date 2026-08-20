@@ -16,7 +16,6 @@ import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 class DiscoverScreen extends ConsumerStatefulWidget {
   const DiscoverScreen({super.key});
@@ -28,7 +27,6 @@ class DiscoverScreen extends ConsumerStatefulWidget {
 class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   CatalogFilters _filters = const CatalogFilters();
   late Future<List<AnimeSummary>> _results;
-  final _backFocus = FocusNode(debugLabel: 'discover.back');
   final _resetFocus = FocusNode(debugLabel: 'discover.reset');
   final _filtersFocus = FocusNode(debugLabel: 'discover.filters');
   final _firstResultFocus = FocusNode(debugLabel: 'discover.result.first');
@@ -84,20 +82,10 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     }
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
-    if (layout?.usesTvRail == true &&
-        current == _backFocus &&
-        key == LogicalKeyboardKey.arrowLeft) {
-      layout!.focusRail();
-      return KeyEventResult.handled;
-    }
-    if (current == _backFocus && key == LogicalKeyboardKey.arrowRight) {
-      (_resetFocus.context == null ? _filtersFocus : _resetFocus)
-          .requestFocus();
-      return KeyEventResult.handled;
-    }
     if (current == _resetFocus) {
       if (key == LogicalKeyboardKey.arrowLeft) {
-        _backFocus.requestFocus();
+        if (layout?.usesTvRail != true) return KeyEventResult.ignored;
+        layout!.focusRail();
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.arrowRight) {
@@ -106,13 +94,17 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
       }
     }
     if (current == _filtersFocus && key == LogicalKeyboardKey.arrowLeft) {
-      (_resetFocus.context == null ? _backFocus : _resetFocus).requestFocus();
+      if (_resetFocus.context != null) {
+        _resetFocus.requestFocus();
+      } else if (layout?.usesTvRail == true) {
+        layout!.focusRail();
+      } else {
+        return KeyEventResult.ignored;
+      }
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowDown &&
-        (current == _backFocus ||
-            current == _resetFocus ||
-            current == _filtersFocus) &&
+        (current == _resetFocus || current == _filtersFocus) &&
         _firstResultFocus.context != null) {
       _focusAndReveal(_firstResultFocus, towardEnd: true);
       return KeyEventResult.handled;
@@ -143,7 +135,6 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
 
   @override
   void dispose() {
-    _backFocus.dispose();
     _resetFocus.dispose();
     _filtersFocus.dispose();
     _firstResultFocus.dispose();
@@ -158,7 +149,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.discover,
-      firstContentFocusNode: _backFocus,
+      firstContentFocusNode: _filtersFocus,
       builder: (context, layout) => Focus(
         onKeyEvent: (node, event) =>
             _handleNavigation(node, event, layout: layout),
@@ -173,13 +164,6 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             const SizedBox(height: 8),
             Row(
               children: [
-                _HeaderButton(
-                  focusNode: _backFocus,
-                  icon: Icons.arrow_back_rounded,
-                  label: context.isCompactWidth ? null : 'Back',
-                  onPressed: () => _returnToPreviousOrHome(context),
-                ),
-                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,6 +236,9 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                     titlePreference: titlePreference,
                     autofocus: false,
                     firstFocusNode: _firstResultFocus,
+                    onNavigateLeftFromFirstColumn: layout.usesTvRail
+                        ? layout.focusRail
+                        : null,
                     onNavigateUpFromFirstRow: () =>
                         _focusAndReveal(_filtersFocus, towardEnd: false),
                     onLongPress: (anime) => unawaited(
@@ -270,14 +257,6 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
       ),
     );
   }
-}
-
-void _returnToPreviousOrHome(BuildContext context) {
-  if (Navigator.of(context).canPop()) {
-    context.pop();
-    return;
-  }
-  context.go('/');
 }
 
 class _DiscoverFiltersDialog extends StatefulWidget {

@@ -33,7 +33,6 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _queryController = TextEditingController();
-  final _backFocusNode = FocusNode(debugLabel: 'search.back');
   final _searchFocusNode = FocusNode(debugLabel: 'search_input');
   final _voiceFocusNode = FocusNode(debugLabel: 'search.voice');
   final _firstResultFocusNode = FocusNode(debugLabel: 'search.result.first');
@@ -57,7 +56,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void dispose() {
     _debounce?.cancel();
     _queryController.dispose();
-    _backFocusNode.dispose();
     _searchFocusNode.dispose();
     _voiceFocusNode.dispose();
     _firstResultFocusNode.dispose();
@@ -179,13 +177,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     final current = FocusManager.instance.primaryFocus;
     if (key == LogicalKeyboardKey.arrowLeft) {
-      if (current == _backFocusNode) {
-        if (!layout.usesTvRail) return KeyEventResult.ignored;
+      if (current == _searchFocusNode && layout.usesTvRail) {
         layout.focusRail();
-        return KeyEventResult.handled;
-      }
-      if (current == _searchFocusNode) {
-        _backFocusNode.requestFocus();
         return KeyEventResult.handled;
       }
       if (current == _voiceFocusNode) {
@@ -194,10 +187,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       }
     }
     if (key == LogicalKeyboardKey.arrowRight) {
-      if (current == _backFocusNode) {
-        _searchFocusNode.requestFocus();
-        return KeyEventResult.handled;
-      }
       if (current == _searchFocusNode) {
         _voiceFocusNode.requestFocus();
         return KeyEventResult.handled;
@@ -219,7 +208,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.search,
-      firstContentFocusNode: _backFocusNode,
+      firstContentFocusNode: _searchFocusNode,
       onActiveDestinationPressed: _searchFocusNode.requestFocus,
       resizeToAvoidBottomInset: true,
       builder: (context, layout) {
@@ -239,29 +228,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               children: [
                 LayoutBuilder(
                   builder: (context, constraints) {
-                    final back = TvFocusable(
-                      focusNode: _backFocusNode,
-                      onPressed: () => _returnToPreviousOrHome(context),
-                      borderRadius: BorderRadius.circular(10),
-                      focusScale: 1.02,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: context.appPalette.surface.withValues(
-                            alpha: .92,
-                          ),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: context.appPalette.primaryText.withValues(
-                              alpha: .11,
-                            ),
-                          ),
-                        ),
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.arrow_back_rounded, size: 20),
-                        ),
-                      ),
-                    );
                     final input = TvTextInput(
                       focusNode: _searchFocusNode,
                       controller: _queryController,
@@ -306,8 +272,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         children: [
                           Row(
                             children: [
-                              back,
-                              const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
                                   'Search anime',
@@ -324,8 +288,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     }
                     return Row(
                       children: [
-                        back,
-                        const SizedBox(width: 18),
                         Text(
                           'Search anime',
                           style: Theme.of(context).textTheme.titleLarge
@@ -527,14 +489,6 @@ class _SearchCard extends StatelessWidget {
       ),
     );
   }
-}
-
-void _returnToPreviousOrHome(BuildContext context) {
-  if (Navigator.of(context).canPop()) {
-    context.pop();
-    return;
-  }
-  context.go('/');
 }
 
 class _SearchMessage extends StatelessWidget {

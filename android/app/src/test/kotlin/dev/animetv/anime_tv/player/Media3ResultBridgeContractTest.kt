@@ -28,6 +28,17 @@ class Media3ResultBridgeContractTest {
                 "Media3PlayerActivity.RESULT_AUDIO_PREFERENCE_SET to",
             ),
         )
+        assertTrue(
+            "An unchanged native subtitle observation must remain absent so Flutter preserves intent",
+            nativePlayerResult.contains(
+                "data.hasExtra(Media3PlayerActivity.RESULT_SUBTITLES_ENABLED)",
+            ),
+        )
+        assertTrue(
+            nativePlayerResult.contains(
+                "nativeResult[Media3PlayerActivity.RESULT_SUBTITLES_ENABLED] =",
+            ),
+        )
     }
 
     @Test

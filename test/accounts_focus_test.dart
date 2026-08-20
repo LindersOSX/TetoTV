@@ -38,9 +38,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.back');
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.area.customize',
@@ -252,7 +249,6 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
 
     for (final shelf in HomeShelf.values) {
@@ -288,7 +284,6 @@ void main() {
     expect(find.text('Read-only GitHub token'), findsNothing);
 
     for (final key in [
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.enter,
@@ -308,9 +303,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('title language toggle is reachable from the header', (
-    tester,
-  ) async {
+  testWidgets('title language is a focusable Display setting', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(960, 540);
     tester.view.devicePixelRatio = 1;
@@ -322,7 +315,23 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    expect(find.textContaining('Titles:'), findsNothing);
+    for (var index = 0; index <= HomeShelf.values.length; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Title language'), findsOneWidget);
+    final languageDetector = find.descendant(
+      of: find.ancestor(
+        of: find.text('Title language'),
+        matching: find.byType(TvFocusable),
+      ),
+      matching: find.byType(FocusableActionDetector),
+    );
+    final languageFocus = tester
+        .widget<FocusableActionDetector>(languageDetector)
+        .focusNode!;
+    languageFocus.requestFocus();
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -331,7 +340,9 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
-    expect(find.text('Titles: Romaji'), findsOneWidget);
+    await tester.tap(find.text('Romaji').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Romaji'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -352,7 +363,6 @@ void main() {
     expect(find.text('Advanced: personal token'), findsNothing);
     expect(find.text('TorBox API token'), findsNothing);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -387,7 +397,6 @@ void main() {
     await tester.pumpAndSettle();
 
     for (final key in [
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
@@ -513,7 +522,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     for (var index = 0; index < 3; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     }
@@ -579,7 +587,6 @@ void main() {
       const ProviderScope(child: MaterialApp(home: AccountsScreen())),
     );
     await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     for (var index = 0; index < 3; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     }
@@ -624,7 +631,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     for (final key in [
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.arrowRight,
@@ -869,7 +875,6 @@ void main() {
     await tester.pumpAndSettle();
 
     for (final key in [
-      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowRight,
       LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
@@ -1117,7 +1122,6 @@ void main() {
       await tester.pumpAndSettle();
 
       for (final key in [
-        LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.arrowRight,
         LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,

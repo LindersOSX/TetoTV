@@ -9,9 +9,10 @@ the same as legal, store, or codec certification.
 - Sign every APK with a unique protected release key. Reject debug keys at
   build time, keep at least two encrypted/offline backups, and never lose the
   signing identity used by installed sideload builds.
-- Publish the privacy disclosure at an unauthenticated HTTPS URL, keep the
-  in-app disclosure accessible by remote and touch, and provide a working
-  public support/contact route.
+- Verify <https://tetotv-bot.wisp.uno/privacy> returns the current privacy
+  disclosure without authentication, confirm `/health` advertises that exact
+  URL and effective date, keep the in-app disclosure accessible by remote and
+  touch, and provide a working public support/contact route.
 - Choose and publish an explicit software license before exposing the source
   repository. APK distribution does not by itself grant permission to reuse
   TetoTV's source or branding.

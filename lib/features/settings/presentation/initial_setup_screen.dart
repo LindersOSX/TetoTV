@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
@@ -11,6 +12,7 @@ import 'package:anime_tv/features/marketplace/application/marketplace_controller
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -40,6 +42,10 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
     'Privacy',
   ];
   final _pages = PageController();
+  late final List<FocusNode> _firstChoiceFocusNodes = List.generate(
+    _stepCount,
+    (index) => FocusNode(debugLabel: 'setup.step.$index.first-choice'),
+  );
   bool _finishing = false;
   bool _transitioning = false;
   int _step = 0;
@@ -53,12 +59,16 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
       if (ref.read(deviceSetupProvider).report == null) {
         unawaited(ref.read(deviceSetupProvider.notifier).scan());
       }
+      _firstChoiceFocusNodes.first.requestFocus();
     });
   }
 
   @override
   void dispose() {
     _pages.dispose();
+    for (final node in _firstChoiceFocusNodes) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -73,6 +83,13 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
       );
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _firstChoiceFocusNodes[next].context != null) {
+            _firstChoiceFocusNodes[next].requestFocus();
+          }
+        });
+      }
     } finally {
       _transitioning = false;
     }
@@ -181,11 +198,20 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
                   controller: _pages,
                   physics: const NeverScrollableScrollPhysics(),
                   children: [
-                    _PlaybackStep(preferences: preferences),
-                    _TvExperienceStep(preferences: preferences),
-                    const _StreamingStep(),
-                    const _AccountsStep(),
-                    _PrivacyStep(preferences: preferences),
+                    _PlaybackStep(
+                      preferences: preferences,
+                      firstFocusNode: _firstChoiceFocusNodes[0],
+                    ),
+                    _TvExperienceStep(
+                      preferences: preferences,
+                      firstFocusNode: _firstChoiceFocusNodes[1],
+                    ),
+                    _StreamingStep(firstFocusNode: _firstChoiceFocusNodes[2]),
+                    _AccountsStep(firstFocusNode: _firstChoiceFocusNodes[3]),
+                    _PrivacyStep(
+                      preferences: preferences,
+                      firstFocusNode: _firstChoiceFocusNodes[4],
+                    ),
                   ],
                 ),
               ),
@@ -205,7 +231,6 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
                         ? Icons.check_rounded
                         : Icons.arrow_forward_rounded,
                     primary: true,
-                    autofocus: true,
                     onPressed: _step == _stepCount - 1
                         ? _finish
                         : () => _setStep(_step + 1),
@@ -221,9 +246,13 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
 }
 
 class _TvExperienceStep extends ConsumerWidget {
-  const _TvExperienceStep({required this.preferences});
+  const _TvExperienceStep({
+    required this.preferences,
+    required this.firstFocusNode,
+  });
 
   final SettingsPreferences preferences;
+  final FocusNode firstFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -232,75 +261,393 @@ class _TvExperienceStep extends ConsumerWidget {
       icon: Icons.tune_rounded,
       title: 'Make it feel right on your TV',
       subtitle: 'Choose how Home looks and keep your everyday shortcuts close.',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final twoColumns = constraints.maxWidth >= 700;
+          final blockWidth = twoColumns
+              ? (constraints.maxWidth - 12) / 2
+              : constraints.maxWidth;
+          Widget block(Widget child) => SizedBox(
+            width: blockWidth,
+            child: Align(alignment: Alignment.topLeft, child: child),
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _TvExperiencePreview(preferences: preferences),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                alignment: WrapAlignment.start,
+                children: [
+                  block(
+                    _SetupChoiceRow(
+                      label: 'Screen layout',
+                      children: [
+                        for (final mode in InterfaceMode.values)
+                          _SetupChoice(
+                            label: mode.displayName,
+                            focusNode: mode == InterfaceMode.values.first
+                                ? firstFocusNode
+                                : null,
+                            selected: preferences.interfaceMode == mode,
+                            onPressed: () => controller.setInterfaceMode(mode),
+                          ),
+                      ],
+                    ),
+                  ),
+                  block(
+                    _SetupChoiceRow(
+                      label: 'Navigation & logo size',
+                      children: [
+                        for (final size in NavigationChromeSize.values)
+                          _SetupChoice(
+                            label: size.displayName,
+                            selected: preferences.navigationChromeSize == size,
+                            onPressed: () =>
+                                controller.setNavigationChromeSize(size),
+                          ),
+                      ],
+                    ),
+                  ),
+                  block(
+                    _SetupChoiceRow(
+                      label: 'Home layout',
+                      children: [
+                        for (final layout in HomeLayout.values)
+                          _SetupChoice(
+                            label: layout.displayName,
+                            selected: preferences.homeLayout == layout,
+                            onPressed: () => controller.setHomeLayout(layout),
+                          ),
+                      ],
+                    ),
+                  ),
+                  block(
+                    _SetupChoiceRow(
+                      label: 'Top navigation',
+                      children: [
+                        _SetupChoice(
+                          label: 'My List',
+                          selected: preferences.showMyList,
+                          onPressed: () =>
+                              controller.setShowMyList(!preferences.showMyList),
+                        ),
+                        _SetupChoice(
+                          label: 'Discover',
+                          selected: preferences.showDiscover,
+                          onPressed: () => controller.setShowDiscover(
+                            !preferences.showDiscover,
+                          ),
+                        ),
+                        _SetupChoice(
+                          label: 'Calendar',
+                          selected: preferences.showCalendar,
+                          onPressed: () => controller.setShowCalendar(
+                            !preferences.showCalendar,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  block(
+                    _SetupChoiceRow(
+                      label: 'Home details',
+                      children: [
+                        _SetupChoice(
+                          label: 'Featured hero',
+                          selected: preferences.showHero,
+                          onPressed: () =>
+                              controller.setShowHero(!preferences.showHero),
+                        ),
+                        _SetupChoice(
+                          label: 'Poster badges',
+                          selected: preferences.showPosterMetadata,
+                          onPressed: () => controller.setShowPosterMetadata(
+                            !preferences.showPosterMetadata,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TvExperiencePreview extends StatelessWidget {
+  const _TvExperiencePreview({required this.preferences});
+
+  final SettingsPreferences preferences;
+
+  IconData _iconFor(TopNavigationDestination destination) =>
+      switch (destination) {
+        TopNavigationDestination.search => Icons.search_rounded,
+        TopNavigationDestination.home => Icons.home_rounded,
+        TopNavigationDestination.myList => Icons.video_library_rounded,
+        TopNavigationDestination.discover => Icons.explore_rounded,
+        TopNavigationDestination.calendar => Icons.calendar_month_rounded,
+        TopNavigationDestination.settings => Icons.settings_rounded,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleDestinations = preferences.topNavigationOrder
+        .where(preferences.isTopNavigationDestinationVisible)
+        .take(6)
+        .toList(growable: false);
+    final dense = preferences.homeLayout == HomeLayout.compact;
+    final cardCount = dense ? 7 : 5;
+    final modern = preferences.interfaceMode != InterfaceMode.phone;
+    final (
+      railWidth,
+      logoSize,
+      navigationIconSize,
+    ) = switch (preferences.navigationChromeSize) {
+      NavigationChromeSize.small => (27.0, 16.0, 8.0),
+      NavigationChromeSize.medium => (34.0, 20.0, 10.0),
+      NavigationChromeSize.large => (42.0, 24.0, 12.0),
+    };
+    final content = Stack(
+      fit: StackFit.expand,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          decoration: BoxDecoration(
+            gradient: preferences.showHero
+                ? LinearGradient(
+                    colors: [
+                      context.appPalette.accent.withValues(alpha: .45),
+                      const Color(0xFF11151C),
+                      Colors.black,
+                    ],
+                  )
+                : const LinearGradient(
+                    colors: [Color(0xFF11151C), Colors.black],
+                  ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    preferences.homeLayout.displayName,
+                    style: const TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: context.appPalette.accentBright,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ],
+              ),
+              if (preferences.showHero) ...[
+                const Spacer(),
+                Container(
+                  width: 70,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: Colors.white70,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  width: 42,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: context.appPalette.accent,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              SizedBox(
+                height: dense ? 31 : 37,
+                child: Row(
+                  children: [
+                    for (var index = 0; index < cardCount; index++) ...[
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Color.lerp(
+                              context.appPalette.surfaceRaised,
+                              context.appPalette.accent,
+                              index / (cardCount * 2),
+                            ),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: preferences.showPosterMetadata
+                              ? const Align(
+                                  alignment: Alignment.bottomLeft,
+                                  child: Padding(
+                                    padding: EdgeInsets.all(2),
+                                    child: Icon(
+                                      Icons.star_rounded,
+                                      size: 7,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                      if (index != cardCount - 1)
+                        SizedBox(width: dense ? 3 : 5),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final rail = AnimatedContainer(
+      key: const ValueKey('setup-preview-modern-rail'),
+      duration: const Duration(milliseconds: 180),
+      width: railWidth,
+      color: const Color(0xFF080808),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Column(
         children: [
-          _SetupChoiceRow(
-            label: 'Home layout',
-            children: [
-              for (final layout in HomeLayout.values)
-                _SetupChoice(
-                  label: layout.displayName,
-                  selected: preferences.homeLayout == layout,
-                  onPressed: () => controller.setHomeLayout(layout),
-                ),
-            ],
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: logoSize,
+            height: logoSize,
+            child: Image.asset(
+              'assets/branding/tetotv_icon.png',
+              fit: BoxFit.contain,
+            ),
           ),
-          const SizedBox(height: 12),
-          _SetupChoiceRow(
-            label: 'Top navigation',
-            children: [
-              _SetupChoice(
-                label: 'My List',
-                selected: preferences.showMyList,
-                onPressed: () =>
-                    controller.setShowMyList(!preferences.showMyList),
+          const SizedBox(height: 3),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.topCenter,
+              child: Column(
+                children: [
+                  for (final destination in visibleDestinations)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Icon(
+                        _iconFor(destination),
+                        size: navigationIconSize,
+                        color: destination == TopNavigationDestination.home
+                            ? context.appPalette.accentBright
+                            : Colors.white70,
+                      ),
+                    ),
+                ],
               ),
-              _SetupChoice(
-                label: 'Discover',
-                selected: preferences.showDiscover,
-                onPressed: () =>
-                    controller.setShowDiscover(!preferences.showDiscover),
-              ),
-              _SetupChoice(
-                label: 'Calendar',
-                selected: preferences.showCalendar,
-                onPressed: () =>
-                    controller.setShowCalendar(!preferences.showCalendar),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _SetupChoiceRow(
-            label: 'Home details',
-            children: [
-              _SetupChoice(
-                label: 'Featured hero',
-                selected: preferences.showHero,
-                onPressed: () => controller.setShowHero(!preferences.showHero),
-              ),
-              _SetupChoice(
-                label: 'Poster badges',
-                selected: preferences.showPosterMetadata,
-                onPressed: () => controller.setShowPosterMetadata(
-                  !preferences.showPosterMetadata,
-                ),
-              ),
-            ],
+            ),
           ),
         ],
+      ),
+    );
+    final classicHeader = AnimatedContainer(
+      key: const ValueKey('setup-preview-classic-header'),
+      duration: const Duration(milliseconds: 180),
+      height: railWidth * .62,
+      color: const Color(0xFF080808),
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      child: Row(
+        children: [
+          Image.asset(
+            'assets/branding/tetotv_icon.png',
+            width: logoSize,
+            height: logoSize,
+            fit: BoxFit.contain,
+          ),
+          const SizedBox(width: 7),
+          for (final destination in visibleDestinations) ...[
+            Icon(
+              _iconFor(destination),
+              size: navigationIconSize,
+              color: destination == TopNavigationDestination.home
+                  ? context.appPalette.accentBright
+                  : Colors.white70,
+            ),
+            const SizedBox(width: 6),
+          ],
+          const Spacer(),
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: context.appPalette.accent,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
+      ),
+    );
+    return Semantics(
+      label:
+          'Live preview: ${preferences.interfaceMode.displayName}, '
+          '${preferences.navigationChromeSize.displayName} navigation and logo, '
+          '${preferences.homeLayout.displayName} Home layout, '
+          '${preferences.showHero ? 'featured hero shown' : 'featured hero hidden'}',
+      child: AnimatedContainer(
+        key: const ValueKey('setup-tv-experience-preview'),
+        duration: const Duration(milliseconds: 180),
+        height: 112,
+        clipBehavior: Clip.hardEdge,
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .6),
+          ),
+        ),
+        child: modern
+            ? Row(
+                children: [
+                  rail,
+                  Expanded(child: content),
+                ],
+              )
+            : Column(
+                children: [
+                  classicHeader,
+                  Expanded(child: content),
+                ],
+              ),
       ),
     );
   }
 }
 
 class _PlaybackStep extends ConsumerWidget {
-  const _PlaybackStep({required this.preferences});
+  const _PlaybackStep({
+    required this.preferences,
+    required this.firstFocusNode,
+  });
 
   final SettingsPreferences preferences;
+  final FocusNode firstFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.read(settingsPreferencesProvider.notifier);
+    final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final report = ref.watch(deviceSetupProvider).report;
     final showCompatibilityAdvice =
         report != null &&
@@ -311,77 +658,127 @@ class _PlaybackStep extends ConsumerWidget {
     return _SetupPage(
       icon: Icons.play_circle_outline_rounded,
       title: 'Choose your playback defaults',
-      subtitle: 'Set how you type, listen, and move through episodes.',
-      child: Column(
-        children: [
-          _SetupChoiceRow(
-            label: 'Text input',
+      subtitle: 'Set your player, language, subtitles, input, and skipping.',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final twoColumns = constraints.maxWidth >= 700;
+          final blockWidth = twoColumns
+              ? (constraints.maxWidth - 12) / 2
+              : constraints.maxWidth;
+          Widget block(Widget child) => SizedBox(
+            width: blockWidth,
+            child: Align(alignment: Alignment.topLeft, child: child),
+          );
+
+          return Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.start,
             children: [
-              _SetupChoice(
-                label: 'TetoTV keyboard',
-                selected: preferences.useBuiltInKeyboard,
-                onPressed: () => controller.setUseBuiltInKeyboard(true),
+              block(
+                _SetupChoiceRow(
+                  label: 'Preferred player',
+                  children: [
+                    for (final player in PreferredPlayer.values)
+                      _SetupChoice(
+                        label: player.displayName,
+                        focusNode: player == PreferredPlayer.values.first
+                            ? firstFocusNode
+                            : null,
+                        selected: preferences.preferredPlayer == player,
+                        onPressed: () => controller.setPreferredPlayer(player),
+                      ),
+                  ],
+                ),
               ),
-              _SetupChoice(
-                label: 'Device keyboard',
-                selected: !preferences.useBuiltInKeyboard,
-                onPressed: () => controller.setUseBuiltInKeyboard(false),
+              block(
+                _SetupChoiceRow(
+                  label: 'Audio & subtitle default',
+                  children: [
+                    for (final audio in PlaybackAudioPreference.values)
+                      _SetupChoice(
+                        label: audio.displayName,
+                        selected: preferences.preferredAudio == audio,
+                        onPressed: () => controller.setPreferredAudio(audio),
+                      ),
+                  ],
+                ),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _SetupChoiceRow(
-            label: 'Preferred anime audio',
-            children: [
-              for (final audio in PlaybackAudioPreference.values)
-                _SetupChoice(
-                  label: audio.displayName,
-                  selected: preferences.preferredAudio == audio,
-                  onPressed: () => controller.setPreferredAudio(audio),
+              block(
+                _SetupChoiceRow(
+                  label: 'Anime title language',
+                  children: [
+                    for (final language in TitleLanguagePreference.values)
+                      _SetupChoice(
+                        label: language.displayName,
+                        selected: titlePreference == language,
+                        onPressed: () => ref
+                            .read(titleLanguagePreferenceProvider.notifier)
+                            .setPreference(language),
+                      ),
+                  ],
+                ),
+              ),
+              block(
+                _SetupChoiceRow(
+                  label: 'Text input',
+                  children: [
+                    _SetupChoice(
+                      label: 'TetoTV keyboard',
+                      selected: preferences.useBuiltInKeyboard,
+                      onPressed: () => controller.setUseBuiltInKeyboard(true),
+                    ),
+                    _SetupChoice(
+                      label: 'Device keyboard',
+                      selected: !preferences.useBuiltInKeyboard,
+                      onPressed: () => controller.setUseBuiltInKeyboard(false),
+                    ),
+                  ],
+                ),
+              ),
+              block(
+                _SetupChoiceRow(
+                  label: 'Automatic skipping',
+                  children: [
+                    _SetupChoice(
+                      label: 'Skip intros',
+                      selected: preferences.autoSkipIntros,
+                      onPressed: () => controller.setAutoSkipIntros(
+                        !preferences.autoSkipIntros,
+                      ),
+                    ),
+                    _SetupChoice(
+                      label: 'Skip outros',
+                      selected: preferences.autoSkipOutros,
+                      onPressed: () => controller.setAutoSkipOutros(
+                        !preferences.autoSkipOutros,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (showCompatibilityAdvice)
+                SizedBox(
+                  width: constraints.maxWidth,
+                  child: const _SetupNote(
+                    key: ValueKey('setup-compatibility-warning'),
+                    icon: Icons.info_outline_rounded,
+                    text:
+                        'For smoother playback on this TV, start with 1080p H.264 releases. TetoTV will use compatibility playback automatically.',
+                  ),
                 ),
             ],
-          ),
-          const SizedBox(height: 14),
-          _SetupChoiceRow(
-            label: 'Automatic skipping',
-            children: [
-              _SetupChoice(
-                label: 'Skip intros',
-                selected: preferences.autoSkipIntros,
-                onPressed: () =>
-                    controller.setAutoSkipIntros(!preferences.autoSkipIntros),
-              ),
-              _SetupChoice(
-                label: 'Skip outros',
-                selected: preferences.autoSkipOutros,
-                onPressed: () =>
-                    controller.setAutoSkipOutros(!preferences.autoSkipOutros),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          Text(
-            'Automatic skipping only runs when reliable timestamps are available.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
-          ),
-          if (showCompatibilityAdvice) ...[
-            const SizedBox(height: 16),
-            const _SetupNote(
-              key: ValueKey('setup-compatibility-warning'),
-              icon: Icons.info_outline_rounded,
-              text:
-                  'For smoother playback on this TV, start with 1080p H.264 releases. TetoTV will use compatibility playback automatically.',
-            ),
-          ],
-        ],
+          );
+        },
       ),
     );
   }
 }
 
 class _AccountsStep extends ConsumerWidget {
-  const _AccountsStep();
+  const _AccountsStep({required this.firstFocusNode});
+
+  final FocusNode firstFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -418,6 +815,9 @@ class _AccountsStep extends ConsumerWidget {
               for (final provider in TrackingProvider.values)
                 _SetupChoice(
                   label: provider.displayName,
+                  focusNode: provider == TrackingProvider.values.first
+                      ? firstFocusNode
+                      : null,
                   selected: preferences.trackingProvider == provider,
                   onPressed: () => ref
                       .read(settingsPreferencesProvider.notifier)
@@ -490,7 +890,9 @@ class _AccountsStep extends ConsumerWidget {
 }
 
 class _StreamingStep extends ConsumerWidget {
-  const _StreamingStep();
+  const _StreamingStep({required this.firstFocusNode});
+
+  final FocusNode firstFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -529,6 +931,9 @@ class _StreamingStep extends ConsumerWidget {
               for (final service in DebridService.values)
                 _SetupChoice(
                   label: service.displayName,
+                  focusNode: service == DebridService.values.first
+                      ? firstFocusNode
+                      : null,
                   selected: preferences.debridProvider == service,
                   onPressed: () => ref
                       .read(settingsPreferencesProvider.notifier)
@@ -611,9 +1016,10 @@ class _StreamingStep extends ConsumerWidget {
 }
 
 class _PrivacyStep extends ConsumerWidget {
-  const _PrivacyStep({required this.preferences});
+  const _PrivacyStep({required this.preferences, required this.firstFocusNode});
 
   final SettingsPreferences preferences;
+  final FocusNode firstFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -630,6 +1036,7 @@ class _PrivacyStep extends ConsumerWidget {
             children: [
               _SetupChoice(
                 label: 'Do not send',
+                focusNode: firstFocusNode,
                 selected: !preferences.anonymousCrashReportingEnabled,
                 onPressed: () =>
                     settings.setAnonymousCrashReportingEnabled(false),
@@ -714,40 +1121,59 @@ class _SetupPage extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final contentWidth = constraints.maxWidth.clamp(0.0, 900.0).toDouble();
+      final card = SizedBox(
+        width: contentWidth,
         child: Container(
           width: double.infinity,
-          padding: EdgeInsets.all(context.isCompactWidth ? 18 : 28),
+          padding: EdgeInsets.all(context.isCompactWidth ? 18 : 22),
           decoration: BoxDecoration(
             color: context.appPalette.surface,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withValues(alpha: .08)),
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(icon, color: context.appPalette.accentBright, size: 48),
-              const SizedBox(height: 12),
+              Icon(icon, color: context.appPalette.accentBright, size: 40),
+              const SizedBox(height: 8),
               Text(
                 title,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: 5),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: context.appPalette.mutedText),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               child,
             ],
           ),
         ),
-      ),
-    ),
+      );
+      if (context.isCompactWidth) {
+        return SingleChildScrollView(child: Center(child: card));
+      }
+      // TV steps always stay inside the current viewport. Large-content steps
+      // scale down as a unit instead of hiding their final choices below a
+      // scroll edge that is easy to miss with a remote.
+      return ClipRect(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: FittedBox(
+            key: const ValueKey('setup-tv-fit-without-scroll'),
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.topCenter,
+            child: card,
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -764,6 +1190,7 @@ class _SetupProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Row(
         children: [
@@ -810,13 +1237,14 @@ class _SetupChoiceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
       const SizedBox(height: 8),
       Wrap(
         spacing: 8,
         runSpacing: 8,
-        alignment: WrapAlignment.center,
+        alignment: WrapAlignment.start,
         children: children,
       ),
     ],
@@ -828,14 +1256,17 @@ class _SetupChoice extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onPressed,
+    this.focusNode,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onPressed;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) => TvFocusable(
+    focusNode: focusNode,
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(8),
     child: Container(
@@ -926,18 +1357,15 @@ class _SetupButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.primary = false,
-    this.autofocus = false,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onPressed;
   final bool primary;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) => TvFocusable(
-    autofocus: autofocus,
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(8),
     child: Container(

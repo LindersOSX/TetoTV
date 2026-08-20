@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
-  testWidgets('Calendar Back returns Home when opened as a top-level route', (
+  testWidgets('Calendar system Back returns Home without a header arrow', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 720);
@@ -52,7 +52,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     expect(find.text('Home destination'), findsOneWidget);
@@ -126,13 +127,6 @@ void main() {
     );
     expect(find.text('Followed anime'), findsOneWidget);
     expect(find.text('Unrelated anime'), findsNothing);
-    final backDetector = find.descendant(
-      of: find.ancestor(
-        of: find.byIcon(Icons.arrow_back_rounded),
-        matching: find.byType(TvFocusable),
-      ),
-      matching: find.byType(FocusableActionDetector),
-    );
     final refreshDetector = find.descendant(
       of: find.ancestor(
         of: find.byIcon(Icons.refresh_rounded),
@@ -141,8 +135,17 @@ void main() {
       matching: find.byType(FocusableActionDetector),
     );
     expect(
-      tester.widget<FocusableActionDetector>(backDetector).focusNode?.hasFocus,
+      tester
+          .widget<FocusableActionDetector>(refreshDetector)
+          .focusNode
+          ?.hasFocus,
       isTrue,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();

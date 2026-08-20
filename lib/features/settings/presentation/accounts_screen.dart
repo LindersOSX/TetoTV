@@ -47,7 +47,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
-  final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
   final _debridProviderFocus = FocusNode(
     debugLabel: 'accounts.debrid.provider',
@@ -160,7 +159,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
-    _backFocus.dispose();
     _titleLanguageFocus.dispose();
     _debridProviderFocus.dispose();
     _trackingProviderFocus.dispose();
@@ -227,12 +225,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     }
     final current = FocusManager.instance.primaryFocus;
     final key = event.logicalKey;
-    if (layout?.usesTvRail == true &&
-        current == _backFocus &&
-        key == LogicalKeyboardKey.arrowLeft) {
-      layout!.focusRail();
-      return KeyEventResult.handled;
-    }
     final preferences = ref.read(settingsPreferencesProvider);
     final selectedDebridAction = switch (preferences.debridProvider) {
       DebridService.realDebrid => _debridConnectFocus,
@@ -266,6 +258,40 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       for (final area in _SettingsArea.values) _areaFocusNodes[area]!,
     ];
     final areaIndex = current == null ? -1 : areaNodes.indexOf(current);
+    final leftEdgeNodes = <FocusNode>{
+      areaNodes.first,
+      ...shelfNodes,
+      _customizationFocus,
+      _titleLanguageFocus,
+      _debridProviderFocus,
+      selectedDebridAction,
+      _debridStreamsFocus,
+      _marketplaceFocus,
+      _debridSortFocus,
+      _sourcePriorityFocus,
+      _webQualityFocus,
+      _localMediaFocus,
+      _trackingProviderFocus,
+      selectedTrackingAction,
+      _trackingThresholdFocus,
+      _setupFocus,
+      _automaticUpdatesFocus,
+      _updateChannelFocus,
+      _releaseHistoryFocus,
+      _discordPresenceFocus,
+      _discordQrFocus,
+      _discordFocus,
+      _donationQrFocus,
+      _donateFocus,
+      _clearCacheFocus,
+      _privacyFocus,
+    };
+    if (key == LogicalKeyboardKey.arrowLeft &&
+        layout?.usesTvRail == true &&
+        leftEdgeNodes.contains(current)) {
+      layout!.focusRail();
+      return KeyEventResult.handled;
+    }
 
     if (areaIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowLeft && areaIndex > 0) {
@@ -275,7 +301,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           areaIndex < areaNodes.length - 1) {
         target = areaNodes[areaIndex + 1];
       }
-      if (key == LogicalKeyboardKey.arrowUp) target = _titleLanguageFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = switch (_activeArea) {
           _SettingsArea.customize => shelfNodes.first,
@@ -299,25 +324,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
 
     if (areaIndex >= 0 || shelfIndex >= 0) {
       // Settings-area and Home-shelf navigation were handled above.
-    } else if (current == _backFocus) {
-      if (key == LogicalKeyboardKey.arrowRight) {
-        target = _titleLanguageFocus;
-      }
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = _areaFocusNodes[_activeArea];
-      }
     } else if (current == _titleLanguageFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = _areaFocusNodes[_activeArea];
-      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _customizationFocus;
     } else if (current == _debridProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.streaming];
       }
       if (key == LogicalKeyboardKey.arrowDown) target = selectedDebridAction;
     } else if (current == selectedDebridAction) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _backFocus;
       if (key == LogicalKeyboardKey.arrowUp) target = _debridProviderFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = selectedDebridToken.context == null
@@ -583,7 +597,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.settings,
-      firstContentFocusNode: _backFocus,
+      firstContentFocusNode: _areaFocusNodes[_activeArea]!,
       resizeToAvoidBottomInset: true,
       builder: (context, layout) => Focus(
         canRequestFocus: false,
@@ -594,55 +608,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             LayoutBuilder(
               builder: (context, constraints) {
                 final showSecurityLabel = constraints.maxWidth >= 1180;
-                if (constraints.maxWidth < 620) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          _TvIconButton(
-                            autofocus: true,
-                            focusNode: _backFocus,
-                            icon: Icons.arrow_back_rounded,
-                            onPressed: context.pop,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Settings',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                          Icon(
-                            Icons.lock_rounded,
-                            size: 18,
-                            color: context.appPalette.secondaryAccent,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 9),
-                      _TitleLanguageToggle(
-                        focusNode: _titleLanguageFocus,
-                        preference: titlePreference,
-                        onPressed: () => ref
-                            .read(titleLanguagePreferenceProvider.notifier)
-                            .toggle(),
-                      ),
-                    ],
-                  );
-                }
                 return Row(
                   children: [
-                    _TvIconButton(
-                      autofocus: true,
-                      focusNode: _backFocus,
-                      icon: Icons.arrow_back_rounded,
-                      onPressed: context.pop,
-                    ),
-                    const SizedBox(width: 18),
                     Expanded(
                       child: Text(
                         'Settings',
@@ -654,16 +621,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               fontWeight: FontWeight.w800,
                             ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    _TitleLanguageToggle(
-                      focusNode: _titleLanguageFocus,
-                      preference: titlePreference,
-                      onPressed: () {
-                        ref
-                            .read(titleLanguagePreferenceProvider.notifier)
-                            .toggle();
-                      },
                     ),
                     const SizedBox(width: 12),
                     Tooltip(
@@ -723,6 +680,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     const SizedBox(height: 10),
                     _CustomizationPanel(
                       preferences: preferences,
+                      titlePreference: titlePreference,
+                      titleLanguageFocusNode: _titleLanguageFocus,
+                      onTitleLanguageChanged: (preference) => ref
+                          .read(titleLanguagePreferenceProvider.notifier)
+                          .setPreference(preference),
                       controller: ref.read(
                         settingsPreferencesProvider.notifier,
                       ),
@@ -1282,6 +1244,7 @@ class _SettingsAreaTabs extends StatelessWidget {
       };
       return TvFocusable(
         focusNode: focusNodes[area],
+        autofocus: area == selected,
         onPressed: () => onSelected(area),
         focusScale: 1.02,
         borderRadius: BorderRadius.circular(12),
@@ -1621,6 +1584,9 @@ class _SettingsSelection<T> extends StatelessWidget {
 class _CustomizationPanel extends StatelessWidget {
   const _CustomizationPanel({
     required this.preferences,
+    required this.titlePreference,
+    required this.titleLanguageFocusNode,
+    required this.onTitleLanguageChanged,
     required this.controller,
     required this.firstFocusNode,
     required this.onOpenThemeStudio,
@@ -1628,6 +1594,9 @@ class _CustomizationPanel extends StatelessWidget {
   });
 
   final SettingsPreferences preferences;
+  final TitleLanguagePreference titlePreference;
+  final FocusNode titleLanguageFocusNode;
+  final ValueChanged<TitleLanguagePreference> onTitleLanguageChanged;
   final SettingsPreferencesController controller;
   final FocusNode firstFocusNode;
   final VoidCallback onOpenThemeStudio;
@@ -1671,6 +1640,27 @@ class _CustomizationPanel extends StatelessWidget {
                 _SettingsOption(value: mode, label: mode.displayName),
             ],
             onSelected: controller.setInterfaceMode,
+          ),
+          _SettingsSelection<TitleLanguagePreference>(
+            label: 'Title language',
+            value: titlePreference,
+            focusNode: titleLanguageFocusNode,
+            options: [
+              for (final language in TitleLanguagePreference.values)
+                _SettingsOption(value: language, label: language.displayName),
+            ],
+            onSelected: onTitleLanguageChanged,
+          ),
+          _PreferenceRow(
+            label: 'Navigation & logo size',
+            children: [
+              for (final size in NavigationChromeSize.values)
+                _PreferenceChip(
+                  label: size.displayName,
+                  selected: preferences.navigationChromeSize == size,
+                  onPressed: () => controller.setNavigationChromeSize(size),
+                ),
+            ],
           ),
           _PreferenceRow(
             label: 'Interface scale',
@@ -4663,11 +4653,6 @@ Color _settingsAccentForeground(BuildContext context) =>
     ? Colors.white
     : contrastForeground(context.appPalette.accent);
 
-Color _settingsTitleToggleSurface(BuildContext context) =>
-    _usesDefaultSettingsPalette(context)
-    ? const Color(0xFF171717)
-    : context.appPalette.surfaceRaised;
-
 Color _settingsDisabledActionSurface(BuildContext context) =>
     _usesDefaultSettingsPalette(context)
     ? const Color(0xFF3A2228)
@@ -4717,87 +4702,6 @@ class _StatusPill extends StatelessWidget {
           fontSize: 10,
           fontWeight: FontWeight.w800,
           letterSpacing: 1,
-        ),
-      ),
-    );
-  }
-}
-
-class _TitleLanguageToggle extends StatelessWidget {
-  const _TitleLanguageToggle({
-    required this.focusNode,
-    required this.preference,
-    required this.onPressed,
-  });
-
-  final FocusNode focusNode;
-  final TitleLanguagePreference preference;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      focusNode: focusNode,
-      focusScale: 1.02,
-      borderRadius: BorderRadius.circular(8),
-      onPressed: onPressed,
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        decoration: BoxDecoration(
-          color: _settingsTitleToggleSurface(context),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _settingsBorderColor(context, .08)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.translate_rounded,
-              size: 17,
-              color: context.appPalette.accentBright,
-            ),
-            const SizedBox(width: 7),
-            Text(
-              'Titles: ${preference.displayName}',
-              style: TextStyle(
-                color: _settingsPrimaryText(context),
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TvIconButton extends StatelessWidget {
-  const _TvIconButton({
-    required this.icon,
-    required this.onPressed,
-    this.autofocus = false,
-    this.focusNode,
-  });
-
-  final IconData icon;
-  final VoidCallback onPressed;
-  final bool autofocus;
-  final FocusNode? focusNode;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      autofocus: autofocus,
-      focusNode: focusNode,
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(10),
-      child: ColoredBox(
-        color: context.appPalette.surface,
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Icon(icon, size: 20),
         ),
       ),
     );

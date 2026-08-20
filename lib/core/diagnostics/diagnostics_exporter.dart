@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:path/path.dart' as path;
@@ -16,17 +16,17 @@ class DiagnosticsExporter {
     );
     final version = await AndroidTvBridge.instance.getAppVersion();
     final database = await TetoTvDatabase.instance.diagnosticsSnapshot();
-    final payload = <String, Object?>{
-      'app': {'name': 'TetoTV', 'version': version.name, 'build': version.code},
-      'device': profile.toJson(),
-      'database': database,
-      'privacy':
-          'Authentication tokens and direct stream URLs are never exported.',
-    };
-    final file = File(path.join(directory.path, 'tetotv-diagnostics.json'));
-    return file.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(payload),
-      flush: true,
+    final isTelevision = await AndroidTvBridge.instance.isTelevision(
+      refresh: true,
     );
+    final report = buildRedactedDiagnosticsText(
+      version: version,
+      profile: profile,
+      isTelevision: isTelevision,
+      diagnostics: database,
+      generatedAt: DateTime.now().toUtc(),
+    );
+    final file = File(path.join(directory.path, 'tetotv-diagnostics.json'));
+    return file.writeAsString(report, flush: true);
   }
 }

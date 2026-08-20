@@ -2,7 +2,6 @@ package software.solid.fluttervlcplayer;
 
 import android.content.Context;
 import android.graphics.SurfaceTexture;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
@@ -55,12 +54,10 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
             mLayoutChangeRunnable = null;
         }
 
-        if (mSurfaceTexture != null) {
-            if (!isSurfaceTextureReleased(mSurfaceTexture)) {
-                mSurfaceTexture.release();
-            }
-            mSurfaceTexture = null;
-        }
+        // The TextureRegistry.SurfaceTextureEntry is the sole owner. Releasing
+        // the same SurfaceTexture here and then releasing the entry caused a
+        // destroyed-mutex SIGABRT in ARMv7 Mali finalizer threads.
+        mSurfaceTexture = null;
         mTextureEntry = null;
         mMediaPlayer = null;
         mContext = null;
@@ -75,8 +72,13 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
     }
 
     public void setMediaPlayer(MediaPlayer mediaPlayer) {
-        if (mediaPlayer == null) {
-            mMediaPlayer.getVLCVout().detachViews();
+        if (mediaPlayer == null && mMediaPlayer != null) {
+            final MediaPlayer previousPlayer = mMediaPlayer;
+            // Clear the Java owner before calling native VLC so a throwing
+            // detach cannot leave dispose() believing the vout is still live.
+            mMediaPlayer = null;
+            previousPlayer.getVLCVout().detachViews();
+            return;
         }
 
         mMediaPlayer = mediaPlayer;
@@ -94,28 +96,15 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
     private void updateSurfaceTexture() {
         if (this.mTextureEntry != null) {
             final SurfaceTexture texture = this.mTextureEntry.surfaceTexture();
-            if (!isSurfaceTextureReleased(texture) && (getSurfaceTexture() != texture)) {
+            if (getSurfaceTexture() != texture) {
                 setSurfaceTexture(texture);
             }
         }
     }
 
-    /**
-     * SurfaceTexture.isReleased() was added in Android 8.0 (API 26), while
-     * Flutter and TetoTV still support Android 7.0/7.1 devices. Older Android
-     * versions cannot expose the released state, so preserve the pre-26
-     * lifecycle behavior without invoking a method that does not exist there.
-     */
-    private static boolean isSurfaceTextureReleased(@NonNull SurfaceTexture surfaceTexture) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            return surfaceTexture.isReleased();
-        }
-        return false;
-    }
-
     @Override
     public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-        if (mSurfaceTexture == null || isSurfaceTextureReleased(mSurfaceTexture)) {
+        if (mSurfaceTexture == null) {
             mSurfaceTexture = surface;
 
             if (mMediaPlayer != null) {
@@ -154,11 +143,8 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
         }
 
         if (mSurfaceTexture != surface) {
-            if (mSurfaceTexture != null) {
-                if (!isSurfaceTextureReleased(mSurfaceTexture)) {
-                    mSurfaceTexture.release();
-                }
-            }
+            // Do not release a registry-owned texture here. The entry remains
+            // authoritative across virtual-display detach/reattach events.
             mSurfaceTexture = surface;
         }
 

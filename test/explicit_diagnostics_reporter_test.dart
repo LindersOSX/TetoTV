@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
@@ -28,7 +29,10 @@ void main() {
 
     expect(report.eventId, startsWith('diag-'));
     expect(report.eventId, hasLength(greaterThanOrEqualTo(32)));
-    expect(report.report.length, lessThanOrEqualTo(10000));
+    expect(
+      report.report.length,
+      lessThanOrEqualTo(maximumExplicitDiagnosticsCharacters),
+    );
     expect(report.report, contains('[URL]'));
     expect(report.report, contains('[INFO_HASH]'));
     expect(report.report, contains('Bearer [REDACTED]'));
@@ -36,6 +40,109 @@ void main() {
     expect(report.report, isNot(contains(token)));
     expect(report.toWireJson(), isNot(contains('account_id')));
     expect(report.toWireJson()['device_class'], 'tv');
+  });
+
+  test('retains the complete bounded event ring and redacts keyed PII', () {
+    final diagnostics = <String, Object?>{
+      'account_id': 123456789,
+      'username': 'private-user',
+      'diagnosticEvents': [
+        for (var index = 0; index < 100; index++)
+          {
+            'category': 'playback',
+            'message':
+                'failure $index user@example.com from 192.168.1.20 ${List.filled(600, 'x').join()}',
+            'details_json':
+                'bounded detail $index ${List.filled(1200, 'y').join()}',
+          },
+      ],
+    };
+
+    final text = buildRedactedDiagnosticsText(
+      version: const AppVersionInfo(name: '2.0.11', code: 410002),
+      profile: _profile,
+      isTelevision: true,
+      diagnostics: diagnostics,
+      generatedAt: DateTime.utc(2026, 8, 20),
+    );
+    final decoded = jsonDecode(text) as Map<String, dynamic>;
+    final safeDiagnostics = decoded['diagnostics'] as Map<String, dynamic>;
+
+    expect(text.length, greaterThan(10000));
+    expect(
+      text.length,
+      lessThanOrEqualTo(maximumExplicitDiagnosticsCharacters),
+    );
+    expect(safeDiagnostics['diagnosticEvents'], hasLength(100));
+    expect(safeDiagnostics['account_id'], '[REDACTED]');
+    expect(safeDiagnostics['username'], '[REDACTED]');
+    expect(text, isNot(contains('private-user')));
+    expect(text, isNot(contains('user@example.com')));
+    expect(text, isNot(contains('192.168.1.20')));
+    expect(text, contains('[EMAIL]'));
+    expect(text, contains('[NETWORK ADDRESS]'));
+  });
+
+  test('redacts camelCase, compact sensitive keys, and IPv6 addresses', () {
+    final text = buildRedactedDiagnosticsText(
+      version: const AppVersionInfo(name: '2.0.11', code: 410002),
+      profile: _profile,
+      isTelevision: true,
+      diagnostics: const {
+        'accessToken': 'access-secret-value',
+        'refreshtoken': 'refresh-secret-value',
+        'clientSecret': 'client-secret-value',
+        'apikey': 'api-secret-value',
+        'deviceId': 'device-private-value',
+        'streamUrl': 'stream-private-value',
+        'networkFailure': 'peer 2001:db8:85a3::8a2e:370:7334 refused',
+      },
+      generatedAt: DateTime.utc(2026, 8, 20),
+    );
+    final decoded = jsonDecode(text) as Map<String, dynamic>;
+    final diagnostics = decoded['diagnostics'] as Map<String, dynamic>;
+
+    for (final key in const [
+      'accessToken',
+      'refreshtoken',
+      'clientSecret',
+      'apikey',
+      'deviceId',
+      'streamUrl',
+    ]) {
+      expect(diagnostics[key], '[REDACTED]', reason: key);
+    }
+    expect(text, isNot(contains('2001:db8:85a3::8a2e:370:7334')));
+    expect(text, contains('[NETWORK ADDRESS]'));
+  });
+
+  test('oversized capability data is reduced as valid declared JSON', () {
+    final text = buildRedactedDiagnosticsText(
+      version: const AppVersionInfo(name: '2.0.11', code: 410002),
+      profile: _profile,
+      isTelevision: true,
+      diagnostics: {
+        'unusuallyLargeList': [
+          for (var index = 0; index < 300; index++)
+            'entry-$index ${List.filled(4000, 'z').join()}',
+        ],
+      },
+      generatedAt: DateTime.utc(2026, 8, 20),
+    );
+    final decoded = jsonDecode(text) as Map<String, dynamic>;
+
+    expect(
+      text.length,
+      lessThanOrEqualTo(maximumExplicitDiagnosticsCharacters),
+    );
+    expect(
+      (decoded['reportCompleteness'] as Map<String, dynamic>)['reduced'],
+      isTrue,
+    );
+    expect(
+      (decoded['diagnostics'] as Map<String, dynamic>)['unusuallyLargeList'],
+      hasLength(50),
+    );
   });
 
   test('client accepts only a root HTTPS receiver origin', () {

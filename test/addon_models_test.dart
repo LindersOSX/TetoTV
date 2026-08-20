@@ -143,4 +143,39 @@ void main() {
     );
     expect(restored!.userConfigDefaults, addon.userConfigDefaults);
   });
+
+  test('resolves relative catalog and manifest resources safely', () {
+    final summary = MarketplaceAddon.tryParse({
+      'id': 'relative-provider',
+      'name': 'Relative provider',
+      'manifestUri': '../providers/relative/manifest.json#ignored',
+      'type': 'online-stream-provider',
+      'language': 'js',
+    }, repositoryUrl: 'https://example.com/catalog/main.json');
+
+    expect(summary, isNotNull);
+    expect(
+      summary!.manifestUri,
+      Uri.parse('https://example.com/providers/relative/manifest.json'),
+    );
+    expect(summary.isCompatible, isTrue);
+
+    final complete = MarketplaceAddon.tryParse(
+      {
+        'id': 'relative-provider',
+        'name': 'Relative provider',
+        'manifestUri': './manifest.json',
+        'payloadUrl': './provider.ts#fragment',
+        'type': 'anime_stream_provider',
+        'language': 'ts',
+      },
+      repositoryUrl: 'https://example.com/catalog/main.json',
+      resourceBaseUri: summary.manifestUri,
+    );
+    expect(
+      complete!.payloadUri,
+      Uri.parse('https://example.com/providers/relative/provider.ts'),
+    );
+    expect(complete.isCompatible, isTrue);
+  });
 }

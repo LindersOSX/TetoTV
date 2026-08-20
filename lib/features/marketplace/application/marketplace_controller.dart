@@ -185,7 +185,7 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }) async {
     final uri = safePublicHttpsUri(rawUrl);
     if (uri == null) return 'Enter a public HTTPS repository URL.';
-    final normalized = uri.toString();
+    final normalized = uri.removeFragment().toString();
     if (state.repositories.any((item) => item.url == normalized)) {
       return 'That repository is already added.';
     }
@@ -205,6 +205,36 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     state = state.copyWith(repositories: [...state.repositories, repository]);
     if (refreshAfterAdd) await refresh();
     return null;
+  }
+
+  Future<BulkSourceAddResult> addRepositories(String input) async {
+    final candidates = splitSourceUrlInput(input);
+    if (candidates.isEmpty) {
+      return const BulkSourceAddResult(
+        added: 0,
+        duplicates: 0,
+        rejected: ['Enter at least one public HTTPS repository URL.'],
+      );
+    }
+    var added = 0;
+    var duplicates = 0;
+    final rejected = <String>[];
+    for (final candidate in candidates) {
+      final error = await addRepository(candidate, refreshAfterAdd: false);
+      if (error == null) {
+        added++;
+      } else if (error.contains('already added')) {
+        duplicates++;
+      } else {
+        rejected.add(error);
+      }
+    }
+    if (added > 0) await refresh();
+    return BulkSourceAddResult(
+      added: added,
+      duplicates: duplicates,
+      rejected: List.unmodifiable(rejected),
+    );
   }
 
   Future<void> setRepositoryEnabled(

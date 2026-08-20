@@ -50,7 +50,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
       expect(
-        _focusedControl(tester, find.text('Add Torrent source manifest')),
+        _focusedControl(tester, find.text('Add Torrent source manifests')),
         isTrue,
       );
 
@@ -59,7 +59,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(
-        _focusedControl(tester, find.text('Add Marketplace repository')),
+        _focusedControl(tester, find.text('Add Marketplace repositories')),
         isTrue,
       );
 
@@ -94,14 +94,14 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
       expect(
-        _focusedControl(tester, find.text('Add Marketplace repository')),
+        _focusedControl(tester, find.text('Add Marketplace repositories')),
         isTrue,
       );
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
       expect(
-        _focusedControl(tester, find.text('Add Torrent source manifest')),
+        _focusedControl(tester, find.text('Add Torrent source manifests')),
         isTrue,
       );
       expect(tester.takeException(), isNull);

@@ -190,7 +190,11 @@ class AnonymousCrashReporter {
     required Object error,
     StackTrace? stack,
   }) {
-    if (_disposed || !_enabled) return Future<void>.value();
+    if (_disposed ||
+        !_enabled ||
+        _isExpectedArtworkNetworkFailure(error, stack)) {
+      return Future<void>.value();
+    }
     final message = redactDiagnosticValue(error.toString(), maximum: 500);
     final safeStack = _redactStack(stack?.toString() ?? '', maximum: 4000);
     final signature =
@@ -232,7 +236,10 @@ class AnonymousCrashReporter {
     required Object error,
     StackTrace? stack,
   }) {
-    if (_disposed || !_enabled || !_isUnexpectedHandledError(error)) {
+    if (_disposed ||
+        !_enabled ||
+        _isExpectedArtworkNetworkFailure(error, stack) ||
+        !_isUnexpectedHandledError(error)) {
       return Future<void>.value();
     }
     final now = DateTime.now();
@@ -423,6 +430,37 @@ bool _isUnexpectedHandledError(Object error) {
     'not instantly cached',
     'no results',
   ].any(message.contains);
+}
+
+/// Image loading is deliberately best-effort: Flutter's image pipeline can
+/// surface an artwork CDN DNS outage through the global error hooks even
+/// though the screen has already rendered its placeholder. Keep that bounded
+/// network context in the local explicit diagnostics ring (recorded by the
+/// global hook), but do not post it as an anonymous application crash.
+///
+/// API failures remain reportable. The predicate requires either an image
+/// pipeline stack frame or one of the narrowly scoped public artwork hosts;
+/// a generic DNS/connection failure is never discarded.
+bool _isExpectedArtworkNetworkFailure(Object error, StackTrace? stack) {
+  final message = error.toString().toLowerCase();
+  final isResolutionFailure =
+      message.contains('failed host lookup') ||
+      message.contains('connection closed before full header') ||
+      message.contains('connection reset by peer');
+  if (!isResolutionFailure) return false;
+  final stackText = stack?.toString().toLowerCase() ?? '';
+  final imagePipeline =
+      stackText.contains('network_image') ||
+      stackText.contains('image_provider') ||
+      stackText.contains('image_stream');
+  final artworkHost = const [
+    's4.anilist.co',
+    's.anilist.co',
+    'media.kitsu.io',
+    'cdn.myanimelist.net',
+    'cdn.discordapp.com',
+  ].any(message.contains);
+  return imagePipeline || artworkHost;
 }
 
 /// Captures Riverpod failures that would otherwise be converted into an error

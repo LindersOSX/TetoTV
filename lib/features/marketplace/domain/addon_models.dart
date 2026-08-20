@@ -34,6 +34,38 @@ class AddonRepository {
       );
 }
 
+class BulkSourceAddResult {
+  const BulkSourceAddResult({
+    required this.added,
+    required this.duplicates,
+    required this.rejected,
+  });
+
+  final int added;
+  final int duplicates;
+  final List<String> rejected;
+
+  int get rejectedCount => rejected.length;
+
+  String get summary {
+    final parts = <String>['Added $added'];
+    if (duplicates > 0) parts.add('$duplicates already saved');
+    if (rejectedCount > 0) parts.add('$rejectedCount rejected');
+    return '${parts.join(' • ')}.';
+  }
+}
+
+/// Accepts URLs pasted one-per-line or separated by ordinary whitespace.
+/// URLs containing spaces must already be percent encoded, as required by URI
+/// syntax. The bound prevents an accidental clipboard dump from creating an
+/// unbounded validation queue.
+List<String> splitSourceUrlInput(String value) => value
+    .split(RegExp(r'\s+'))
+    .map((item) => item.trim())
+    .where((item) => item.isNotEmpty)
+    .take(64)
+    .toList(growable: false);
+
 class MarketplaceAddon {
   const MarketplaceAddon({
     required this.id,
@@ -115,18 +147,21 @@ class MarketplaceAddon {
   static MarketplaceAddon? tryParse(
     Object? value, {
     required String repositoryUrl,
+    Uri? resourceBaseUri,
   }) {
     if (value is! Map) return null;
     final json = value.map((key, value) => MapEntry('$key', value));
     final id = _clean(json['id'], 80);
     final name = _clean(json['name'], 120);
-    final manifest = safePublicHttpsUri(
+    final manifest = _safeMarketplaceResourceUri(
       _firstValue(json, const [
         'manifestURI',
         'manifestUri',
         'manifestURL',
         'manifestUrl',
       ]),
+      repositoryUrl: repositoryUrl,
+      resourceBaseUri: resourceBaseUri,
     );
     if (id == null ||
         name == null ||
@@ -142,24 +177,48 @@ class MarketplaceAddon {
       manifestUri: manifest,
       repositoryUrl: repositoryUrl,
       language: _normalizedAddonLanguage(json['language']),
-      type: (_clean(json['type'], 48) ?? '').toLowerCase(),
+      type: _normalizedAddonType(json['type']),
       locale:
           (_clean(_firstValue(json, const ['lang', 'locale']), 12) ?? 'unknown')
               .toLowerCase(),
       version: _clean(json['version'], 32),
-      iconUri: safePublicHttpsUri(json['icon']),
-      payloadUri: safePublicHttpsUri(
+      iconUri: _safeMarketplaceResourceUri(
+        json['icon'],
+        repositoryUrl: repositoryUrl,
+        resourceBaseUri: resourceBaseUri,
+      ),
+      payloadUri: _safeMarketplaceResourceUri(
         _firstValue(json, const [
           'payloadURI',
           'payloadUri',
           'payloadURL',
           'payloadUrl',
         ]),
+        repositoryUrl: repositoryUrl,
+        resourceBaseUri: resourceBaseUri,
       ),
       inlinePayload: _cleanPayload(json['payload']),
       userConfigDefaults: _userConfigDefaults(json['userConfig']),
     );
   }
+}
+
+Uri? _safeMarketplaceResourceUri(
+  Object? value, {
+  required String repositoryUrl,
+  Uri? resourceBaseUri,
+}) {
+  if (value is! String || value.trim().isEmpty || value.length > 2048) {
+    return null;
+  }
+  final raw = Uri.tryParse(value.trim());
+  if (raw == null) return null;
+  if (raw.hasScheme || raw.hasAuthority) {
+    return safePublicHttpsUri(raw.toString());
+  }
+  final base = resourceBaseUri ?? safePublicHttpsUri(repositoryUrl);
+  if (base == null) return null;
+  return safePublicHttpsUri(base.resolveUri(raw).toString());
 }
 
 Object? _firstValue(Map<String, Object?> json, List<String> keys) {
@@ -176,6 +235,15 @@ String _normalizedAddonLanguage(Object? value) {
     'js' => 'javascript',
     'ts' => 'typescript',
     _ => language,
+  };
+}
+
+String _normalizedAddonType(Object? value) {
+  final type = (_clean(value, 48) ?? '').toLowerCase();
+  final compact = type.replaceAll(RegExp(r'[^a-z0-9]+'), '');
+  return switch (compact) {
+    'onlinestreamprovider' || 'animestreamprovider' => 'onlinestream-provider',
+    _ => type,
   };
 }
 
@@ -301,7 +369,7 @@ Uri? safePublicHttpsUri(Object? value) {
       _literalAddressIsNonPublic(host)) {
     return null;
   }
-  return uri;
+  return uri.removeFragment();
 }
 
 typedef PublicHostLookup = Future<List<InternetAddress>> Function(String host);

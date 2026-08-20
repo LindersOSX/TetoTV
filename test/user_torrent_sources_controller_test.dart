@@ -78,4 +78,26 @@ void main() {
     );
     expect(controller.state.manifestUrls, isEmpty);
   });
+
+  test('bulk add accepts whitespace-separated manifests in one pass', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = UserTorrentSourcesController(
+      storage,
+      targetValidator: (_) async {},
+    );
+
+    final result = await controller.addAll('''
+https://one.example/addon/manifest.json
+https://two.example/addon/manifest.json https://one.example/addon/manifest.json
+https://bad.example/catalog.json
+''');
+
+    expect(result.added, 2);
+    expect(result.duplicates, 1);
+    expect(result.rejectedCount, 1);
+    expect(controller.state.manifestUrls, [
+      'https://one.example/addon/manifest.json',
+      'https://two.example/addon/manifest.json',
+    ]);
+  });
 }

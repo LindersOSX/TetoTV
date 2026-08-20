@@ -314,9 +314,10 @@ String? _safePublicAvatarUrl(Object? value) {
   final source = _nonEmptyString(value);
   if (source == null) return null;
   try {
+    final original = Uri.tryParse(source);
+    if (original == null || original.hasFragment) return null;
     final uri = safePublicHttpsUri(source);
     if (uri == null ||
-        uri.hasFragment ||
         (uri.hasPort && uri.port != 443) ||
         uri.path.contains('\\')) {
       return null;

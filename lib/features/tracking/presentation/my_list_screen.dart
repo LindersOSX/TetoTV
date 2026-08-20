@@ -339,6 +339,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                               onManage: (item) =>
                                   _manage(item, titlePreference),
                               preferences: preferences,
+                              onLeftEdge: layout.usesTvRail
+                                  ? layout.focusRail
+                                  : null,
                             ),
                           ),
                         ],
@@ -606,6 +609,7 @@ class _TrackedShelf extends StatelessWidget {
     required this.onPressed,
     required this.onManage,
     required this.preferences,
+    this.onLeftEdge,
   });
 
   final List<HomeTrackedAnime> items;
@@ -613,6 +617,7 @@ class _TrackedShelf extends StatelessWidget {
   final ValueChanged<HomeTrackedAnime> onPressed;
   final ValueChanged<HomeTrackedAnime> onManage;
   final SettingsPreferences preferences;
+  final VoidCallback? onLeftEdge;
 
   @override
   Widget build(BuildContext context) {
@@ -639,6 +644,17 @@ class _TrackedShelf extends StatelessWidget {
             width: metrics.width * preferences.thumbnailScale,
             height: metrics.height * preferences.thumbnailScale,
             child: TvFocusable(
+              onKeyEvent: index == 0 && onLeftEdge != null
+                  ? (_, event) {
+                      if (event.logicalKey != LogicalKeyboardKey.arrowLeft) {
+                        return KeyEventResult.ignored;
+                      }
+                      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                        onLeftEdge!();
+                      }
+                      return KeyEventResult.handled;
+                    }
+                  : null,
               onPressed: () => onPressed(item),
               onLongPress: () => onManage(item),
               focusScale: 1.025,

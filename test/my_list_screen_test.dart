@@ -1067,6 +1067,60 @@ void main() {
     expect(find.text('Watching is empty'), findsNothing);
   });
 
+  testWidgets('first My List card returns left to the active rail item', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const item = HomeTrackedAnime(
+      tracked: TrackedAnime(
+        mediaId: 17,
+        title: 'Left edge show',
+        status: TrackingListStatus.watching,
+        progress: 3,
+      ),
+      provider: TrackingProvider.anilist,
+      anilistId: 17,
+      coverImageUrl: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [item])),
+        ],
+        child: const MaterialApp(home: TvShortcuts(child: MyListScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final cardDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Left edge show'),
+          matching: find.byType(TvFocusable),
+        ),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    cardDetector.focusNode!.requestFocus();
+    await tester.pump();
+    expect(cardDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('failed refresh keeps the previous tracker cards visible', (
     tester,
   ) async {

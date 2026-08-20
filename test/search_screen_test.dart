@@ -237,8 +237,8 @@ void main() {
       expect(find.byKey(const ValueKey('main-navigation')), findsOneWidget);
       expect(find.byKey(const ValueKey('main-nav-search')), findsOneWidget);
 
-      final back = _focusNode('search.back');
-      back.requestFocus();
+      final searchInput = _focusNode('search_input');
+      searchInput.requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
@@ -249,7 +249,7 @@ void main() {
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
-      expect(FocusManager.instance.primaryFocus, same(back));
+      expect(FocusManager.instance.primaryFocus, same(searchInput));
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
@@ -302,7 +302,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('main-navigation')), findsNothing);
-    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
     expect(find.byType(TvTextInput), findsOneWidget);
     expect(find.byIcon(Icons.mic_rounded), findsOneWidget);
     expect(
@@ -312,7 +312,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Search Back pops history and otherwise returns Home', (
+  testWidgets('Search system Back pops history and otherwise returns Home', (
     tester,
   ) async {
     Future<void> pumpRouter(String initialLocation) async {
@@ -345,14 +345,14 @@ void main() {
     await pumpRouter('/origin');
     await tester.tap(find.text('Open search'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Open search'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
     await pumpRouter('/search');
-    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Home fallback'), findsOneWidget);
     expect(tester.takeException(), isNull);

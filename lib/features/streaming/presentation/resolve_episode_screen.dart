@@ -110,6 +110,29 @@ bool releaseMatchesStreamFilters(
   );
 }
 
+/// Matches the viewer's local torrent-picker query without changing provider
+/// discovery, autoplay ranking, or failover order.
+bool releaseMatchesTorrentSearch(ReleaseCandidate release, String query) {
+  final terms = query
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((term) => term.isNotEmpty);
+  if (terms.isEmpty) return true;
+  final searchable = [
+    release.releaseName,
+    release.provider,
+    release.sourceId,
+    release.quality,
+    release.codec,
+    release.sizeLabel,
+    release.isDubbed ? 'dub dual audio' : 'sub',
+    if (release.isHdr) 'hdr',
+    if (release.isBatch) 'batch',
+  ].whereType<String>().join(' ').toLowerCase();
+  return terms.every(searchable.contains);
+}
+
 int compareStreamReleases(
   ReleaseCandidate left,
   ReleaseCandidate right, {
@@ -270,11 +293,14 @@ class ResolveEpisodeScreen extends ConsumerStatefulWidget {
 
 class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   final _magnetController = TextEditingController();
+  final _torrentSearchController = TextEditingController();
+  final _torrentSearchFocus = FocusNode(debugLabel: 'torrent-picker.search');
   bool _loadingAccount = true;
   bool _loadingReleases = false;
   bool _resolving = false;
   bool _showManual = false;
   bool _showAdvancedFilters = false;
+  String _torrentSearchQuery = '';
   double _progress = 0;
   String _status = 'Preparing…';
   String? _error;
@@ -1677,6 +1703,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     _releaseSearchGeneration++;
     _preferredWebWaitTimer?.cancel();
     _magnetController.dispose();
+    _torrentSearchController.dispose();
+    _torrentSearchFocus.dispose();
     super.dispose();
   }
 
@@ -1852,7 +1880,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if ((_releases.isNotEmpty || _webStreams.isNotEmpty) && !_showManual) {
-      final filtered = _filteredAndSortedReleases(_releases);
+      final torrentSearchHasNoMatches =
+          _torrentSearchQuery.trim().isNotEmpty &&
+          _releases.isNotEmpty &&
+          !_releases.any(
+            (release) =>
+                releaseMatchesTorrentSearch(release, _torrentSearchQuery),
+          );
+      final filtered = _filteredAndSortedReleases(_releases)
+          .where(
+            (release) =>
+                releaseMatchesTorrentSearch(release, _torrentSearchQuery),
+          )
+          .toList(growable: false);
       final filteredWeb = _filteredWebStreams(_webStreams);
       final sourcePreferences = ref.read(settingsPreferencesProvider);
       return _StreamPicker(
@@ -1897,6 +1937,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             : () => _resolveCandidate(_lastAttemptedRelease!),
         onRefresh: () => _loadConfiguredReleases(refreshWeb: true),
         onManual: () => setState(() => _showManual = true),
+        torrentSearchController: _torrentSearchController,
+        torrentSearchFocus: _torrentSearchFocus,
+        torrentSearchHasNoMatches: torrentSearchHasNoMatches,
+        onTorrentSearchChanged: (value) => setState(() {
+          _torrentSearchQuery = value;
+        }),
+        onClearTorrentSearch: () {
+          _torrentSearchController.clear();
+          setState(() => _torrentSearchQuery = '');
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _torrentSearchFocus.requestFocus();
+          });
+        },
       );
     }
     if (!_hasDebrid && _webStreams.isEmpty) {
@@ -2083,6 +2136,11 @@ class _StreamPicker extends StatelessWidget {
     required this.onRetry,
     required this.onRefresh,
     required this.onManual,
+    required this.torrentSearchController,
+    required this.torrentSearchFocus,
+    required this.torrentSearchHasNoMatches,
+    required this.onTorrentSearchChanged,
+    required this.onClearTorrentSearch,
   });
 
   final List<ReleaseCandidate> releases;
@@ -2120,6 +2178,11 @@ class _StreamPicker extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback onRefresh;
   final VoidCallback onManual;
+  final TextEditingController torrentSearchController;
+  final FocusNode torrentSearchFocus;
+  final bool torrentSearchHasNoMatches;
+  final ValueChanged<String> onTorrentSearchChanged;
+  final VoidCallback onClearTorrentSearch;
 
   List<Widget> get _debridSlivers => releases.isEmpty
       ? const []
@@ -2214,52 +2277,48 @@ class _StreamPicker extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: context.isCompactWidth ? 820 : 1260,
-              child: Row(
+          Text(
+            'Choose your stream',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
+            ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
+            '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final search = SizedBox(
+                width: constraints.maxWidth < 720 ? constraints.maxWidth : 320,
+                child: TvTextInput(
+                  controller: torrentSearchController,
+                  focusNode: torrentSearchFocus,
+                  labelText: 'Search torrents',
+                  hintText: 'Release, group, quality, codec…',
+                  keyboardTitle: 'Search torrents for this episode',
+                  onChanged: onTorrentSearchChanged,
+                ),
+              );
+              final controls = Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Choose your stream',
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
-                          ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
-                          '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  if (debridEnabled && connectedServices.length > 1) ...[
+                  if (debridEnabled && connectedServices.length > 1)
                     for (final service in DebridService.values.where(
                       connectedServices.contains,
-                    )) ...[
+                    ))
                       _FilterButton(
                         label: service.shortName,
                         selected: selectedService == service,
                         onPressed: () => onServiceChanged(service),
                       ),
-                      const SizedBox(width: 8),
-                    ],
-                    Container(
-                      width: 1,
-                      height: 32,
-                      color: palette.primaryText.withValues(alpha: .12),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  for (final value in _StreamLanguageFilter.values) ...[
+                  for (final value in _StreamLanguageFilter.values)
                     _FilterButton(
                       label: switch (value) {
                         _StreamLanguageFilter.all => 'ALL',
@@ -2269,8 +2328,6 @@ class _StreamPicker extends StatelessWidget {
                       selected: filter == value,
                       onPressed: () => onFilterChanged(value),
                     ),
-                    const SizedBox(width: 8),
-                  ],
                   _CompactAction(
                     icon: showAdvancedFilters
                         ? Icons.tune_rounded
@@ -2283,13 +2340,11 @@ class _StreamPicker extends StatelessWidget {
                     onPressed: () =>
                         onAdvancedFiltersChanged(!showAdvancedFilters),
                   ),
-                  const SizedBox(width: 8),
                   _CompactAction(
                     icon: Icons.refresh_rounded,
                     label: 'Refresh',
                     onPressed: onRefresh,
                   ),
-                  const SizedBox(width: 8),
                   if (debridEnabled)
                     _CompactAction(
                       icon: Icons.add_link_rounded,
@@ -2297,9 +2352,52 @@ class _StreamPicker extends StatelessWidget {
                       onPressed: onManual,
                     ),
                 ],
+              );
+              if (!debridEnabled) return controls;
+              if (constraints.maxWidth < 900) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [search, const SizedBox(height: 10), controls],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  search,
+                  const SizedBox(width: 12),
+                  Expanded(child: controls),
+                ],
+              );
+            },
+          ),
+          if (torrentSearchHasNoMatches) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: palette.primaryText.withValues(alpha: .1),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.search_off_rounded, size: 19),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Text('No torrents match this local search.'),
+                  ),
+                  _CompactAction(
+                    icon: Icons.close_rounded,
+                    label: 'Clear search',
+                    onPressed: onClearTorrentSearch,
+                  ),
+                ],
               ),
             ),
-          ),
+          ],
           if (isSearching) ...[
             const SizedBox(height: 10),
             Container(
