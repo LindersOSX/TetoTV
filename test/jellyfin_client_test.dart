@@ -325,6 +325,123 @@ void main() {
         );
       },
     );
+
+    test(
+      'searches recursively and parses the server resume checkpoint',
+      () async {
+        RequestOptions? captured;
+        final client = JellyfinClient(
+          _stubDio((request) {
+            captured = request;
+            return _json(request, {
+              'Items': [
+                {
+                  'Id': 'episode-id-12345678',
+                  'Name': 'The Search',
+                  'Type': 'Episode',
+                  'RunTimeTicks': 14_400_000_000,
+                  'UserData': {
+                    'PlaybackPositionTicks': 450_000_000,
+                    'Played': false,
+                  },
+                },
+              ],
+              'TotalRecordCount': 1,
+            });
+          }),
+        );
+
+        final results = await client.search(_connection(), ' Search ');
+
+        expect(results.single.name, 'The Search');
+        expect(results.single.resumePosition, const Duration(seconds: 45));
+        expect(results.single.duration, const Duration(minutes: 24));
+        expect(captured?.uri.queryParameters['searchTerm'], 'Search');
+        expect(captured?.uri.queryParameters['recursive'], 'true');
+        expect(captured?.uri.queryParameters['limit'], '60');
+        expect(captured?.uri.toString(), isNot(contains('access-token')));
+      },
+    );
+
+    test(
+      'reports playback progress without putting the token in the URL',
+      () async {
+        RequestOptions? captured;
+        final client = JellyfinClient(
+          _stubDio((request) {
+            captured = request;
+            return _raw(
+              requestOptions: request,
+              statusCode: 204,
+              data: const {},
+            );
+          }),
+        );
+        const item = JellyfinMediaItem(
+          id: 'episode-id-12345678',
+          name: 'Episode',
+          type: 'Episode',
+        );
+
+        await client.reportPlaybackProgress(
+          _connection(),
+          item,
+          playSessionId: 'session_1234567890abcdef',
+          position: const Duration(seconds: 90),
+        );
+
+        expect(captured?.method, 'POST');
+        expect(captured?.uri.path, '/jellyfin/Sessions/Playing/Progress');
+        expect(captured?.uri.toString(), isNot(contains('access-token')));
+        expect(captured?.headers['Authorization'], contains('Token='));
+        expect(captured?.data, containsPair('PositionTicks', 900_000_000));
+      },
+    );
+
+    test('loads artwork without following a token-bearing redirect', () async {
+      RequestOptions? captured;
+      final imageUri = Uri.parse(
+        'http://192.168.1.25:8096/jellyfin/Items/item-123/Images/Primary',
+      );
+      final client = JellyfinClient(
+        _stubDio((request) {
+          captured = request;
+          return _binary(
+            requestOptions: request,
+            statusCode: 200,
+            bytes: const [1, 2, 3],
+          );
+        }),
+      );
+
+      expect(await client.imageBytes(_connection(), imageUri), [1, 2, 3]);
+      expect(captured?.followRedirects, isFalse);
+      expect(captured?.headers['Authorization'], contains('Token='));
+      expect(captured?.uri.toString(), isNot(contains('access-token')));
+
+      final redirected = JellyfinClient(
+        _stubDio(
+          (request) => _binary(
+            requestOptions: request,
+            statusCode: 302,
+            bytes: const [],
+            headers: Headers.fromMap({
+              'location': ['https://attacker.example/collect'],
+            }),
+          ),
+        ),
+      );
+      await expectLater(
+        redirected.imageBytes(_connection(), imageUri),
+        throwsA(
+          isA<JellyfinException>().having(
+            (error) => error.message,
+            'message',
+            contains('redirected'),
+          ),
+        ),
+      );
+    });
   });
 }
 
@@ -359,6 +476,18 @@ Response<ResponseBody> _raw({
       Headers.contentTypeHeader: ['application/json'],
     },
   ),
+);
+
+Response<ResponseBody> _binary({
+  required RequestOptions requestOptions,
+  required int statusCode,
+  required List<int> bytes,
+  Headers? headers,
+}) => Response<ResponseBody>(
+  requestOptions: requestOptions,
+  statusCode: statusCode,
+  headers: headers ?? Headers(),
+  data: ResponseBody.fromBytes(bytes, statusCode),
 );
 
 JellyfinConnection _connection() => JellyfinConnection(

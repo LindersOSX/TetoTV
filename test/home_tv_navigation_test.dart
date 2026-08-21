@@ -4,6 +4,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
@@ -573,7 +574,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Modern Home posters match the default Search thumbnail size', (
+  testWidgets('Modern Home, Search, and Discover share default poster size', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({
@@ -646,8 +647,34 @@ void main() {
         .first;
     final searchSize = tester.getSize(searchCard);
 
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _RailSettingsController(),
+          ),
+          catalogClientProvider.overrideWithValue(
+            _ImmediateSearchCatalog(const [anime]),
+          ),
+        ],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final discoverCard = find
+        .ancestor(
+          of: find.text('Shared poster geometry'),
+          matching: find.byType(TvFocusable),
+        )
+        .first;
+    final discoverSize = tester.getSize(discoverCard);
+
     expect(homeSize.width, closeTo(searchSize.width, .01));
     expect(homeSize.height, closeTo(searchSize.height, .01));
+    expect(homeSize.width, closeTo(discoverSize.width, .01));
+    expect(homeSize.height, closeTo(discoverSize.height, .01));
     expect(tester.takeException(), isNull);
   });
 
@@ -859,6 +886,12 @@ class _ImmediateSearchCatalog extends AniListCatalogClient {
   @override
   Future<List<AnimeSummary>> search(String term, {int page = 1}) async =>
       results;
+
+  @override
+  Future<List<AnimeSummary>> discover(
+    CatalogFilters filters, {
+    int page = 1,
+  }) async => results;
 }
 
 class _TrackingAccountsRef extends Fake implements Ref {}

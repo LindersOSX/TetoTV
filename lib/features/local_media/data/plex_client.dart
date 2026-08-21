@@ -200,6 +200,70 @@ class PlexClient {
     );
   }
 
+  Future<List<PlexMediaItem>> search(
+    PlexConnection connection,
+    String query, {
+    int limit = 60,
+  }) async {
+    final baseUri = _validateConnection(connection);
+    final term = query.trim();
+    if (term.length < 2 || term.length > 200) {
+      throw const PlexException(
+        'Enter at least two characters to search Plex.',
+      );
+    }
+    final response = await _requestXml(
+      _endpoint(baseUri, '/hubs/search').replace(
+        queryParameters: {
+          'query': term,
+          'limit': limit.clamp(1, _maxPageSize).toString(),
+          'includeCollections': '0',
+          'includeExternalMedia': '0',
+        },
+      ),
+      headers: _xmlHeaders(connection),
+    );
+    final container = _mediaContainer(response.document);
+    final results = <PlexMediaItem>[];
+    final seen = <String>{};
+    for (final hub in _directElements(container, const {'Hub'})) {
+      for (final element in _directElements(hub, const {
+        'Directory',
+        'Video',
+        'Metadata',
+      })) {
+        final item = _parseMediaItem(element, connection);
+        if (item == null || !seen.add(item.ratingKey)) continue;
+        results.add(item);
+        if (results.length >= limit.clamp(1, _maxPageSize)) {
+          return List.unmodifiable(results);
+        }
+      }
+    }
+    return List.unmodifiable(results);
+  }
+
+  Future<PlexMediaItem> metadata(
+    PlexConnection connection,
+    PlexMediaItem item,
+  ) async {
+    _validateConnection(connection);
+    final response = await _requestXml(
+      _resolveResponseKey(connection, item.key),
+      headers: _xmlHeaders(connection),
+    );
+    final container = _mediaContainer(response.document);
+    for (final element in _directElements(container, const {
+      'Directory',
+      'Video',
+      'Metadata',
+    })) {
+      final parsed = _parseMediaItem(element, connection);
+      if (parsed?.ratingKey == item.ratingKey) return parsed!;
+    }
+    throw const PlexException('Plex did not return playable media details.');
+  }
+
   Uri playbackUri(
     PlexConnection connection,
     PlexMediaItem item, {
@@ -238,6 +302,33 @@ class PlexClient {
   Map<String, String> authenticatedHeaders(PlexConnection connection) {
     _validateConnection(connection);
     return Map.unmodifiable(_authenticatedHeaders(connection));
+  }
+
+  Future<void> reportTimeline(
+    PlexConnection connection,
+    PlexMediaItem item, {
+    required Duration position,
+    required bool playing,
+  }) async {
+    final baseUri = _validateConnection(connection);
+    if (!RegExp(r'^[A-Za-z0-9._:-]{1,200}$').hasMatch(item.ratingKey)) {
+      throw const PlexException('Plex returned an invalid media identity.');
+    }
+    await _requestStatus(
+      _endpoint(baseUri, '/:/timeline').replace(
+        queryParameters: {
+          'ratingKey': item.ratingKey,
+          'key': item.key,
+          'state': playing ? 'playing' : 'stopped',
+          'time': position.inMilliseconds.clamp(0, _maxCount).toString(),
+          if (item.durationMilliseconds != null)
+            'duration': item.durationMilliseconds!
+                .clamp(0, _maxCount)
+                .toString(),
+        },
+      ),
+      headers: _authenticatedHeaders(connection),
+    );
   }
 
   /// Loads an authenticated thumbnail without allowing an HTTP redirect to
@@ -380,6 +471,47 @@ class PlexClient {
       throw const PlexException('TetoTV could not reach that Plex server.');
     } on FormatException {
       throw const PlexException('Plex returned invalid XML.');
+    }
+  }
+
+  Future<void> _requestStatus(
+    Uri uri, {
+    required Map<String, String> headers,
+  }) async {
+    try {
+      final response = await _dio.requestUri<ResponseBody>(
+        uri,
+        options: Options(
+          method: 'GET',
+          headers: headers,
+          followRedirects: false,
+          maxRedirects: 0,
+          responseType: ResponseType.stream,
+        ),
+      );
+      final status = response.statusCode ?? 0;
+      _closeResponseBody(response.data);
+      if (status == 401 || status == 403) {
+        throw const PlexException('Plex rejected the saved access token.');
+      }
+      if (status >= 300 && status < 400) {
+        throw const PlexException(
+          'Plex redirected the request. Enter the server’s final address.',
+        );
+      }
+      if (status != 200 && status != 204) {
+        throw PlexException('Plex returned HTTP $status.');
+      }
+    } on PlexException {
+      rethrow;
+    } on DioException catch (error) {
+      final responseBody = error.response?.data;
+      if (responseBody is ResponseBody) _closeResponseBody(responseBody);
+      final status = error.response?.statusCode;
+      if (status == 401 || status == 403) {
+        throw const PlexException('Plex rejected the saved access token.');
+      }
+      throw const PlexException('TetoTV could not reach that Plex server.');
     }
   }
 

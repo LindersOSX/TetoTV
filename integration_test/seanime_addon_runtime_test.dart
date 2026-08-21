@@ -324,6 +324,164 @@ void main() {
   );
 
   testWidgets(
+    'runtime adapts legacy search, wrappers, candidate fallback, scanner, and store',
+    (tester) async {
+      final manifest = MarketplaceAddon.tryParse({
+        'id': 'community-contract-fixture',
+        'name': 'Community Contract Fixture',
+        'manifestURI': 'https://catalog.example/provider/manifest.json',
+        'payloadURI': 'https://code.example/provider.js',
+        'version': '1.0.0',
+        'type': 'onlinestream-provider',
+        'language': 'javascript',
+      }, repositoryUrl: 'https://catalog.example/marketplace.json')!;
+      final addon = InstalledStreamingAddon(
+        manifest: manifest,
+        payload: r'''
+          class Provider {
+            getSettings() {
+              return {servers: [{id: 'primary', label: 'Primary'}], supportsDubbed: false};
+            }
+
+            async search(query) {
+              if (typeof query !== 'string') {
+                if (query.media.id !== 123 || query.media.idMal !== 456 ||
+                    query.media.anilistId !== 123 || query.media.malId !== 456 ||
+                    query.media.title !== 'Legacy Fixture Season 2 Part 2') {
+                  throw new Error('media aliases are missing');
+                }
+                // Reproduces pre-SearchOptions providers that use String APIs.
+                query.replace(/fixture/i, 'fixture');
+              }
+              const smart = $scannerUtils.buildSmartSearchTitles([
+                'Legacy Fixture Season 2 Part 2',
+                'Legacy Fixture: Second Season - Part 2',
+              ]);
+              const macron = $scannerUtils.normalizeTitle('Tōkyō Ghūl');
+              const possessive = $scannerUtils.normalizeTitle(
+                "The Ancient Magus's Bride Season 2 (2023)",
+              );
+              const roman = $scannerUtils.normalizeTitle('Overlord II');
+              const series = $scannerUtils.normalizeTitle('Title Series 3');
+              const noise = $scannerUtils.getSignificantTokens(
+                'That Time I Got Reincarnated as a Slime',
+              );
+              const finalSeason = $scannerUtils.buildSmartSearchTitles([
+                'Attack on Titan - The Final Season',
+                'ATTACK ON TITAN - THE FINAL SEASON',
+              ]);
+              if (smart.season !== 2 || smart.part !== 2 || !smart.titles.length ||
+                  $scannerUtils.findBestMatch('Legacy Fixture', ['Wrong', 'Legacy Fixture']) !== 'Legacy Fixture' ||
+                  $scannerUtils.extractSeasonNumber('Hunter x Hunter') !== -1 ||
+                  $scannerUtils.extractSeasonNumber('Fixture S02E03') !== 2 ||
+                  $scannerUtils.extractSeasonNumber('Overlord II') !== 2 ||
+                  $scannerUtils.extractSeasonNumber('Overlord XIII') !== 13 ||
+                  $scannerUtils.extractSeasonNumber('Diamond no Ace Act II') !== -1 ||
+                  $scannerUtils.extractSeasonNumber('Attack on Titan Part II') !== -1 ||
+                  $scannerUtils.extractSeasonNumber('Mushoku Tensei II Part 2') !== 2 ||
+                  $scannerUtils.extractSeasonNumber('Title Series 3') !== 3 ||
+                  $scannerUtils.extractSeasonNumber('作品 2期') !== 2 ||
+                  $scannerUtils.extractPartNumber('Fixture 3rd Cour') !== 3 ||
+                  macron.normalized !== 'toukyou ghuul' ||
+                  Object.keys(macron).sort().join('|') !==
+                    'cleanBaseTitle|denoisedTitle|isMain|normalized|original|part|season|tokens|year' ||
+                  possessive.normalized !== 'ancient magus bride 2023' ||
+                  possessive.cleanBaseTitle !== 'ancient magus bride' ||
+                  possessive.season !== 2 || possessive.year !== 2023 ||
+                  roman.normalized !== 'overlord ii' ||
+                  roman.cleanBaseTitle !== 'overlord' || roman.season !== 2 ||
+                  series.normalized !== 'title' || series.season !== 3 ||
+                  $scannerUtils.normalizeTitle('Constructor').cleanBaseTitle !== 'constructor' ||
+                  $scannerUtils.normalizeTitle('Fixture S02').normalized !== 'fixture' ||
+                  $scannerUtils.normalizeTitle('Fixture 2期').normalized !== 'fixture' ||
+                  $scannerUtils.normalizeTitle('OAD OAV Specials Special Episode (TV)').normalized !== 'ova ova sp sp' ||
+                  $scannerUtils.normalizeTitle("Magus's Bride").normalized !==
+                    $scannerUtils.normalizeTitle('Magus’s Bride').normalized ||
+                  $scannerUtils.normalizeTitle('Magus`s Bride').normalized !== 'magus bride' ||
+                  noise.join('|') !== 'time|got|reincarnated|slime' ||
+                  Math.abs($scannerUtils.compareTitles('Foo Bar 2023', 'Foo Bar 2024') - 0.8) > 0.0001 ||
+                  Math.abs($scannerUtils.compareTitles('Foo Bar Baz', 'Foo Bar') - (2 / 3)) > 0.0001 ||
+                  $scannerUtils.compareTitles('Foo Bar', 'Foo Bar Baz') !== 1 ||
+                  $scannerUtils.findBestMatch('Overlord II', ['Overlord', 'Overlord II']) !== 'Overlord II' ||
+                  new Set(finalSeason.titles.map(value => value.toLowerCase())).size !== finalSeason.titles.length ||
+                  !finalSeason.titles.includes('attack titan') ||
+                  !finalSeason.titles.includes('attack on titan') ||
+                  !$scannerUtils.buildAdvancedQuery(['Legacy Fixture', 'Legacy Fixture Alt']).includes('|')) {
+                throw new Error('scanner utilities are incompatible');
+              }
+              $store.set('legacy-search', {worked: true});
+              return {data: {matches: [
+                {animeId: 'wrong-show', name: query, subOrDub: 'sub'},
+                {animeId: 'right-show', name: query, subOrDub: 'sub'},
+              ]}};
+            }
+
+            async findEpisodes(id) {
+              if (!$store.get('legacy-search').worked) {
+                throw new Error('invocation-local store did not carry over');
+              }
+              if (id === 'wrong-show') {
+                return {data: {episodes: [{id: 'wrong-7', episodeNumber: 7}]}};
+              }
+              return {response: {entries: [{id: 'right-episode', episode: 'S02E03'}]}};
+            }
+
+            async findEpisodeServer(episode, server) {
+              if (episode.id !== 'right-episode' || server !== 'primary') {
+                throw new Error('episode/server aliases are incompatible');
+              }
+              return {
+                responseHeaders: {Referer: 'https://catalog.example/'},
+                streams: {
+                  primary: {
+                    streamUrl: 'https://media.example/legacy-fixture.m3u8',
+                    label: '1080p',
+                    captions: {
+                      english: {href: 'https://media.example/english.vtt', lang: 'en'},
+                    },
+                  },
+                },
+              };
+            }
+          }
+        ''',
+        enabled: true,
+        installedAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      );
+
+      final results =
+          await SeanimeJavascriptProvider(
+            addon,
+            validateResultTarget: (_) async {},
+          ).streams(
+            const EpisodeReference(
+              anilistMediaId: 123,
+              malMediaId: 456,
+              title: 'Legacy Fixture Season 2 Part 2',
+              titleEnglish: 'Legacy Fixture Season 2 Part 2',
+              year: 2024,
+              episode: 3,
+            ),
+          );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.uri,
+        Uri.parse('https://media.example/legacy-fixture.m3u8'),
+      );
+      expect(results.single.quality, '1080p');
+      expect(results.single.headers['Referer'], 'https://catalog.example/');
+      expect(
+        results.single.subtitleUri,
+        Uri.parse('https://media.example/english.vtt'),
+      );
+      expect(results.single.subtitleLanguage, 'en');
+    },
+    timeout: const Timeout(Duration(seconds: 45)),
+  );
+
+  testWidgets(
     'packaged QuickJS interrupts non-terminating scripts',
     (tester) async {
       final runtime = QuickJsRuntime2(timeout: 100);

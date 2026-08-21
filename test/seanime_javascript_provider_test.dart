@@ -177,6 +177,64 @@ void main() {
     expect(workerMessage, isNot(contains('NO_STREAM')));
   });
 
+  test('provider failure markers expose only bounded stage and reason', () {
+    final error = StateError(
+      'Bad state: NO_STREAM: https://media.example/private?token=secret '
+      '[stage=server; reason=http_403]',
+    );
+    final details = seanimeProviderFailureDetails(error);
+    final message = seanimeProviderFailureMessage(error);
+
+    expect(details?.stage, 'server');
+    expect(details?.reason, 'http_403');
+    expect(message, contains('HTTP 403'));
+    expect(message, isNot(contains('token')));
+    expect(message, isNot(contains('media.example')));
+    expect(
+      seanimeProviderFailureDetails(
+        StateError('[stage=arbitrary; reason=raw_secret]'),
+      ),
+      isNull,
+    );
+  });
+
+  test('provider diagnostics include provenance without full URLs', () {
+    final manifest = MarketplaceAddon.tryParse({
+      'id': 'fixture-provider',
+      'name': 'Fixture Provider',
+      'manifestURI': 'https://code.example/providers/manifest.json?secret=one',
+      'payloadURI': 'https://cdn.example/provider.js?secret=two',
+      'version': '1.2.3',
+      'type': 'onlinestream-provider',
+      'language': 'javascript',
+    }, repositoryUrl: 'https://catalog.example/main.json?secret=three')!;
+    final provider = SeanimeJavascriptProvider(
+      InstalledStreamingAddon(
+        manifest: manifest,
+        payload: 'class Provider {}',
+        enabled: true,
+        installedAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      ),
+    );
+
+    final message = seanimeProviderDiagnosticMessage(
+      provider,
+      StateError(
+        'NO_STREAM: token=hidden [stage=server; reason=empty_sources]',
+      ),
+    );
+
+    expect(message, contains('provider=fixture-provider'));
+    expect(message, contains('version=1.2.3'));
+    expect(message, contains('repositoryHost=catalog.example'));
+    expect(message, contains('executableHost=cdn.example'));
+    expect(message, contains('stage=server'));
+    expect(message, contains('reason=empty_sources'));
+    expect(message, isNot(contains('hidden')));
+    expect(message, isNot(contains('?')));
+  });
+
   test('bounds Seanime request timeouts to the remaining runtime', () {
     expect(addonRequestTimeout(0.05), const Duration(milliseconds: 100));
     expect(addonRequestTimeout(2), const Duration(seconds: 2));

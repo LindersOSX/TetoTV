@@ -1,26 +1,34 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
-import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
+import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/local_media/application/local_media_controller.dart';
 import 'package:anime_tv/features/local_media/application/plex_controller.dart';
+import 'package:anime_tv/features/local_media/application/unified_media_search_controller.dart';
 import 'package:anime_tv/features/local_media/data/jellyfin_client.dart';
 import 'package:anime_tv/features/local_media/data/plex_client.dart';
 import 'package:anime_tv/features/local_media/domain/jellyfin_models.dart';
 import 'package:anime_tv/features/local_media/domain/plex_models.dart';
+import 'package:anime_tv/features/player/domain/library_playback_request.dart';
+import 'package:anime_tv/features/player/presentation/library_tv_player_screen.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
-import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 class LocalMediaScreen extends ConsumerStatefulWidget {
-  const LocalMediaScreen({super.key});
+  const LocalMediaScreen({
+    this.activeDestination = TopNavigationDestination.settings,
+    super.key,
+  });
+
+  final TopNavigationDestination activeDestination;
 
   @override
   ConsumerState<LocalMediaScreen> createState() => _LocalMediaScreenState();
@@ -37,6 +45,13 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
   final _plexTokenController = TextEditingController();
   final _plexAddressFocus = FocusNode(debugLabel: 'Plex server address');
   final _plexTokenFocus = FocusNode(debugLabel: 'Plex access token');
+  final _searchController = TextEditingController();
+  final _backFocus = FocusNode(debugLabel: 'local-media.back');
+  final _searchFocus = FocusNode(debugLabel: 'local-media.unified-search');
+  final _searchActionFocus = FocusNode(debugLabel: 'local-media.search-action');
+  final _clearSearchFocus = FocusNode(debugLabel: 'local-media.clear-search');
+  final _chooseVideoFocus = FocusNode(debugLabel: 'local-media.choose-video');
+  final _directionalRepeatGate = TvDirectionalRepeatGate();
   bool _hydratedFields = false;
   bool _hydratedPlexFields = false;
   bool _openingPlayer = false;
@@ -53,6 +68,13 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     _plexTokenController.dispose();
     _plexAddressFocus.dispose();
     _plexTokenFocus.dispose();
+    _searchController.dispose();
+    _backFocus.dispose();
+    _searchFocus.dispose();
+    _searchActionFocus.dispose();
+    _clearSearchFocus.dispose();
+    _chooseVideoFocus.dispose();
+    _directionalRepeatGate.reset();
     super.dispose();
   }
 
@@ -86,10 +108,12 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     releaseName: document.name,
     streamLabel: 'Local device media',
     headers: const {},
+    mediaContentType: document.mimeType,
   );
 
   Future<void> _playJellyfin(JellyfinMediaItem item) async {
     final controller = ref.read(localMediaControllerProvider.notifier);
+    final playSessionId = controller.createPlaybackSessionId();
     await _openPlayer(
       source: controller.streamUri(item),
       title: item.displayTitle,
@@ -99,22 +123,61 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       streamLabel: 'Jellyfin • ${item.secondaryLabel}',
       headers: controller.playbackHeaders(),
       artworkUrl: controller.imageUri(item)?.toString(),
+      serverResumePosition: controller.serverResumePosition(item),
+      onStarted: (position) => controller.reportPlaybackStarted(
+        item,
+        playSessionId: playSessionId,
+        position: position,
+      ),
+      onProgress: (position, paused) => controller.reportPlaybackProgress(
+        item,
+        playSessionId: playSessionId,
+        position: position,
+        paused: paused,
+      ),
+      onStopped: (position) => controller.reportPlaybackStopped(
+        item,
+        playSessionId: playSessionId,
+        position: position,
+      ),
     );
   }
 
   Future<void> _playPlex(PlexMediaItem item) async {
     final controller = ref.read(plexControllerProvider.notifier);
-    final source = controller.playbackUri(item);
-    final series = item.grandparentTitle?.trim();
-    await _openPlayer(
-      source: source,
-      title: item.displayTitle,
-      releaseName: series?.isNotEmpty == true
-          ? '$series — ${item.displayTitle}'
-          : item.displayTitle,
-      streamLabel: 'Plex • ${item.secondaryLabel}',
-      headers: controller.playbackHeaders(),
-    );
+    try {
+      final playable = await controller.preparePlayableItem(item);
+      final source = controller.playbackUri(playable);
+      final series = playable.grandparentTitle?.trim();
+      await _openPlayer(
+        source: source,
+        title: playable.displayTitle,
+        releaseName: series?.isNotEmpty == true
+            ? '$series — ${playable.displayTitle}'
+            : playable.displayTitle,
+        streamLabel: 'Plex • ${playable.secondaryLabel}',
+        headers: controller.playbackHeaders(),
+        artworkUrl: controller.imageUri(playable)?.toString(),
+        serverResumePosition: controller.serverResumePosition(playable),
+        onStarted: (position) => controller.reportTimeline(
+          playable,
+          position: position,
+          playing: true,
+        ),
+        onProgress: (position, paused) => controller.reportTimeline(
+          playable,
+          position: position,
+          playing: !paused,
+        ),
+        onStopped: (position) => controller.reportTimeline(
+          playable,
+          position: position,
+          playing: false,
+        ),
+      );
+    } catch (error) {
+      if (mounted) _showMessage(error.toString());
+    }
   }
 
   Future<void> _openPlayer({
@@ -124,54 +187,62 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     required String streamLabel,
     required Map<String, String> headers,
     String? artworkUrl,
+    String? mediaContentType,
+    Duration serverResumePosition = Duration.zero,
+    Future<void> Function(Duration position)? onStarted,
+    Future<void> Function(Duration position, bool paused)? onProgress,
+    Future<void> Function(Duration position)? onStopped,
   }) async {
     if (_openingPlayer) return;
     setState(() => _openingPlayer = true);
     final controller = ref.read(localMediaControllerProvider.notifier);
-    final appearance = ref.read(settingsPreferencesProvider);
     try {
-      final resume = await controller.resumePosition(source);
-      final result = await AndroidTvBridge.instance.startNativePlayer(
+      var resume = await controller.resumePosition(source);
+      if (serverResumePosition > resume) resume = serverResumePosition;
+      final checkpointId = controller.checkpointId(source);
+      final writeback = _LibraryPlaybackWriteback(
+        saveLocal: (position) =>
+            controller.saveResumePosition(source, position),
+        writeServer: onProgress,
+      );
+      final request = LibraryPlaybackRequest(
         source: source,
         title: title,
-        checkpointKey: 'local:${controller.checkpointId(source)}',
         releaseName: releaseName,
         streamLabel: streamLabel,
-        resumePosition: resume,
-        resumeUpdatedAt: resume > Duration.zero ? DateTime.now() : null,
-        startFromBeginning: false,
-        audioLanguage: appearance.preferredAudio.audioLanguage,
-        subtitlesEnabled: appearance.preferredAudio.subtitlesPreferred,
-        subtitleSize: appearance.captionTextSize,
-        subtitleTextColor: appearance.captionTextColor,
-        subtitleBackgroundColor: appearance.captionBackgroundColor,
-        seekBackSeconds: appearance.seekBackSeconds,
-        seekForwardSeconds: appearance.seekForwardSeconds,
-        autoSkipIntros: appearance.autoSkipIntros,
-        autoSkipOutros: appearance.autoSkipOutros,
-        artworkUrl: artworkUrl,
+        checkpointKey: 'local:$checkpointId',
+        timelineIdentity: checkpointId,
         headers: headers,
-        trustedLocalSource: true,
-        theme: ref
-            .read(themeStudioControllerProvider)
-            .palette
-            .nativePlayerThemePayload,
+        artworkUrl: artworkUrl,
+        mediaContentType: mediaContentType,
+        initialPosition: resume,
+        onStarted: onStarted,
+        onProgress: writeback.handle,
+        onFinished: (result) async {
+          if (result.completed) {
+            await controller.clearResumePosition(source);
+          } else {
+            await controller.saveResumePosition(source, result.position);
+          }
+          if (result.started && onStopped != null) {
+            await onStopped(result.position);
+          }
+          if (result.failed && mounted) {
+            _showMessage(
+              'This library video could not be played by the selected engine.',
+            );
+          }
+        },
       );
-      if (result.completed) {
-        await controller.clearResumePosition(source);
-      } else {
-        await controller.saveResumePosition(source, result.position);
-      }
       if (!mounted) return;
-      if (result.failed) {
-        _showMessage(result.error ?? 'This video could not be played.');
-      } else if (const {'use_mpv', 'use_vlc'}.contains(result.status)) {
-        _showMessage(
-          'Local, Jellyfin, and Plex media currently use the native Media3 player.',
-        );
-      }
-    } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          settings: const RouteSettings(name: 'library-player'),
+          builder: (_) => LibraryTvPlayerScreen(request: request),
+        ),
+      );
+    } catch (_) {
+      if (mounted) _showMessage('This library video could not be opened.');
     } finally {
       if (mounted) setState(() => _openingPlayer = false);
     }
@@ -183,10 +254,107 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _searchAllMedia() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await ref
+        .read(unifiedMediaSearchControllerProvider.notifier)
+        .search(_searchController.text);
+  }
+
+  Future<void> _activateSearchResult(UnifiedMediaSearchItem result) async {
+    final document = result.document;
+    if (document != null) {
+      await _playDocument(document);
+      return;
+    }
+    final jellyfin = result.jellyfinItem;
+    if (jellyfin != null) {
+      if (jellyfin.isFolder) {
+        await ref
+            .read(localMediaControllerProvider.notifier)
+            .openFolder(jellyfin);
+      } else {
+        await _playJellyfin(jellyfin);
+      }
+      return;
+    }
+    final plex = result.plexItem;
+    if (plex == null) return;
+    if (plex.isFolder) {
+      await ref.read(plexControllerProvider.notifier).openFolder(plex);
+    } else {
+      await _playPlex(plex);
+    }
+  }
+
+  void _focusNavigationOrBack(TetoTopLevelLayout layout) {
+    if (layout.usesTvRail) {
+      layout.focusRail();
+    } else if (_backFocus.context != null) {
+      _backFocus.requestFocus();
+    }
+  }
+
+  KeyEventResult _handleNavigation(KeyEvent event, TetoTopLevelLayout layout) {
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.arrowLeft &&
+        key != LogicalKeyboardKey.arrowRight) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyUpEvent) {
+      _directionalRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (!_directionalRepeatGate.accept(event)) {
+      return KeyEventResult.handled;
+    }
+
+    final current = FocusManager.instance.primaryFocus;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (current == _searchFocus ||
+          current == _chooseVideoFocus ||
+          current == _addressFocus ||
+          current == _usernameFocus ||
+          current == _passwordFocus ||
+          current == _plexAddressFocus ||
+          current == _plexTokenFocus) {
+        _focusNavigationOrBack(layout);
+        return KeyEventResult.handled;
+      }
+      if (current == _searchActionFocus) {
+        _searchFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (current == _clearSearchFocus) {
+        _searchActionFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+    } else {
+      if (current == _backFocus) {
+        _searchFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (current == _searchFocus) {
+        _searchActionFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+      if (current == _searchActionFocus && _clearSearchFocus.context != null) {
+        _clearSearchFocus.requestFocus();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(localMediaControllerProvider);
     final plexState = ref.watch(plexControllerProvider);
+    final searchState = ref.watch(unifiedMediaSearchControllerProvider);
+    final preferences = ref.watch(settingsPreferencesProvider);
     _hydrateFields(state);
     _hydratePlexFields(plexState);
     ref.listen(localMediaControllerProvider, (previous, next) {
@@ -203,99 +371,237 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         });
       }
     });
-    return Scaffold(
-      backgroundColor: context.appPalette == AppThemePalette.defaults
-          ? Colors.black
-          : context.appPalette.background,
-      body: SafeArea(
-        minimum: context.responsiveScreenPadding,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                _ActionButton(
-                  label: 'Back',
-                  icon: Icons.arrow_back_rounded,
-                  autofocus: true,
-                  onPressed: context.pop,
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    'Local media, Jellyfin & Plex',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                ),
-                if (state.busy || plexState.busy || _openingPlayer)
-                  SizedBox.square(
-                    dimension: 28,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: context.appPalette.accentBright,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: ListView(
+    return TetoTopLevelShell(
+      preferences: preferences,
+      activeDestination: widget.activeDestination,
+      firstContentFocusNode: _searchFocus,
+      onActiveDestinationPressed: _searchFocus.requestFocus,
+      resizeToAvoidBottomInset: true,
+      builder: (context, layout) => Focus(
+        canRequestFocus: false,
+        onKeyEvent: (_, event) => _handleNavigation(event, layout),
+        child: Padding(
+          padding: layout.usesTvRail
+              ? EdgeInsets.zero
+              : context.responsiveScreenPadding,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  _SectionCard(
-                    title: 'USB OR INTERNAL STORAGE',
-                    subtitle:
-                        'Choose a video with Android’s secure file picker. TetoTV keeps read access only to the file you select.',
-                    child: Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _ActionButton(
-                          label: 'Choose video',
-                          icon: Icons.video_file_rounded,
-                          onPressed: state.busy ? null : _pickAndPlay,
-                        ),
-                        if (state.recentLocalDocument case final recent?)
-                          _ActionButton(
-                            label: 'Play ${recent.name}',
-                            icon: Icons.replay_rounded,
-                            onPressed: _openingPlayer
-                                ? null
-                                : () => _playDocument(recent),
+                  if (!layout.usesTvRail) ...[
+                    _ActionButton(
+                      label: 'Back',
+                      icon: Icons.arrow_back_rounded,
+                      focusNode: _backFocus,
+                      onPressed: context.pop,
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  Expanded(
+                    child: Text(
+                      'Your media',
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontSize: layout.usesTvRail ? 30 : null,
+                            fontWeight: FontWeight.w800,
                           ),
-                      ],
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  _SectionCard(
-                    title: 'JELLYFIN SERVER',
-                    subtitle: state.connection == null
-                        ? 'Connect to a Jellyfin server on your home network or an HTTPS server. Your password is used once and is never saved. HTTPS is recommended.'
-                        : '${state.connection!.serverName} • ${state.connection!.username} • Jellyfin ${state.connection!.serverVersion}',
-                    child: state.connection == null
-                        ? _buildConnectionForm(state)
-                        : _buildLibrary(state),
-                  ),
-                  const SizedBox(height: 16),
-                  _SectionCard(
-                    title: 'PLEX MEDIA SERVER',
-                    subtitle: plexState.connection == null
-                        ? 'Connect with a Plex server address and X-Plex-Token. The token is stored in Android secure storage and is never placed in a media or artwork URL.'
-                        : '${plexState.connection!.serverName ?? 'Plex Media Server'} • Plex ${plexState.connection!.serverVersion ?? 'unknown'}',
-                    child: plexState.connection == null
-                        ? _buildPlexConnectionForm(plexState)
-                        : _buildPlexLibrary(plexState),
-                  ),
-                  const SizedBox(height: 24),
+                  if (state.busy ||
+                      plexState.busy ||
+                      searchState.busy ||
+                      _openingPlayer)
+                    SizedBox.square(
+                      dimension: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: context.appPalette.accentBright,
+                      ),
+                    ),
                 ],
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewInsetsOf(context).bottom + 24,
+                  ),
+                  children: [
+                    _buildUnifiedSearch(searchState, layout),
+                    const SizedBox(height: 16),
+                    _SectionCard(
+                      title: 'USB OR INTERNAL STORAGE',
+                      subtitle:
+                          'Choose a video with Android’s secure file picker. Android does not let apps silently scan your device.',
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          _ActionButton(
+                            label: 'Choose video',
+                            icon: Icons.video_file_rounded,
+                            focusNode: _chooseVideoFocus,
+                            onPressed: state.busy ? null : _pickAndPlay,
+                          ),
+                          if (state.recentLocalDocument case final recent?)
+                            _ActionButton(
+                              label: 'Play ${recent.name}',
+                              icon: Icons.replay_rounded,
+                              onPressed: _openingPlayer
+                                  ? null
+                                  : () => _playDocument(recent),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _SectionCard(
+                      title: 'JELLYFIN SERVER',
+                      subtitle: state.connection == null
+                          ? 'Connect to a Jellyfin server on your home network or an HTTPS server. Your password is used once and is never saved. HTTPS is recommended.'
+                          : '${state.connection!.serverName} • ${state.connection!.username} • Jellyfin ${state.connection!.serverVersion}',
+                      child: state.connection == null
+                          ? _buildConnectionForm(state, layout)
+                          : _buildLibrary(state, layout),
+                    ),
+                    const SizedBox(height: 16),
+                    _SectionCard(
+                      title: 'PLEX MEDIA SERVER',
+                      subtitle: plexState.connection == null
+                          ? 'Connect with a Plex server address and X-Plex-Token. The token is stored in Android secure storage and is never placed in a media or artwork URL.'
+                          : '${plexState.connection!.serverName ?? 'Plex Media Server'} • Plex ${plexState.connection!.serverVersion ?? 'unknown'}',
+                      child: plexState.connection == null
+                          ? _buildPlexConnectionForm(plexState, layout)
+                          : _buildPlexLibrary(plexState, layout),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildConnectionForm(LocalMediaState state) => Column(
+  Widget _buildUnifiedSearch(
+    UnifiedMediaSearchState searchState,
+    TetoTopLevelLayout layout,
+  ) => _SectionCard(
+    title: 'SEARCH YOUR MEDIA',
+    subtitle:
+        'Search connected Jellyfin and Plex libraries together. Your recently selected device video is included when its name matches.',
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final input = TvTextInput(
+              controller: _searchController,
+              focusNode: _searchFocus,
+              autofocus: true,
+              labelText: 'Title or keyword',
+              keyboardTitle: 'Search your media libraries',
+              onSubmitted: (_) => _searchAllMedia(),
+            );
+            final actions = Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _ActionButton(
+                  label: 'Search',
+                  icon: Icons.search_rounded,
+                  focusNode: _searchActionFocus,
+                  onPressed: searchState.busy ? null : _searchAllMedia,
+                ),
+                if (searchState.query.isNotEmpty)
+                  _ActionButton(
+                    label: 'Clear',
+                    icon: Icons.close_rounded,
+                    focusNode: _clearSearchFocus,
+                    onPressed: searchState.busy
+                        ? null
+                        : () {
+                            _searchController.clear();
+                            ref
+                                .read(
+                                  unifiedMediaSearchControllerProvider.notifier,
+                                )
+                                .clear();
+                            _searchFocus.requestFocus();
+                          },
+                  ),
+              ],
+            );
+            if (constraints.maxWidth < 720) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [input, const SizedBox(height: 12), actions],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(child: input),
+                const SizedBox(width: 12),
+                actions,
+              ],
+            );
+          },
+        ),
+        if (searchState.message case final message?) ...[
+          const SizedBox(height: 12),
+          Text(message, style: Theme.of(context).textTheme.bodyMedium),
+        ],
+        if (searchState.results.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          SizedBox(
+            height: (searchState.results.length * 92.0).clamp(92.0, 460.0),
+            child: ListView.separated(
+              key: const ValueKey('unified-media-results'),
+              itemCount: searchState.results.length,
+              itemBuilder: (context, index) {
+                final result = searchState.results[index];
+                return _UnifiedMediaRow(
+                  key: ValueKey('unified-media-${result.origin.name}-$index'),
+                  result: result,
+                  jellyfinImageUri: result.jellyfinItem == null
+                      ? null
+                      : ref
+                            .read(localMediaControllerProvider.notifier)
+                            .imageUri(result.jellyfinItem!),
+                  jellyfinImageLoader: ref
+                      .read(localMediaControllerProvider.notifier)
+                      .imageBytes,
+                  plexImageUri: result.plexItem == null
+                      ? null
+                      : ref
+                            .read(plexControllerProvider.notifier)
+                            .imageUri(result.plexItem!),
+                  plexImageLoader: ref
+                      .read(plexControllerProvider.notifier)
+                      .imageBytes,
+                  onExitLeft: () => _focusNavigationOrBack(layout),
+                  onPressed: _openingPlayer
+                      ? null
+                      : () => _activateSearchResult(result),
+                );
+              },
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  Widget _buildConnectionForm(
+    LocalMediaState state,
+    TetoTopLevelLayout layout,
+  ) => Column(
     children: [
       TvTextInput(
         controller: _addressController,
@@ -326,6 +632,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         child: _ActionButton(
           label: 'Connect Jellyfin',
           icon: Icons.lan_rounded,
+          onExitLeft: () => _focusNavigationOrBack(layout),
           onPressed: state.busy ? null : _connectJellyfin,
         ),
       ),
@@ -371,114 +678,125 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     _passwordController.clear();
   }
 
-  Widget _buildLibrary(LocalMediaState state) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Wrap(
-        spacing: 12,
-        runSpacing: 12,
+  Widget _buildLibrary(LocalMediaState state, TetoTopLevelLayout layout) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (state.breadcrumbs.isNotEmpty)
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              if (state.breadcrumbs.isNotEmpty)
+                _ActionButton(
+                  label: 'Up',
+                  icon: Icons.arrow_upward_rounded,
+                  onExitLeft: () => _focusNavigationOrBack(layout),
+                  onPressed: state.busy
+                      ? null
+                      : ref.read(localMediaControllerProvider.notifier).goUp,
+                ),
+              _ActionButton(
+                label: 'Refresh',
+                icon: Icons.refresh_rounded,
+                onExitLeft: state.breadcrumbs.isEmpty
+                    ? () => _focusNavigationOrBack(layout)
+                    : null,
+                onPressed: state.busy
+                    ? null
+                    : ref.read(localMediaControllerProvider.notifier).refresh,
+              ),
+              _ActionButton(
+                label: 'Disconnect',
+                icon: Icons.link_off_rounded,
+                onPressed: state.busy
+                    ? null
+                    : ref
+                          .read(localMediaControllerProvider.notifier)
+                          .disconnect,
+              ),
+            ],
+          ),
+          if (state.breadcrumbs.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              state.breadcrumbs.map((crumb) => crumb.name).join('  /  '),
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          const SizedBox(height: 14),
+          if (state.items.isNotEmpty)
+            SizedBox(
+              height: (state.items.length * 92.0).clamp(92.0, 520.0),
+              child: ListView.separated(
+                itemCount: state.items.length,
+                itemBuilder: (context, index) {
+                  final item = state.items[index];
+                  return _MediaRow(
+                    item: item,
+                    imageUri: ref
+                        .read(localMediaControllerProvider.notifier)
+                        .imageUri(item),
+                    imageLoader: ref
+                        .read(localMediaControllerProvider.notifier)
+                        .imageBytes,
+                    onExitLeft: () => _focusNavigationOrBack(layout),
+                    onPressed: state.busy || _openingPlayer
+                        ? null
+                        : item.isFolder
+                        ? () => ref
+                              .read(localMediaControllerProvider.notifier)
+                              .openFolder(item)
+                        : () => _playJellyfin(item),
+                  );
+                },
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+              ),
+            ),
+          if (state.nextStartIndex < state.totalCount)
             _ActionButton(
-              label: 'Up',
-              icon: Icons.arrow_upward_rounded,
+              label: 'Load more (${state.items.length} of ${state.totalCount})',
+              icon: Icons.expand_more_rounded,
+              onExitLeft: () => _focusNavigationOrBack(layout),
               onPressed: state.busy
                   ? null
-                  : ref.read(localMediaControllerProvider.notifier).goUp,
+                  : ref.read(localMediaControllerProvider.notifier).loadMore,
             ),
-          _ActionButton(
-            label: 'Refresh',
-            icon: Icons.refresh_rounded,
-            onPressed: state.busy
-                ? null
-                : ref.read(localMediaControllerProvider.notifier).refresh,
+        ],
+      );
+
+  Widget _buildPlexConnectionForm(PlexState state, TetoTopLevelLayout layout) =>
+      Column(
+        children: [
+          TvTextInput(
+            controller: _plexAddressController,
+            focusNode: _plexAddressFocus,
+            labelText: 'Server address',
+            hintText: '192.168.1.20:32400 or https://plex.example.com',
+            keyboardTitle: 'Plex server address',
           ),
-          _ActionButton(
-            label: 'Disconnect',
-            icon: Icons.link_off_rounded,
-            onPressed: state.busy
-                ? null
-                : ref.read(localMediaControllerProvider.notifier).disconnect,
+          const SizedBox(height: 12),
+          TvTextInput(
+            controller: _plexTokenController,
+            focusNode: _plexTokenFocus,
+            labelText: 'X-Plex-Token',
+            keyboardTitle: 'Plex access token',
+            obscureText: true,
+            onSubmitted: (_) => _connectPlex(),
+          ),
+          const SizedBox(height: 14),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _ActionButton(
+              label: 'Connect Plex',
+              icon: Icons.connected_tv_rounded,
+              onExitLeft: () => _focusNavigationOrBack(layout),
+              onPressed: state.busy ? null : _connectPlex,
+            ),
           ),
         ],
-      ),
-      if (state.breadcrumbs.isNotEmpty) ...[
-        const SizedBox(height: 14),
-        Text(
-          state.breadcrumbs.map((crumb) => crumb.name).join('  /  '),
-          style: Theme.of(context).textTheme.bodyMedium,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
-      const SizedBox(height: 14),
-      if (state.items.isNotEmpty)
-        SizedBox(
-          height: (state.items.length * 92.0).clamp(92.0, 520.0),
-          child: ListView.separated(
-            itemCount: state.items.length,
-            itemBuilder: (context, index) {
-              final item = state.items[index];
-              return _MediaRow(
-                item: item,
-                imageUri: ref
-                    .read(localMediaControllerProvider.notifier)
-                    .imageUri(item),
-                imageHeaders: ref
-                    .read(localMediaControllerProvider.notifier)
-                    .playbackHeaders(),
-                onPressed: state.busy || _openingPlayer
-                    ? null
-                    : item.isFolder
-                    ? () => ref
-                          .read(localMediaControllerProvider.notifier)
-                          .openFolder(item)
-                    : () => _playJellyfin(item),
-              );
-            },
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-          ),
-        ),
-      if (state.nextStartIndex < state.totalCount)
-        _ActionButton(
-          label: 'Load more (${state.items.length} of ${state.totalCount})',
-          icon: Icons.expand_more_rounded,
-          onPressed: state.busy
-              ? null
-              : ref.read(localMediaControllerProvider.notifier).loadMore,
-        ),
-    ],
-  );
-
-  Widget _buildPlexConnectionForm(PlexState state) => Column(
-    children: [
-      TvTextInput(
-        controller: _plexAddressController,
-        focusNode: _plexAddressFocus,
-        labelText: 'Server address',
-        hintText: '192.168.1.20:32400 or https://plex.example.com',
-        keyboardTitle: 'Plex server address',
-      ),
-      const SizedBox(height: 12),
-      TvTextInput(
-        controller: _plexTokenController,
-        focusNode: _plexTokenFocus,
-        labelText: 'X-Plex-Token',
-        keyboardTitle: 'Plex access token',
-        obscureText: true,
-        onSubmitted: (_) => _connectPlex(),
-      ),
-      const SizedBox(height: 14),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: _ActionButton(
-          label: 'Connect Plex',
-          icon: Icons.connected_tv_rounded,
-          onPressed: state.busy ? null : _connectPlex,
-        ),
-      ),
-    ],
-  );
+      );
 
   Future<void> _connectPlex() async {
     FocusManager.instance.primaryFocus?.unfocus();
@@ -517,7 +835,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     if (mounted) _plexTokenController.clear();
   }
 
-  Widget _buildPlexLibrary(PlexState state) {
+  Widget _buildPlexLibrary(PlexState state, TetoTopLevelLayout layout) {
     final controller = ref.read(plexControllerProvider.notifier);
     final browsingItems = state.locations.isNotEmpty;
     final rowCount = browsingItems
@@ -534,11 +852,15 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               _ActionButton(
                 label: 'Up',
                 icon: Icons.arrow_upward_rounded,
+                onExitLeft: () => _focusNavigationOrBack(layout),
                 onPressed: state.busy ? null : controller.goUp,
               ),
             _ActionButton(
               label: 'Refresh',
               icon: Icons.refresh_rounded,
+              onExitLeft: browsingItems
+                  ? null
+                  : () => _focusNavigationOrBack(layout),
               onPressed: state.busy ? null : controller.refresh,
             ),
             _ActionButton(
@@ -574,6 +896,8 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                     isFolder: true,
                     imageUri: controller.libraryImageUri(library),
                     imageLoader: controller.imageBytes,
+                    progress: null,
+                    onExitLeft: () => _focusNavigationOrBack(layout),
                     onPressed: state.busy
                         ? null
                         : () => controller.openLibrary(library),
@@ -587,6 +911,8 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                   isFolder: item.isFolder,
                   imageUri: controller.imageUri(item),
                   imageLoader: controller.imageBytes,
+                  progress: _plexProgress(item),
+                  onExitLeft: () => _focusNavigationOrBack(layout),
                   onPressed: state.busy || _openingPlayer
                       ? null
                       : item.isFolder
@@ -605,6 +931,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           _ActionButton(
             label: 'Load more (${state.items.length} of ${state.totalCount})',
             icon: Icons.expand_more_rounded,
+            onExitLeft: () => _focusNavigationOrBack(layout),
             onPressed: state.busy ? null : controller.loadMore,
           ),
         ],
@@ -655,17 +982,239 @@ class _SectionCard extends StatelessWidget {
   );
 }
 
+double? _jellyfinProgress(JellyfinMediaItem item) =>
+    _normalizedProgress(position: item.resumePosition, duration: item.duration);
+
+double? _plexProgress(PlexMediaItem item) => _normalizedProgress(
+  position: Duration(milliseconds: item.viewOffsetMilliseconds ?? 0),
+  duration: item.durationMilliseconds == null
+      ? null
+      : Duration(milliseconds: item.durationMilliseconds!),
+);
+
+double? _unifiedProgress(UnifiedMediaSearchItem result) {
+  final jellyfin = result.jellyfinItem;
+  if (jellyfin != null) return _jellyfinProgress(jellyfin);
+  final plex = result.plexItem;
+  return plex == null ? null : _plexProgress(plex);
+}
+
+class _LibraryPlaybackWriteback {
+  _LibraryPlaybackWriteback({
+    required this.saveLocal,
+    required this.writeServer,
+  });
+
+  static const _interval = Duration(seconds: 10);
+
+  final Future<void> Function(Duration position) saveLocal;
+  final Future<void> Function(Duration position, bool paused)? writeServer;
+  DateTime? _lastWrittenAt;
+  bool? _lastPlaying;
+
+  Future<void> handle(LibraryPlaybackProgress progress) async {
+    final stateChanged = _lastPlaying != progress.playing;
+    final elapsed = _lastWrittenAt == null
+        ? null
+        : progress.sampledAt.difference(_lastWrittenAt!);
+    if (!stateChanged &&
+        elapsed != null &&
+        !elapsed.isNegative &&
+        elapsed < _interval) {
+      return;
+    }
+    _lastWrittenAt = progress.sampledAt;
+    _lastPlaying = progress.playing;
+    await Future.wait<void>([
+      saveLocal(progress.position),
+      if (writeServer case final callback?)
+        callback(progress.position, !progress.playing),
+    ]);
+  }
+}
+
+double? _normalizedProgress({
+  required Duration position,
+  required Duration? duration,
+}) {
+  if (duration == null ||
+      duration <= Duration.zero ||
+      position <= Duration.zero) {
+    return null;
+  }
+  final value = position.inMilliseconds / duration.inMilliseconds;
+  if (!value.isFinite || value <= 0 || value >= .98) return null;
+  return value.clamp(0, 1);
+}
+
+class _MediaProgressBar extends StatelessWidget {
+  const _MediaProgressBar({required this.value});
+
+  final double value;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(999),
+    child: LinearProgressIndicator(
+      value: value,
+      minHeight: 4,
+      backgroundColor: context.appPalette.surfaceRaised,
+      color: context.appPalette.accentBright,
+    ),
+  );
+}
+
+class _UnifiedMediaRow extends StatelessWidget {
+  const _UnifiedMediaRow({
+    super.key,
+    required this.result,
+    required this.jellyfinImageUri,
+    required this.jellyfinImageLoader,
+    required this.plexImageUri,
+    required this.plexImageLoader,
+    required this.onExitLeft,
+    required this.onPressed,
+  });
+
+  final UnifiedMediaSearchItem result;
+  final Uri? jellyfinImageUri;
+  final Future<Uint8List> Function(Uri uri) jellyfinImageLoader;
+  final Uri? plexImageUri;
+  final Future<Uint8List> Function(Uri uri) plexImageLoader;
+  final VoidCallback onExitLeft;
+  final VoidCallback? onPressed;
+
+  String get _originLabel => switch (result.origin) {
+    UnifiedMediaOrigin.device => 'DEVICE',
+    UnifiedMediaOrigin.jellyfin => 'JELLYFIN',
+    UnifiedMediaOrigin.plex => 'PLEX',
+  };
+
+  IconData get _originIcon => switch (result.origin) {
+    UnifiedMediaOrigin.device => Icons.video_file_rounded,
+    UnifiedMediaOrigin.jellyfin => Icons.live_tv_rounded,
+    UnifiedMediaOrigin.plex => Icons.connected_tv_rounded,
+  };
+
+  @override
+  Widget build(BuildContext context) => Opacity(
+    opacity: onPressed == null ? .55 : 1,
+    child: TvFocusable(
+      onPressed: onPressed ?? () {},
+      onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 82),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: context.appPalette.selectableSurface,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(9),
+              child: SizedBox.square(dimension: 64, child: _artwork(context)),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: context.appPalette.accent.withValues(
+                            alpha: .18,
+                          ),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
+                          child: Text(
+                            _originLabel,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: context.appPalette.accentBright,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: .7,
+                                ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          result.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    result.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  if (_unifiedProgress(result) case final progress?) ...[
+                    const SizedBox(height: 6),
+                    _MediaProgressBar(value: progress),
+                  ],
+                ],
+              ),
+            ),
+            Icon(
+              result.isFolder
+                  ? Icons.chevron_right_rounded
+                  : Icons.play_arrow_rounded,
+              color: context.appPalette.accentBright,
+              size: 30,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _artwork(BuildContext context) {
+    if (result.origin == UnifiedMediaOrigin.plex) {
+      return _PlexArtwork(uri: plexImageUri, loader: plexImageLoader);
+    }
+    if (result.origin == UnifiedMediaOrigin.jellyfin &&
+        jellyfinImageUri != null) {
+      return _JellyfinArtwork(
+        uri: jellyfinImageUri,
+        loader: jellyfinImageLoader,
+      );
+    }
+    return ColoredBox(
+      color: context.appPalette.surfaceRaised,
+      child: Icon(_originIcon),
+    );
+  }
+}
+
 class _MediaRow extends StatelessWidget {
   const _MediaRow({
     required this.item,
     required this.imageUri,
-    required this.imageHeaders,
+    required this.imageLoader,
+    required this.onExitLeft,
     required this.onPressed,
   });
 
   final JellyfinMediaItem item;
   final Uri? imageUri;
-  final Map<String, String> imageHeaders;
+  final Future<Uint8List> Function(Uri uri) imageLoader;
+  final VoidCallback onExitLeft;
   final VoidCallback? onPressed;
 
   @override
@@ -673,6 +1222,7 @@ class _MediaRow extends StatelessWidget {
     opacity: onPressed == null ? .55 : 1,
     child: TvFocusable(
       onPressed: onPressed ?? () {},
+      onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
       child: Container(
         constraints: const BoxConstraints(minHeight: 82),
         padding: const EdgeInsets.all(10),
@@ -687,23 +1237,7 @@ class _MediaRow extends StatelessWidget {
               child: SizedBox(
                 width: 64,
                 height: 64,
-                child: imageUri == null
-                    ? ColoredBox(
-                        color: context.appPalette.surfaceRaised,
-                        child: Icon(Icons.movie_rounded),
-                      )
-                    : Image.network(
-                        imageUri.toString(),
-                        headers: imageHeaders,
-                        cacheWidth: 128,
-                        cacheHeight: 128,
-                        filterQuality: FilterQuality.low,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => ColoredBox(
-                          color: context.appPalette.surfaceRaised,
-                          child: Icon(Icons.movie_rounded),
-                        ),
-                      ),
+                child: _JellyfinArtwork(uri: imageUri, loader: imageLoader),
               ),
             ),
             const SizedBox(width: 14),
@@ -725,6 +1259,10 @@ class _MediaRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
+                  if (_jellyfinProgress(item) case final progress?) ...[
+                    const SizedBox(height: 6),
+                    _MediaProgressBar(value: progress),
+                  ],
                 ],
               ),
             ),
@@ -750,6 +1288,8 @@ class _PlexBrowseRow extends StatelessWidget {
     required this.isFolder,
     required this.imageUri,
     required this.imageLoader,
+    required this.progress,
+    required this.onExitLeft,
     required this.onPressed,
   });
 
@@ -758,6 +1298,8 @@ class _PlexBrowseRow extends StatelessWidget {
   final bool isFolder;
   final Uri? imageUri;
   final Future<Uint8List> Function(Uri uri) imageLoader;
+  final double? progress;
+  final VoidCallback onExitLeft;
   final VoidCallback? onPressed;
 
   @override
@@ -765,6 +1307,7 @@ class _PlexBrowseRow extends StatelessWidget {
     opacity: onPressed == null ? .55 : 1,
     child: TvFocusable(
       onPressed: onPressed ?? () {},
+      onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
       child: Container(
         constraints: const BoxConstraints(minHeight: 82),
         padding: const EdgeInsets.all(10),
@@ -801,6 +1344,10 @@ class _PlexBrowseRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
+                  if (progress case final value?) ...[
+                    const SizedBox(height: 6),
+                    _MediaProgressBar(value: value),
+                  ],
                 ],
               ),
             ),
@@ -814,6 +1361,61 @@ class _PlexBrowseRow extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _JellyfinArtwork extends StatefulWidget {
+  const _JellyfinArtwork({required this.uri, required this.loader});
+
+  final Uri? uri;
+  final Future<Uint8List> Function(Uri uri) loader;
+
+  @override
+  State<_JellyfinArtwork> createState() => _JellyfinArtworkState();
+}
+
+class _JellyfinArtworkState extends State<_JellyfinArtwork> {
+  Future<Uint8List>? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _JellyfinArtwork oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uri != widget.uri) _load();
+  }
+
+  void _load() {
+    final uri = widget.uri;
+    _bytes = uri == null ? null : widget.loader(uri);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes == null) return const _MediaArtworkPlaceholder();
+    return FutureBuilder<Uint8List>(
+      future: bytes,
+      builder: (context, snapshot) {
+        final value = snapshot.data;
+        if (value == null || value.isEmpty) {
+          return const _MediaArtworkPlaceholder();
+        }
+        return Image.memory(
+          value,
+          cacheWidth: 128,
+          cacheHeight: 128,
+          filterQuality: FilterQuality.low,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, _) => const _MediaArtworkPlaceholder(),
+        );
+      },
+    );
+  }
 }
 
 class _PlexArtwork extends StatefulWidget {
@@ -886,20 +1488,25 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
-    this.autofocus = false,
+    this.focusNode,
+    this.onExitLeft,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback? onPressed;
-  final bool autofocus;
+  final FocusNode? focusNode;
+  final VoidCallback? onExitLeft;
 
   @override
   Widget build(BuildContext context) => Opacity(
     opacity: onPressed == null ? .5 : 1,
     child: TvFocusable(
-      autofocus: autofocus,
+      focusNode: focusNode,
       onPressed: onPressed ?? () {},
+      onKeyEvent: onExitLeft == null
+          ? null
+          : (_, event) => _handleExitLeft(event, onExitLeft!),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
@@ -924,4 +1531,12 @@ class _ActionButton extends StatelessWidget {
       ),
     ),
   );
+}
+
+KeyEventResult _handleExitLeft(KeyEvent event, VoidCallback onExit) {
+  if (event.logicalKey != LogicalKeyboardKey.arrowLeft) {
+    return KeyEventResult.ignored;
+  }
+  if (event is KeyDownEvent) onExit();
+  return KeyEventResult.handled;
 }

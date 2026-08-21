@@ -92,6 +92,50 @@ class Media3PlayerSafetyTest {
     }
 
     @Test
+    fun `native skip focus follows playback and transport without stealing dialogs`() {
+        assertTrue(
+            nativeShouldAutoFocusSkipAction(
+                controllerVisible = false,
+                transportFocused = false,
+                modalVisible = false,
+            ),
+        )
+        assertTrue(
+            nativeShouldAutoFocusSkipAction(
+                controllerVisible = true,
+                transportFocused = true,
+                modalVisible = false,
+            ),
+        )
+        assertFalse(
+            nativeShouldAutoFocusSkipAction(
+                controllerVisible = true,
+                transportFocused = false,
+                modalVisible = false,
+            ),
+        )
+        assertFalse(
+            nativeShouldAutoFocusSkipAction(
+                controllerVisible = false,
+                transportFocused = false,
+                modalVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `native skip autofocus is consumed once for intro and once for outro`() {
+        val focused = mutableSetOf<String>()
+        val intro = nativeSkipSegmentKey(NativeSkipSegment(60_000L, 150_000L, "opening"))
+        val outro = nativeSkipSegmentKey(NativeSkipSegment(1_290_000L, 1_440_000L, "ending"))
+
+        assertTrue(focused.add(intro))
+        assertFalse(focused.add(intro))
+        assertTrue(focused.add(outro))
+        assertFalse(focused.add(outro))
+    }
+
+    @Test
     fun `dual and multi audio release labels request extended discovery`() {
         assertTrue(nativeReleaseAdvertisesMultipleAudio("[Group] Show - Dual Audio"))
         assertTrue(nativeReleaseAdvertisesMultipleAudio("Show.Multi-Audio.1080p"))
@@ -135,6 +179,46 @@ class Media3PlayerSafetyTest {
                 "",
                 0L,
                 audioPreferenceSet = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `watch party commands require the exact native playback generation`() {
+        assertTrue(
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+                action = "seek",
+            ),
+        )
+        assertFalse(
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:3",
+                requestedGeneration = 8,
+                action = "pause",
+            ),
+        )
+        assertFalse(
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 7,
+                action = "play",
+            ),
+        )
+        assertFalse(
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+                action = "stop",
             ),
         )
     }

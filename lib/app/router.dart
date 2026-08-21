@@ -18,19 +18,19 @@ import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.da
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/diagnostics_screen.dart';
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/privacy_screen.dart';
 import 'package:anime_tv/features/settings/presentation/third_party_notices_screen.dart';
 import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
-import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
+import 'package:anime_tv/features/watch_together/presentation/watch_together_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 
 final appRouter = GoRouter(
@@ -172,20 +172,20 @@ final appRouter = GoRouter(
       builder: (context, state) => const MarketplaceScreen(),
     ),
     GoRoute(
+      path: '/library',
+      builder: (context, state) => const LocalMediaScreen(
+        activeDestination: TopNavigationDestination.myList,
+      ),
+    ),
+    GoRoute(
       path: '/settings/local-media',
-      redirect: (context, state) async {
-        try {
-          final enabled = await const FlutterSecureStorage().read(
-            key: developerModeStorageKey,
-          );
-          return enabled == 'true' ? null : '/settings/accounts';
-        } catch (_) {
-          // Developer-only surfaces fail closed when encrypted preferences
-          // are temporarily unavailable.
-          return '/settings/accounts';
-        }
-      },
       builder: (context, state) => const LocalMediaScreen(),
+    ),
+    GoRoute(
+      path: '/watch-together',
+      builder: (context, state) => WatchTogetherScreen(
+        initialRoomCode: state.uri.queryParameters['room'],
+      ),
     ),
     GoRoute(
       path: '/resolve',

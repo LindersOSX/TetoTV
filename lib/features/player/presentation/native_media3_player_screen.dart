@@ -12,11 +12,14 @@ import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
+import 'package:anime_tv/features/player/application/library_playback_session.dart';
 import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
+import 'package:anime_tv/features/player/presentation/player_failover_notification.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
+import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
@@ -28,6 +31,8 @@ import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.da
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_playback_coordinator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -152,6 +157,8 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
     required this.title,
     required this.debridService,
     required this.launch,
+    this.watchPartyPlayback,
+    this.libraryPlayback,
     required this.onUseMpv,
     required this.onUseVlc,
     required this.onStreamAdopted,
@@ -169,6 +176,8 @@ class NativeMedia3PlayerScreen extends ConsumerStatefulWidget {
   final String title;
   final DebridService debridService;
   final PlaybackLaunch launch;
+  final WatchPartyPlaybackCoordinator? watchPartyPlayback;
+  final LibraryPlaybackSession? libraryPlayback;
   final String? subtitle;
   final int? anilistMediaId;
   final int? malMediaId;
@@ -208,6 +217,9 @@ class _NativeMedia3PlayerScreenState
   List<PlaybackStreamOption> _directStreamOptions = const [];
   StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
   StreamSubscription<NativePlaybackProgress>? _nativeProgressSubscription;
+  late final WatchPartyPlaybackEngineHandle _watchPartyHandle;
+  late final WatchPartyPlaybackCoordinator _watchPartyPlayback;
+  late final bool _ownsWatchPartyPlayback;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   PlaybackAudioPreference _globalAudioPreference = PlaybackAudioPreference.dub;
   Duration _resumePosition = Duration.zero;
@@ -218,6 +230,8 @@ class _NativeMedia3PlayerScreenState
   bool _startFromBeginning = false;
   bool _syncHandled = false;
   final PlayerHandoffGate _nextEpisodeHandoff = PlayerHandoffGate();
+  final PlayerFailoverNoticeGate _failoverNoticeGate =
+      PlayerFailoverNoticeGate();
   bool _streamFailoverInProgress = false;
   bool _running = false;
   bool _prewarmingNextEpisode = false;
@@ -234,11 +248,15 @@ class _NativeMedia3PlayerScreenState
   int? _resolvedMalMediaId;
   String _status = 'Opening the native TV player…';
   String? _diagnostic;
+  String? _pendingFailoverNotice;
 
+  bool get _animeFeaturesEnabled => widget.libraryPlayback == null;
   int get _mediaId =>
       widget.anilistMediaId ?? widget.launch.episode.anilistMediaId;
   int get _episodeNumber => widget.episode ?? widget.launch.episode.episode;
-  String get _checkpointKey => '$_mediaId:$_episodeNumber';
+  String get _checkpointKey =>
+      widget.libraryPlayback?.request.checkpointKey ??
+      '$_mediaId:$_episodeNumber';
   int? get _malMediaId =>
       _resolvedMalMediaId ??
       widget.malMediaId ??
@@ -250,12 +268,28 @@ class _NativeMedia3PlayerScreenState
       : _globalAudioPreference;
 
   void _onNativePlaybackProgress(NativePlaybackProgress progress) {
-    if (!mounted || progress.checkpointKey != _checkpointKey) return;
+    if (!mounted ||
+        progress.checkpointKey != _checkpointKey ||
+        progress.playbackSessionGeneration != _watchPartyHandle.generation) {
+      return;
+    }
     _nativePlaybackPosition = progress.position;
     if (progress.duration > Duration.zero) {
       _nativePlaybackDuration = progress.duration;
     }
     _nativePlaybackIsPlaying = progress.isPlaying;
+    widget.libraryPlayback?.report(
+      position: progress.position,
+      duration: progress.duration,
+      playing: progress.isPlaying,
+    );
+    _watchPartyPlayback.publish(
+      _watchPartyHandle,
+      position: progress.position,
+      duration: progress.duration,
+      playing: progress.isPlaying,
+      ready: progress.duration > Duration.zero,
+    );
     if (progress.audioPreferenceSet) {
       _nativeAudioSelectionOperation = _nativeAudioSelectionOperation.then(
         (_) => _persistNativeAudioSelection(progress),
@@ -273,7 +307,7 @@ class _NativeMedia3PlayerScreenState
   Future<void> _persistNativeAudioSelection(
     NativePlaybackProgress progress,
   ) async {
-    if (!mounted) return;
+    if (!mounted || !_animeFeaturesEnabled) return;
     final previousPreferences = _preferences;
     final previousRequest = _nextEpisodePreparationRequest();
     final database = ref.read(tetoTvDatabaseProvider);
@@ -317,6 +351,17 @@ class _NativeMedia3PlayerScreenState
     }
   }
 
+  void _handoffToMpvAfterFailure(Object? reason) {
+    if (!mounted) return;
+    showPlayerFailoverNotice(
+      context,
+      gate: _failoverNoticeGate,
+      destination: 'MPV player',
+      reason: reason,
+    );
+    _handoffToMpv();
+  }
+
   void _handoffToVlc() {
     if (!mounted) return;
     _preserveNextEpisodePreparation = true;
@@ -326,6 +371,17 @@ class _NativeMedia3PlayerScreenState
       _preserveNextEpisodePreparation = false;
       rethrow;
     }
+  }
+
+  void _handoffToVlcAfterFailure(Object? reason) {
+    if (!mounted) return;
+    showPlayerFailoverNotice(
+      context,
+      gate: _failoverNoticeGate,
+      destination: 'VLC player',
+      reason: reason,
+    );
+    _handoffToVlc();
   }
 
   @override
@@ -350,13 +406,53 @@ class _NativeMedia3PlayerScreenState
       PlaybackStreamOption(stream: _currentStream, release: _release),
       ...widget.launch.directAlternatives,
     ], const []);
+    _ownsWatchPartyPlayback = widget.watchPartyPlayback == null;
+    final libraryPlayback = widget.libraryPlayback;
+    _watchPartyPlayback =
+        widget.watchPartyPlayback ??
+        (libraryPlayback == null
+            ? WatchPartyPlaybackCoordinator(
+                episode: widget.launch.episode,
+                release: widget.launch.selectedRelease,
+              )
+            : WatchPartyPlaybackCoordinator.privateMedia(
+                checkpointKey: libraryPlayback.request.checkpointKey,
+                timelineIdentity: libraryPlayback.request.timelineIdentity,
+                displayTitle: libraryPlayback.request.watchPartyDisplayTitle,
+              ));
+    _watchPartyHandle = _watchPartyPlayback.bindEngine(
+      engine: 'media3',
+      play: () async {
+        await AndroidTvBridge.instance.controlNativePlayer(
+          checkpointKey: _checkpointKey,
+          playbackSessionGeneration: _watchPartyHandle.generation,
+          action: 'play',
+        );
+      },
+      pause: () async {
+        await AndroidTvBridge.instance.controlNativePlayer(
+          checkpointKey: _checkpointKey,
+          playbackSessionGeneration: _watchPartyHandle.generation,
+          action: 'pause',
+        );
+      },
+      seekTo: (position) async {
+        await AndroidTvBridge.instance.controlNativePlayer(
+          checkpointKey: _checkpointKey,
+          playbackSessionGeneration: _watchPartyHandle.generation,
+          action: 'seek',
+          position: position,
+        );
+      },
+    );
     _nativeProgressSubscription = AndroidTvBridge
         .instance
         .nativePlaybackProgress
         .listen(_onNativePlaybackProgress);
-    unawaited(_startWebSourceDiscovery());
+    if (_animeFeaturesEnabled) unawaited(_startWebSourceDiscovery());
     _resolvedMalMediaId = widget.malMediaId ?? widget.launch.episode.malMediaId;
-    _startFromBeginning = widget.launch.episode.startFromBeginning;
+    _startFromBeginning =
+        _animeFeaturesEnabled && widget.launch.episode.startFromBeginning;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_run());
     });
@@ -393,10 +489,13 @@ class _NativeMedia3PlayerScreenState
               : 'Opening a more compatible stream…';
           _diagnostic = null;
         });
+        final pendingFailoverNotice = _pendingFailoverNotice;
+        _pendingFailoverNotice = null;
         final result = await AndroidTvBridge.instance.startNativePlayer(
           source: Uri.parse(_source),
           title: widget.title,
           checkpointKey: _checkpointKey,
+          playbackSessionGeneration: _watchPartyHandle.generation,
           releaseName: _release.releaseName,
           streamLabel:
               _currentStream.providerName ??
@@ -410,8 +509,16 @@ class _NativeMedia3PlayerScreenState
           subtitleContentType: _currentStream.subtitleContentType,
           externalSubtitleRejected: _currentStream.externalSubtitleRejected,
           headers: _currentStream.headers,
+          trustedLocalSource: widget.libraryPlayback != null,
+          libraryPlayback: widget.libraryPlayback != null,
+          allowEngineSwitch:
+              widget.libraryPlayback?.request.allowsFlutterEngines ?? true,
           trustedPlaybackProxy: WebPlaybackProxy.instance
               .isOwnedPlaybackProxyUri(_currentStream.uri),
+          failoverNotice: pendingFailoverNotice,
+          watchPartyStatus: watchPartyPlayerStatus(
+            ref.read(watchPartyControllerProvider),
+          ),
           audioLanguage: _preferences.audioPreferenceSet
               ? _preferences.audioLanguage
               : effectiveAudio.audioLanguage,
@@ -428,14 +535,16 @@ class _NativeMedia3PlayerScreenState
           subtitleBackgroundColor: appearance.captionBackgroundColor,
           seekBackSeconds: appearance.seekBackSeconds,
           seekForwardSeconds: appearance.seekForwardSeconds,
-          autoSkipIntros: appearance.autoSkipIntros,
-          autoSkipOutros: appearance.autoSkipOutros,
+          autoSkipIntros: _animeFeaturesEnabled && appearance.autoSkipIntros,
+          autoSkipOutros: _animeFeaturesEnabled && appearance.autoSkipOutros,
           videoFit: _preferences.videoFit,
-          malMediaId: _malMediaId,
-          episodeNumber: _episodeNumber,
+          malMediaId: _animeFeaturesEnabled ? _malMediaId : null,
+          episodeNumber: _animeFeaturesEnabled ? _episodeNumber : null,
           artworkUrl: widget.coverImageUrl,
           hasDirectSources: _currentStream.isWebStream,
-          expectedSeekable: _currentStream.debridService != null,
+          expectedSeekable:
+              widget.libraryPlayback != null ||
+              _currentStream.debridService != null,
           theme: ref
               .read(themeStudioControllerProvider)
               .palette
@@ -459,6 +568,19 @@ class _NativeMedia3PlayerScreenState
         _nativePlaybackPosition = result.position;
         _nativePlaybackDuration = result.duration;
         _nativePlaybackIsPlaying = false;
+        widget.libraryPlayback?.report(
+          position: result.position,
+          duration: result.duration,
+          playing: false,
+          force: true,
+        );
+        _watchPartyPlayback.publish(
+          _watchPartyHandle,
+          position: _nativePlaybackPosition,
+          duration: _nativePlaybackDuration,
+          playing: false,
+          ready: false,
+        );
         if (returnNavigation == NativePlayerReturnNavigation.previousRoute) {
           await runBestEffortNativePlayerExitBookkeeping([
             () => _persistResult(result),
@@ -502,15 +624,27 @@ class _NativeMedia3PlayerScreenState
             await _openDirectStreamPicker();
             continue;
           case 'use_vlc':
-          case 'fallback_vlc':
             if (mounted) {
               _handoffToVlc();
             }
             return;
+          case 'fallback_vlc':
+            if (mounted) {
+              _handoffToVlcAfterFailure(
+                result.error ?? 'Media3 could not continue playback.',
+              );
+            }
+            return;
           case 'use_mpv':
-          case 'fallback_mpv':
             if (mounted) {
               _handoffToMpv();
+            }
+            return;
+          case 'fallback_mpv':
+            if (mounted) {
+              _handoffToMpvAfterFailure(
+                result.error ?? 'Media3 could not continue playback.',
+              );
             }
             return;
           case 'error':
@@ -534,12 +668,16 @@ class _NativeMedia3PlayerScreenState
             // MPV keeps libass and unusual-codec support as the second engine.
             // VLC remains available manually from MPV or on a future retry.
             if (mounted) {
-              _handoffToMpv();
+              _handoffToMpvAfterFailure(
+                result.error ?? 'Media3 could not render this stream.',
+              );
             }
             return;
           case 'unsupported':
             if (mounted) {
-              _handoffToMpv();
+              _handoffToMpvAfterFailure(
+                result.error ?? 'Media3 is not supported.',
+              );
             }
             return;
           case 'release_failed':
@@ -575,6 +713,7 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<int?> _resolveSkipMalMediaId() async {
+    if (!_animeFeaturesEnabled) return null;
     final known = _malMediaId;
     if (known != null && known > 0) return known;
     if (_mediaId <= 0) return null;
@@ -675,6 +814,7 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _startWebSourceDiscovery() async {
+    if (!_animeFeaturesEnabled) return;
     if (!mounted || _sourceDiscoverySubscription != null) return;
     final webStreamsEnabled = ref
         .read(settingsPreferencesProvider)
@@ -717,6 +857,16 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _loadResumeAndPreferences() async {
     if (!mounted) return;
+    final libraryPlayback = widget.libraryPlayback;
+    if (libraryPlayback != null) {
+      final requested =
+          widget.initialPosition ?? libraryPlayback.request.initialPosition;
+      _resumePosition = requested.isNegative ? Duration.zero : requested;
+      _resumeUpdatedAt = _resumePosition > Duration.zero
+          ? DateTime.now()
+          : null;
+      return;
+    }
     final database = ref.read(tetoTvDatabaseProvider);
     _preferences = await database.seriesPreferences(_mediaId);
     if (widget.initialPosition case final handoffPosition?) {
@@ -749,6 +899,26 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _persistResult(NativePlaybackResult result) async {
     if (!mounted) return;
+    final libraryPlayback = widget.libraryPlayback;
+    if (libraryPlayback != null) {
+      libraryPlayback.report(
+        position: result.position,
+        duration: result.duration,
+        playing: false,
+        force: true,
+      );
+      if (result.completed ||
+          result.status == 'completed' ||
+          result.status == 'ended') {
+        libraryPlayback.markCompleted(
+          position: result.duration > Duration.zero
+              ? result.duration
+              : result.position,
+          duration: result.duration,
+        );
+      }
+      return;
+    }
     final database = ref.read(tetoTvDatabaseProvider);
     final settingsController = ref.read(settingsPreferencesProvider.notifier);
     final previousAudioPreference = _effectiveAudioPreference;
@@ -862,7 +1032,7 @@ class _NativeMedia3PlayerScreenState
   Future<void> _syncResultIfThresholdReached(
     NativePlaybackResult result,
   ) async {
-    if (_syncHandled || !mounted) return;
+    if (_syncHandled || !mounted || !_animeFeaturesEnabled) return;
     if (widget.anilistMediaId == null &&
         widget.launch.episode.anilistMediaId <= 0 &&
         _malMediaId == null) {
@@ -969,6 +1139,11 @@ class _NativeMedia3PlayerScreenState
             _automaticStreamAttempts++;
             await widget.onStreamAdopted(option.stream, option.release);
             _invalidateNextEpisodePreparation();
+            _queueAutomaticFailoverNotice(
+              reason,
+              option.stream,
+              option.release,
+            );
             return true;
           },
         );
@@ -1008,6 +1183,7 @@ class _NativeMedia3PlayerScreenState
           _automaticStreamAttempts++;
           await widget.onStreamAdopted(ready, candidate);
           _invalidateNextEpisodePreparation();
+          _queueAutomaticFailoverNotice(reason, ready, candidate);
           return true;
         }
         return false;
@@ -1086,6 +1262,21 @@ class _NativeMedia3PlayerScreenState
     } finally {
       _streamFailoverInProgress = false;
     }
+  }
+
+  void _queueAutomaticFailoverNotice(
+    Object? reason,
+    StreamReady stream,
+    ReleaseCandidate release,
+  ) {
+    _pendingFailoverNotice = _failoverNoticeGate.next(
+      destination: playerFailoverDestination(
+        isWebStream: stream.isWebStream,
+        providerName: stream.providerName ?? release.provider,
+        quality: release.quality,
+      ),
+      reason: reason,
+    );
   }
 
   List<PlaybackStreamOption> _remainingDirectFailoverCandidates() {
@@ -1194,7 +1385,7 @@ class _NativeMedia3PlayerScreenState
   }
 
   Future<void> _syncProgress() async {
-    if (_syncHandled || !mounted) return;
+    if (_syncHandled || !mounted || !_animeFeaturesEnabled) return;
     _syncHandled = true;
     final syncService = ref.read(trackingSyncServiceProvider);
     final completedEpisodes = _episodeNumber;
@@ -1222,6 +1413,16 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _offerNextEpisode() async {
     if (!mounted) return;
+    if (!_animeFeaturesEnabled) {
+      widget.libraryPlayback?.markCompleted(
+        position: _nativePlaybackDuration > Duration.zero
+            ? _nativePlaybackDuration
+            : _nativePlaybackPosition,
+        duration: _nativePlaybackDuration,
+      );
+      if (context.canPop()) context.pop();
+      return;
+    }
     if (!_preferences.autoplayNextEpisode) {
       if (context.canPop()) {
         context.pop();
@@ -1251,6 +1452,7 @@ class _NativeMedia3PlayerScreenState
     required Duration duration,
   }) {
     if (!mounted ||
+        !_animeFeaturesEnabled ||
         !_nativePlaybackIsPlaying ||
         !_preferences.autoplayNextEpisode ||
         widget.episode == null ||
@@ -1463,6 +1665,8 @@ class _NativeMedia3PlayerScreenState
 
   @override
   void dispose() {
+    _watchPartyPlayback.unbindEngine(_watchPartyHandle);
+    if (_ownsWatchPartyPlayback) unawaited(_watchPartyPlayback.dispose());
     if (!_preserveNextEpisodePreparation && widget.episode != null) {
       final request = _nextEpisodePreparationRequest();
       unawaited(

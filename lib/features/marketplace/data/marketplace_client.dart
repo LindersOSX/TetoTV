@@ -174,19 +174,57 @@ List<MarketplaceAddon> parseMarketplaceCatalog(
   return unique.values.toList(growable: false);
 }
 
-List<dynamic>? _catalogEntriesFromWrapper(Map<dynamic, dynamic> wrapper) {
-  Map<dynamic, dynamic> current = wrapper;
-  for (var depth = 0; depth < 8; depth++) {
-    for (final key in const ['addons', 'providers', 'extensions', 'items']) {
-      final value = current[key];
-      if (value is List) return value;
+List<dynamic>? _catalogEntriesFromWrapper(
+  Map<dynamic, dynamic> wrapper, {
+  int depth = 0,
+}) {
+  if (depth >= 8) return null;
+  for (final key in const [
+    'addons',
+    'providers',
+    'extensions',
+    'items',
+    'results',
+    'entries',
+  ]) {
+    final value = wrapper[key];
+    if (value is List) return value;
+    if (value is Map) {
+      final mapped = _catalogEntriesFromMapValues(value);
+      if (mapped != null) return mapped;
     }
-    final data = current['data'];
-    if (data is List) return data;
-    if (data is! Map) return null;
-    current = data;
+  }
+  for (final key in const ['data', 'marketplace', 'catalog', 'result']) {
+    final value = wrapper[key];
+    if (value is List) return value;
+    if (value is Map) {
+      final nested = _catalogEntriesFromWrapper(value, depth: depth + 1);
+      if (nested != null) return nested;
+      final mapped = _catalogEntriesFromMapValues(value);
+      if (mapped != null) return mapped;
+    }
   }
   return null;
+}
+
+/// Some community catalogs key entries by extension ID instead of using a
+/// JSON array. Accept only maps whose bounded values look like actual manifest
+/// summaries; arbitrary metadata maps are not reinterpreted as executable
+/// add-ons.
+List<dynamic>? _catalogEntriesFromMapValues(Map<dynamic, dynamic> value) {
+  if (value.isEmpty || value.length > 1000) return null;
+  final entries = value.values.whereType<Map>().toList(growable: false);
+  if (entries.isEmpty || entries.length != value.length) return null;
+  final hasManifestSummary = entries.any(
+    (entry) => const [
+      'manifestURI',
+      'manifestUri',
+      'manifestURL',
+      'manifestUrl',
+      'manifest',
+    ].any((key) => entry[key] is String),
+  );
+  return hasManifestSummary ? entries : null;
 }
 
 /// Seanime add-on IDs are case-sensitive in JavaScript only by convention.
@@ -198,8 +236,9 @@ MarketplaceAddon validateAndMergeMarketplaceManifest(
   MarketplaceAddon summary,
   Object? decoded,
 ) {
+  final manifestValue = _unwrapMarketplaceManifest(decoded);
   final manifest = MarketplaceAddon.tryParse(
-    decoded,
+    manifestValue,
     repositoryUrl: summary.repositoryUrl,
     resourceBaseUri: summary.manifestUri,
   );
@@ -209,6 +248,35 @@ MarketplaceAddon validateAndMergeMarketplaceManifest(
     );
   }
   return summary.mergeManifest(manifest);
+}
+
+Object? _unwrapMarketplaceManifest(Object? value, {int depth = 0}) {
+  if (value is! Map || depth >= 4) return value;
+  final normalized = value.map((key, item) => MapEntry('$key', item));
+  final hasIdentity =
+      normalized['id'] is String && normalized['name'] is String;
+  final hasManifestUri = const [
+    'manifestURI',
+    'manifestUri',
+    'manifestURL',
+    'manifestUrl',
+    'manifest',
+  ].any((key) => normalized[key] is String);
+  if (hasIdentity && hasManifestUri) return normalized;
+  for (final key in const [
+    'manifest',
+    'addon',
+    'extension',
+    'provider',
+    'data',
+  ]) {
+    final nested = normalized[key];
+    if (nested is Map) {
+      final unwrapped = _unwrapMarketplaceManifest(nested, depth: depth + 1);
+      if (unwrapped is Map) return unwrapped;
+    }
+  }
+  return normalized;
 }
 
 bool _looksLikeProvider(String payload) =>

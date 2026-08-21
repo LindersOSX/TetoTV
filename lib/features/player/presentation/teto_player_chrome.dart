@@ -87,6 +87,7 @@ class TetoPlayerChrome extends StatelessWidget {
     required this.onOptions,
     required this.onDismiss,
     this.engineLabel,
+    this.partyStatus,
     this.footerHint = 'D-pad controls  |  J/L seek  |  Menu/Y options',
     super.key,
   });
@@ -95,6 +96,7 @@ class TetoPlayerChrome extends StatelessWidget {
   final String title;
   final String streamLabel;
   final String? engineLabel;
+  final String? partyStatus;
   final Duration position;
   final Duration duration;
   final bool isPlaying;
@@ -181,6 +183,15 @@ class TetoPlayerChrome extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 12),
+                      if (partyStatus != null) ...[
+                        Flexible(
+                          child: _PlayerBadge(
+                            key: ValueKey('$engineKey-watch-party-status'),
+                            text: partyStatus!,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       if (!compact && engineLabel != null) ...[
                         _PlayerBadge(text: engineLabel!),
                         const SizedBox(width: 8),
@@ -523,7 +534,7 @@ class TetoPlayerControl extends StatelessWidget {
 }
 
 class _PlayerBadge extends StatelessWidget {
-  const _PlayerBadge({required this.text});
+  const _PlayerBadge({required this.text, super.key});
 
   final String text;
 

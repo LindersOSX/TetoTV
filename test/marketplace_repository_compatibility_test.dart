@@ -1,10 +1,75 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   const repository = 'https://example.com/marketplace/main.json';
+
+  group('current user-supplied Seanime catalog shapes', () {
+    String fixture(String name) =>
+        File('test/fixtures/marketplace/$name').readAsStringSync();
+
+    test('Bas catalog retains advisory working and broken status', () {
+      const source =
+          'https://raw.githubusercontent.com/Bas1874/Seanime-Marketplace/'
+          'refs/heads/main/Marketplace/Main.json';
+      final catalog = parseMarketplaceCatalog(
+        fixture('bas_marketplace_excerpt.json'),
+        repositoryUrl: source,
+      );
+
+      expect(catalog.map((addon) => addon.id), ['allmangaanime', 'anidb']);
+      expect(catalog.first.reportedWorking, isFalse);
+      expect(catalog.first.reportedBroken, isTrue);
+      expect(catalog.last.reportedWorking, isTrue);
+      expect(catalog.last.lastWorkingVersion, '3.10.2');
+    });
+
+    test('ASleepyDrink catalog keeps status unknown when it is absent', () {
+      const source =
+          'https://raw.githubusercontent.com/ASleepyDrink/Seanime-Stuff/'
+          'refs/heads/main/marketplace.json';
+      final catalog = parseMarketplaceCatalog(
+        fixture('sleepy_marketplace_excerpt.json'),
+        repositoryUrl: source,
+      );
+
+      expect(catalog, hasLength(2));
+      expect(catalog.every((addon) => addon.reportedWorking == null), isTrue);
+      expect(catalog.every((addon) => !addon.reportedBroken), isTrue);
+    });
+
+    test('Pal catalog accepts casing drift without changing visible ID', () {
+      const source =
+          'https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/'
+          'main/marketplace/main.json';
+      final catalog = parseMarketplaceCatalog(
+        fixture('pal_marketplace_excerpt.json'),
+        repositoryUrl: source,
+      );
+
+      expect(catalog, hasLength(2));
+      expect(catalog.first.id, 'animeAV1');
+      expect(catalog.first.isCompatible, isTrue);
+    });
+
+    test(
+      'Carloss catalog is valid but contains no online-stream providers',
+      () {
+        const source =
+            'https://raw.githubusercontent.com/Carloss616/seanime-extensions/'
+            'main/marketplace.json';
+        final catalog = parseMarketplaceCatalog(
+          fixture('carloss_marketplace_excerpt.json'),
+          repositoryUrl: source,
+        );
+
+        expect(catalog, isEmpty);
+      },
+    );
+  });
 
   test('accepts casing-only catalog and manifest ID drift', () {
     final catalog = parseMarketplaceCatalog(
@@ -100,6 +165,76 @@ void main() {
       catalog.single.payloadUri,
       Uri.parse('https://example.com/wrapped/provider.js'),
     );
+  });
+
+  test('adapts a bounded ID-keyed catalog map', () {
+    final catalog = parseMarketplaceCatalog(
+      jsonEncode({
+        'marketplace': {
+          'extensions': {
+            'mapped-provider': {
+              'identifier': 'mapped-provider',
+              'title': 'Mapped provider',
+              'manifest': './mapped/manifest.json',
+              'kind': 'anime_stream_provider',
+              'runtime': 'js',
+            },
+          },
+        },
+      }),
+      repositoryUrl: repository,
+    );
+
+    expect(catalog, hasLength(1));
+    expect(catalog.single.id, 'mapped-provider');
+    expect(
+      catalog.single.manifestUri,
+      Uri.parse('https://example.com/marketplace/mapped/manifest.json'),
+    );
+  });
+
+  test('unwraps a manifest and preserves catalog-only executable fields', () {
+    final summary = parseMarketplaceCatalog(
+      jsonEncode([
+        {
+          'id': 'wrapped-manifest-provider',
+          'name': 'Catalog name',
+          'description': 'Catalog description',
+          'author': 'Catalog author',
+          'manifestURI': 'https://example.com/provider/manifest.json',
+          'payloadURI': 'https://example.com/provider/provider.js',
+          'type': 'onlinestream-provider',
+          'language': 'javascript',
+          'lang': 'en',
+          'workingTag': true,
+        },
+      ]),
+      repositoryUrl: repository,
+    ).single;
+
+    final merged = validateAndMergeMarketplaceManifest(summary, {
+      'data': {
+        'provider': {
+          'id': 'WRAPPED-MANIFEST-PROVIDER',
+          'name': 'Manifest name',
+          'description': '',
+          'author': 'Unknown',
+          'manifestURI': './manifest.json',
+        },
+      },
+    });
+
+    expect(merged.name, 'Manifest name');
+    expect(merged.description, 'Catalog description');
+    expect(merged.author, 'Catalog author');
+    expect(merged.language, 'javascript');
+    expect(merged.type, 'onlinestream-provider');
+    expect(merged.reportedWorking, isTrue);
+    expect(
+      merged.payloadUri,
+      Uri.parse('https://example.com/provider/provider.js'),
+    );
+    expect(merged.isCompatible, isTrue);
   });
 
   test('still rejects catalogs without a bounded provider list', () {

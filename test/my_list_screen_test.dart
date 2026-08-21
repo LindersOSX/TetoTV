@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   test('sorts tracker data consistently for every supported field', () {
@@ -97,6 +98,7 @@ void main() {
     expect(find.byIcon(Icons.home_rounded), findsOneWidget);
     expect(find.byIcon(Icons.explore_rounded), findsOneWidget);
     expect(find.byIcon(Icons.calendar_month_rounded), findsOneWidget);
+    expect(find.text('Your media'), findsOneWidget);
     final watchingTab = find.ancestor(
       of: find.text('Watching').first,
       matching: find.byType(TvFocusable),
@@ -108,6 +110,22 @@ void main() {
     expect(
       tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus,
       isTrue,
+    );
+
+    for (var index = 0; index < TrackingListStatus.values.length; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.your-media',
+      reason: 'the ordinary library action follows the existing status tabs',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.${TrackingListStatus.values.last.name}',
     );
   });
 
@@ -141,6 +159,43 @@ void main() {
     expect(find.byType(HomeSideNavigation), findsNothing);
     expect(find.byType(MainNavigationBar), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Your media opens the ordinary library surface', (tester) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final router = GoRouter(
+      initialLocation: '/my-list',
+      routes: [
+        GoRoute(path: '/my-list', builder: (_, _) => const MyListScreen()),
+        GoRoute(
+          path: '/library',
+          builder: (_, _) => const Scaffold(
+            body: SizedBox(key: ValueKey('ordinary-library-surface')),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Your media'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('ordinary-library-surface')), findsOne);
   });
 
   testWidgets('held My List input is throttled and card focus returns to tab', (

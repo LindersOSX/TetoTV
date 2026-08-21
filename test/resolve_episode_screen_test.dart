@@ -780,49 +780,150 @@ void main() {
     expect(launch.selectedRelease.infoHash, exactDebrid.infoHash);
   });
 
-  testWidgets('source picker keeps the pre-redesign compact control row', (
+  testWidgets(
+    'source picker exposes every primary TV action without scrolling',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _FakeReleaseSource(),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42,
+                title: 'Example Show',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text('Dubbed release'));
+
+      expect(find.text('Choose your stream'), findsOneWidget);
+      expect(find.text('ALL'), findsOneWidget);
+      expect(find.text('SUB'), findsOneWidget);
+      expect(find.text('DUB'), findsOneWidget);
+      expect(find.text('More filters'), findsOneWidget);
+      expect(find.text('Refresh'), findsOneWidget);
+      expect(find.text('Search'), findsOneWidget);
+      expect(find.text('Magnet'), findsNothing);
+      for (final label in [
+        'ALL',
+        'SUB',
+        'DUB',
+        'More filters',
+        'Refresh',
+        'Search',
+      ]) {
+        final rect = tester.getRect(find.text(label));
+        expect(rect.left, greaterThanOrEqualTo(0), reason: label);
+        expect(rect.right, lessThanOrEqualTo(1920), reason: label);
+        expect(rect.top, greaterThanOrEqualTo(0), reason: label);
+        expect(rect.bottom, lessThanOrEqualTo(1080), reason: label);
+      }
+
+      await tester.tap(find.text('Search'));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('stream-picker-search-input')),
+        findsOneWidget,
+      );
+      expect(find.text('Close search'), findsOneWidget);
+      expect(find.text('Magnet'), findsNothing);
+
+      final input = tester.widget<TvTextInput>(
+        find.byKey(const ValueKey('stream-picker-search-input')),
+      );
+      input.controller.text = 'definitely-no-local-match';
+      input.onChanged?.call(input.controller.text);
+      await tester.pump();
+      expect(find.text('No streams match this search.'), findsOneWidget);
+      expect(find.text('Clear search'), findsOneWidget);
+
+      await tester.tap(find.text('Clear search'));
+      await tester.pump();
+      expect(find.text('Dubbed release'), findsOneWidget);
+      expect(find.text('No streams match this search.'), findsNothing);
+    },
+  );
+
+  test('local stream search covers useful Debrid and Web metadata', () {
+    const release = ReleaseCandidate(
+      infoHash: 'searchable-release',
+      magnetUri: 'magnet:?xt=urn:btih:searchable-release',
+      releaseName: '[SeaDex] Example S01E01 Dual Audio HEVC',
+      seeders: 44,
+      sourceId: 'nyaa-provider',
+      provider: 'Nyaa Anime',
+      quality: '1080p',
+      codec: 'HEVC',
+      sizeLabel: '1.4 GB',
+      isDubbed: true,
+      hasSubtitles: true,
+    );
+    final web = _providerWebStream(
+      providerId: 'allmanga-main',
+      providerName: 'AllManga',
+      quality: '720p',
+      isDubbed: false,
+    );
+
+    expect(releaseMatchesLocalStreamSearch(release, 'seadex 1080 dub'), isTrue);
+    expect(releaseMatchesLocalStreamSearch(release, '44 seeders'), isTrue);
+    expect(releaseMatchesLocalStreamSearch(release, '720'), isFalse);
+    expect(webStreamMatchesLocalSearch(web, 'allmanga 720 sub'), isTrue);
+    expect(webStreamMatchesLocalSearch(web, 'dub'), isFalse);
+  });
+
+  testWidgets('source-list search fits a compact Classic viewport', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           configuredReleaseSourceProvider.overrideWithValue(
             const _FakeReleaseSource(),
           ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([
+              _providerWebStream(
+                providerId: 'compact-web',
+                providerName:
+                    'A deliberately long provider name that must stay inside the compact stream card',
+                quality: '1080p',
+              ),
+            ]),
+          ),
         ],
         child: const MaterialApp(
           home: ResolveEpisodeScreen(
             episode: EpisodeReference(
               anilistMediaId: 42,
-              title: 'Example Show',
+              title: 'Compact Example',
               episode: 1,
             ),
           ),
         ),
       ),
     );
-    await _pumpUntilFound(tester, find.text('Dubbed release'));
+    await _pumpUntilFound(tester, find.text('WEB STREAMS'));
+    expect(find.text('Search'), findsOneWidget);
 
-    expect(find.text('Choose your stream'), findsOneWidget);
-    expect(find.text('Search torrents'), findsNothing);
-    expect(find.text('No torrents match this local search.'), findsNothing);
-    expect(find.text('ALL'), findsOneWidget);
-    expect(find.text('SUB'), findsOneWidget);
-    expect(find.text('DUB'), findsOneWidget);
-    expect(find.text('More filters'), findsOneWidget);
-    expect(find.text('Refresh'), findsOneWidget);
-    expect(find.text('Magnet'), findsOneWidget);
-    expect(
-      find.ancestor(
-        of: find.text('Magnet'),
-        matching: find.byType(SingleChildScrollView),
-      ),
-      findsOneWidget,
-      reason: 'the original picker keeps its single compact horizontal row',
-    );
+    await tester.tap(find.text('Search'));
+    await tester.pump();
+
+    final input = find.byKey(const ValueKey('stream-picker-search-input'));
+    expect(input, findsOneWidget);
+    expect(tester.getRect(input).right, lessThanOrEqualTo(390));
   });
 
   testWidgets(

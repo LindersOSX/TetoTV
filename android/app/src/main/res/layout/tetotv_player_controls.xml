@@ -399,9 +399,18 @@
                     android:includeFontPadding="false"
                     android:textColor="@android:color/white"
                     android:textSize="13sp"
-                    android:textStyle="bold" />
+                android:textStyle="bold" />
 
-                <TextView
+            <TextView
+                android:id="@+id/tetotv_watch_party_status"
+                style="@style/TetoTVPlayerBadge"
+                android:layout_marginStart="12dp"
+                android:ellipsize="end"
+                android:maxWidth="230dp"
+                android:maxLines="1"
+                android:visibility="gone" />
+
+            <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"

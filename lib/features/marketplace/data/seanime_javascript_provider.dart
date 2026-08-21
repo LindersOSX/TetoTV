@@ -82,6 +82,14 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
   @override
   String get name => addon.manifest.name;
 
+  String? get version => addon.manifest.version;
+
+  String? get repositoryHost =>
+      safePublicHttpsUri(addon.manifest.repositoryUrl)?.host;
+
+  String get executableHost =>
+      (addon.manifest.payloadUri ?? addon.manifest.manifestUri).host;
+
   @override
   Future<List<WebStreamResult>> streams(
     EpisodeReference episode, {
@@ -166,7 +174,8 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
     }
     if (results.isEmpty && raw.isNotEmpty) {
       throw StateError(
-        'NO_STREAM: Provider streams failed URL or network safety validation.',
+        'NO_STREAM: Provider streams failed URL or network safety validation. '
+        '[stage=server; reason=unsafe_target]',
       );
     }
     return results;
@@ -224,10 +233,67 @@ List<String> seanimeProviderMediaSynonyms(EpisodeReference episode) {
 bool isSeanimeProviderNoStream(Object error) =>
     error.toString().contains('NO_STREAM:');
 
+class SeanimeProviderFailureDetails {
+  const SeanimeProviderFailureDetails({
+    required this.stage,
+    required this.reason,
+  });
+
+  final String stage;
+  final String reason;
+}
+
+const _providerFailureStages = {'search', 'episodes', 'server', 'runtime'};
+const _providerFailureReasons = {
+  'timeout',
+  'empty_sources',
+  'unsafe_target',
+  'invalid_response',
+  'network',
+  'runtime_api',
+  'provider_error',
+  'empty_result',
+};
+
+/// Reads only the bounded, runtime-generated failure marker. Provider error
+/// text is deliberately excluded so URLs, search terms, cookies, and tokens
+/// cannot be copied into diagnostics through a thrown third-party error.
+SeanimeProviderFailureDetails? seanimeProviderFailureDetails(Object error) {
+  final match = RegExp(
+    r'\[stage=([a-z_]+);\s*reason=([a-z0-9_]+)\]',
+  ).firstMatch(error.toString());
+  if (match == null) return null;
+  final stage = match.group(1)!;
+  final reason = match.group(2)!;
+  if (!_providerFailureStages.contains(stage)) return null;
+  if (!_providerFailureReasons.contains(reason) &&
+      !RegExp(r'^http_[1-5][0-9]{2}$').hasMatch(reason)) {
+    return null;
+  }
+  return SeanimeProviderFailureDetails(stage: stage, reason: reason);
+}
+
+String _providerReasonCopy(String reason) => switch (reason) {
+  'timeout' => 'the provider timed out',
+  'empty_sources' || 'empty_result' => 'the upstream returned no sources',
+  'unsafe_target' => 'the returned address failed network safety checks',
+  'invalid_response' => 'the upstream response format changed',
+  'network' => 'the provider could not reach its upstream service',
+  'runtime_api' => 'the provider uses an unsupported runtime API',
+  final String value when value.startsWith('http_') =>
+    'the upstream returned HTTP ${value.substring(5)}',
+  _ => 'the provider reported an error',
+};
+
 /// Converts provider/runtime failures into bounded user-facing copy without
 /// leaking Dart's implementation prefix (`Bad state:`) into the stream UI.
 String seanimeProviderFailureMessage(Object error) {
   var value = error.toString().replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+  final details = seanimeProviderFailureDetails(error);
+  value = value.replaceAll(
+    RegExp(r'\s*\[stage=[a-z_]+;\s*reason=[a-z0-9_]+\]\s*'),
+    '',
+  );
   final implementationPrefix = RegExp(
     r'^(?:Bad state|StateError|Exception):\s*',
     caseSensitive: false,
@@ -236,13 +302,43 @@ String seanimeProviderFailureMessage(Object error) {
     value = value.replaceFirst(implementationPrefix, '').trimLeft();
   }
   if (value.startsWith('NO_STREAM:')) {
+    final reason = details == null
+        ? 'It may need an update or a different server.'
+        : 'Reason: ${_providerReasonCopy(details.reason)}.';
     value =
-        'This provider found the episode but could not return a compatible '
-        'stream. It may need an update or a different server.';
+        'This provider found the episode but could not return a '
+        'compatible stream. $reason';
   } else if (value.startsWith('NO_MATCH:')) {
-    value = 'This provider has no matching title or episode.';
+    value = value.toLowerCase().contains('episode')
+        ? 'This provider matched the title but has no matching episode.'
+        : 'This provider has no matching title.';
   }
   return value.length > 180 ? '${value.substring(0, 180)}…' : value;
+}
+
+/// Stable, redacted provider provenance for diagnostic events and health
+/// records. Only manifest-derived IDs/versions/hosts and runtime-generated
+/// enums are included; full URLs and provider exception text are omitted.
+String seanimeProviderDiagnosticMessage(
+  SeanimeJavascriptProvider provider,
+  Object error,
+) {
+  final details = seanimeProviderFailureDetails(error);
+  String field(Object? value, {int maximum = 80}) {
+    final safe = '${value ?? 'unknown'}'
+        .replaceAll(RegExp(r'[^A-Za-z0-9._:-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    return safe.length <= maximum ? safe : safe.substring(0, maximum);
+  }
+
+  return [
+    'provider=${field(provider.id)}',
+    'version=${field(provider.version)}',
+    'repositoryHost=${field(provider.repositoryHost)}',
+    'executableHost=${field(provider.executableHost)}',
+    'stage=${field(details?.stage ?? 'runtime')}',
+    'reason=${field(details?.reason ?? (error is TimeoutException ? 'timeout' : 'provider_error'))}',
+  ].join(' ');
 }
 
 class HlsStreamVariant {
@@ -758,14 +854,35 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             synonyms: ${jsonEncode((input['synonyms'] as List?) ?? const [])},
             isAdult: ${input['isAdult'] == true},
           };
+          // Canonical Seanime names stay authoritative. Read-only aliases
+          // cover older community providers without changing the object shape
+          // expected by current SearchOptions implementations.
+          Object.defineProperties(media, {
+            anilistId: {value: media.id, enumerable: false},
+            aniListId: {value: media.id, enumerable: false},
+            idAniList: {value: media.id, enumerable: false},
+          });
           const englishTitle = ${jsonEncode(input['titleEnglish'])};
           if (englishTitle) media.englishTitle = englishTitle;
+          Object.defineProperties(media, {
+            title: {value: titles[0] || media.romajiTitle, enumerable: false},
+            titleRomaji: {value: media.romajiTitle, enumerable: false},
+            titleEnglish: {value: englishTitle || undefined, enumerable: false},
+          });
           const malMediaId = ${input['malId'] ?? 'null'};
-          if (malMediaId != null) media.idMal = malMediaId;
+          if (malMediaId != null) {
+            media.idMal = malMediaId;
+            Object.defineProperties(media, {
+              malId: {value: malMediaId, enumerable: false},
+              idMAL: {value: malMediaId, enumerable: false},
+            });
+          }
           if (releaseYear > 0) {
             media.startDate = {year: releaseYear};
           }
-          const modes = settings.supportsDub ? [false, true] : [false];
+          const supportsDub = settings.supportsDub === true ||
+            settings.supportsDubbed === true || settings.hasDub === true;
+          const modes = supportsDub ? [false, true] : [false];
           const output = [];
           const errors = [];
           let foundTitle = false;
@@ -780,27 +897,86 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             const words = new Set(b.split(' ').filter(x => x.length > 1));
             return a.split(' ').reduce((sum, word) => sum + (words.has(word) ? 20 : 0), 0);
           };
-          const listFrom = (value, keys) => {
-            if (Array.isArray(value)) return value;
-            if (!value || typeof value !== 'object') return [];
+          const listFrom = (value, keys, depth) => {
+            const level = Number(depth || 0);
+            if (Array.isArray(value)) return value.slice(0, 200);
+            if (!value || typeof value !== 'object' || level >= 3) return [];
             for (const key of keys) {
-              if (Array.isArray(value[key])) return value[key];
-            }
-            if (value.data && typeof value.data === 'object') {
-              for (const key of keys) {
-                if (Array.isArray(value.data[key])) return value.data[key];
+              if (Array.isArray(value[key])) return value[key].slice(0, 200);
+              if (value[key] && typeof value[key] === 'object') {
+                const nested = listFrom(value[key], keys, level + 1);
+                if (nested.length) return nested;
               }
+            }
+            for (const wrapper of ['data', 'result', 'response', 'payload']) {
+              if (value[wrapper] && typeof value[wrapper] === 'object') {
+                const nested = listFrom(value[wrapper], keys, level + 1);
+                if (nested.length) return nested;
+              }
+            }
+            const mapped = Object.values(value);
+            if (mapped.length && mapped.length <= 200 &&
+                mapped.every(item => item && typeof item === 'object')) {
+              return mapped;
             }
             return [];
           };
           const episodeNumberOf = item => {
-            const raw = item && (item.number != null ? item.number :
-              (item.episodeNumber != null ? item.episodeNumber :
-              (item.episode != null ? item.episode : item.num)));
-            const direct = Number(raw);
-            if (Number.isFinite(direct)) return direct;
-            const match = String(raw || (item && (item.title || item.id)) || '').match(/(?:episode|ep)?\\s*([0-9]+(?:\\.[0-9]+)?)/i);
-            return match ? Number(match[1]) : NaN;
+            if (!item || typeof item !== 'object') return NaN;
+            const explicit = [
+              item.number, item.episodeNumber, item.episode_number,
+              item.episodeNum, item.episode, item.ep, item.num, item.index,
+            ];
+            for (const raw of explicit) {
+              if (raw == null || raw === '') continue;
+              const direct = Number(raw);
+              if (Number.isFinite(direct)) return direct;
+              const text = String(raw);
+              const seasonEpisode = text.match(/s\\d{1,3}\\s*e([0-9]+(?:\\.[0-9]+)?)/i);
+              if (seasonEpisode) return Number(seasonEpisode[1]);
+              const embedded = text.match(/(?:episode|ep|e)\\s*[-_.:#]?\\s*([0-9]+(?:\\.[0-9]+)?)/i);
+              if (embedded) return Number(embedded[1]);
+            }
+            const values = [item.title, item.name, item.label, item.url, item.id];
+            for (const raw of values) {
+              const text = String(raw || '');
+              let match = text.match(/s\\d{1,3}\\s*e([0-9]+(?:\\.[0-9]+)?)/i);
+              if (!match) match = text.match(/(?:episode|ep|e)\\s*[-_.:#]?\\s*([0-9]+(?:\\.[0-9]+)?)/i);
+              if (!match) match = text.match(/(?:^|[\\/_-])([0-9]+(?:\\.[0-9]+)?)(?:\$|[/?#._-])/);
+              if (match) return Number(match[1]);
+            }
+            return NaN;
+          };
+          const valueFrom = (item, keys) => {
+            if (!item || typeof item !== 'object') return undefined;
+            for (const key of keys) {
+              const value = item[key];
+              if (value != null && value !== '') return value;
+            }
+            return undefined;
+          };
+          const candidateKey = item => {
+            const identity = valueFrom(item, [
+              'id', 'animeId', 'mediaId', 'providerId', 'slug', 'url', 'link',
+            ]);
+            if (identity != null) return String(identity).slice(0, 512);
+            try { return String(JSON.stringify(item)).slice(0, 512); }
+            catch (_) { return candidateTitle(item).slice(0, 512); }
+          };
+          const candidateTitle = item => String(valueFrom(item, [
+            'title', 'name', 'englishTitle', 'romajiTitle', 'label',
+          ]) || '');
+          const providerReason = error => {
+            const message = String(error && error.message || error || '').toLowerCase();
+            if (/timeout|timed out|deadline|aborted/.test(message)) return 'timeout';
+            const http = message.match(/(?:http|status|returned|failed)\\D{0,12}([1-5][0-9]{2})/);
+            if (http) return 'http_' + http[1];
+            if (/no source|no stream|video source|empty source|unable to find a valid source/.test(message)) return 'empty_sources';
+            if (/public https|safety|unsafe|private address|not permitted/.test(message)) return 'unsafe_target';
+            if (/json|parse|unexpected token|invalid response/.test(message)) return 'invalid_response';
+            if (/network|socket|dns|connection|fetch failed|host lookup/.test(message)) return 'network';
+            if (/referenceerror|is not defined|is not a function|undefined/.test(message)) return 'runtime_api';
+            return 'provider_error';
           };
           const toHttps = (value, bases) => {
             if (typeof value !== 'string' || !value.trim()) return null;
@@ -826,64 +1002,119 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             }) || tracks[0];
           };
           for (const dub of modes) {
-            let selected = null;
+            const candidates = new Map();
             for (const title of titles) {
+              const searchInput = {
+                query: title,
+                dub,
+                year: releaseYear,
+                media,
+                opts: {dub, year: releaseYear, media},
+              };
+              let matches = [];
               try {
-                const searchInput = {
-                  query: title,
-                  dub,
-                  year: releaseYear,
-                  media,
-                  opts: {dub, year: releaseYear, media},
-                };
-                let rawMatches = await providerCall(() => provider.search(searchInput));
-                let matches = listFrom(rawMatches, ['results', 'items', 'data']);
-                if (!matches.length) {
-                  try {
-                    const legacyOptions = {dub, year: releaseYear, media};
-                    rawMatches = await providerCall(
-                      () => provider.search(title, legacyOptions)
-                    );
-                    matches = listFrom(rawMatches, ['results', 'items', 'data']);
-                  } catch (error) { errors.push(String(error && error.message || error)); }
+                const rawMatches = await providerCall(
+                  () => provider.search(searchInput)
+                );
+                matches = listFrom(rawMatches, ['results', 'items', 'data', 'matches']);
+              } catch (error) {
+                errors.push({stage: 'search', reason: providerReason(error)});
+              }
+              // Several pre-SearchOptions providers throw when handed the
+              // canonical object (for example they call query.replace()). A
+              // failure must not suppress the bounded legacy string attempt.
+              if (!matches.length) {
+                try {
+                  const legacyOptions = {dub, year: releaseYear, media};
+                  const rawMatches = await providerCall(
+                    () => provider.search(title, legacyOptions)
+                  );
+                  matches = listFrom(rawMatches, ['results', 'items', 'data', 'matches']);
+                } catch (error) {
+                  errors.push({stage: 'search', reason: providerReason(error)});
                 }
-                const ranked = matches.slice(0, 40).map(item => ({item, points: score(item.title, title)}))
-                  .sort((a, b) => b.points - a.points);
-                if (ranked.length && (!selected || ranked[0].points > selected.points)) {
-                  selected = ranked[0];
+              }
+              matches.slice(0, 40).forEach((item, index) => {
+                if (!item || typeof item !== 'object') return;
+                const titleScore = score(candidateTitle(item), title);
+                const mediaId = valueFrom(item, ['anilistId', 'aniListId', 'idAniList']);
+                const idBonus = Number(mediaId) === media.id ? 2000 : 0;
+                const providerOrderBonus = Math.max(0, 39 - index);
+                const points = titleScore + idBonus + providerOrderBonus;
+                const key = candidateKey(item);
+                const existing = candidates.get(key);
+                if (!existing || points > existing.points) {
+                  candidates.set(key, {item, points});
                 }
-                // A provider's own ordered search result is usually more
-                // useful than repeatedly querying every title alias. Continue
-                // only when the match is weak enough to justify another call.
-                if (selected && selected.points >= 500) break;
-              } catch (error) { errors.push(String(error && error.message || error)); }
+              });
+              if (Array.from(candidates.values()).some(item => item.points >= 1000)) break;
             }
-            if (!selected) continue;
+            const rankedCandidates = Array.from(candidates.values())
+              .sort((left, right) => right.points - left.points)
+              .slice(0, 4);
+            if (!rankedCandidates.length) continue;
             foundTitle = true;
-            let episodes = [];
-            try {
-              const rawEpisodes = await providerCall(
-                () => provider.findEpisodes(
-                  selected.item.id || selected.item.url || selected.item.slug
-                )
+            let selected = null;
+            let episode = null;
+            for (const candidate of rankedCandidates) {
+              let episodes = listFrom(candidate.item, ['episodes']);
+              const identifier = valueFrom(candidate.item, [
+                'id', 'animeId', 'mediaId', 'providerId', 'slug', 'url', 'link',
+              ]);
+              if (!episodes.length && identifier != null) {
+                try {
+                  const rawEpisodes = await providerCall(
+                    () => provider.findEpisodes(identifier)
+                  );
+                  episodes = listFrom(rawEpisodes, [
+                    'episodes', 'items', 'results', 'data', 'entries',
+                  ]);
+                } catch (error) {
+                  errors.push({stage: 'episodes', reason: providerReason(error)});
+                  // A bounded object-shape retry covers providers that adopted
+                  // search-result objects before Seanime standardized the ID
+                  // argument. Network failures are never repeated.
+                  const message = String(error && error.message || error);
+                  if (/argument|undefined|null|property|object|expected/i.test(message)) {
+                    try {
+                      const rawEpisodes = await providerCall(
+                        () => provider.findEpisodes(candidate.item)
+                      );
+                      episodes = listFrom(rawEpisodes, [
+                        'episodes', 'items', 'results', 'data', 'entries',
+                      ]);
+                    } catch (fallbackError) {
+                      errors.push({
+                        stage: 'episodes',
+                        reason: providerReason(fallbackError),
+                      });
+                    }
+                  }
+                }
+              }
+              episode = episodes.find(
+                item => Math.abs(episodeNumberOf(item) - episodeNumber) < 0.01
               );
-              episodes = listFrom(rawEpisodes, ['episodes', 'items', 'results']);
-            } catch (error) {
-              errors.push(String(error && error.message || error));
+              if (!episode && episodes.length === 1 && episodeNumber === 1) {
+                episode = episodes[0];
+              }
+              if (episode) {
+                selected = candidate;
+                break;
+              }
             }
-            let episode = episodes.find(item => Math.abs(episodeNumberOf(item) - episodeNumber) < 0.01);
-            if (!episode && episodes.length === 1 && episodeNumber === 1) episode = episodes[0];
-            if (!episode) continue;
+            if (!selected || !episode) continue;
             foundEpisode = true;
-            let servers = Array.isArray(settings.episodeServers) && settings.episodeServers.length
-              ? settings.episodeServers.slice(0, 6) : ['default'];
+            const configuredServers = settings.episodeServers || settings.servers;
+            let servers = Array.isArray(configuredServers) && configuredServers.length
+              ? configuredServers.slice(0, 6) : ['default'];
             const serverName = server => server && typeof server === 'object'
               ? String(server.name || server.label || server.id || server.value || 'Default')
               : String(server || 'Default');
             const serverValue = server => server && typeof server === 'object'
               ? (server.value || server.id || server.name || server.label) : server;
             const dubbedServers = servers.filter(server => /dub/i.test(serverName(server)));
-            if (settings.supportsDub && dubbedServers.length) {
+            if (supportsDub && dubbedServers.length) {
               servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(serverName(server)));
             }
             // Providers commonly mutate instance headers/cookies while
@@ -899,7 +1130,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   );
                 } catch (error) {
                   const message = String(error && error.message || error);
-                  errors.push(message);
+                  errors.push({stage: 'server', reason: providerReason(error)});
                   // Seanime's current contract passes the episode object. A
                   // small number of legacy providers expect its ID instead;
                   // retry only argument-shape errors so network failures are
@@ -913,15 +1144,22 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                         )
                       );
                     } catch (fallbackError) {
-                      errors.push(String(fallbackError && fallbackError.message || fallbackError));
+                      errors.push({
+                        stage: 'server',
+                        reason: providerReason(fallbackError),
+                      });
                     }
                   }
                 }
                 if (!resolved) continue;
-                const serverHeaders = resolved && resolved.headers && typeof resolved.headers === 'object'
-                  ? resolved.headers : {};
-                let sources = listFrom(resolved, ['videoSources', 'sources', 'streams']);
-                if (!sources.length && (typeof resolved === 'string' || resolved.url || resolved.file || resolved.src)) {
+                const resolvedHeaders = resolved &&
+                  (resolved.headers || resolved.requestHeaders || resolved.responseHeaders);
+                const serverHeaders = resolvedHeaders && typeof resolvedHeaders === 'object'
+                  ? resolvedHeaders : {};
+                let sources = listFrom(resolved, [
+                  'videoSources', 'sources', 'streams', 'videos', 'links',
+                ]);
+                if (!sources.length && (typeof resolved === 'string' || resolved.url || resolved.file || resolved.src || resolved.link)) {
                   sources = [resolved];
                 }
                 for (const rawSource of sources.slice(0, 20)) {
@@ -929,15 +1167,23 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   if (!source || typeof source !== 'object') continue;
                   const bases = [source.baseUrl, resolved.baseUrl, resolved.url, episode.url, selected.item.url];
                   const url = toHttps(
-                    source.url || source.file || source.src || source.link || source.manifest,
+                    source.url || source.file || source.src || source.link ||
+                      source.href || source.uri || source.manifest ||
+                      source.playlist || source.streamUrl || source.hls,
                     bases,
                   );
                   if (!url) continue;
-                  const subtitles = listFrom(source.subtitles || source.tracks, ['subtitles', 'tracks'])
-                    .concat(listFrom(resolved.subtitles || resolved.tracks, ['subtitles', 'tracks']));
+                  const subtitles = listFrom(
+                    source.subtitles || source.tracks || source.captions,
+                    ['subtitles', 'tracks', 'captions'],
+                  ).concat(listFrom(
+                    resolved.subtitles || resolved.tracks || resolved.captions,
+                    ['subtitles', 'tracks', 'captions'],
+                  ));
                   const english = englishTrack(subtitles);
                   const subtitleUrl = english && toHttps(
-                    english.url || english.file || english.src || english.link,
+                    english.url || english.file || english.src || english.link ||
+                      english.href || english.uri || english.subtitleUrl,
                     bases,
                   );
                   output.push({
@@ -951,14 +1197,19 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     isDubbed: dub || /dub/i.test(String(selected.item.subOrDub || serverName(server))),
                   });
                 }
-              } catch (error) { errors.push(String(error && error.message || error)); }
+              } catch (error) {
+                errors.push({stage: 'server', reason: providerReason(error)});
+              }
             }
           }
           if (!output.length) {
-            const detail = errors.length ? ' Last error: ' + errors[errors.length - 1] : '';
-            if (!foundTitle) throw new Error('NO_MATCH: This provider has no matching title.' + detail);
-            if (!foundEpisode) throw new Error('NO_MATCH: This provider has no matching episode.' + detail);
-            throw new Error('NO_STREAM: The provider found the episode but returned no compatible stream.' + detail);
+            const failure = errors.length
+              ? errors[errors.length - 1]
+              : {stage: foundEpisode ? 'server' : (foundTitle ? 'episodes' : 'search'), reason: 'empty_result'};
+            const marker = ' [stage=' + failure.stage + '; reason=' + failure.reason + ']';
+            if (!foundTitle) throw new Error('NO_MATCH: This provider has no matching title.' + marker);
+            if (!foundEpisode) throw new Error('NO_MATCH: This provider has no matching episode.' + marker);
+            throw new Error('NO_STREAM: The provider found the episode but returned no compatible stream.' + marker);
           }
           sendMessage('TetoDone', JSON.stringify({ok: true, result: output}));
         } catch (error) {
@@ -2006,41 +2257,347 @@ const _seanimeCompatibilityBootstrap = r'''
     } while (pending !== __tetoSleepTail);
   }
 
+  // Seanime-compatible scanner surface. This is an original, bounded
+  // implementation of the public behavior exercised by community providers;
+  // it does not embed Seanime source code.
+  const __tetoNoiseWords = new Set([
+    'the', 'a', 'an', 'of', 'to', 'in', 'for', 'on', 'with', 'at', 'by',
+    'from', 'as', 'is', 'it', 'that', 'this', 'be', 'are', 'was', 'were',
+    'no', 'wa', 'wo', 'ga', 'ni', 'de', 'ka', 'mo', 'ya', 'e', 'he',
+    'anime', 'ova', 'ona', 'oad', 'tv', 'movie', 'nc', 'nced', 'ncop',
+    'extras', 'ending', 'opening', 'preview', 'special', 'specials', 'sp',
+    'finale', 'season', 'uncensored', 'censored', 'bluray',
+  ]);
+  const __tetoFormatWords = new Set([
+    'ova', 'ona', 'oad', 'oav', 'sp', 'special', 'specials', 'movie',
+    'film', 'tv', 'nc', 'nced', 'ncop', 'extras', 'opening', 'ending',
+    'preview', 'finale',
+  ]);
+  // Standalone I and X are deliberately excluded because ordinary titles use
+  // them too often for them to be reliable season markers.
+  const __tetoRoman = Object.freeze({ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, xi: 11, xii: 12, xiii: 13});
+  const __tetoOrdinalWords = {first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10};
+  const __tetoIsRoman = value => Object.prototype.hasOwnProperty.call(
+    __tetoRoman, value
+  );
+
+  function __tetoNumber(value, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.trunc(numeric) : fallback;
+  }
+
+  function extractSeasonNumber(value) {
+    const text = String(value || '').toLowerCase();
+    let match = text.match(/\b(?:season|series)\s*0*([0-9]{1,2})\b/);
+    if (match) return Number(match[1]);
+    match = text.match(/\bs\s*0*([0-9]{1,2})(?=\b|e[0-9])/);
+    if (match) return Number(match[1]);
+    match = text.match(/\b([0-9]{1,2})(?:st|nd|rd|th)\s+(?:season|series)\b/);
+    if (match) return Number(match[1]);
+    match = text.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b/);
+    if (match) return __tetoOrdinalWords[match[1]] || -1;
+    match = text.match(/([0-9]{1,2})\s*(?:期|シーズン)/);
+    if (match) return Number(match[1]);
+    const romanSource = text.replace(
+      /\b(?:act|arc|chapter|saga|hen|part|cour)[\s._:-]+(?:ii|iii|iv|v|vi|vii|viii|ix|xi|xii|xiii)\b/g,
+      ' ',
+    );
+    match = romanSource.match(
+      /(?:^|[\s.])(ii|iii|iv|v|vi|vii|viii|ix|xi|xii|xiii)(?:\s*$|[:,.'"]|\s+(?:s[0-9]|e[0-9]|part))/,
+    );
+    if (match) return __tetoRoman[match[1]] || -1;
+    match = text.match(/(?:^|\s)([0-9]{1,2})\s*$/);
+    if (match && !/(?:part|cour|special|sp|movie|ova|ona|oad)\s*[0-9]{1,2}\s*$/.test(text)) {
+      const trailing = Number(match[1]);
+      if (trailing >= 2 && trailing <= 10) return trailing;
+    }
+    return -1;
+  }
+
+  function extractPartNumber(value) {
+    const text = String(value || '').toLowerCase();
+    let match = text.match(/\b(?:part|cour)\s*([0-9]{1,2})\b/);
+    if (!match) match = text.match(/\b([0-9]{1,2})(?:st|nd|rd|th)\s+(?:part|cour)\b/);
+    if (match) return Number(match[1]);
+    match = text.match(/\b(?:part|cour)\s+(ii|iii|iv|v|vi|vii|viii|ix|xi|xii|xiii)\b/);
+    return match ? (__tetoRoman[match[1]] || -1) : -1;
+  }
+
+  function extractYear(value) {
+    const match = String(value || '').match(/(?:\(|\b)(19[0-9]{2}|20[0-9]{2})(?:\)|\b)/);
+    return match ? Number(match[1]) : -1;
+  }
+
   function normalizeQuery(value) {
-    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    return String(value || '').toLowerCase()
+      // Expand macrons before Unicode decomposition removes their marks.
+      .replace(/ō/g, 'ou').replace(/ū/g, 'uu')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/@/g, 'a').replace(/×/g, ' x ')
+      .replace(/꞉/g, ':').replace(/＊/g, ' * ')
+      .replace(/\bthe animation\b/g, ' ')
+      .replace(/\bthe\b/g, ' ').replace(/\bepisode\b/g, ' ')
+      .replace(/\boad\b/g, ' ova ').replace(/\boav\b/g, ' ova ')
+      .replace(/\bspecials?\b/g, ' sp ').replace(/\(\s*tv\s*\)/g, ' ')
+      .replace(/&/g, ' and ')
+      // Possessives need a token boundary; deleting the apostrophe first would
+      // incorrectly merge e.g. "Magus's" into "maguss".
+      .replace(/[’'`]s\b/g, ' ')
+      .replace(/[’'`"“”]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function normalizeTitle(value) {
+    const original = String(value || '');
+    const season = extractSeasonNumber(original);
+    const part = extractPartNumber(original);
+    const year = extractYear(original);
+    // Strip Japanese season suffixes before the ASCII-only query pass turns
+    // the suffix into whitespace and leaves a misleading bare number behind.
+    const titleForNormalization = original.replace(
+      /[0-9]{1,2}\s*(?:期|シーズン)/g,
+      ' ',
+    );
+    let normalized = normalizeQuery(titleForNormalization)
+      .replace(/\b(?:season|series)\s*0*[0-9]{1,2}\b/g, ' ')
+      .replace(/\bs\s*0*[0-9]{1,2}(?=\b|e[0-9])/g, ' ')
+      .replace(/\b[0-9]{1,2}(?:st|nd|rd|th)\s+(?:season|series)\b/g, ' ')
+      .replace(/\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b/g, ' ')
+      .replace(/\b(?:part|cour)\s*(?:[0-9]{1,2}|ii|iii|iv|v|vi|vii|viii|ix|xi|xii|xiii)\b/g, ' ')
+      .replace(/\b[0-9]{1,2}(?:st|nd|rd|th)\s+(?:part|cour)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const tokens = normalized ? normalized.split(' ').slice(0, 64) : [];
+    let base = tokens.filter(token =>
+      !__tetoFormatWords.has(token) && !__tetoIsRoman(token)
+    ).join(' ');
+    base = base.replace(/\b[0-9]+$/, '').replace(/\s+/g, ' ').trim();
+    const denoised = base.split(' ').filter(token => token && !__tetoNoiseWords.has(token)).join(' ');
+    return {
+      original,
+      normalized,
+      cleanBaseTitle: base,
+      denoisedTitle: denoised,
+      tokens,
+      season,
+      part,
+      year,
+      isMain: false,
+    };
+  }
+
+  function getSignificantTokens(value) {
+    const tokens = Array.isArray(value) ? value : normalizeTitle(value).tokens;
+    return tokens.slice(0, 64).filter(token => String(token).length > 1 && !__tetoNoiseWords.has(String(token).toLowerCase()));
+  }
+
+  function compareTitles(left, right) {
+    const a = normalizeTitle(left).tokens;
+    const b = new Set(normalizeTitle(right).tokens);
+    if (!a.length || !b.size) return 0;
+    let total = 0; let matched = 0;
+    a.forEach(token => {
+      const weight = __tetoNoiseWords.has(token) ? 0.3 : (/^(?:19|20)[0-9]{2}$/.test(token) ? 0.5 : 1);
+      total += weight;
+      if (b.has(token)) matched += weight;
+    });
+    return total ? matched / total : 0;
   }
 
   function __tetoSimilarity(left, right) {
-    const a = new Set(normalizeQuery(left).split(' ').filter(Boolean));
-    const b = new Set(normalizeQuery(right).split(' ').filter(Boolean));
-    if (!a.size || !b.size) return 0;
-    let common = 0;
-    a.forEach(item => { if (b.has(item)) common++; });
-    return common / Math.max(a.size, b.size);
+    return Math.min(compareTitles(left, right), compareTitles(right, left));
+  }
+
+  function sanitizeQuery(value) {
+    return String(value || '').replace(/[()[\]{}|"'~*?\\^!]/g, ' ')
+      .replace(/\s{2,}/g, ' ').trim();
+  }
+
+  function buildSearchQuery(value) {
+    const normalized = normalizeTitle(value);
+    return sanitizeQuery(normalized.denoisedTitle || normalized.cleanBaseTitle || normalized.normalized);
+  }
+
+  function buildAdvancedQuery(values) {
+    const unique = [];
+    (Array.isArray(values) ? values : []).slice(0, 32).forEach(value => {
+      const query = buildSearchQuery(value);
+      if (query && !unique.includes(query)) unique.push(query);
+    });
+    if (!unique.length) return '';
+    return unique.length === 1 ? unique[0] : '(' + unique.join(' | ') + ')';
+  }
+
+  function __tetoOrdinal(value) {
+    const number = Math.abs(value);
+    const suffix = number % 100 >= 11 && number % 100 <= 13
+      ? 'th' : ({1: 'st', 2: 'nd', 3: 'rd'}[number % 10] || 'th');
+    return String(value) + suffix;
+  }
+
+  function buildSeasonQuery(title, value) {
+    const base = buildSearchQuery(title);
+    const season = __tetoNumber(value, -1);
+    if (!base || season <= 1) return base;
+    return '(' + [base + ' S' + String(season).padStart(2, '0'), base + ' S' + season,
+      base + ' Season ' + season, base + ' ' + __tetoOrdinal(season) + ' Season'].join(' | ') + ')';
+  }
+
+  function buildPartQuery(title, value) {
+    const base = buildSearchQuery(title);
+    const part = __tetoNumber(value, -1);
+    if (!base || part <= 1) return base;
+    const roman = Object.keys(__tetoRoman).find(key => __tetoRoman[key] === part);
+    const variants = [base + ' Part ' + part];
+    if (roman) variants.push(base + ' Part ' + roman.toUpperCase());
+    variants.push(base + ' ' + __tetoOrdinal(part) + ' Cour');
+    return '(' + variants.join(' | ') + ')';
+  }
+
+  function buildSmartSearchTitles(values) {
+    const titles = [];
+    const seen = new Set();
+    let season = -1; let part = -1;
+    const add = value => {
+      const title = String(value || '').trim();
+      const key = title.toLowerCase();
+      if (title && !seen.has(key) && titles.length < 64) {
+        seen.add(key); titles.push(title);
+      }
+    };
+    const addNormalizedVariants = value => {
+      const normalized = normalizeTitle(value);
+      add(sanitizeQuery(
+        normalized.denoisedTitle || normalized.cleanBaseTitle || normalized.normalized
+      ));
+      add(sanitizeQuery(normalized.cleanBaseTitle));
+      return normalized;
+    };
+    (Array.isArray(values) ? values : [values]).slice(0, 32).forEach(value => {
+      const original = String(value || '');
+      if (!original) return;
+      const normalized = addNormalizedVariants(original);
+      if (season <= 0 && normalized.season > 0) season = normalized.season;
+      if (part <= 0 && normalized.part > 0) part = normalized.part;
+      [original.indexOf(':'), original.indexOf(' - ')].forEach(index => {
+        if (index >= 5) addNormalizedVariants(original.substring(0, index));
+      });
+    });
+    return {titles, season, part};
   }
 
   function filterBySimilarity(items, query) {
-    return (Array.isArray(items) ? items : []).slice().sort((left, right) =>
-      __tetoSimilarity(right.title || right.name, query) - __tetoSimilarity(left.title || left.name, query)
+    return (Array.isArray(items) ? items : []).slice(0, 200).sort((left, right) =>
+      __tetoSimilarity(right && (right.title || right.name), query) -
+      __tetoSimilarity(left && (left.title || left.name), query)
     );
   }
 
+  function findBestMatch(target, candidates) {
+    let best = ''; let score = -1;
+    (Array.isArray(candidates) ? candidates : []).slice(0, 200).forEach(candidate => {
+      if (typeof candidate !== 'string') return;
+      const next = compareTitles(target, candidate);
+      if (next > score) { best = candidate; score = next; }
+    });
+    return best;
+  }
+
   globalThis.$scannerUtils = {
+    normalizeTitle,
+    extractPartNumber,
+    extractSeasonNumber,
+    extractYear,
+    compareTitles,
+    findBestMatch,
+    getSignificantTokens,
+    buildSearchQuery,
+    buildAdvancedQuery,
+    sanitizeQuery,
+    buildSeasonQuery,
+    buildPartQuery,
+    buildSmartSearchTitles,
+    // Compatibility aliases retained for providers predating the current
+    // scanner contract.
     normalizeQuery,
-    sanitizeQuery(value) { return normalizeQuery(value); },
-    buildSearchQuery(value) { return normalizeQuery(value); },
-    buildSmartSearchTitles(values) {
-      const titles = [];
-      (Array.isArray(values) ? values : [values]).forEach(value => {
-        const title = String(value || '').trim();
-        if (title && !titles.includes(title)) titles.push(title);
-      });
-      return {titles, season: null, part: null};
-    },
     filterBySimilarity,
-    findBestMatch(items, query) { return filterBySimilarity(items, query)[0] || null; },
     similarity: __tetoSimilarity,
     compareTwoStrings: __tetoSimilarity,
   };
+
+  // A bounded invocation-local store lets providers cache repeated title
+  // attempts without persisting third-party data or sharing it across
+  // providers. JSON cloning prevents callers from mutating stored values by
+  // reference while keeping memory use measurable and bounded.
+  function __tetoCreateStore() {
+    const entries = Object.create(null);
+    let totalSize = 0;
+    const keyOf = value => {
+      const key = String(value == null ? '' : value);
+      if (!key || key.length > 128 || /[\u0000-\u001f]/.test(key)) {
+        throw new Error('Store key is invalid');
+      }
+      return key;
+    };
+    const encode = value => {
+      const encoded = JSON.stringify(value);
+      if (encoded === undefined || encoded.length > 131072) {
+        throw new Error('Store value exceeds its limit');
+      }
+      return encoded;
+    };
+    const decode = encoded => encoded === undefined ? undefined : JSON.parse(encoded);
+    const set = (rawKey, value) => {
+      const key = keyOf(rawKey);
+      const encoded = encode(value);
+      if (!Object.prototype.hasOwnProperty.call(entries, key) && Object.keys(entries).length >= 64) {
+        throw new Error('Store entry limit exceeded');
+      }
+      const nextSize = totalSize - (entries[key] ? entries[key].length : 0) + encoded.length;
+      if (nextSize > 262144) throw new Error('Store total size limit exceeded');
+      entries[key] = encoded; totalSize = nextSize;
+    };
+    const api = {
+      set,
+      get(key) { return decode(entries[keyOf(key)]); },
+      getUnsafe(key) { return decode(entries[keyOf(key)]); },
+      has(key) { return Object.prototype.hasOwnProperty.call(entries, keyOf(key)); },
+      getOrSet(key, factory) {
+        const normalized = keyOf(key);
+        if (Object.prototype.hasOwnProperty.call(entries, normalized)) return decode(entries[normalized]);
+        const value = typeof factory === 'function' ? factory() : factory;
+        set(normalized, value); return decode(entries[normalized]);
+      },
+      setIfLessThanLimit(key, value, maximum) {
+        const limit = Math.max(0, Math.min(64, __tetoNumber(maximum, 0)));
+        if (!api.has(key) && Object.keys(entries).length >= limit) return false;
+        set(key, value); return true;
+      },
+      marshalJSON(value) { return encode(value); },
+      unmarshalJSON(value) {
+        const decoded = JSON.parse(String(value || '{}'));
+        if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return;
+        Object.keys(decoded).slice(0, 64).forEach(key => set(key, decoded[key]));
+      },
+      reset() { Object.keys(entries).forEach(key => delete entries[key]); totalSize = 0; },
+      clear() { api.reset(); },
+      drop() { api.reset(); },
+      remove(key) {
+        const normalized = keyOf(key);
+        if (entries[normalized]) totalSize -= entries[normalized].length;
+        delete entries[normalized];
+      },
+      keys() { return Object.keys(entries); },
+      values() { return Object.keys(entries).map(key => decode(entries[key])); },
+      valuesUnsafe() { return api.values(); },
+      getAll() {
+        const result = Object.create(null);
+        Object.keys(entries).forEach(key => { result[key] = decode(entries[key]); });
+        return result;
+      },
+      getAllUnsafe() { return api.getAll(); },
+    };
+    return Object.freeze(api);
+  }
+  globalThis.$store = __tetoCreateStore();
+  globalThis.$storage = __tetoCreateStore();
 ''';

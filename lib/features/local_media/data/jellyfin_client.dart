@@ -6,6 +6,7 @@ import 'package:anime_tv/features/local_media/domain/jellyfin_models.dart';
 import 'package:dio/dio.dart';
 
 const _maxJellyfinResponseBytes = 4 * 1024 * 1024;
+const _maxJellyfinImageBytes = 8 * 1024 * 1024;
 
 Uri? normalizeJellyfinServerUri(String input) {
   final raw = input.trim();
@@ -142,7 +143,7 @@ class JellyfinClient {
         'sortOrder': 'Ascending',
         'includeItemTypes':
             'CollectionFolder,Folder,Series,Season,BoxSet,Movie,Episode,Video',
-        'fields': 'Overview,MediaSources,PrimaryImageAspectRatio',
+        'fields': 'Overview,MediaSources,PrimaryImageAspectRatio,UserData',
         'enableImages': true,
         'enableTotalRecordCount': true,
         'startIndex': startIndex.clamp(0, 1 << 31),
@@ -151,6 +152,120 @@ class JellyfinClient {
       headers: _sessionHeaders(connection),
     );
     final data = _map(response);
+    return _parseItemPage(data, startIndex: startIndex);
+  }
+
+  Future<List<JellyfinMediaItem>> search(
+    JellyfinConnection connection,
+    String query, {
+    int limit = 60,
+  }) async {
+    final term = query.trim();
+    if (term.length < 2 || term.length > 200) {
+      throw const JellyfinException(
+        'Enter at least two characters to search Jellyfin.',
+      );
+    }
+    final response = await _request(
+      connection.baseUri.resolve('${_basePath(connection.baseUri)}/Items'),
+      queryParameters: {
+        'userId': connection.userId,
+        'searchTerm': term,
+        'recursive': true,
+        'sortBy': 'SortName',
+        'sortOrder': 'Ascending',
+        'includeItemTypes': 'Series,Season,Movie,Episode,Video',
+        'fields': 'Overview,MediaSources,PrimaryImageAspectRatio,UserData',
+        'enableImages': true,
+        'enableTotalRecordCount': true,
+        'startIndex': 0,
+        'limit': limit.clamp(1, 100),
+      },
+      headers: _sessionHeaders(connection),
+    );
+    return _parseItemPage(_map(response), startIndex: 0).items;
+  }
+
+  Future<void> reportPlaybackStarted(
+    JellyfinConnection connection,
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+  }) => _reportPlayback(
+    connection,
+    item,
+    endpoint: 'Playing',
+    playSessionId: playSessionId,
+    position: position,
+    paused: false,
+  );
+
+  Future<void> reportPlaybackProgress(
+    JellyfinConnection connection,
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+    bool paused = false,
+  }) => _reportPlayback(
+    connection,
+    item,
+    endpoint: 'Playing/Progress',
+    playSessionId: playSessionId,
+    position: position,
+    paused: paused,
+  );
+
+  Future<void> reportPlaybackStopped(
+    JellyfinConnection connection,
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+  }) => _reportPlayback(
+    connection,
+    item,
+    endpoint: 'Playing/Stopped',
+    playSessionId: playSessionId,
+    position: position,
+    paused: true,
+  );
+
+  Future<void> _reportPlayback(
+    JellyfinConnection connection,
+    JellyfinMediaItem item, {
+    required String endpoint,
+    required String playSessionId,
+    required Duration position,
+    required bool paused,
+  }) async {
+    if (!RegExp(r'^[A-Za-z0-9_-]{16,100}$').hasMatch(playSessionId)) {
+      throw const JellyfinException('The local playback session is invalid.');
+    }
+    await _request(
+      connection.baseUri.resolve(
+        '${_basePath(connection.baseUri)}/Sessions/$endpoint',
+      ),
+      method: 'POST',
+      data: {
+        'ItemId': item.id,
+        'PlaySessionId': playSessionId,
+        'PositionTicks': position.inMicroseconds.clamp(0, 1 << 49) * 10,
+        'IsPaused': paused,
+        'PlayMethod': 'DirectPlay',
+        'EventName': paused ? 'Pause' : 'TimeUpdate',
+      },
+      headers: {
+        ..._sessionHeaders(connection),
+        'Content-Type': 'application/json',
+      },
+      expectedStatuses: const {200, 204},
+      allowEmptyBody: true,
+    );
+  }
+
+  JellyfinLibraryPage _parseItemPage(
+    Map<Object?, Object?> data, {
+    required int startIndex,
+  }) {
     final rawItems = data['Items'] is List ? data['Items'] as List : const [];
     final parsed = <JellyfinMediaItem>[];
     for (final value in rawItems.whereType<Map>()) {
@@ -158,8 +273,11 @@ class JellyfinClient {
       final id = _bounded(item['Id'], 8, 160);
       final name = _bounded(item['Name'], 1, 500);
       final type = _bounded(item['Type'], 1, 80);
-      if (id == null || name == null || type == null) continue;
+      if (id == null || !_safeServerId(id) || name == null || type == null) {
+        continue;
+      }
       final imageTags = _map(item['ImageTags']);
+      final userData = _map(item['UserData']);
       final mediaSources = item['MediaSources'] is List
           ? item['MediaSources'] as List
           : const [];
@@ -182,6 +300,8 @@ class JellyfinClient {
               ? _bounded(item['Container'], 1, 80)
               : _bounded(firstSource['Container'], 1, 80),
           overview: _bounded(item['Overview'], 1, 4000),
+          playbackPositionTicks: _integer(userData['PlaybackPositionTicks']),
+          played: userData['Played'] == true,
         ),
       );
     }
@@ -232,6 +352,75 @@ class JellyfinClient {
   Map<String, String> playbackHeaders(JellyfinConnection connection) =>
       _sessionHeaders(connection);
 
+  /// Loads authenticated artwork without allowing a redirect to carry the
+  /// Jellyfin session header to another origin.
+  Future<Uint8List> imageBytes(JellyfinConnection connection, Uri uri) async {
+    final baseUri = normalizeJellyfinServerUri(connection.baseUri.toString());
+    if (baseUri == null ||
+        !_sameOrigin(baseUri, uri) ||
+        !_isUnderBasePath(baseUri.path, uri.path)) {
+      throw const JellyfinException(
+        'Jellyfin returned an external image resource.',
+      );
+    }
+    try {
+      final response = await _dio.requestUri<ResponseBody>(
+        uri,
+        options: Options(
+          method: 'GET',
+          headers: _sessionHeaders(connection),
+          followRedirects: false,
+          maxRedirects: 0,
+          responseType: ResponseType.stream,
+        ),
+      );
+      final status = response.statusCode ?? 0;
+      if (status >= 300 && status < 400) {
+        _closeResponseBody(response.data);
+        throw const JellyfinException('Jellyfin redirected an image request.');
+      }
+      if (status != 200) {
+        _closeResponseBody(response.data);
+        throw const JellyfinException('Jellyfin image could not be loaded.');
+      }
+      final declared = int.tryParse(
+        response.headers.value(Headers.contentLengthHeader) ?? '',
+      );
+      if (declared != null && declared > _maxJellyfinImageBytes) {
+        _closeResponseBody(response.data);
+        throw const JellyfinException('Jellyfin returned an oversized image.');
+      }
+      final body = response.data;
+      if (body == null) {
+        throw const JellyfinException('Jellyfin returned an empty image.');
+      }
+      final bytes = BytesBuilder(copy: false);
+      try {
+        await for (final chunk in body.stream) {
+          if (bytes.length + chunk.length > _maxJellyfinImageBytes) {
+            throw const JellyfinException(
+              'Jellyfin returned an oversized image.',
+            );
+          }
+          bytes.add(chunk);
+        }
+      } finally {
+        _closeResponseBody(body);
+      }
+      final result = bytes.takeBytes();
+      if (result.isEmpty) {
+        throw const JellyfinException('Jellyfin returned an empty image.');
+      }
+      return result;
+    } on JellyfinException {
+      rethrow;
+    } on DioException catch (error) {
+      final responseBody = error.response?.data;
+      if (responseBody is ResponseBody) _closeResponseBody(responseBody);
+      throw const JellyfinException('Jellyfin image could not be loaded.');
+    }
+  }
+
   Future<void> logout(JellyfinConnection connection) async {
     await _request(
       connection.baseUri.resolve(
@@ -250,6 +439,7 @@ class JellyfinClient {
     Map<String, Object?>? queryParameters,
     Map<String, String>? headers,
     Set<int> expectedStatuses = const {200},
+    bool allowEmptyBody = false,
   }) async {
     try {
       final requestUri = queryParameters == null
@@ -300,6 +490,7 @@ class JellyfinClient {
       }
       final body = response.data;
       if (body == null) {
+        if (allowEmptyBody) return null;
         throw const JellyfinException('Jellyfin returned an empty response.');
       }
       final bytes = BytesBuilder(copy: false);
@@ -314,7 +505,9 @@ class JellyfinClient {
         _closeResponseBody(body);
       }
       try {
-        return jsonDecode(utf8.decode(bytes.takeBytes()));
+        final value = bytes.takeBytes();
+        if (value.isEmpty && allowEmptyBody) return null;
+        return jsonDecode(utf8.decode(value));
       } on FormatException {
         throw const JellyfinException('Jellyfin returned invalid data.');
       }
@@ -377,3 +570,16 @@ class JellyfinClient {
 // internal. Rejected and size-limited responses must release the socket now.
 // ignore: invalid_use_of_internal_member
 void _closeResponseBody(ResponseBody? body) => body?.close();
+
+bool _sameOrigin(Uri first, Uri second) =>
+    first.scheme.toLowerCase() == second.scheme.toLowerCase() &&
+    first.host.toLowerCase() == second.host.toLowerCase() &&
+    first.port == second.port;
+
+bool _isUnderBasePath(String basePath, String path) {
+  final base = basePath.replaceFirst(RegExp(r'/+$'), '');
+  return base.isEmpty || path == base || path.startsWith('$base/');
+}
+
+bool _safeServerId(String value) =>
+    RegExp(r'^[A-Za-z0-9_-]{8,160}$').hasMatch(value);

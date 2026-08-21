@@ -1,0 +1,24 @@
+[
+  {
+    "id": "animeav1",
+    "name": "AnimeAV1",
+    "description": "Online streaming provider with hard subs and dubs in Spanish.",
+    "author": "jabifx",
+    "manifestURI": "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/AnimeAV1/manifest.json",
+    "type": "onlinestream-provider",
+    "language": "typescript",
+    "lang": "es"
+  },
+  {
+    "id": "animeheaven",
+    "name": "AnimeHeaven",
+    "description": "AnimeHeaven is an online streaming provider for subbed anime in english",
+    "manifestURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/animeheaven/manifest.json",
+    "version": "1.1.1",
+    "author": "Pal",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en",
+    "payloadURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/animeheaven/provider.js"
+  }
+]

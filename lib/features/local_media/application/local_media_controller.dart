@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
@@ -301,6 +302,12 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
     );
   }
 
+  Future<List<JellyfinMediaItem>> search(String query) async {
+    final connection = state.connection;
+    if (connection == null) return const [];
+    return _client.search(connection, query);
+  }
+
   Uri streamUri(JellyfinMediaItem item) {
     final connection = state.connection;
     if (connection == null) {
@@ -317,6 +324,85 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
   Map<String, String> playbackHeaders() {
     final connection = state.connection;
     return connection == null ? const {} : _client.playbackHeaders(connection);
+  }
+
+  Future<Uint8List> imageBytes(Uri uri) {
+    final connection = state.connection;
+    if (connection == null) {
+      throw const JellyfinException('Connect Jellyfin before loading artwork.');
+    }
+    return _client.imageBytes(connection, uri);
+  }
+
+  Duration serverResumePosition(JellyfinMediaItem item) => item.resumePosition;
+
+  String createPlaybackSessionId() {
+    final random = Random.secure();
+    return List<int>.generate(
+      24,
+      (_) => random.nextInt(256),
+    ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  Future<void> reportPlaybackStarted(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+  }) async {
+    final connection = state.connection;
+    if (connection == null) return;
+    try {
+      await _client.reportPlaybackStarted(
+        connection,
+        item,
+        playSessionId: playSessionId,
+        position: position,
+      );
+    } catch (_) {
+      // Server progress is best effort and must never block local playback.
+    }
+  }
+
+  Future<void> reportPlaybackStopped(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+  }) async {
+    final connection = state.connection;
+    if (connection == null) return;
+    try {
+      await _client.reportPlaybackStopped(
+        connection,
+        item,
+        playSessionId: playSessionId,
+        position: position,
+      );
+    } catch (_) {
+      // A temporarily offline server cannot turn a successful play into an
+      // app error. The encrypted local checkpoint remains available.
+    }
+  }
+
+  Future<void> reportPlaybackProgress(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required Duration position,
+    bool paused = false,
+  }) async {
+    final connection = state.connection;
+    if (connection == null) return;
+    try {
+      await _client.reportPlaybackProgress(
+        connection,
+        item,
+        playSessionId: playSessionId,
+        position: position,
+        paused: paused,
+      );
+    } catch (_) {
+      // Progress reporting is deliberately best effort. Playback stays usable
+      // when a home server sleeps or the network changes mid-stream.
+    }
   }
 
   Future<Duration> resumePosition(Uri uri) async {

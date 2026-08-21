@@ -43,6 +43,8 @@ class JellyfinMediaItem {
     this.mediaSourceId,
     this.container,
     this.overview,
+    this.playbackPositionTicks,
+    this.played = false,
   });
 
   final String id;
@@ -56,6 +58,16 @@ class JellyfinMediaItem {
   final String? mediaSourceId;
   final String? container;
   final String? overview;
+  final int? playbackPositionTicks;
+  final bool played;
+
+  Duration get resumePosition => Duration(
+    microseconds: ((playbackPositionTicks ?? 0).clamp(0, 1 << 53) / 10).round(),
+  );
+
+  Duration? get duration => runTimeTicks == null
+      ? null
+      : Duration(microseconds: (runTimeTicks!.clamp(0, 1 << 53) / 10).round());
 
   bool get isPlayable => const {'Movie', 'Episode', 'Video'}.contains(type);
   bool get isFolder => !isPlayable;

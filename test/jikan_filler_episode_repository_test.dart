@@ -402,11 +402,13 @@ void main() {
   test('concurrent identical lookups share one request', () async {
     final requests = <RequestOptions>[];
     final gate = Completer<void>();
+    final requestStarted = Completer<void>();
     final dio = Dio(BaseOptions(baseUrl: 'https://api.jikan.test/v4/'));
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (request, handler) async {
           requests.add(request);
+          if (!requestStarted.isCompleted) requestStarted.complete();
           await gate.future;
           handler.resolve(
             Response<ResponseBody>(
@@ -437,7 +439,7 @@ void main() {
 
     final first = repository.lookup(identity);
     final second = repository.lookup(identity);
-    await Future<void>.delayed(const Duration(milliseconds: 1));
+    await requestStarted.future.timeout(const Duration(seconds: 1));
     expect(requests, hasLength(1));
     gate.complete();
     final results = await Future.wait([first, second]);

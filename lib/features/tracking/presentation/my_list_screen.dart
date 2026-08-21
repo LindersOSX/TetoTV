@@ -34,6 +34,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
   final _statusRepeatGate = TvDirectionalRepeatGate(
     repeatInterval: const Duration(milliseconds: 92),
   );
+  final _libraryFocusNode = FocusNode(debugLabel: 'my-list.your-media');
   final _trackedShelfKey = GlobalKey<_TrackedShelfState>();
   bool _updating = false;
   bool _refreshing = false;
@@ -44,6 +45,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     for (final node in _statusFocusNodes.values) {
       node.dispose();
     }
+    _libraryFocusNode.dispose();
     super.dispose();
   }
 
@@ -79,9 +81,32 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
       return KeyEventResult.handled;
     }
     if (next >= TrackingListStatus.values.length) {
+      _libraryFocusNode.requestFocus();
       return KeyEventResult.handled;
     }
     _statusFocusNodes[TrackingListStatus.values[next]]!.requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  KeyEventResult _handleLibraryKey(KeyEvent event) {
+    final key = event.logicalKey;
+    final directional =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _statusRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (!_statusRepeatGate.accept(event)) return KeyEventResult.handled;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _statusFocusNodes[TrackingListStatus.values.last]!.requestFocus();
+    } else {
+      _trackedShelfKey.currentState?.requestFocus();
+    }
     return KeyEventResult.handled;
   }
 
@@ -284,9 +309,21 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: tabs,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: tabs,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _YourMediaButton(
+                          focusNode: _libraryFocusNode,
+                          onKeyEvent: (_, event) => _handleLibraryKey(event),
+                          onPressed: () => context.push('/library'),
+                        ),
+                      ],
                     ),
                   ],
                 );
@@ -303,6 +340,12 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                   const SizedBox(width: 22),
                   tabs,
                   const Spacer(),
+                  _YourMediaButton(
+                    focusNode: _libraryFocusNode,
+                    onKeyEvent: (_, event) => _handleLibraryKey(event),
+                    onPressed: () => context.push('/library'),
+                  ),
+                  const SizedBox(width: 8),
                   _RefreshButton(refreshing: _refreshing, onPressed: _refresh),
                   const SizedBox(width: 8),
                   _SortButton(sort: sort, onPressed: () => _chooseSort(sort)),
@@ -512,6 +555,53 @@ class _SortButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _YourMediaButton extends StatelessWidget {
+  const _YourMediaButton({
+    required this.focusNode,
+    required this.onKeyEvent,
+    required this.onPressed,
+  });
+
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    key: const Key('my-list-your-media'),
+    focusNode: focusNode,
+    onKeyEvent: onKeyEvent,
+    onPressed: onPressed,
+    focusScale: 1.03,
+    borderRadius: BorderRadius.circular(8),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+      decoration: BoxDecoration(
+        color: context.appPalette.accent.withValues(alpha: .2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: context.appPalette.accentBright.withValues(alpha: .55),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.video_library_rounded,
+            size: 18,
+            color: context.appPalette.accentBright,
+          ),
+          const SizedBox(width: 7),
+          const Text(
+            'Your media',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _RefreshButton extends StatelessWidget {

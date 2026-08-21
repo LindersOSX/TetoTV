@@ -522,6 +522,79 @@ void main() {
       );
       expect(_connection().toString(), isNot(contains(_token)));
     });
+
+    test('searches nested Plex hubs and deduplicates server results', () async {
+      RequestOptions? captured;
+      final client = PlexClient(
+        _stubDio((request) {
+          captured = request;
+          return _xml(request, '''
+<MediaContainer size="3">
+  <Hub type="movie">
+    <Video ratingKey="200" key="/library/metadata/200" type="movie"
+        title="Search Movie" viewOffset="30000">
+      <Media container="mkv">
+        <Part key="/library/parts/200/file.mkv" />
+      </Media>
+    </Video>
+  </Hub>
+  <Hub type="movie">
+    <Video ratingKey="200" key="/library/metadata/200" type="movie"
+        title="Search Movie Duplicate" />
+  </Hub>
+  <Hub type="show">
+    <Directory ratingKey="300" key="/library/metadata/300/children"
+        type="show" title="Search Show" />
+  </Hub>
+</MediaContainer>
+''');
+        }),
+      );
+
+      final results = await client.search(_connection(), ' Search ');
+
+      expect(results.map((item) => item.title), [
+        'Search Movie',
+        'Search Show',
+      ]);
+      expect(results.first.isPlayable, isTrue);
+      expect(results.last.isFolder, isTrue);
+      expect(captured?.uri.path, '/plex/hubs/search');
+      expect(captured?.uri.queryParameters['query'], 'Search');
+      expect(captured?.headers['X-Plex-Token'], _token);
+      expect(captured?.uri.toString(), isNot(contains(_token)));
+    });
+
+    test('reports timeline state with token only in request headers', () async {
+      RequestOptions? captured;
+      final client = PlexClient(
+        _stubDio((request) {
+          captured = request;
+          return _raw(requestOptions: request, statusCode: 200, body: '');
+        }),
+      );
+      const item = PlexMediaItem(
+        ratingKey: 'episode-123',
+        key: '/library/metadata/episode-123',
+        title: 'Episode',
+        type: PlexMediaType.episode,
+        durationMilliseconds: 1_440_000,
+      );
+
+      await client.reportTimeline(
+        _connection(),
+        item,
+        position: const Duration(seconds: 75),
+        playing: false,
+      );
+
+      expect(captured?.uri.path, '/plex/:/timeline');
+      expect(captured?.uri.queryParameters['ratingKey'], 'episode-123');
+      expect(captured?.uri.queryParameters['time'], '75000');
+      expect(captured?.uri.queryParameters['state'], 'stopped');
+      expect(captured?.headers['X-Plex-Token'], _token);
+      expect(captured?.uri.toString(), isNot(contains(_token)));
+    });
   });
 }
 

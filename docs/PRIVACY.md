@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 20, 2026
+Effective date: August 21, 2026
 
 The stable public copy is available without an account or authentication at
 <https://tetotv-bot.wisp.uno/privacy>.
@@ -144,6 +144,28 @@ phone-assisted source entry:
 
 Pairing records are held in process memory, not a user-profile database. A
 broker restart can end an active pairing session.
+
+## Watch Together
+
+Watch Together is optional. Creating or joining a room sends the Wispbyte
+TetoTV service an eight-character room code, a high-entropy room capability,
+public catalog identity such as AniList title ID and episode number, an
+optional opaque release-timeline fingerprint, playback position and
+play/pause state, readiness counts, and request timing. It does not send a
+stream URL, HTTP header, Plex or Jellyfin address/token, debrid credential,
+magnet link, local filename/path, or video/audio bytes.
+
+Room state and hashed capabilities are held only in the bot process, are
+bounded, and expire automatically within six hours or sooner after inactivity.
+The service uses ordinary connection metadata for rate limiting and abuse
+prevention. There is no room history or TetoTV user profile database.
+
+The public <https://tetotv-bot.wisp.uno/watch> page can join a room and play a
+video selected through the browser's local file picker. The selected file is
+represented by a browser-local `blob:` URL and is never uploaded to TetoTV.
+Every participant must independently choose a lawful source or local copy.
+Because different releases can have different cuts, the app can display a
+timeline warning and use coarse synchronization when fingerprints differ.
 
 ## Diagnostics and sharing
 

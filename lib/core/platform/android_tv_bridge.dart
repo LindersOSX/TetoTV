@@ -168,6 +168,7 @@ class MediaAction {
 class NativePlaybackProgress {
   const NativePlaybackProgress({
     required this.checkpointKey,
+    this.playbackSessionGeneration = 0,
     required this.position,
     required this.duration,
     required this.isPlaying,
@@ -176,6 +177,7 @@ class NativePlaybackProgress {
   });
 
   final String checkpointKey;
+  final int playbackSessionGeneration;
   final Duration position;
   final Duration duration;
   final bool isPlaying;
@@ -185,6 +187,8 @@ class NativePlaybackProgress {
   factory NativePlaybackProgress.fromMap(Map<Object?, Object?> value) =>
       NativePlaybackProgress(
         checkpointKey: value['checkpointKey'] as String? ?? '',
+        playbackSessionGeneration:
+            (value['playbackSessionGeneration'] as num?)?.toInt() ?? 0,
         position: Duration(
           milliseconds: (value['positionMs'] as num?)?.round() ?? 0,
         ),
@@ -806,6 +810,11 @@ class AndroidTvBridge {
     Map<String, String> headers = const {},
     bool trustedLocalSource = false,
     bool trustedPlaybackProxy = false,
+    bool libraryPlayback = false,
+    bool allowEngineSwitch = true,
+    String? failoverNotice,
+    int playbackSessionGeneration = 0,
+    String? watchPartyStatus,
     Map<String, Object> theme = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -823,6 +832,8 @@ class AndroidTvBridge {
           'source': source.toString(),
           'title': title,
           'checkpointKey': checkpointKey,
+          if (playbackSessionGeneration > 0)
+            'playbackSessionGeneration': playbackSessionGeneration,
           'releaseName': releaseName,
           'streamLabel': streamLabel,
           'resumeMs': resumePosition.inMilliseconds,
@@ -860,6 +871,12 @@ class AndroidTvBridge {
           if (headers.isNotEmpty) 'headers': headers,
           if (trustedLocalSource) 'trustedLocalSource': true,
           if (trustedPlaybackProxy) 'trustedPlaybackProxy': true,
+          if (libraryPlayback) 'libraryPlayback': true,
+          if (!allowEngineSwitch) 'allowEngineSwitch': false,
+          if (failoverNotice != null && failoverNotice.isNotEmpty)
+            'failoverNotice': failoverNotice,
+          if (watchPartyStatus != null && watchPartyStatus.isNotEmpty)
+            'watchPartyStatus': watchPartyStatus,
           for (final key in const [
             'themeBackgroundColor',
             'themeSurfaceColor',
@@ -881,6 +898,42 @@ class AndroidTvBridge {
           : NativePlaybackResult.fromMap(value);
     } on PlatformException catch (error) {
       return NativePlaybackResult.platformError(error);
+    }
+  }
+
+  /// Sends a party-sync command only to the exact active Media3 session.
+  ///
+  /// The native side repeats both guards before touching ExoPlayer, so a late
+  /// command cannot control a replacement engine or a newly opened episode.
+  Future<bool> controlNativePlayer({
+    required String checkpointKey,
+    required int playbackSessionGeneration,
+    required String action,
+    Duration? position,
+  }) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        checkpointKey.trim().isEmpty ||
+        playbackSessionGeneration <= 0 ||
+        !const {'play', 'pause', 'seek'}.contains(action)) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('controlNativePlayer', {
+            'checkpointKey': checkpointKey,
+            'playbackSessionGeneration': playbackSessionGeneration,
+            'action': action,
+            if (action == 'seek')
+              'positionMs': (position ?? Duration.zero).inMilliseconds.clamp(
+                0,
+                86_400_000,
+              ),
+          }) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
     }
   }
 

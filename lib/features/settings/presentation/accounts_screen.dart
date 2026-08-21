@@ -90,6 +90,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _localMediaFocus = FocusNode(
     debugLabel: 'accounts.streaming.local-media',
   );
+  final _watchTogetherFocus = FocusNode(
+    debugLabel: 'accounts.streaming.watch-together',
+  );
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
   );
@@ -193,6 +196,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _autoPickQualityFocus.dispose();
     _autoPickAudioFocus.dispose();
     _localMediaFocus.dispose();
+    _watchTogetherFocus.dispose();
     _customizationFocus.dispose();
     _setupFocus.dispose();
     _calibrationFocus.dispose();
@@ -311,6 +315,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _autoPickQualityFocus,
       _autoPickAudioFocus,
       _localMediaFocus,
+      _watchTogetherFocus,
       _trackingProviderFocus,
       selectedTrackingAction,
       _trackingThresholdFocus,
@@ -431,9 +436,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) {
         target = preferences.autoPickSourceEnabled
             ? _autoPickSourceFocus
-            : (ref.read(appUpdateControllerProvider).developerMode
-                  ? _localMediaFocus
-                  : _autoPickEnabledFocus);
+            : _localMediaFocus;
       }
     } else if (current == _autoPickSourceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _autoPickEnabledFocus;
@@ -444,9 +447,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _autoPickAudioFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _autoPickQualityFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = ref.read(appUpdateControllerProvider).developerMode
-            ? _localMediaFocus
-            : _autoPickAudioFocus;
+        target = _localMediaFocus;
       }
     } else if (current == _localMediaFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -454,9 +455,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? _autoPickAudioFocus
             : _autoPickEnabledFocus;
       }
+      if (key == LogicalKeyboardKey.arrowDown) target = _watchTogetherFocus;
+    } else if (current == _watchTogetherFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _localMediaFocus;
       // Streaming is the end of this tab. Keep focus here instead of pointing
       // at a control which is not mounted while this tab is active.
-      if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _watchTogetherFocus;
     } else if (current == _trackingProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.tracking];
@@ -1000,46 +1004,80 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           .read(settingsPreferencesProvider.notifier)
                           .setAutoPickAudio,
                     ),
-                    if (appUpdate.developerMode) ...[
-                      const SizedBox(height: 8),
-                      _Panel(
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Local media, Jellyfin & Plex',
-                                    style: TextStyle(
-                                      color: context.appPalette.primaryText,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w800,
-                                    ),
+                    const SizedBox(height: 8),
+                    _Panel(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Local media, Jellyfin & Plex',
+                                  style: TextStyle(
+                                    color: context.appPalette.primaryText,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
                                   ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    'Play from USB/internal storage, Jellyfin, or Plex.',
-                                    style: TextStyle(
-                                      color: context.appPalette.mutedText,
-                                      fontSize: 11,
-                                    ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  'Search and play device files and your connected media libraries.',
+                                  style: TextStyle(
+                                    color: context.appPalette.mutedText,
+                                    fontSize: 11,
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 12),
-                            _TvTextButton(
-                              label: 'Open media',
-                              icon: Icons.video_library_rounded,
-                              focusNode: _localMediaFocus,
-                              onPressed: () =>
-                                  context.push('/settings/local-media'),
-                            ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(width: 12),
+                          _TvTextButton(
+                            label: 'Open media',
+                            icon: Icons.video_library_rounded,
+                            focusNode: _localMediaFocus,
+                            onPressed: () => context.push('/library'),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
+                    const SizedBox(height: 8),
+                    _Panel(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Watch Together',
+                                  style: TextStyle(
+                                    color: context.appPalette.primaryText,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  'Create or join a synchronized room from TetoTV.',
+                                  style: TextStyle(
+                                    color: context.appPalette.mutedText,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          _TvTextButton(
+                            label: 'Open rooms',
+                            icon: Icons.groups_rounded,
+                            focusNode: _watchTogetherFocus,
+                            onPressed: () => context.push('/watch-together'),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 14),
                     const _DebridOnlyPanel(),
                     const SizedBox(height: 10),

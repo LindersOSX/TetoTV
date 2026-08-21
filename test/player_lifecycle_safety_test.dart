@@ -724,8 +724,9 @@ void main() {
     expect(source, contains('KeyEvent.KEYCODE_L -> seekRelative('));
     expect(
       RegExp(r'seekOrUseMpv\(target\)').allMatches(source),
-      hasLength(2),
-      reason: 'transport and intro/outro skip must share the same fallback',
+      hasLength(3),
+      reason:
+          'transport, party sync, and intro/outro skip must share the same fallback',
     );
     expect(source, contains('handoffPositionOverrideMs = targetMs'));
     expect(source, contains('finishWithResult(STATUS_USE_MPV)'));

@@ -42,6 +42,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.player.Media3PlayerActivity
 import dev.animetv.anime_tv.player.NativePlayerProgressBridge
+import dev.animetv.anime_tv.player.NativePlayerCommandBridge
 import dev.animetv.anime_tv.security.AppDeepLinkPolicy
 import java.io.File
 import java.security.MessageDigest
@@ -165,6 +166,19 @@ class MainActivity : FlutterActivity() {
                     "startNativePlayer" -> {
                         @Suppress("UNCHECKED_CAST")
                         startNativePlayer(call.arguments as? Map<String, Any?> ?: emptyMap(), result)
+                    }
+                    "controlNativePlayer" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val data = call.arguments as? Map<String, Any?> ?: emptyMap()
+                        result.success(
+                            NativePlayerCommandBridge.dispatch(
+                                checkpointKey = data["checkpointKey"] as? String ?: "",
+                                generation = (data["playbackSessionGeneration"] as? Number)
+                                    ?.toInt() ?: 0,
+                                action = data["action"] as? String ?: "",
+                                positionMs = (data["positionMs"] as? Number)?.toLong(),
+                            ),
+                        )
                     }
                     "setPreferredFrameRate" -> {
                         val fps = call.argument<Double>("fps") ?: 0.0
@@ -358,6 +372,10 @@ class MainActivity : FlutterActivity() {
             putExtra(Media3PlayerActivity.EXTRA_ARTWORK_URL, data["artworkUrl"] as? String)
             putExtra(Media3PlayerActivity.EXTRA_STREAM_LABEL, data["streamLabel"] as? String)
             putExtra(
+                Media3PlayerActivity.EXTRA_FAILOVER_NOTICE,
+                (data["failoverNotice"] as? String)?.take(180),
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_SUBTITLE_URL,
                 data["subtitleUrl"] as? String ?: data["externalSubtitle"] as? String,
             )
@@ -474,10 +492,26 @@ class MainActivity : FlutterActivity() {
                 data["trustedPlaybackProxy"] as? Boolean ?: false,
             )
             putExtra(
+                Media3PlayerActivity.EXTRA_LIBRARY_PLAYBACK,
+                data["libraryPlayback"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_ALLOW_ENGINE_SWITCH,
+                data["allowEngineSwitch"] as? Boolean ?: true,
+            )
+            putExtra(
                 Media3PlayerActivity.EXTRA_START_FROM_BEGINNING,
                 data["startFromBeginning"] as? Boolean ?: false,
             )
             putExtra(Media3PlayerActivity.EXTRA_CHECKPOINT_KEY, data["checkpointKey"] as? String)
+            putExtra(
+                Media3PlayerActivity.EXTRA_PLAYBACK_SESSION_GENERATION,
+                (data["playbackSessionGeneration"] as? Number)?.toInt() ?: 0,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_WATCH_PARTY_STATUS,
+                (data["watchPartyStatus"] as? String)?.take(96),
+            )
         }
         pendingNativePlayerResult = result
         try {
