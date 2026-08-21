@@ -2,6 +2,7 @@ import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/airing_calendar_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -9,10 +10,51 @@ import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('Classic Calendar restores navigation and noninitial Back', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _ClassicSettingsController(),
+          ),
+          airingWeekProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: AiringCalendarScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('main-navigation')), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'calendar.refresh');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'calendar.back');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'calendar.refresh');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Calendar system Back returns Home without a header arrow', (
     tester,
   ) async {
@@ -158,4 +200,16 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+}
+
+class _ClassicSettingsController extends SettingsPreferencesController {
+  _ClassicSettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(
+      interfaceMode: InterfaceMode.phone,
+      loaded: true,
+    );
+  }
+
+  @override
+  Future<void> load() async {}
 }

@@ -24,6 +24,7 @@ import 'package:anime_tv/features/streaming/application/debrid_token_service.dar
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
@@ -927,14 +928,14 @@ class _NativeMedia3PlayerScreenState
         _diagnostic = null;
       });
 
-      Future<bool> tryDirectCandidates() async {
+      Future<bool> tryDirectCandidates(
+        Iterable<PlaybackStreamOption> candidates,
+      ) async {
         if (_currentStream.isWebStream) {
           _failedDirectStreamUris.add(_currentStream.uri.toString());
         }
-        await _waitForInFlightDirectDiscovery();
-        if (!mounted || !_streamFailoverInProgress) return false;
         final opened = await openFirstViablePlayerCandidate(
-          candidates: _remainingDirectFailoverCandidates(),
+          candidates: candidates,
           resumePosition: _resumePosition,
           maxCandidates: _maxFailoverCandidatesPerRequest,
           isActive: () => mounted && _streamFailoverInProgress,
@@ -974,8 +975,10 @@ class _NativeMedia3PlayerScreenState
         return opened != null;
       }
 
-      Future<bool> tryDebridCandidates() async {
-        for (final candidate in _remainingReleaseFailoverCandidates().take(
+      Future<bool> tryDebridCandidates(
+        Iterable<ReleaseCandidate> candidates,
+      ) async {
+        for (final candidate in candidates.take(
           _maxFailoverCandidatesPerRequest,
         )) {
           _attemptedReleaseAlternatives.add(candidate);
@@ -1013,13 +1016,65 @@ class _NativeMedia3PlayerScreenState
       final classOrder = playerFailoverClassOrder(
         currentIsWeb: _currentStream.isWebStream,
       );
-      final directFirst = classOrder.first == PlayerFailoverClass.directWeb;
-      if (directFirst && await tryDirectCandidates()) return true;
+      final currentQualityHeight = releaseQualityHeight(_release);
+      await _waitForInFlightDirectDiscovery();
       if (!mounted || !_streamFailoverInProgress) return false;
-      if (await tryDebridCandidates()) return true;
-      if (!mounted || !_streamFailoverInProgress) return false;
-      if (!directFirst && await tryDirectCandidates()) return true;
-      if (!mounted || !_streamFailoverInProgress) return false;
+      final allDirectCandidates = _remainingDirectFailoverCandidates();
+      final allReleaseCandidates = _remainingReleaseFailoverCandidates();
+      final audioRankTiers = playerFailoverAudioRankTiers([
+        for (final option in allDirectCandidates)
+          releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+        for (final candidate in allReleaseCandidates)
+          releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      ]);
+      for (final audioRank in audioRankTiers) {
+        for (final sameQuality in playerFailoverSameQualityTiers(
+          currentQualityHeight: currentQualityHeight,
+        )) {
+          final directCandidates = allDirectCandidates.where(
+            (option) =>
+                releaseAudioPreferenceRank(
+                      option.release,
+                      _effectiveAudioPreference,
+                    ) ==
+                    audioRank &&
+                playerFailoverCandidateIsInQualityTier(
+                  candidateQualityHeight: releaseQualityHeight(option.release),
+                  currentQualityHeight: currentQualityHeight,
+                  sameQuality: sameQuality,
+                ),
+          );
+          final releaseCandidates = allReleaseCandidates.where(
+            (candidate) =>
+                releaseAudioPreferenceRank(
+                      candidate,
+                      _effectiveAudioPreference,
+                    ) ==
+                    audioRank &&
+                playerFailoverCandidateIsInQualityTier(
+                  candidateQualityHeight: releaseQualityHeight(candidate),
+                  currentQualityHeight: currentQualityHeight,
+                  sameQuality: sameQuality,
+                ),
+          );
+          for (final streamClass in classOrder) {
+            final opened = switch (streamClass) {
+              PlayerFailoverClass.directWeb => await tryDirectCandidates(
+                directCandidates,
+              ),
+              PlayerFailoverClass.debrid =>
+                playerFailoverClassIsAvailable(
+                      streamClass,
+                      debridAvailable: terminalFailure == null,
+                    )
+                    ? await tryDebridCandidates(releaseCandidates)
+                    : false,
+            };
+            if (opened) return true;
+            if (!mounted || !_streamFailoverInProgress) return false;
+          }
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -1055,6 +1110,10 @@ class _NativeMedia3PlayerScreenState
       candidates: candidates,
       audioRank: (option) =>
           releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+      qualityRank: (option) => automaticQualityAffinityRank(
+        releaseQualityHeight(option.release),
+        releaseQualityHeight(_release),
+      ),
       affinityRank: affinityRank,
     );
   }
@@ -1069,6 +1128,10 @@ class _NativeMedia3PlayerScreenState
       candidates: candidates,
       audioRank: (candidate) =>
           releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      qualityRank: (candidate) => automaticQualityAffinityRank(
+        releaseQualityHeight(candidate),
+        releaseQualityHeight(_release),
+      ),
       affinityRank: _releaseFailoverAffinity,
     );
   }
@@ -1353,6 +1416,7 @@ class _NativeMedia3PlayerScreenState
       final preferredSourceId = _release.sourceId.trim();
       final preferredAuthor = releaseGroupKey(_release.releaseName);
       final preferredWebProviderId = _currentStream.providerId?.trim();
+      final preferredQualityHeight = releaseQualityHeight(_release);
       context.pushReplacement(
         Uri(
           path: '/resolve',
@@ -1371,6 +1435,8 @@ class _NativeMedia3PlayerScreenState
             if (preferredWebProviderId != null &&
                 preferredWebProviderId.isNotEmpty)
               'preferredWebProviderId': preferredWebProviderId,
+            if (preferredQualityHeight > 0)
+              'preferredQualityHeight': preferredQualityHeight.toString(),
             if (details.seasonYear != null)
               'year': details.seasonYear.toString(),
             if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,

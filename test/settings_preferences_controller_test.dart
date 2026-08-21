@@ -39,6 +39,10 @@ void main() {
     await controller.setDebridStreamSort(DebridStreamSort.largestSize);
     await controller.setStreamSourcePriority(StreamSourcePriority.webFirst);
     await controller.setWebStreamQuality(WebStreamQualityPreference.p720);
+    await controller.setAutoPickSourceEnabled(true);
+    await controller.setAutoPickSourceType(AutoPickSourceType.webOnly);
+    await controller.setAutoPickQuality(AutoPickQuality.p480);
+    await controller.setAutoPickAudio(AutoPickAudio.subOnly);
     await controller.setDefaultLandingPage(LandingPage.myList);
     await controller.setAnonymousCrashReportingEnabled(true);
     await controller.setNavigationChromeSize(NavigationChromeSize.large);
@@ -81,6 +85,10 @@ void main() {
     expect(restored.state.debridStreamSort, DebridStreamSort.largestSize);
     expect(restored.state.streamSourcePriority, StreamSourcePriority.webFirst);
     expect(restored.state.webStreamQuality, WebStreamQualityPreference.p720);
+    expect(restored.state.autoPickSourceEnabled, isTrue);
+    expect(restored.state.autoPickSourceType, AutoPickSourceType.webOnly);
+    expect(restored.state.autoPickQuality, AutoPickQuality.p480);
+    expect(restored.state.autoPickAudio, AutoPickAudio.subOnly);
     expect(restored.state.defaultLandingPage, LandingPage.myList);
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
     expect(restored.state.navigationChromeSize, NavigationChromeSize.large);
@@ -147,6 +155,10 @@ void main() {
         controller.state.webStreamQuality,
         WebStreamQualityPreference.bestAvailable,
       );
+      expect(controller.state.autoPickSourceEnabled, isFalse);
+      expect(controller.state.autoPickSourceType, AutoPickSourceType.any);
+      expect(controller.state.autoPickQuality, AutoPickQuality.any);
+      expect(controller.state.autoPickAudio, AutoPickAudio.any);
       expect(controller.state.loaded, isTrue);
       expect(
         controller.state.trackerUpdateThreshold,
@@ -176,6 +188,24 @@ void main() {
     await controller.load();
 
     expect(controller.state.topNavigationOrder, customOrder);
+  });
+
+  test('invalid Auto Pick values migrate safely without enabling it', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'streaming_auto_pick_source_type': 'legacySource',
+      'streaming_auto_pick_quality': '8kMaybe',
+      'streaming_auto_pick_audio': 'bothSometimes',
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(controller.state.autoPickSourceEnabled, isFalse);
+    expect(controller.state.autoPickSourceType, AutoPickSourceType.any);
+    expect(controller.state.autoPickQuality, AutoPickQuality.any);
+    expect(controller.state.autoPickAudio, AutoPickAudio.any);
   });
 
   test(
@@ -464,7 +494,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 41, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 45, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

@@ -32,8 +32,12 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
   static const _cardWidth = 292.0;
   static const _cardSpacing = 12.0;
 
+  final _backFocus = FocusNode(debugLabel: 'calendar.back');
   final _refreshFocus = FocusNode(debugLabel: 'calendar.refresh');
   final _verticalGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
+  final _headerGate = TvDirectionalRepeatGate(
     repeatInterval: const Duration(milliseconds: 92),
   );
   final _dayShelves = <DateTime, TvShelfFocusController>{};
@@ -51,7 +55,9 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
 
   @override
   void dispose() {
+    _backFocus.dispose();
     _refreshFocus.dispose();
+    _headerGate.reset();
     _verticalGate.reset();
     for (final shelf in _dayShelves.values) {
       shelf.dispose();
@@ -69,7 +75,14 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
     final shelf = _shelfFor(group.key, group.value.length);
     if (shelf.itemCount == 0) return;
     final index = requestedIndex.clamp(0, shelf.itemCount - 1);
-    if (!shelf.requestFocus(preferredIndex: index)) return;
+    if (!shelf.requestFocus(
+      preferredIndex: index,
+      revealIndex: index ~/ 2,
+      itemExtent: _cardWidth,
+      spacing: _cardSpacing,
+    )) {
+      return;
+    }
     final target = shelf.focusNodeAt(index).context;
     if (target != null) {
       unawaited(
@@ -95,17 +108,34 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
         key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.arrowDown;
     if (!directional) return KeyEventResult.ignored;
-    if (event is KeyUpEvent) return KeyEventResult.handled;
+    if (event is KeyUpEvent) {
+      _headerGate.accept(event);
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.handled;
     }
+    if (!_headerGate.accept(event)) return KeyEventResult.handled;
+    if (key == LogicalKeyboardKey.arrowRight && current == _backFocus) {
+      _refreshFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.arrowLeft && current == _refreshFocus) {
-      if (!layout.usesTvRail) return KeyEventResult.ignored;
-      layout.focusRail();
+      if (layout.usesTvRail) {
+        layout.focusRail();
+      } else if (_backFocus.context != null) {
+        _backFocus.requestFocus();
+      } else {
+        return KeyEventResult.ignored;
+      }
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowDown && groups.isNotEmpty) {
-      _focusEntry(groups, 0, 0);
+      _focusEntry(
+        groups,
+        0,
+        current == _refreshFocus && _backFocus.context != null ? 1 : 0,
+      );
       return KeyEventResult.handled;
     }
     return KeyEventResult.handled;
@@ -125,11 +155,17 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
       return shelf.handleHorizontalKey(
         event,
         currentIndex: focusIndex,
-        itemExtent: _cardWidth / 2,
-        // Each visual card contributes two focus stops. Half the inter-card
-        // gap keeps every pair aligned to the real card pitch.
-        spacing: _cardSpacing / 2,
-        onLeftEdge: layout.usesTvRail ? layout.focusRail : null,
+        itemExtent: _cardWidth,
+        spacing: _cardSpacing,
+        // Each visual card contributes a main and reminder focus stop. Reveal
+        // the complete card for either one so its focused surface never stays
+        // clipped at the shelf edge.
+        revealIndexForFocusIndex: (index) => index ~/ 2,
+        onLeftEdge: layout.usesTvRail
+            ? layout.focusRail
+            : _backFocus.context != null
+            ? _backFocus.requestFocus
+            : null,
       );
     }
     final direction = switch (event.logicalKey) {
@@ -148,7 +184,11 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
     if (!_verticalGate.accept(event)) return KeyEventResult.handled;
     final nextRow = row + direction;
     if (nextRow < 0) {
-      _refreshFocus.requestFocus();
+      if (layout.usesTvRail || _backFocus.context == null) {
+        _refreshFocus.requestFocus();
+      } else {
+        (focusIndex.isEven ? _backFocus : _refreshFocus).requestFocus();
+      }
       return KeyEventResult.handled;
     }
     if (nextRow >= groups.length) return KeyEventResult.handled;
@@ -197,6 +237,25 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
+              if (preferences.interfaceMode == InterfaceMode.phone) ...[
+                TvFocusable(
+                  focusNode: _backFocus,
+                  onKeyEvent: (_, event) => _handleHeaderKey(
+                    event,
+                    current: _backFocus,
+                    layout: layout,
+                    groups: groups,
+                  ),
+                  onPressed: () => _returnToPreviousOrHome(context),
+                  borderRadius: BorderRadius.circular(9),
+                  focusScale: 1.02,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    child: Icon(Icons.arrow_back_rounded),
+                  ),
+                ),
+                const SizedBox(width: 14),
+              ],
               Text(
                 'Airing calendar',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -549,6 +608,14 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
       ),
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
 }
 
 bool _isFollowed(AnimeSummary anime, List<HomeTrackedAnime> followed) {

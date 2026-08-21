@@ -234,6 +234,7 @@ void main() {
         candidates: const [sub4k, dub1080],
         audioRank: (candidate) =>
             releaseAudioPreferenceRank(candidate, PlaybackAudioPreference.dub),
+        qualityRank: (_) => 0,
         affinityRank: (candidate) =>
             candidate.provider == 'same-provider' ? 0 : 1,
       );
@@ -271,6 +272,7 @@ void main() {
           option.release,
           PlaybackAudioPreference.dub,
         ),
+        qualityRank: (_) => 0,
         affinityRank: (option) =>
             option.stream.providerId == 'same-provider' ? 0 : 1,
       );
@@ -291,6 +293,164 @@ void main() {
       expect(attemptedDirect, const ['dub-1080']);
     },
   );
+
+  test(
+    'active-player fallback keeps current quality first and fails open',
+    () async {
+      final candidates = [
+        (id: 'same-source-4k', height: 2160, affinity: 0),
+        (id: 'other-1080', height: 1080, affinity: 3),
+        (id: 'other-720', height: 720, affinity: 2),
+      ];
+      final ranked = rankAutomaticPlayerFailoverCandidates(
+        candidates: candidates,
+        audioRank: (_) => 0,
+        qualityRank: (candidate) => candidate.height == 1080 ? 0 : 1,
+        affinityRank: (candidate) => candidate.affinity,
+      );
+      final attempted = <String>[];
+      final opened = await openFirstViablePlayerCandidate(
+        candidates: ranked,
+        resumePosition: const Duration(minutes: 7),
+        isActive: () => true,
+        attempt: (candidate, _) async {
+          attempted.add(candidate.id);
+          return candidate.height != 1080;
+        },
+      );
+
+      expect(ranked.first.id, 'other-1080');
+      expect(ranked, hasLength(3));
+      expect(attempted, ['other-1080', 'same-source-4k']);
+      expect(opened?.id, 'same-source-4k');
+    },
+  );
+
+  test(
+    'cross-class fallback exhausts same quality before class preference',
+    () {
+      final candidates =
+          <
+            ({
+              PlayerFailoverClass streamClass,
+              String id,
+              int height,
+              int audio,
+            })
+          >[
+            (
+              streamClass: PlayerFailoverClass.debrid,
+              id: 'debrid-4k',
+              height: 2160,
+              audio: 0,
+            ),
+            (
+              streamClass: PlayerFailoverClass.directWeb,
+              id: 'web-1080',
+              height: 1080,
+              audio: 0,
+            ),
+            (
+              streamClass: PlayerFailoverClass.debrid,
+              id: 'debrid-1080',
+              height: 1080,
+              audio: 0,
+            ),
+          ];
+      final planned = <String>[];
+      for (final audioRank in playerFailoverAudioRankTiers(
+        candidates.map((candidate) => candidate.audio),
+      )) {
+        for (final sameQuality in playerFailoverSameQualityTiers(
+          currentQualityHeight: 1080,
+        )) {
+          for (final streamClass in playerFailoverClassOrder(
+            currentIsWeb: false,
+          )) {
+            planned.addAll(
+              candidates
+                  .where(
+                    (candidate) =>
+                        candidate.audio == audioRank &&
+                        candidate.streamClass == streamClass &&
+                        playerFailoverCandidateIsInQualityTier(
+                          candidateQualityHeight: candidate.height,
+                          currentQualityHeight: 1080,
+                          sameQuality: sameQuality,
+                        ),
+                  )
+                  .map((candidate) => candidate.id),
+            );
+          }
+        }
+      }
+
+      expect(planned, ['debrid-1080', 'web-1080', 'debrid-4k']);
+    },
+  );
+
+  test('cross-class audio remains authoritative ahead of quality', () {
+    final candidates = [
+      (
+        streamClass: PlayerFailoverClass.directWeb,
+        id: 'same-quality-sub',
+        height: 1080,
+        audio: 1,
+      ),
+      (
+        streamClass: PlayerFailoverClass.debrid,
+        id: 'different-quality-dub',
+        height: 2160,
+        audio: 0,
+      ),
+    ];
+    final planned = <String>[];
+    for (final audioRank in playerFailoverAudioRankTiers(
+      candidates.map((candidate) => candidate.audio),
+    )) {
+      for (final sameQuality in playerFailoverSameQualityTiers(
+        currentQualityHeight: 1080,
+      )) {
+        for (final streamClass in playerFailoverClassOrder(
+          currentIsWeb: true,
+        )) {
+          planned.addAll(
+            candidates
+                .where(
+                  (candidate) =>
+                      candidate.audio == audioRank &&
+                      candidate.streamClass == streamClass &&
+                      playerFailoverCandidateIsInQualityTier(
+                        candidateQualityHeight: candidate.height,
+                        currentQualityHeight: 1080,
+                        sameQuality: sameQuality,
+                      ),
+                )
+                .map((candidate) => candidate.id),
+          );
+        }
+      }
+    }
+
+    expect(planned, ['different-quality-dub', 'same-quality-sub']);
+  });
+
+  test('terminal Debrid failure leaves Web failover available', () {
+    expect(
+      playerFailoverClassIsAvailable(
+        PlayerFailoverClass.debrid,
+        debridAvailable: false,
+      ),
+      isFalse,
+    );
+    expect(
+      playerFailoverClassIsAvailable(
+        PlayerFailoverClass.directWeb,
+        debridAvailable: false,
+      ),
+      isTrue,
+    );
+  });
 
   test(
     'debrid failure consumes a delayed secure web result at the same timestamp',
@@ -408,11 +568,18 @@ void main() {
           'final preferredWebProviderId = ${expected.stream}.providerId?.trim()',
         ),
       );
+      expect(
+        next,
+        contains(
+          'final preferredQualityHeight = releaseQualityHeight(${expected.release})',
+        ),
+      );
       for (final name in const [
         'preferredProvider',
         'preferredSourceId',
         'preferredAuthor',
         'preferredWebProviderId',
+        'preferredQualityHeight',
       ]) {
         expect(next, contains("'$name': $name"));
       }
@@ -420,6 +587,7 @@ void main() {
       expect(next, contains('preferredSourceId.isNotEmpty'));
       expect(next, contains('preferredAuthor.isNotEmpty'));
       expect(next, contains('preferredWebProviderId.isNotEmpty'));
+      expect(next, contains('preferredQualityHeight > 0'));
     }
   });
 
@@ -428,17 +596,19 @@ void main() {
     _expectInOrder(mpv, const [
       'final position = _player.state.position',
       'await AndroidTvBridge.instance.getDeviceProfile()',
-      'await _switchToNextDirectStream(position)',
       'await _openMedia(resume: position, propagateFailure: true)',
     ]);
+    expect(mpv, contains('await _switchToNextDirectStream('));
+    expect(mpv, contains('position,'));
 
     final vlc = _method(_read(players['VLC']!), 'Future<void> _tryNextStream(');
     _expectInOrder(vlc, const [
       'final position = _effectiveHandoffPosition()',
-      'await _waitForInFlightDirectDiscovery()',
-      'await _switchToNextDirectStream(position)',
       'resumePosition: position',
+      'await _waitForInFlightDirectDiscovery()',
     ]);
+    expect(vlc, contains('await _switchToNextDirectStream('));
+    expect(vlc, contains('position,'));
     final restart = _method(
       _read(players['VLC']!),
       'Future<void> _runRestart(',
@@ -500,7 +670,7 @@ void main() {
       'if (!mounted || _engineHandoffInProgress) return',
       'await _database.recordStreamFailure(',
       'if (!mounted || _engineHandoffInProgress) return',
-      'await _switchToNextDirectStream(position)',
+      'await _switchToNextDirectStream(',
     ]);
 
     for (final name in ['MPV', 'VLC']) {
@@ -701,13 +871,14 @@ void main() {
     _expectInOrder(failover, const [
       '_diagnostic = null',
       'openFirstViablePlayerCandidate(',
-      '_remainingReleaseFailoverCandidates().take(',
+      'for (final sameQuality in playerFailoverSameQualityTiers(',
+      'for (final streamClass in classOrder)',
       "_status = 'No compatible streams remain'",
       '_diagnostic = terminalFailure?.toString() ?? reason',
     ]);
   });
 
-  test('all engines apply audio-first ordering only to automatic failover', () {
+  test('all engines apply audio then quality to automatic failover', () {
     for (final entry in players.entries) {
       final source = _read(entry.value);
       final direct = _method(
@@ -718,6 +889,9 @@ void main() {
         'rankAutomaticPlayerFailoverCandidates(',
         'audioRank:',
         'releaseAudioPreferenceRank(',
+        'qualityRank:',
+        'automaticQualityAffinityRank(',
+        'releaseQualityHeight(',
         'affinityRank:',
       ]);
 
@@ -729,6 +903,9 @@ void main() {
         'rankAutomaticPlayerFailoverCandidates(',
         'audioRank:',
         'releaseAudioPreferenceRank(',
+        'qualityRank:',
+        'automaticQualityAffinityRank(',
+        'releaseQualityHeight(',
         'affinityRank:',
       ]);
       expect(direct, contains('_effectiveAudioPreference'));
@@ -749,41 +926,35 @@ void main() {
     ]);
   });
 
-  test(
-    'stream class order prefers current class before cross-class fallback',
-    () {
-      for (final name in ['MPV', 'VLC']) {
-        final failover = _method(
-          _read(players[name]!),
-          'Future<void> _tryNextStream(',
-        );
-        _expectInOrder(failover, const [
-          'final classOrder = playerFailoverClassOrder(',
-          'currentIsWeb: _currentStream.isWebStream',
-          'final directFirst = classOrder.first == PlayerFailoverClass.directWeb',
-          'if (directFirst)',
-          'await _switchToNextDirectStream(position)',
-          '_remainingReleaseFailoverCandidates().take(12)',
-          'if (!directFirst)',
-          'await _waitForInFlightDirectDiscovery()',
-          'await _switchToNextDirectStream(position)',
-        ]);
-      }
-
-      final media3 = _method(
-        _read(players['Media3']!),
-        'Future<bool> _switchToCompatibleStream(',
+  test('all engines apply quality tiers before source-class preference', () {
+    for (final entry in players.entries) {
+      final failover = _method(
+        _read(entry.value),
+        entry.key == 'Media3'
+            ? 'Future<bool> _switchToCompatibleStream('
+            : 'Future<void> _tryNextStream(',
       );
-      _expectInOrder(media3, const [
+      _expectInOrder(failover, const [
         'final classOrder = playerFailoverClassOrder(',
         'currentIsWeb: _currentStream.isWebStream',
-        'final directFirst = classOrder.first == PlayerFailoverClass.directWeb',
-        'if (directFirst && await tryDirectCandidates()) return true',
-        'if (await tryDebridCandidates()) return true',
-        'if (!directFirst && await tryDirectCandidates()) return true',
+        'final currentQualityHeight = releaseQualityHeight(',
+        'final audioRankTiers = playerFailoverAudioRankTiers(',
+        'for (final audioRank in audioRankTiers)',
+        'for (final sameQuality in playerFailoverSameQualityTiers(',
+        'currentQualityHeight: currentQualityHeight',
+        'playerFailoverCandidateIsInQualityTier(',
+        'for (final streamClass in classOrder)',
+        'switch (streamClass)',
+        'playerFailoverClassIsAvailable(',
+        'debridAvailable: terminalFailure == null',
       ]);
-    },
-  );
+      expect(
+        failover,
+        isNot(contains('if (terminalFailure != null) break')),
+        reason: '${entry.key} must continue from terminal Debrid to Web',
+      );
+    }
+  });
 
   test('enabled web discovery also runs during debrid playback', () {
     for (final name in ['MPV', 'VLC', 'Media3']) {
@@ -801,11 +972,12 @@ void main() {
     final media3 = _read(players['Media3']!);
     final direct = _method(media3, 'Future<bool> _switchToCompatibleStream(');
     _expectInOrder(direct, const [
-      'Future<bool> tryDirectCandidates() async',
-      'await _waitForInFlightDirectDiscovery()',
+      'Future<bool> tryDirectCandidates(',
       'openFirstViablePlayerCandidate(',
       'await _preflightDirectStream(',
       '_resumePosition = resumePosition',
+      'await _waitForInFlightDirectDiscovery()',
+      'for (final audioRank in audioRankTiers)',
     ]);
   });
 

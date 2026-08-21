@@ -1,7 +1,10 @@
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/home/presentation/home_screen.dart';
@@ -328,8 +331,85 @@ void main() {
     },
   );
 
+  testWidgets('Home reveals a far remembered column before changing shelves', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final now = DateTime(2026, 8, 20);
+    final checkpoints = [
+      for (var index = 0; index < 18; index++)
+        PlaybackCheckpoint(
+          anilistMediaId: 1000 + index,
+          episode: index + 1,
+          title: 'Far shelf show $index',
+          position: const Duration(minutes: 5),
+          duration: const Duration(minutes: 24),
+          updatedAt: now.subtract(Duration(minutes: index)),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trendingAnimeProvider.overrideWith(
+            (_) async => const [
+              AnimeSummary(
+                id: 1,
+                title: 'Featured',
+                description: 'Featured description',
+                episodes: 12,
+                score: 8.4,
+              ),
+            ],
+          ),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          recentPlaybackProvider.overrideWith((_) async => checkpoints),
+          dismissedContinueWatchingProvider.overrideWith(
+            (_) async => const <int>{},
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 180));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    for (var index = 0; index < 12; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.shelf.Continue watching.item.12',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.shelf.Watch history.item.12',
+    );
+    expect(FocusManager.instance.primaryFocus?.context, isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
-    'profile stays fixed and focusing it restores the sponsored hero',
+    'Modern profile stays at the top and disappears with Home content',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({
         initialSetupCompletedStorageKey: 'true',
@@ -340,9 +420,16 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final now = DateTime(2026, 8, 20);
+      final settings = _RailSettingsController(
+        const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          loaded: true,
+        ),
+      );
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            settingsPreferencesProvider.overrideWith((_) => settings),
             trackingAccountsControllerProvider.overrideWith(
               (_) => _StaticTrackingAccountsController(
                 const TrackingAccountsState(
@@ -407,25 +494,162 @@ void main() {
       controller.jumpTo(controller.position.maxScrollExtent);
       await tester.pump();
       expect(controller.offset, greaterThan(0));
-      expect(tester.getTopLeft(profileFinder).dy, fixedProfileTop);
+      expect(profileFinder, findsNothing);
 
-      final profileDetector = tester.widget<FocusableActionDetector>(
-        find
-            .descendant(
-              of: profileFinder,
-              matching: find.byType(FocusableActionDetector),
-            )
-            .first,
-      );
-      profileDetector.focusNode!.requestFocus();
+      await settings.setInterfaceMode(InterfaceMode.phone);
+      await tester.pumpAndSettle();
+      controller.jumpTo(0);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
+      expect(profileFinder, findsNothing);
+      await settings.setInterfaceMode(InterfaceMode.television);
+      await tester.pump();
       expect(controller.offset, closeTo(0, .5));
       expect(tester.getTopLeft(profileFinder).dy, fixedProfileTop);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Classic Layout restores the horizontal Home navigation', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final settings = _RailSettingsController(
+      const SettingsPreferences(
+        interfaceMode: InterfaceMode.phone,
+        showHero: false,
+        loaded: true,
+      ),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith((_) => settings),
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                profiles: {
+                  TrackingProvider.anilist: TrackingAccountProfile(
+                    provider: TrackingProvider.anilist,
+                    username: 'Classic profile',
+                  ),
+                },
+              ),
+            ),
+          ),
+          trendingAnimeProvider.overrideWith((_) async => const []),
+          seasonalAnimeProvider.overrideWith((_) async => const []),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          recentPlaybackProvider.overrideWith((_) async => const []),
+          dismissedContinueWatchingProvider.overrideWith(
+            (_) async => const <int>{},
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
+
+    expect(find.byType(HomeSideNavigation), findsNothing);
+    expect(find.byType(MainNavigationBar), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-fixed-profile')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('main-nav-profile-summary')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Modern Home posters match the default Search thumbnail size', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const anime = AnimeSummary(
+      id: 404,
+      title: 'Shared poster geometry',
+      description: '',
+      episodes: 12,
+      score: 8,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _RailSettingsController(),
+          ),
+          trendingAnimeProvider.overrideWith((_) async => const []),
+          seasonalAnimeProvider.overrideWith((_) async => const [anime]),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          recentPlaybackProvider.overrideWith((_) async => const []),
+          dismissedContinueWatchingProvider.overrideWith(
+            (_) async => const <int>{},
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    final homeSize = tester.getSize(
+      find.byKey(const ValueKey('home-poster-card-404')),
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _RailSettingsController(),
+          ),
+          catalogClientProvider.overrideWithValue(
+            _ImmediateSearchCatalog(const [anime]),
+          ),
+        ],
+        child: const MaterialApp(
+          home: SearchScreen(initialQuery: 'shared poster'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final searchCard = find
+        .ancestor(
+          of: find.text('Shared poster geometry'),
+          matching: find.byType(TvFocusable),
+        )
+        .first;
+    final searchSize = tester.getSize(searchCard);
+
+    expect(homeSize.width, closeTo(searchSize.width, .01));
+    expect(homeSize.height, closeTo(searchSize.height, .01));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'hidden hero and Home icon focus the nearest visible rail action',
@@ -601,8 +825,13 @@ void main() {
 }
 
 class _RailSettingsController extends SettingsPreferencesController {
-  _RailSettingsController() : super(const FlutterSecureStorage()) {
-    state = const SettingsPreferences(showHero: false, loaded: true);
+  _RailSettingsController([
+    SettingsPreferences initial = const SettingsPreferences(
+      showHero: false,
+      loaded: true,
+    ),
+  ]) : super(const FlutterSecureStorage()) {
+    state = initial;
   }
 
   @override
@@ -620,6 +849,16 @@ class _StaticTrackingAccountsController extends TrackingAccountsController {
 
   @override
   Future<void> load() async {}
+}
+
+class _ImmediateSearchCatalog extends AniListCatalogClient {
+  _ImmediateSearchCatalog(this.results);
+
+  final List<AnimeSummary> results;
+
+  @override
+  Future<List<AnimeSummary>> search(String term, {int page = 1}) async =>
+      results;
 }
 
 class _TrackingAccountsRef extends Fake implements Ref {}

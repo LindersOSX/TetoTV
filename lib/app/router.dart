@@ -200,6 +200,9 @@ final appRouter = GoRouter(
           preferredAuthor: query['preferredAuthor'],
           preferredSourceId: query['preferredSourceId'],
           preferredWebProviderId: query['preferredWebProviderId'],
+          preferredQualityHeight: int.tryParse(
+            query['preferredQualityHeight'] ?? '',
+          ),
           episode: episode,
         );
       },

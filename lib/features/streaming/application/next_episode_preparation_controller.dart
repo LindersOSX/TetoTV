@@ -408,7 +408,7 @@ class NextEpisodePreparationController {
     );
     final webStreams = _rankWebStreams(
       discovery.webStreams,
-      current: request.currentLaunch.stream,
+      current: request.currentLaunch,
       settings: settings,
       seriesPreferences: request.seriesPreferences,
       preferredAudio: preferredAudio,
@@ -444,12 +444,92 @@ class NextEpisodePreparationController {
         .where((stream) => !strictWeb(stream))
         .toList(growable: false);
 
-    // A prior provider/source is only an affinity hint inside one filter
-    // tier. Never let a same-source HEVC/batch/4K fallback jump ahead of a
-    // strict H.264/single-episode/1080p match from another source class.
+    final preferredQualityHeight = releaseQualityHeight(
+      request.currentLaunch.selectedRelease,
+    );
+    List<({List<ReleaseCandidate> releases, List<WebStreamResult> webStreams})>
+    qualityPools(
+      List<ReleaseCandidate> tierReleases,
+      List<WebStreamResult> tierWebStreams,
+    ) {
+      if (preferredQualityHeight <= 0) {
+        return [(releases: tierReleases, webStreams: tierWebStreams)];
+      }
+      final minimumSafety = tierReleases.isEmpty
+          ? 0
+          : tierReleases
+                .map(
+                  (release) => automaticPlaybackSafetyScore(
+                    release,
+                    device: device,
+                    previousFailures:
+                        failureCounts[release.infoHash.toLowerCase()] ?? 0,
+                  ),
+                )
+                .reduce((left, right) => left < right ? left : right);
+      final preferredReleaseHashes = <String>{
+        for (final release in tierReleases)
+          if (releaseQualityHeight(release) == preferredQualityHeight &&
+              automaticPlaybackSafetyScore(
+                    release,
+                    device: device,
+                    previousFailures:
+                        failureCounts[release.infoHash.toLowerCase()] ?? 0,
+                  ) ==
+                  minimumSafety)
+            release.infoHash.toLowerCase(),
+      };
+      final preferredWebKeys = <String>{
+        for (final stream in tierWebStreams)
+          if (webStreamQualityHeight(stream) == preferredQualityHeight)
+            '${stream.providerId}\u0000${stream.uri}',
+      };
+      if (preferredReleaseHashes.isEmpty && preferredWebKeys.isEmpty) {
+        return [(releases: tierReleases, webStreams: tierWebStreams)];
+      }
+      return [
+        (
+          releases: tierReleases
+              .where(
+                (release) => preferredReleaseHashes.contains(
+                  release.infoHash.toLowerCase(),
+                ),
+              )
+              .toList(growable: false),
+          webStreams: tierWebStreams
+              .where(
+                (stream) => preferredWebKeys.contains(
+                  '${stream.providerId}\u0000${stream.uri}',
+                ),
+              )
+              .toList(growable: false),
+        ),
+        (
+          releases: tierReleases
+              .where(
+                (release) => !preferredReleaseHashes.contains(
+                  release.infoHash.toLowerCase(),
+                ),
+              )
+              .toList(growable: false),
+          webStreams: tierWebStreams
+              .where(
+                (stream) => !preferredWebKeys.contains(
+                  '${stream.providerId}\u0000${stream.uri}',
+                ),
+              )
+              .toList(growable: false),
+        ),
+      ];
+    }
+
+    // Strict series filters and device safety lead. Within each filter tier,
+    // keep the current normalized quality first, then fail open to every other
+    // quality. Provider/source and source-class affinity are applied inside
+    // those pools and can never make an unsafe release win.
     for (final pool in [
-      (releases: strictReleases, webStreams: strictWebStreams),
-      (releases: fallbackReleases, webStreams: fallbackWebStreams),
+      ...qualityPools(strictReleases, strictWebStreams),
+      ...qualityPools(fallbackReleases, fallbackWebStreams),
     ]) {
       if (pool.releases.isEmpty && pool.webStreams.isEmpty) continue;
       final launch = await _prepareCandidatePool(
@@ -993,6 +1073,7 @@ List<ReleaseCandidate> _rankReleases(
     preferredSourceId: current.sourceId,
     existingPreferredProvider: seriesPreferences.preferredReleaseProvider,
     existingPreferredReleaseGroup: seriesPreferences.preferredReleaseGroup,
+    preferredQualityHeight: releaseQualityHeight(current),
   );
 }
 
@@ -1027,7 +1108,7 @@ int _releaseAffinity(ReleaseCandidate candidate, ReleaseCandidate current) {
 
 List<WebStreamResult> _rankWebStreams(
   Iterable<WebStreamResult> streams, {
-  required StreamReady current,
+  required PlaybackLaunch current,
   required SettingsPreferences settings,
   required SeriesPlaybackPreferences seriesPreferences,
   required PlaybackAudioPreference preferredAudio,
@@ -1038,7 +1119,8 @@ List<WebStreamResult> _rankWebStreams(
     quality: seriesPreferences.preferredQuality,
     preferredAudio: preferredAudio,
     qualityPreference: settings.webStreamQuality,
-    preferredWebProviderId: current.providerId,
+    preferredWebProviderId: current.stream.providerId,
+    preferredQualityHeight: releaseQualityHeight(current.selectedRelease),
   );
 }
 

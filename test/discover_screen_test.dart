@@ -7,6 +7,8 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -18,6 +20,98 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  for (final mode in [InterfaceMode.television, InterfaceMode.phone]) {
+    testWidgets('${mode.displayName} opens Discover on the upper-left result', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LayoutSettingsController(mode),
+            ),
+            catalogClientProvider.overrideWithValue(
+              _FakeCatalog(
+                results: const [
+                  AnimeSummary(
+                    id: 1,
+                    title: 'Upper-left result',
+                    description: '',
+                    episodes: 12,
+                    score: 8,
+                  ),
+                ],
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: DiscoverScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'discover.result.first',
+      );
+      expect(
+        find.byType(HomeSideNavigation),
+        mode == InterfaceMode.television ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Classic Discover restores navigation and a noninitial Back', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LayoutSettingsController(InterfaceMode.phone),
+          ),
+          catalogClientProvider.overrideWithValue(
+            _FakeCatalog(
+              results: const [
+                AnimeSummary(
+                  id: 2,
+                  title: 'Classic first result',
+                  description: '',
+                  episodes: 12,
+                  score: 8,
+                ),
+              ],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MainNavigationBar), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.result.first',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.back');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Discover system Back returns Home without a header arrow', (
     tester,
   ) async {
@@ -201,6 +295,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.result.first',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -238,8 +338,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(catalog.requests.last.genre, 'Fantasy');
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'discover.result.first',
@@ -281,7 +379,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.result.first',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();
     expect(
@@ -290,9 +391,11 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'discover.filters');
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'discover.result.first',
+    );
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
     final title = find.text(
@@ -346,9 +449,8 @@ void main() {
 
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'discover.filters',
+        'discover.result.first',
       );
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(_focusedResult(tester, 'Production Result 1'), isTrue);
 
@@ -387,9 +489,8 @@ void main() {
       await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'discover.filters',
+        'discover.result.first',
       );
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(_focusedResult(tester, 'Production Result 7'), isTrue);
@@ -603,6 +704,16 @@ class _FakeCatalog extends AniListCatalogClient {
     if (error != null) throw error!;
     return results;
   }
+}
+
+class _LayoutSettingsController extends SettingsPreferencesController {
+  _LayoutSettingsController(InterfaceMode mode)
+    : super(const FlutterSecureStorage()) {
+    state = SettingsPreferences(interfaceMode: mode, loaded: true);
+  }
+
+  @override
+  Future<void> load() async {}
 }
 
 bool _focusedResult(WidgetTester tester, String title) {

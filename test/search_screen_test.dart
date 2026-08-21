@@ -8,6 +8,7 @@ import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -283,6 +284,38 @@ void main() {
     },
   );
 
+  testWidgets('Classic search restores Back without stealing initial focus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _ClassicSettingsController(),
+          ),
+        ],
+        child: const MaterialApp(home: SearchScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+    expect(find.byKey(const ValueKey('main-navigation')), findsNothing);
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'search_input');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'search.back');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'search_input');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('compact search preserves its stacked phone header', (
     tester,
   ) async {
@@ -524,6 +557,18 @@ class _DeferredCatalogClient extends AniListCatalogClient {
   void complete(String term, List<AnimeSummary> results) {
     _requests[term]!.complete(results);
   }
+}
+
+class _ClassicSettingsController extends SettingsPreferencesController {
+  _ClassicSettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(
+      interfaceMode: InterfaceMode.phone,
+      loaded: true,
+    );
+  }
+
+  @override
+  Future<void> load() async {}
 }
 
 class _SearchRecordingRepository implements TrackingRepository {

@@ -185,6 +185,17 @@ int releaseQualityHeight(ReleaseCandidate release) =>
 int webStreamQualityHeight(WebStreamResult stream) =>
     _qualityHeight('${stream.quality ?? ''} ${stream.title}');
 
+/// Soft affinity for keeping automatic fallback at the current stream's
+/// normalized resolution. Unknown or unavailable quality never filters a
+/// candidate; it only removes the affinity advantage.
+int automaticQualityAffinityRank(
+  int candidateHeight,
+  int? preferredQualityHeight,
+) {
+  if (preferredQualityHeight == null || preferredQualityHeight <= 0) return 0;
+  return candidateHeight == preferredQualityHeight ? 0 : 1;
+}
+
 double? releaseSizeBytes(ReleaseCandidate release) {
   final value = release.sizeLabel?.trim().toUpperCase();
   if (value == null || value.isEmpty) return null;
@@ -482,6 +493,7 @@ int compareAutomaticAutoplayWebStreams(
   WebStreamResult right, {
   required PlaybackAudioPreference preferredAudio,
   String? preferredWebProviderId,
+  int? preferredQualityHeight,
   WebStreamQualityPreference qualityPreference =
       WebStreamQualityPreference.bestAvailable,
 }) {
@@ -490,6 +502,17 @@ int compareAutomaticAutoplayWebStreams(
     preferredAudio,
   ).compareTo(webStreamAudioPreferenceRank(right, preferredAudio));
   if (audio != 0) return audio;
+  final qualityAffinity =
+      automaticQualityAffinityRank(
+        webStreamQualityHeight(left),
+        preferredQualityHeight,
+      ).compareTo(
+        automaticQualityAffinityRank(
+          webStreamQualityHeight(right),
+          preferredQualityHeight,
+        ),
+      );
+  if (qualityAffinity != 0) return qualityAffinity;
   final preferredId = _boundedAutomaticHint(
     preferredWebProviderId,
     maxLength: 160,
@@ -525,6 +548,7 @@ int compareAutomaticAutoplayReleases(
   String? existingPreferredReleaseGroup,
   PlaybackAudioPreference? preferredAudio,
   DebridStreamSort? rankingPreference,
+  int? preferredQualityHeight,
 }) {
   if (preferredAudio != null) {
     final audio = releaseAudioPreferenceRank(
@@ -550,6 +574,17 @@ int compareAutomaticAutoplayReleases(
         ),
       );
   if (safety != 0) return safety;
+  final qualityAffinity =
+      automaticQualityAffinityRank(
+        releaseQualityHeight(left),
+        preferredQualityHeight,
+      ).compareTo(
+        automaticQualityAffinityRank(
+          releaseQualityHeight(right),
+          preferredQualityHeight,
+        ),
+      );
+  if (qualityAffinity != 0) return qualityAffinity;
   final affinity =
       _automaticReleaseAffinityRank(
         left,
@@ -599,6 +634,7 @@ List<ReleaseCandidate> rankAutomaticAutoplayReleases(
   String? preferredSourceId,
   String? existingPreferredProvider,
   String? existingPreferredReleaseGroup,
+  int? preferredQualityHeight,
 }) {
   final strict = <ReleaseCandidate>[];
   final fallback = <ReleaseCandidate>[];
@@ -630,6 +666,7 @@ List<ReleaseCandidate> rankAutomaticAutoplayReleases(
         existingPreferredReleaseGroup: existingPreferredReleaseGroup,
         preferredAudio: preferredAudio,
         rankingPreference: rankingPreference,
+        preferredQualityHeight: preferredQualityHeight,
       );
   strict.sort(compare);
   fallback.sort(compare);
@@ -643,6 +680,7 @@ List<WebStreamResult> rankAutomaticAutoplayWebStreams(
   required PlaybackAudioPreference preferredAudio,
   required WebStreamQualityPreference qualityPreference,
   String? preferredWebProviderId,
+  int? preferredQualityHeight,
 }) {
   final strict = <WebStreamResult>[];
   final fallback = <WebStreamResult>[];
@@ -665,6 +703,7 @@ List<WebStreamResult> rankAutomaticAutoplayWebStreams(
         right,
         preferredAudio: preferredAudio,
         preferredWebProviderId: preferredWebProviderId,
+        preferredQualityHeight: preferredQualityHeight,
         qualityPreference: qualityPreference,
       );
   strict.sort(compare);

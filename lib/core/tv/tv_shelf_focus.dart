@@ -66,6 +66,7 @@ class TvShelfFocusController {
   final TvDirectionalRepeatGate _horizontalGate = TvDirectionalRepeatGate();
   final List<FocusNode> _focusNodes = <FocusNode>[];
   int _selectedIndex = 0;
+  int _focusRequestGeneration = 0;
   bool _disposed = false;
 
   int get itemCount => _focusNodes.length;
@@ -99,19 +100,100 @@ class TvShelfFocusController {
 
   /// Requests the remembered card, or the closest valid preferred column.
   /// Returns false when the shelf is empty.
-  bool requestFocus({int? preferredIndex}) {
+  bool requestFocus({
+    int? preferredIndex,
+    int? revealIndex,
+    double? itemExtent,
+    double? spacing,
+    bool rapid = false,
+    double edgePadding = 18,
+  }) {
     if (_disposed || itemCount == 0) return false;
     final index = (preferredIndex ?? _selectedIndex).clamp(0, itemCount - 1);
+    final targetRevealIndex = revealIndex ?? index;
     _selectedIndex = index;
+    final generation = ++_focusRequestGeneration;
+    if (itemExtent != null && spacing != null && scrollController.hasClients) {
+      // Stop an in-flight reveal before measuring the latest target. Without
+      // this, a rapid opposite request can see its card as visible at the old
+      // offset while the stale animation keeps moving away from it.
+      scrollController.jumpTo(scrollController.position.pixels);
+    }
     final node = _focusNodes[index];
     if (node.context != null) {
       node.requestFocus();
+      if (itemExtent != null && spacing != null) {
+        // Starting the latest reveal also interrupts any stale animation from
+        // an earlier cross-row request, even when this target is already built.
+        unawaited(
+          _revealThenFocus(
+            generation: generation,
+            focusIndex: index,
+            revealIndex: targetRevealIndex,
+            itemExtent: itemExtent,
+            spacing: spacing,
+            rapid: rapid,
+            edgePadding: edgePadding,
+          ),
+        );
+      }
       return true;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed && node.context != null) node.requestFocus();
-    });
+    if (itemExtent != null && spacing != null) {
+      unawaited(
+        _revealThenFocus(
+          generation: generation,
+          focusIndex: index,
+          revealIndex: targetRevealIndex,
+          itemExtent: itemExtent,
+          spacing: spacing,
+          rapid: rapid,
+          edgePadding: edgePadding,
+        ),
+      );
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed &&
+            generation == _focusRequestGeneration &&
+            node.context != null) {
+          node.requestFocus();
+        }
+      });
+    }
     return true;
+  }
+
+  Future<void> _revealThenFocus({
+    required int generation,
+    required int focusIndex,
+    required int revealIndex,
+    required double itemExtent,
+    required double spacing,
+    required bool rapid,
+    required double edgePadding,
+  }) async {
+    await _revealToIndex(
+      index: revealIndex,
+      itemExtent: itemExtent,
+      spacing: spacing,
+      rapid: rapid,
+      edgePadding: edgePadding,
+    );
+    if (_disposed || generation != _focusRequestGeneration) return;
+
+    // A lazily built ListView attaches the target after the reveal finishes,
+    // sometimes on the following frame. Only the latest request may take
+    // focus, so a rapid opposite direction cancels the stale target.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      WidgetsBinding.instance.scheduleFrame();
+      await WidgetsBinding.instance.endOfFrame;
+      if (_disposed || generation != _focusRequestGeneration) return;
+      final node = _focusNodes[focusIndex];
+      if (node.context != null) {
+        node.requestFocus();
+        return;
+      }
+    }
   }
 
   /// Handles LEFT/RIGHT for a card and consumes every horizontal key packet.
@@ -121,6 +203,7 @@ class TvShelfFocusController {
     required int currentIndex,
     required double itemExtent,
     required double spacing,
+    int Function(int focusIndex)? revealIndexForFocusIndex,
     VoidCallback? onLeftEdge,
     VoidCallback? onRightEdge,
   }) {
@@ -151,10 +234,9 @@ class TvShelfFocusController {
       return KeyEventResult.handled;
     }
 
-    _selectedIndex = nextIndex;
-    _focusNodes[nextIndex].requestFocus();
-    reveal(
-      index: nextIndex,
+    requestFocus(
+      preferredIndex: nextIndex,
+      revealIndex: revealIndexForFocusIndex?.call(nextIndex),
       itemExtent: itemExtent,
       spacing: spacing,
       rapid: event is KeyRepeatEvent,
@@ -169,6 +251,24 @@ class TvShelfFocusController {
     bool rapid = false,
     double edgePadding = 18,
   }) {
+    unawaited(
+      _revealToIndex(
+        index: index,
+        itemExtent: itemExtent,
+        spacing: spacing,
+        rapid: rapid,
+        edgePadding: edgePadding,
+      ),
+    );
+  }
+
+  Future<void> _revealToIndex({
+    required int index,
+    required double itemExtent,
+    required double spacing,
+    required bool rapid,
+    required double edgePadding,
+  }) async {
     if (_disposed || !scrollController.hasClients || itemCount == 0) return;
     final position = scrollController.position;
     if (!position.hasContentDimensions || position.viewportDimension <= 0) {
@@ -192,20 +292,19 @@ class TvShelfFocusController {
       position.maxScrollExtent,
     );
     if ((bounded - position.pixels).abs() < 1) return;
-    unawaited(
-      scrollController.animateTo(
-        bounded,
-        duration: rapid
-            ? const Duration(milliseconds: 88)
-            : const Duration(milliseconds: 165),
-        curve: Curves.easeOutCubic,
-      ),
+    await scrollController.animateTo(
+      bounded,
+      duration: rapid
+          ? const Duration(milliseconds: 88)
+          : const Duration(milliseconds: 165),
+      curve: Curves.easeOutCubic,
     );
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _focusRequestGeneration++;
     _horizontalGate.reset();
     for (final node in _focusNodes) {
       node.dispose();

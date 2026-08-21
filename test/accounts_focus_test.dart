@@ -22,6 +22,50 @@ void main() {
         .setMockMethodCallHandler(androidChannel, null);
   });
 
+  for (final layout in <(String, Size)>[
+    ('expanded', const Size(1280, 720)),
+    ('compact', const Size(390, 844)),
+  ]) {
+    testWidgets('Classic Settings restores noninitial Back on ${layout.$1}', (
+      tester,
+    ) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      tester.view.physicalSize = layout.$2;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith(
+              (_) => _ClassicSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
+      expect(find.byKey(const ValueKey('main-navigation')), findsNothing);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.customize',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.back');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.customize',
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('D-pad reaches Home shelves and switches to streaming', (
     tester,
   ) async {
@@ -83,6 +127,75 @@ void main() {
       find.byKey(const ValueKey('settings-web-stream-quality')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Auto Pick controls are opt-in, conditional, and D-pad ordered', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Streaming'));
+    await tester.pumpAndSettle();
+
+    final toggle = find.byKey(
+      const ValueKey('settings-auto-pick-source-enabled'),
+    );
+    expect(toggle, findsOneWidget);
+    expect(
+      container.read(settingsPreferencesProvider).autoPickSourceEnabled,
+      isFalse,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-auto-pick-source-type')),
+      findsNothing,
+    );
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(settingsPreferencesProvider).autoPickSourceEnabled,
+      isTrue,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-auto-pick-source-type')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-auto-pick-quality')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-auto-pick-audio')),
+      findsOneWidget,
+    );
+
+    final toggleFocusable = tester.widget<TvFocusable>(
+      find.descendant(of: toggle, matching: find.byType(TvFocusable)),
+    );
+    toggleFocusable.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.auto-pick-source',
+    );
+    expect(tester.takeException(), isNull);
   });
 
   for (final layout in <(String, Size)>[
@@ -916,6 +1029,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -1187,6 +1301,18 @@ class _ConnectedRealDebridController extends RealDebridSettingsController {
         username: 'connected-user',
         type: 'premium',
       ),
+    );
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
+class _ClassicSettingsController extends SettingsPreferencesController {
+  _ClassicSettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(
+      interfaceMode: InterfaceMode.phone,
+      loaded: true,
     );
   }
 

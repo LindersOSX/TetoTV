@@ -24,22 +24,51 @@ List<PlayerFailoverClass> playerFailoverClassOrder({
     ? const [PlayerFailoverClass.directWeb, PlayerFailoverClass.debrid]
     : const [PlayerFailoverClass.debrid, PlayerFailoverClass.directWeb];
 
+/// Automatic recovery exhausts same-resolution candidates across both source
+/// classes before trying another resolution. The current source class is only
+/// the tie-breaker inside each quality tier.
+List<bool> playerFailoverSameQualityTiers({
+  required int currentQualityHeight,
+}) => currentQualityHeight > 0 ? const [true, false] : const [false];
+
+List<int> playerFailoverAudioRankTiers(Iterable<int> ranks) {
+  final result = ranks.toSet().toList(growable: false)..sort();
+  return result;
+}
+
+bool playerFailoverCandidateIsInQualityTier({
+  required int candidateQualityHeight,
+  required int currentQualityHeight,
+  required bool sameQuality,
+}) {
+  if (currentQualityHeight <= 0) return !sameQuality;
+  return (candidateQualityHeight == currentQualityHeight) == sameQuality;
+}
+
+bool playerFailoverClassIsAvailable(
+  PlayerFailoverClass streamClass, {
+  required bool debridAvailable,
+}) => streamClass != PlayerFailoverClass.debrid || debridAvailable;
+
 /// Ranks automatic recovery candidates without allowing resolution or source
 /// affinity to override the viewer's effective Dub/Sub choice.
 ///
-/// The incoming order is the final tie-breaker. For web streams it already
-/// carries the source picker's quality order; for debrid releases it preserves
-/// the resolver's bounded quality/order decision. Manual picker ordering is
-/// intentionally independent from this recovery-only policy.
+/// Current normalized quality is a soft rank after authoritative audio and
+/// before provider/source affinity. The incoming order remains the final
+/// tie-breaker, and manual picker ordering is intentionally independent from
+/// this recovery-only policy.
 List<T> rankAutomaticPlayerFailoverCandidates<T>({
   required Iterable<T> candidates,
   required int Function(T candidate) audioRank,
+  required int Function(T candidate) qualityRank,
   required int Function(T candidate) affinityRank,
 }) {
   final indexed = candidates.indexed.toList(growable: false);
   indexed.sort((left, right) {
     final audio = audioRank(left.$2).compareTo(audioRank(right.$2));
     if (audio != 0) return audio;
+    final quality = qualityRank(left.$2).compareTo(qualityRank(right.$2));
+    if (quality != 0) return quality;
     final affinity = affinityRank(left.$2).compareTo(affinityRank(right.$2));
     return affinity != 0 ? affinity : left.$1.compareTo(right.$1);
   });

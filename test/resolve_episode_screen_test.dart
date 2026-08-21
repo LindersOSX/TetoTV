@@ -9,6 +9,7 @@ import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/premiumize_client.dart';
@@ -66,28 +67,6 @@ void main() {
     expect(releases, [sameGroup, sameProvider, unrelated]);
     expect(releaseGroupKey('[SubsPlease] Show - 02'), 'subsplease');
     expect(releaseGroupKey('Show - 02'), isNull);
-  });
-
-  test('torrent picker search matches release metadata with AND terms', () {
-    const release = ReleaseCandidate(
-      infoHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      magnetUri: 'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      releaseName: '[SubsPlease] Example Show - 07',
-      seeders: 25,
-      sourceId: 'community-source',
-      provider: 'Community Marketplace',
-      quality: '1080p',
-      codec: 'HEVC',
-      sizeLabel: '1.4 GB',
-      isHdr: true,
-      hasSubtitles: true,
-    );
-
-    expect(releaseMatchesTorrentSearch(release, ''), isTrue);
-    expect(releaseMatchesTorrentSearch(release, 'subsplease 1080p'), isTrue);
-    expect(releaseMatchesTorrentSearch(release, 'community hevc hdr'), isTrue);
-    expect(releaseMatchesTorrentSearch(release, 'dub'), isFalse);
-    expect(releaseMatchesTorrentSearch(release, 'different group'), isFalse);
   });
 
   test(
@@ -801,85 +780,155 @@ void main() {
     expect(launch.selectedRelease.infoHash, exactDebrid.infoHash);
   });
 
+  testWidgets('source picker keeps the pre-redesign compact control row', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Example Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilFound(tester, find.text('Dubbed release'));
+
+    expect(find.text('Choose your stream'), findsOneWidget);
+    expect(find.text('Search torrents'), findsNothing);
+    expect(find.text('No torrents match this local search.'), findsNothing);
+    expect(find.text('ALL'), findsOneWidget);
+    expect(find.text('SUB'), findsOneWidget);
+    expect(find.text('DUB'), findsOneWidget);
+    expect(find.text('More filters'), findsOneWidget);
+    expect(find.text('Refresh'), findsOneWidget);
+    expect(find.text('Magnet'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.text('Magnet'),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsOneWidget,
+      reason: 'the original picker keeps its single compact horizontal row',
+    );
+  });
+
   testWidgets(
-    'torrent search keeps controls visible and restores focus after zero matches',
+    'visible release fallback keeps the selected normalized quality first',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1920, 1080));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      const selected = ReleaseCandidate(
+        infoHash: 'selected-1080',
+        magnetUri: 'magnet:?xt=urn:btih:selected-1080',
+        releaseName: '[Group] Selected 1080p',
+        seeders: 1,
+        sourceId: 'stable-source',
+        provider: 'Same provider',
+        quality: '1080p',
+        isDubbed: true,
+      );
+      const sameQuality = ReleaseCandidate(
+        infoHash: 'same-full-hd',
+        magnetUri: 'magnet:?xt=urn:btih:same-full-hd',
+        releaseName: '[Other] Same Full HD',
+        seeders: 1,
+        sourceId: 'other-source',
+        provider: 'Other provider',
+        quality: 'Full HD',
+        isDubbed: true,
+      );
+      const higher = ReleaseCandidate(
+        infoHash: 'higher-4k',
+        magnetUri: 'magnet:?xt=urn:btih:higher-4k',
+        releaseName: '[Group] Higher 2160p',
+        seeders: 1000,
+        sourceId: 'stable-source',
+        provider: 'Same provider',
+        quality: '2160p',
+        isDubbed: true,
+      );
+      const lower = ReleaseCandidate(
+        infoHash: 'lower-720',
+        magnetUri: 'magnet:?xt=urn:btih:lower-720',
+        releaseName: '[Lower] Lower 720p',
+        seeders: 2000,
+        sourceId: 'lower-source',
+        provider: 'Lower provider',
+        quality: '720p',
+        isDubbed: true,
+      );
+      final attempted = <String>[];
+      PlaybackLaunch? opened;
+      final router = GoRouter(
+        initialLocation: '/resolve',
+        routes: [
+          GoRoute(
+            path: '/resolve',
+            builder: (_, _) => const ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42108,
+                title: 'Quality Fallback',
+                episode: 1,
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/player',
+            builder: (_, state) {
+              opened = state.extra! as PlaybackLaunch;
+              return const Scaffold(body: Text('QUALITY FALLBACK OPENED'));
+            },
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
 
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
             configuredReleaseSourceProvider.overrideWithValue(
-              const _FakeReleaseSource(),
+              const _ListReleaseSource([higher, lower, sameQuality, selected]),
             ),
+            debridStreamResolverFactoryProvider.overrideWithValue(({
+              required service,
+              required token,
+              required source,
+            }) {
+              return _SourceAwareResolver(source, (candidate) {
+                attempted.add(candidate.infoHash);
+                return candidate.infoHash == higher.infoHash
+                    ? null
+                    : StateError('1080p stream unavailable');
+              });
+            }),
           ],
-          child: const MaterialApp(
-            home: ResolveEpisodeScreen(
-              episode: EpisodeReference(
-                anilistMediaId: 42,
-                title: 'Example Show',
-                episode: 1,
-              ),
-            ),
-          ),
+          child: MaterialApp.router(routerConfig: router),
         ),
       );
-      await _pumpUntilFound(tester, find.text('Dubbed release'));
 
-      expect(find.text('Search torrents'), findsOneWidget);
-      expect(find.text('ALL'), findsOneWidget);
-      expect(find.text('SUB'), findsOneWidget);
-      expect(find.text('DUB'), findsOneWidget);
-      expect(find.text('More filters'), findsOneWidget);
-      expect(find.text('Refresh'), findsOneWidget);
-      expect(find.text('Magnet'), findsOneWidget);
-      expect(
-        find.ancestor(
-          of: find.text('Magnet'),
-          matching: find.byType(SingleChildScrollView),
-        ),
-        findsNothing,
-      );
+      await _pumpUntilFound(tester, find.text(selected.releaseName));
+      await tester.tap(find.text(selected.releaseName));
+      await _pumpUntilFound(tester, find.text('QUALITY FALLBACK OPENED'));
 
-      final input = tester.widget<TvTextInput>(find.byType(TvTextInput));
-      final inputFocus = input.focusNode!;
-      inputFocus.requestFocus();
-      await tester.pump();
-      expect(inputFocus.hasFocus, isTrue);
-
-      input.controller.text = 'no-such-torrent';
-      input.onChanged?.call(input.controller.text);
-      await tester.pump();
-
-      expect(find.text('Dubbed release'), findsNothing);
-      expect(find.text('No torrents match this local search.'), findsOneWidget);
-      expect(find.text('Clear search'), findsOneWidget);
-      expect(inputFocus.hasFocus, isTrue);
-
-      await tester.tap(find.text('Clear search'));
-      await tester.pump();
-      await tester.pump();
-
-      expect(find.text('Dubbed release'), findsOneWidget);
-      expect(find.text('No torrents match this local search.'), findsNothing);
-      expect(input.controller.text, isEmpty);
-      expect(inputFocus.hasFocus, isTrue);
-
-      await tester.tap(find.text('SUB'));
-      await tester.pump();
-      final filteredInput = tester.widget<TvTextInput>(
-        find.byType(TvTextInput),
-      );
-      filteredInput.controller.text = 'dubbed';
-      filteredInput.onChanged?.call(filteredInput.controller.text);
-      await tester.pump();
-      expect(find.text('Dubbed release'), findsNothing);
-      expect(
-        find.text('No torrents match this local search.'),
-        findsNothing,
-        reason: 'the language filter, not the local search, hid this result',
-      );
+      expect(attempted, [
+        selected.infoHash,
+        sameQuality.infoHash,
+        higher.infoHash,
+      ]);
+      expect(opened?.selectedRelease.infoHash, higher.infoHash);
     },
   );
 
@@ -3452,6 +3501,412 @@ void main() {
     );
   });
 
+  testWidgets(
+    'Auto Pick stays off by default and leaves the picker in control',
+    (tester) async {
+      var resolverCalls = 0;
+      final probe = await _pumpAutoPickScenario(
+        tester,
+        mediaId: 99001,
+        settings: const SettingsPreferences(
+          loaded: true,
+          webStreamsEnabled: false,
+        ),
+        releases: const [_autoPickDub1080],
+        resolverFactory: ({required service, required token, required source}) {
+          resolverCalls++;
+          return const _ReadyResolver();
+        },
+      );
+
+      await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+
+      expect(resolverCalls, 0);
+      expect(probe.launch, isNull);
+      expect(find.text(_autoPickDub1080.releaseName), findsOneWidget);
+    },
+  );
+
+  testWidgets('Auto Pick bypasses the picker on a normal resolve open', (
+    tester,
+  ) async {
+    final attempted = <String>[];
+    var webPreflightCalls = 0;
+    final excludedWeb = _providerWebStream(
+      providerId: 'excluded-web',
+      providerName: 'Excluded Web',
+      quality: '1080p',
+    );
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99002,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.debridOnly,
+      ),
+      releases: const [_autoPickDub1080],
+      webStreams: [excludedWeb],
+      preflight: (uri, headers, {subtitleUri}) async {
+        webPreflightCalls++;
+        return ValidatedWebStream(
+          uri: uri,
+          headers: headers,
+          contentType: 'video/mp4',
+        );
+      },
+      resolverFactory: ({required service, required token, required source}) {
+        return _SourceAwareResolver(source, (candidate) {
+          attempted.add(candidate.infoHash);
+          return null;
+        });
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('AUTO PICK PLAYER OPENED'));
+    await tester.pumpAndSettle();
+
+    expect(attempted, [_autoPickDub1080.infoHash]);
+    expect(webPreflightCalls, 0);
+    expect(probe.launch?.selectedRelease.infoHash, _autoPickDub1080.infoHash);
+    expect(find.text('DEBRID STREAMS'), findsNothing);
+  });
+
+  testWidgets('Web-only Auto Pick never opens an available Debrid release', (
+    tester,
+  ) async {
+    var debridResolverCalls = 0;
+    final web = _providerWebStream(
+      providerId: 'allowed-web-only',
+      providerName: 'Allowed Web only',
+      quality: '1080p',
+    );
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99008,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.webOnly,
+      ),
+      releases: const [_autoPickDub1080],
+      webStreams: [web],
+      resolverFactory: ({required service, required token, required source}) {
+        debridResolverCalls++;
+        return const _ReadyResolver();
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('AUTO PICK PLAYER OPENED'));
+
+    expect(debridResolverCalls, 0);
+    expect(probe.launch?.stream.isWebStream, isTrue);
+    expect(probe.launch?.selectedRelease.sourceId, 'web:allowed-web-only');
+  });
+
+  testWidgets('Auto Pick caps mixed Debrid and Web failures at eight total', (
+    tester,
+  ) async {
+    final releases = [
+      for (var index = 0; index < 10; index++)
+        ReleaseCandidate(
+          infoHash: '${index + 10}'.padLeft(40, '0'),
+          magnetUri: 'magnet:?xt=urn:btih:${'${index + 10}'.padLeft(40, '0')}',
+          releaseName: 'Mixed Debrid ${index + 1} dub 1080p',
+          seeders: 100 - index,
+          sourceId: 'mixed-budget',
+          quality: '1080p',
+          isDubbed: true,
+        ),
+    ];
+    final webStreams = [
+      for (var index = 0; index < 5; index++)
+        _providerWebStream(
+          providerId: 'mixed-web-$index',
+          providerName: 'Mixed Web ${index + 1}',
+          quality: '1080p',
+        ),
+    ];
+    var webAttempts = 0;
+    var debridAttempts = 0;
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99009,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.any,
+        streamSourcePriority: StreamSourcePriority.webFirst,
+      ),
+      releases: releases,
+      webStreams: webStreams,
+      preflight: (uri, headers, {subtitleUri}) async {
+        webAttempts++;
+        throw StateError('web unavailable');
+      },
+      resolverFactory: ({required service, required token, required source}) {
+        return _SourceAwareResolver(source, (_) {
+          debridAttempts++;
+          return StateError('debrid unavailable');
+        });
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(probe.launch, isNull);
+    expect(webAttempts, 5);
+    expect(debridAttempts, 3);
+    expect(webAttempts + debridAttempts, 8);
+    expect(find.text('WEB STREAMS'), findsOneWidget);
+    expect(find.textContaining('Automatic selection could not'), findsNothing);
+  });
+
+  testWidgets(
+    'Auto Pick strictly excludes wrong quality and audio candidates',
+    (tester) async {
+      const wrongQuality = ReleaseCandidate(
+        infoHash: '2222222222222222222222222222222222222222',
+        magnetUri:
+            'magnet:?xt=urn:btih:2222222222222222222222222222222222222222',
+        releaseName: 'Wrong quality dub 2160p',
+        seeders: 900,
+        sourceId: 'strict-test',
+        quality: '2160p',
+        isDubbed: true,
+      );
+      const wrongAudio = ReleaseCandidate(
+        infoHash: '3333333333333333333333333333333333333333',
+        magnetUri:
+            'magnet:?xt=urn:btih:3333333333333333333333333333333333333333',
+        releaseName: 'Wrong audio sub 1080p',
+        seeders: 800,
+        sourceId: 'strict-test',
+        quality: '1080p',
+      );
+      final attempted = <String>[];
+      final probe = await _pumpAutoPickScenario(
+        tester,
+        mediaId: 99003,
+        settings: const SettingsPreferences(
+          loaded: true,
+          webStreamsEnabled: false,
+          autoPickSourceEnabled: true,
+          autoPickSourceType: AutoPickSourceType.debridOnly,
+          autoPickQuality: AutoPickQuality.p1080,
+          autoPickAudio: AutoPickAudio.dubOnly,
+        ),
+        releases: const [wrongQuality, wrongAudio, _autoPickDub1080],
+        resolverFactory: ({required service, required token, required source}) {
+          return _SourceAwareResolver(source, (candidate) {
+            attempted.add(candidate.infoHash);
+            return null;
+          });
+        },
+      );
+
+      await _pumpUntilFound(tester, find.text('AUTO PICK PLAYER OPENED'));
+
+      expect(attempted, [_autoPickDub1080.infoHash]);
+      expect(probe.launch?.selectedRelease.infoHash, _autoPickDub1080.infoHash);
+    },
+  );
+
+  testWidgets('failed strict Auto Pick never retries an unfiltered release', (
+    tester,
+  ) async {
+    const disallowed = ReleaseCandidate(
+      infoHash: '5555555555555555555555555555555555555555',
+      magnetUri: 'magnet:?xt=urn:btih:5555555555555555555555555555555555555555',
+      releaseName: 'Disallowed sub 720p fallback',
+      seeders: 999,
+      sourceId: 'strict-bypass-test',
+      quality: '720p',
+    );
+    final attempted = <String>[];
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99010,
+      settings: const SettingsPreferences(
+        loaded: true,
+        webStreamsEnabled: false,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.debridOnly,
+        autoPickQuality: AutoPickQuality.p1080,
+        autoPickAudio: AutoPickAudio.dubOnly,
+      ),
+      releases: const [_autoPickDub1080, disallowed],
+      resolverFactory: ({required service, required token, required source}) {
+        return _SourceAwareResolver(source, (candidate) {
+          attempted.add(candidate.infoHash);
+          return StateError('allowed candidate failed');
+        });
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(probe.launch, isNull);
+    expect(attempted, [_autoPickDub1080.infoHash]);
+    expect(find.text(_autoPickDub1080.releaseName), findsOneWidget);
+    expect(find.textContaining('2 Debrid'), findsOneWidget);
+    expect(find.textContaining('Automatic selection could not'), findsNothing);
+  });
+
+  testWidgets('no strict Auto Pick match reveals every manual result cleanly', (
+    tester,
+  ) async {
+    var resolverCalls = 0;
+    final disallowedWeb = _providerWebStream(
+      providerId: 'manual-web-result',
+      providerName: 'Manual Web result',
+      quality: '1080p',
+    );
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99004,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.webOnly,
+        autoPickQuality: AutoPickQuality.p480,
+        autoPickAudio: AutoPickAudio.subOnly,
+      ),
+      releases: const [_autoPickDub1080],
+      webStreams: [disallowedWeb],
+      resolverFactory: ({required service, required token, required source}) {
+        resolverCalls++;
+        return const _ReadyResolver();
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+
+    expect(probe.launch, isNull);
+    expect(resolverCalls, 0);
+    expect(find.text(_autoPickDub1080.releaseName), findsOneWidget);
+    expect(find.text('WEB STREAMS'), findsOneWidget);
+    expect(find.text('Manual Web result 1080p'), findsOneWidget);
+    expect(find.textContaining('Automatic selection could not'), findsNothing);
+    expect(find.text('Could not resolve this episode'), findsNothing);
+  });
+
+  testWidgets('failed allowed Auto Pick candidates fall back without a loop', (
+    tester,
+  ) async {
+    const second = ReleaseCandidate(
+      infoHash: '4444444444444444444444444444444444444444',
+      magnetUri: 'magnet:?xt=urn:btih:4444444444444444444444444444444444444444',
+      releaseName: 'Second allowed dub 1080p',
+      seeders: 1,
+      sourceId: 'strict-test',
+      quality: '1080p',
+      isDubbed: true,
+    );
+    final attempted = <String>[];
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99005,
+      settings: const SettingsPreferences(
+        loaded: true,
+        webStreamsEnabled: false,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.debridOnly,
+        autoPickQuality: AutoPickQuality.p1080,
+        autoPickAudio: AutoPickAudio.dubOnly,
+      ),
+      releases: const [_autoPickDub1080, second],
+      resolverFactory: ({required service, required token, required source}) {
+        return _SourceAwareResolver(source, (candidate) {
+          attempted.add(candidate.infoHash);
+          return StateError('not playable');
+        });
+      },
+    );
+
+    await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(probe.launch, isNull);
+    expect(attempted.toSet(), {_autoPickDub1080.infoHash, second.infoHash});
+    expect(attempted, hasLength(2));
+    expect(find.text(_autoPickDub1080.releaseName), findsOneWidget);
+    expect(find.text(second.releaseName), findsOneWidget);
+    expect(find.textContaining('Automatic selection could not'), findsNothing);
+  });
+
+  testWidgets('Auto Pick discovery timeout reveals live unfiltered results', (
+    tester,
+  ) async {
+    final never = Completer<void>();
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99006,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.webOnly,
+      ),
+      releases: const [_autoPickDub1080],
+      webAggregator: _NeverCompletingWebAggregator(never.future),
+    );
+
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('DEBRID STREAMS'), findsNothing);
+    await tester.pump(const Duration(seconds: 46));
+
+    expect(probe.launch, isNull);
+    expect(find.text('DEBRID STREAMS'), findsOneWidget);
+    expect(find.text(_autoPickDub1080.releaseName), findsOneWidget);
+    expect(find.textContaining('Automatic selection could not'), findsNothing);
+  });
+
+  testWidgets('late Web preflight cannot escape Auto Pick manual fallback', (
+    tester,
+  ) async {
+    final preflightGate = Completer<void>();
+    final web = _providerWebStream(
+      providerId: 'slow-auto-pick',
+      providerName: 'Slow provider',
+      quality: '1080p',
+    );
+    final probe = await _pumpAutoPickScenario(
+      tester,
+      mediaId: 99007,
+      settings: const SettingsPreferences(
+        loaded: true,
+        autoPickSourceEnabled: true,
+        autoPickSourceType: AutoPickSourceType.webOnly,
+        autoPickQuality: AutoPickQuality.p1080,
+        autoPickAudio: AutoPickAudio.dubOnly,
+      ),
+      releases: const [_autoPickDub1080],
+      webStreams: [web],
+      preflight: (uri, headers, {subtitleUri}) async {
+        await preflightGate.future;
+        return ValidatedWebStream(
+          uri: uri,
+          headers: headers,
+          contentType: 'video/mp4',
+        );
+      },
+    );
+
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 46));
+    expect(find.text('DEBRID STREAMS'), findsOneWidget);
+    expect(probe.launch, isNull);
+
+    preflightGate.complete();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(probe.launch, isNull);
+    expect(find.text('AUTO PICK PLAYER OPENED'), findsNothing);
+    expect(find.text('DEBRID STREAMS'), findsOneWidget);
+  });
+
   test('web qualities are ranked from highest to lowest', () {
     final streams = [
       _webStream('Auto'),
@@ -3476,6 +3931,111 @@ void main() {
       expect(message, contains('did not leave an uncached cloud download'));
     }
   });
+}
+
+const _autoPickDub1080 = ReleaseCandidate(
+  infoHash: '1111111111111111111111111111111111111111',
+  magnetUri: 'magnet:?xt=urn:btih:1111111111111111111111111111111111111111',
+  releaseName: 'Allowed manual dub 1080p',
+  seeders: 10,
+  sourceId: 'auto-pick-test',
+  quality: '1080p',
+  isDubbed: true,
+);
+
+class _AutoPickProbe {
+  PlaybackLaunch? launch;
+}
+
+class _ResolveSettingsController extends SettingsPreferencesController {
+  _ResolveSettingsController(SettingsPreferences preferences)
+    : super(const FlutterSecureStorage()) {
+    state = preferences;
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
+Future<_AutoPickProbe> _pumpAutoPickScenario(
+  WidgetTester tester, {
+  required int mediaId,
+  required SettingsPreferences settings,
+  required List<ReleaseCandidate> releases,
+  List<WebStreamResult> webStreams = const [],
+  WebStreamAggregator? webAggregator,
+  DebridStreamResolverFactory? resolverFactory,
+  WebStreamPreflight? preflight,
+}) async {
+  await tester.binding.setSurfaceSize(const Size(1920, 1080));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final probe = _AutoPickProbe();
+  final router = GoRouter(
+    initialLocation: '/resolve',
+    routes: [
+      GoRoute(
+        path: '/resolve',
+        builder: (_, _) => ResolveEpisodeScreen(
+          episode: EpisodeReference(
+            anilistMediaId: mediaId,
+            title: 'Auto Pick test',
+            episode: 1,
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/player',
+        builder: (_, state) {
+          probe.launch = state.extra! as PlaybackLaunch;
+          return const Scaffold(body: Text('AUTO PICK PLAYER OPENED'));
+        },
+      ),
+    ],
+  );
+  addTearDown(router.dispose);
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        settingsPreferencesProvider.overrideWith(
+          (_) => _ResolveSettingsController(settings),
+        ),
+        configuredReleaseSourceProvider.overrideWithValue(
+          _ListReleaseSource(releases),
+        ),
+        addonStoreProvider.overrideWithValue(_NoopAddonStore()),
+        seriesPreferencesReaderProvider.overrideWithValue(
+          (_) async => const SeriesPlaybackPreferences(),
+        ),
+        seriesPreferencesWriterProvider.overrideWithValue((_, _) async {}),
+        resolveDeviceProfileReaderProvider.overrideWithValue(
+          () async => const TvDeviceProfile.unknown(),
+        ),
+        resolveFailureCountsReaderProvider.overrideWithValue(
+          (_) async => const {},
+        ),
+        webStreamAggregatorProvider.overrideWithValue(
+          webAggregator ?? _FixedWebAggregator(webStreams),
+        ),
+        webStreamPreflightProvider.overrideWithValue(
+          preflight ??
+              (uri, headers, {subtitleUri}) async => ValidatedWebStream(
+                uri: uri,
+                headers: headers,
+                contentType: 'video/mp4',
+              ),
+        ),
+        debridStreamResolverFactoryProvider.overrideWithValue(
+          resolverFactory ??
+              ({required service, required token, required source}) =>
+                  const _ReadyResolver(),
+        ),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pump();
+  return probe;
 }
 
 WebStreamResult _webStream(String quality) => WebStreamResult(

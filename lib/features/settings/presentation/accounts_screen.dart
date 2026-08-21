@@ -4,6 +4,7 @@ import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
@@ -47,6 +48,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
+  final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
   final _debridProviderFocus = FocusNode(
     debugLabel: 'accounts.debrid.provider',
@@ -72,6 +74,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _webQualityFocus = FocusNode(
     debugLabel: 'accounts.streaming.web-quality',
+  );
+  final _autoPickEnabledFocus = FocusNode(
+    debugLabel: 'accounts.streaming.auto-pick-enabled',
+  );
+  final _autoPickSourceFocus = FocusNode(
+    debugLabel: 'accounts.streaming.auto-pick-source',
+  );
+  final _autoPickQualityFocus = FocusNode(
+    debugLabel: 'accounts.streaming.auto-pick-quality',
+  );
+  final _autoPickAudioFocus = FocusNode(
+    debugLabel: 'accounts.streaming.auto-pick-audio',
   );
   final _localMediaFocus = FocusNode(
     debugLabel: 'accounts.streaming.local-media',
@@ -144,6 +158,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     for (final shelf in HomeShelf.values)
       shelf: FocusNode(debugLabel: 'accounts.shelf.${shelf.name}'),
   };
+  final _directionalRepeatGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
   int _systemActivationCount = 0;
 
   @override
@@ -156,9 +173,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
 
   @override
   void dispose() {
+    _directionalRepeatGate.reset();
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
+    _backFocus.dispose();
     _titleLanguageFocus.dispose();
     _debridProviderFocus.dispose();
     _trackingProviderFocus.dispose();
@@ -169,6 +188,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _debridSortFocus.dispose();
     _sourcePriorityFocus.dispose();
     _webQualityFocus.dispose();
+    _autoPickEnabledFocus.dispose();
+    _autoPickSourceFocus.dispose();
+    _autoPickQualityFocus.dispose();
+    _autoPickAudioFocus.dispose();
     _localMediaFocus.dispose();
     _customizationFocus.dispose();
     _setupFocus.dispose();
@@ -220,11 +243,24 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     KeyEvent event, {
     TetoTopLevelLayout? layout,
   }) {
+    final key = event.logicalKey;
+    final directional =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _directionalRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
+      return KeyEventResult.handled;
+    }
+    if (!_directionalRepeatGate.accept(event)) {
+      return KeyEventResult.handled;
     }
     final current = FocusManager.instance.primaryFocus;
-    final key = event.logicalKey;
     final preferences = ref.read(settingsPreferencesProvider);
     final selectedDebridAction = switch (preferences.debridProvider) {
       DebridService.realDebrid => _debridConnectFocus,
@@ -270,6 +306,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _debridSortFocus,
       _sourcePriorityFocus,
       _webQualityFocus,
+      _autoPickEnabledFocus,
+      _autoPickSourceFocus,
+      _autoPickQualityFocus,
+      _autoPickAudioFocus,
       _localMediaFocus,
       _trackingProviderFocus,
       selectedTrackingAction,
@@ -296,6 +336,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (areaIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowLeft && areaIndex > 0) {
         target = areaNodes[areaIndex - 1];
+      }
+      if (key == LogicalKeyboardKey.arrowLeft &&
+          areaIndex == 0 &&
+          layout?.usesTvRail != true &&
+          _backFocus.context != null) {
+        target = _backFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight &&
           areaIndex < areaNodes.length - 1) {
@@ -324,6 +370,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
 
     if (areaIndex >= 0 || shelfIndex >= 0) {
       // Settings-area and Home-shelf navigation were handled above.
+    } else if (current == _backFocus) {
+      if (key == LogicalKeyboardKey.arrowRight ||
+          key == LogicalKeyboardKey.arrowDown) {
+        target = _areaFocusNodes[_activeArea];
+      }
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _customizationFocus;
     } else if (current == _debridProviderFocus) {
@@ -374,13 +425,35 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _webQualityFocus;
     } else if (current == _webQualityFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _sourcePriorityFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _autoPickEnabledFocus;
+    } else if (current == _autoPickEnabledFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _webQualityFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = preferences.autoPickSourceEnabled
+            ? _autoPickSourceFocus
+            : (ref.read(appUpdateControllerProvider).developerMode
+                  ? _localMediaFocus
+                  : _autoPickEnabledFocus);
+      }
+    } else if (current == _autoPickSourceFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _autoPickEnabledFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _autoPickQualityFocus;
+    } else if (current == _autoPickQualityFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _autoPickSourceFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _autoPickAudioFocus;
+    } else if (current == _autoPickAudioFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _autoPickQualityFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
         target = ref.read(appUpdateControllerProvider).developerMode
             ? _localMediaFocus
-            : _webQualityFocus;
+            : _autoPickAudioFocus;
       }
     } else if (current == _localMediaFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _webQualityFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = preferences.autoPickSourceEnabled
+            ? _autoPickAudioFocus
+            : _autoPickEnabledFocus;
+      }
       // Streaming is the end of this tab. Keep focus here instead of pointing
       // at a control which is not mounted while this tab is active.
       if (key == LogicalKeyboardKey.arrowDown) target = _localMediaFocus;
@@ -610,6 +683,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                 final showSecurityLabel = constraints.maxWidth >= 1180;
                 return Row(
                   children: [
+                    if (preferences.interfaceMode == InterfaceMode.phone) ...[
+                      _TvIconButton(
+                        focusNode: _backFocus,
+                        icon: Icons.arrow_back_rounded,
+                        onPressed: () => _returnToPreviousOrHome(context),
+                      ),
+                      SizedBox(width: constraints.maxWidth < 620 ? 12 : 18),
+                    ],
                     Expanded(
                       child: Text(
                         'Settings',
@@ -898,6 +979,26 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       onWebQualitySelected: ref
                           .read(settingsPreferencesProvider.notifier)
                           .setWebStreamQuality,
+                    ),
+                    const SizedBox(height: 8),
+                    _AutoPickSourcePanel(
+                      preferences: preferences,
+                      enabledFocusNode: _autoPickEnabledFocus,
+                      sourceFocusNode: _autoPickSourceFocus,
+                      qualityFocusNode: _autoPickQualityFocus,
+                      audioFocusNode: _autoPickAudioFocus,
+                      onEnabledChanged: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setAutoPickSourceEnabled,
+                      onSourceSelected: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setAutoPickSourceType,
+                      onQualitySelected: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setAutoPickQuality,
+                      onAudioSelected: ref
+                          .read(settingsPreferencesProvider.notifier)
+                          .setAutoPickAudio,
                     ),
                     if (appUpdate.developerMode) ...[
                       const SizedBox(height: 8),
@@ -2160,6 +2261,119 @@ class _StreamRankingPanel extends StatelessWidget {
   }
 }
 
+class _AutoPickSourcePanel extends StatelessWidget {
+  const _AutoPickSourcePanel({
+    required this.preferences,
+    required this.enabledFocusNode,
+    required this.sourceFocusNode,
+    required this.qualityFocusNode,
+    required this.audioFocusNode,
+    required this.onEnabledChanged,
+    required this.onSourceSelected,
+    required this.onQualitySelected,
+    required this.onAudioSelected,
+  });
+
+  final SettingsPreferences preferences;
+  final FocusNode enabledFocusNode;
+  final FocusNode sourceFocusNode;
+  final FocusNode qualityFocusNode;
+  final FocusNode audioFocusNode;
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<AutoPickSourceType> onSourceSelected;
+  final ValueChanged<AutoPickQuality> onQualitySelected;
+  final ValueChanged<AutoPickAudio> onAudioSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MiniSectionLabel('AUTO PICK SOURCE'),
+          const SizedBox(height: 7),
+          _PreferenceRow(
+            label: 'Automatic selection',
+            children: [
+              _PreferenceChip(
+                key: const ValueKey('settings-auto-pick-source-enabled'),
+                label: preferences.autoPickSourceEnabled ? 'ON' : 'OFF',
+                selected: preferences.autoPickSourceEnabled,
+                focusNode: enabledFocusNode,
+                onPressed: () =>
+                    onEnabledChanged(!preferences.autoPickSourceEnabled),
+              ),
+            ],
+          ),
+          if (preferences.autoPickSourceEnabled) ...[
+            const SizedBox(height: 3),
+            _SettingsSelection<AutoPickSourceType>(
+              key: const ValueKey('settings-auto-pick-source-type'),
+              focusNode: sourceFocusNode,
+              label: 'Source type',
+              value: preferences.autoPickSourceType,
+              options: [
+                for (final value in AutoPickSourceType.values)
+                  _SettingsOption(
+                    value: value,
+                    label: value.displayName,
+                    detail: value.description,
+                  ),
+              ],
+              onSelected: onSourceSelected,
+            ),
+            const SizedBox(height: 8),
+            _SettingsSelection<AutoPickQuality>(
+              key: const ValueKey('settings-auto-pick-quality'),
+              focusNode: qualityFocusNode,
+              label: 'Strict quality',
+              value: preferences.autoPickQuality,
+              options: [
+                for (final value in AutoPickQuality.values)
+                  _SettingsOption(
+                    value: value,
+                    label: value.displayName,
+                    detail: value.description,
+                  ),
+              ],
+              onSelected: onQualitySelected,
+            ),
+            const SizedBox(height: 8),
+            _SettingsSelection<AutoPickAudio>(
+              key: const ValueKey('settings-auto-pick-audio'),
+              focusNode: audioFocusNode,
+              label: 'Strict audio',
+              value: preferences.autoPickAudio,
+              options: [
+                for (final value in AutoPickAudio.values)
+                  _SettingsOption(
+                    value: value,
+                    label: value.displayName,
+                    detail: value.description,
+                  ),
+              ],
+              onSelected: onAudioSelected,
+            ),
+          ],
+          const SizedBox(height: 5),
+          Text(
+            preferences.autoPickSourceEnabled
+                ? 'Only exact matches are opened automatically. If no allowed '
+                      'stream plays, the complete source picker opens instead.'
+                : 'Off by default. Episodes continue to open the full source '
+                      'picker until you enable this.',
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 10,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PreferenceRow extends StatelessWidget {
   const _PreferenceRow({required this.label, required this.children});
 
@@ -2214,6 +2428,7 @@ class _PreferenceRow extends StatelessWidget {
 
 class _PreferenceChip extends StatelessWidget {
   const _PreferenceChip({
+    super.key,
     required this.label,
     required this.selected,
     required this.onPressed,
@@ -4706,6 +4921,40 @@ class _StatusPill extends StatelessWidget {
       ),
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
+}
+
+class _TvIconButton extends StatelessWidget {
+  const _TvIconButton({
+    required this.icon,
+    required this.onPressed,
+    this.focusNode,
+  });
+
+  final IconData icon;
+  final VoidCallback onPressed;
+  final FocusNode? focusNode;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    focusNode: focusNode,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(10),
+    child: ColoredBox(
+      color: context.appPalette.surface,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Icon(icon, size: 20),
+      ),
+    ),
+  );
 }
 
 class _TvTextButton extends StatelessWidget {
