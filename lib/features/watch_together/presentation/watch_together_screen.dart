@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
+import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +32,9 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
   final _copyFocus = FocusNode(debugLabel: 'watch-together.copy');
   final _watchFocus = FocusNode(debugLabel: 'watch-together.watch');
   final _leaveFocus = FocusNode(debugLabel: 'watch-together.leave');
+  final _classicNavigationFocus = FocusNode(
+    debugLabel: 'watch-together.navigation',
+  );
   late final TextEditingController _roomCodeController;
 
   @override
@@ -45,6 +51,7 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
     _copyFocus.dispose();
     _watchFocus.dispose();
     _leaveFocus.dispose();
+    _classicNavigationFocus.dispose();
     _roomCodeController.dispose();
     super.dispose();
   }
@@ -78,22 +85,40 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
   Widget build(BuildContext context) {
     final preferences = ref.watch(settingsPreferencesProvider);
     final party = ref.watch(watchPartyControllerProvider);
+    final publicIdentity = ref.watch(watchPartyPublicIdentityProvider);
+    ref.read(watchPartyClientProvider).setPublicIdentity(publicIdentity);
     return TetoTopLevelShell(
       preferences: preferences,
-      activeDestination: TopNavigationDestination.settings,
+      activeDestination: TopNavigationDestination.watchTogether,
       firstContentFocusNode: party.isActive ? _copyFocus : _createFocus,
       fallbackContentFocusNode: party.isActive ? _leaveFocus : _roomCodeFocus,
       builder: (context, layout) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!layout.usesTvRail)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: IconButton(
-                tooltip: 'Back',
-                icon: const Icon(Icons.arrow_back_rounded),
-                onPressed: () =>
-                    context.canPop() ? context.pop() : context.go('/'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Focus(
+                canRequestFocus: false,
+                onKeyEvent: (_, event) {
+                  if (event.logicalKey != LogicalKeyboardKey.arrowDown) {
+                    return KeyEventResult.ignored;
+                  }
+                  if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                    final target = party.isActive ? _copyFocus : _createFocus;
+                    if (target.context != null) target.requestFocus();
+                  }
+                  return KeyEventResult.handled;
+                },
+                child: MainNavigationBar(
+                  active: MainNavigationDestination.watchTogether,
+                  preferences: preferences,
+                  activeFocusNode: _classicNavigationFocus,
+                  onActivePressed: () {
+                    final target = party.isActive ? _copyFocus : _createFocus;
+                    if (target.context != null) target.requestFocus();
+                  },
+                ),
               ),
             ),
           Expanded(
@@ -130,7 +155,9 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
                               .create(),
                         ),
                         onJoin: () => unawaited(_join()),
-                        onLeftEdge: layout.focusRail,
+                        onLeftEdge: layout.usesTvRail
+                            ? layout.focusRail
+                            : _classicNavigationFocus.requestFocus,
                       )
                     else
                       _ActivePartyCard(
@@ -138,7 +165,9 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
                         copyFocus: _copyFocus,
                         watchFocus: _watchFocus,
                         leaveFocus: _leaveFocus,
-                        onLeftEdge: layout.focusRail,
+                        onLeftEdge: layout.usesTvRail
+                            ? layout.focusRail
+                            : _classicNavigationFocus.requestFocus,
                         onWatch: party.snapshot?.media == null
                             ? null
                             : () => _openHostEpisode(party.snapshot!.media!),
@@ -223,15 +252,17 @@ class _LobbyCard extends StatelessWidget {
                 controller: roomCodeController,
                 focusNode: roomCodeFocus,
                 enabled: !state.isBusy,
-                maxLength: 9,
-                textCapitalization: TextCapitalization.characters,
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9-]')),
-                ],
+                autofocus: false,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.done,
+                autocorrect: false,
+                enableSuggestions: false,
+                maxLength: 15,
                 decoration: const InputDecoration(
                   counterText: '',
                   labelText: 'Room code',
-                  hintText: 'ABCD-2345',
+                  hintText: '2345-6789',
+                  helperText: '8 digits using numbers 2-9 only',
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => onJoin(),
@@ -338,6 +369,11 @@ class _ActivePartyCard extends StatelessWidget {
                       '${snapshot?.participantCount ?? 0} guests • ${snapshot?.readyCount ?? 0} ready',
                       style: TextStyle(color: context.appPalette.mutedText),
                     ),
+                    if (snapshot != null &&
+                        snapshot.participants.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      _ParticipantRoster(participants: snapshot.participants),
+                    ],
                     if (media != null) ...[
                       const SizedBox(height: 12),
                       Text(
@@ -400,6 +436,120 @@ class _ActivePartyCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ParticipantRoster extends StatelessWidget {
+  const _ParticipantRoster({required this.participants});
+
+  final List<WatchPartyParticipant> participants;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    label: 'People in this room',
+    child: Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        for (var index = 0; index < participants.length; index++)
+          _ParticipantChip(
+            key: ValueKey('watch-together-participant-$index'),
+            participant: participants[index],
+          ),
+      ],
+    ),
+  );
+}
+
+class _ParticipantChip extends StatelessWidget {
+  const _ParticipantChip({required this.participant, super.key});
+
+  final WatchPartyParticipant participant;
+
+  @override
+  Widget build(BuildContext context) {
+    final role = participant.role == WatchPartyRole.host ? 'Host' : 'Guest';
+    final readiness = participant.ready ? 'Ready' : 'Not ready';
+    return Semantics(
+      label: '${participant.displayName}, $role, $readiness',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: context.appPalette.selectableSurface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: context.appPalette.primaryText.withValues(alpha: .12),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(7, 6, 12, 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox.square(
+                dimension: 36,
+                child: ClipOval(
+                  child: participant.avatarUrl == null
+                      ? ColoredBox(
+                          color: context.appPalette.accent.withValues(
+                            alpha: .22,
+                          ),
+                          child: Center(
+                            child: Text(
+                              _participantInitials(participant.displayName),
+                              style: TextStyle(
+                                color: context.appPalette.accentBright,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        )
+                      : NetworkArtwork(
+                          url: participant.avatarUrl,
+                          icon: Icons.person_rounded,
+                          cacheWidth: 96,
+                        ),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: Text(
+                      participant.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  Text(
+                    '$role • $readiness',
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _participantInitials(String value) {
+  final words = value.trim().split(RegExp(r'\s+')).take(2);
+  final initials = words
+      .where((word) => word.isNotEmpty)
+      .map((word) => String.fromCharCode(word.runes.first))
+      .join()
+      .toUpperCase();
+  return initials.isEmpty ? '?' : initials;
 }
 
 class _PartyPanel extends StatelessWidget {

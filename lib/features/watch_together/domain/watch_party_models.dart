@@ -2,6 +2,117 @@ import 'package:flutter/foundation.dart';
 
 enum WatchPartyRole { host, guest }
 
+const int maximumWatchPartyDisplayNameLength = 48;
+const int maximumWatchPartyAvatarUrlLength = 512;
+const int maximumWatchPartyGuestCount = 20;
+const int maximumWatchPartyRosterSize = maximumWatchPartyGuestCount + 1;
+
+const _watchPartyAvatarHosts = <String>{'s4.anilist.co', 'cdn.myanimelist.net'};
+
+@immutable
+class WatchPartyPublicIdentity {
+  const WatchPartyPublicIdentity._({required this.displayName, this.avatarUrl});
+
+  final String displayName;
+  final String? avatarUrl;
+
+  static WatchPartyPublicIdentity? tryCreate({
+    required Object? displayName,
+    Object? avatarUrl,
+  }) {
+    final safeName = _safeWatchPartyDisplayName(displayName);
+    if (safeName == null) return null;
+    return WatchPartyPublicIdentity._(
+      displayName: safeName,
+      // An unsafe profile picture is optional and is simply not shared.
+      avatarUrl: _safeWatchPartyAvatarUrl(avatarUrl),
+    );
+  }
+
+  Map<String, Object> toJson() => switch (avatarUrl) {
+    final avatar? => <String, Object>{
+      'display_name': displayName,
+      'avatar_url': avatar,
+    },
+    null => <String, Object>{'display_name': displayName},
+  };
+}
+
+@immutable
+class WatchPartyParticipant {
+  const WatchPartyParticipant({
+    required this.displayName,
+    required this.role,
+    required this.ready,
+    this.avatarUrl,
+  });
+
+  final String displayName;
+  final String? avatarUrl;
+  final WatchPartyRole role;
+  final bool ready;
+
+  static WatchPartyParticipant? tryFromJson(Map<String, Object?> value) {
+    const allowedKeys = <String>{'display_name', 'avatar_url', 'role', 'ready'};
+    if (value.keys.any((key) => !allowedKeys.contains(key))) return null;
+    final displayName = _safeWatchPartyDisplayName(value['display_name']);
+    final role = switch (value['role']) {
+      'host' => WatchPartyRole.host,
+      'guest' => WatchPartyRole.guest,
+      _ => null,
+    };
+    final ready = value['ready'];
+    final avatarValue = value['avatar_url'];
+    final avatarUrl = _safeWatchPartyAvatarUrl(avatarValue);
+    if (displayName == null ||
+        role == null ||
+        ready is! bool ||
+        (avatarValue != null && avatarUrl == null)) {
+      return null;
+    }
+    return WatchPartyParticipant(
+      displayName: displayName,
+      avatarUrl: avatarUrl,
+      role: role,
+      ready: ready,
+    );
+  }
+}
+
+String? _safeWatchPartyDisplayName(Object? value) {
+  if (value is! String) return null;
+  final normalized = value
+      .trim()
+      .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ');
+  if (normalized.isEmpty ||
+      normalized.length > maximumWatchPartyDisplayNameLength ||
+      RegExp(r'\S+@\S+\.\S+').hasMatch(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+String? _safeWatchPartyAvatarUrl(Object? value) {
+  if (value == null) return null;
+  if (value is! String || value.length > maximumWatchPartyAvatarUrlLength) {
+    return null;
+  }
+  final uri = Uri.tryParse(value);
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment ||
+      (uri.hasPort && uri.port != 443) ||
+      uri.path.contains('\\') ||
+      !_watchPartyAvatarHosts.contains(uri.host.toLowerCase())) {
+    return null;
+  }
+  return uri.toString();
+}
+
 @immutable
 class WatchPartyMedia {
   const WatchPartyMedia({
@@ -107,6 +218,7 @@ class WatchPartySnapshot {
     required this.participantCount,
     required this.readyCount,
     required this.expiresAt,
+    this.participants = const <WatchPartyParticipant>[],
     this.media,
   });
 
@@ -127,6 +239,7 @@ class WatchPartySnapshot {
   final DateTime? receivedAt;
   final int participantCount;
   final int readyCount;
+  final List<WatchPartyParticipant> participants;
   final DateTime expiresAt;
 
   Duration expectedPositionAt(DateTime localNow) {
@@ -142,6 +255,25 @@ class WatchPartySnapshot {
     DateTime? receivedAt,
   }) {
     final media = value['media'];
+    final participantCount =
+        ((value['participant_count'] as num?)?.toInt() ?? 0).clamp(
+          0,
+          maximumWatchPartyGuestCount,
+        );
+    final readyCount = ((value['ready_count'] as num?)?.toInt() ?? 0).clamp(
+      0,
+      participantCount,
+    );
+    final participants = <WatchPartyParticipant>[];
+    if (value['participants'] case final List<Object?> roster) {
+      for (final item in roster.take(maximumWatchPartyRosterSize)) {
+        if (item is! Map) continue;
+        final participant = WatchPartyParticipant.tryFromJson(
+          item.map((key, value) => MapEntry(key.toString(), value)),
+        );
+        if (participant != null) participants.add(participant);
+      }
+    }
     return WatchPartySnapshot(
       roomCode: value['room_code'] as String? ?? '',
       role: value['role'] == 'host'
@@ -166,8 +298,9 @@ class WatchPartySnapshot {
         isUtc: true,
       ),
       receivedAt: (receivedAt ?? DateTime.now()).toUtc(),
-      participantCount: (value['participant_count'] as num?)?.toInt() ?? 0,
-      readyCount: (value['ready_count'] as num?)?.toInt() ?? 0,
+      participantCount: participantCount,
+      readyCount: readyCount,
+      participants: List<WatchPartyParticipant>.unmodifiable(participants),
       expiresAt:
           DateTime.tryParse(value['expires_at'] as String? ?? '')?.toUtc() ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),

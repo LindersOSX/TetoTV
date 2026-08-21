@@ -771,6 +771,7 @@ void main() {
         'navigation_show_my_list': 'false',
         'navigation_show_discover': 'false',
         'navigation_show_calendar': 'false',
+        'navigation_show_watch_together': 'false',
         'navigation_settings_entry_placement': 'profileMenu',
       });
       tester.view.physicalSize = const Size(1280, 720);
@@ -830,6 +831,7 @@ void main() {
         'main-nav-my-list',
         'main-nav-discover',
         'main-nav-calendar',
+        'main-nav-watch-together',
         'main-nav-settings',
       ]) {
         expect(find.byKey(ValueKey(key)), findsNothing);

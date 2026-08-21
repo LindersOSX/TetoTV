@@ -3,8 +3,11 @@ package dev.animetv.anime_tv.player
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Dialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.res.ColorStateList
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -31,6 +34,9 @@ import android.widget.ImageButton
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.Toast
 import android.widget.TextView
 import androidx.annotation.OptIn
@@ -57,6 +63,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionResult
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.DefaultTimeBar
@@ -77,8 +84,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.lang.ref.WeakReference
+import java.net.URI
 
 internal fun nativePlaybackProgressIsPublishable(
     checkpointKey: String,
@@ -140,6 +150,174 @@ internal object NativePlayerProgressBridge {
             Handler(Looper.getMainLooper()).post(deliver)
         }
     }
+
+    fun requestWatchPartyHud(
+        checkpointKey: String,
+        playbackSessionGeneration: Int,
+        onResult: (NativeWatchPartyHudResult) -> Unit,
+    ): Boolean {
+        if (checkpointKey.isBlank() || playbackSessionGeneration <= 0) return false
+        val activeChannel = channel ?: return false
+        val deliver = Runnable {
+            runCatching {
+                activeChannel.invokeMethod(
+                    "nativeWatchPartyHud",
+                    mapOf(
+                        "checkpointKey" to checkpointKey,
+                        "playbackSessionGeneration" to playbackSessionGeneration,
+                    ),
+                    object : MethodChannel.Result {
+                        override fun success(result: Any?) {
+                            onResult(parseNativeWatchPartyHudResult(result))
+                        }
+
+                        override fun error(
+                            errorCode: String,
+                            errorMessage: String?,
+                            errorDetails: Any?,
+                        ) {
+                            onResult(NativeWatchPartyHudResult.unavailable())
+                        }
+
+                        override fun notImplemented() {
+                            onResult(NativeWatchPartyHudResult.unavailable())
+                        }
+                    },
+                )
+            }.onFailure {
+                onResult(NativeWatchPartyHudResult.unavailable())
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) deliver.run()
+        else Handler(Looper.getMainLooper()).post(deliver)
+        return true
+    }
+}
+
+internal data class NativeWatchPartyHudResult(
+    val ok: Boolean,
+    val roomCode: String?,
+    val watchUrl: String?,
+    val status: String?,
+    val message: String,
+    val participants: List<NativeWatchPartyHudParticipant>,
+) {
+    companion object {
+        fun unavailable(message: String = "Watch Together is unavailable for this player.") =
+            NativeWatchPartyHudResult(false, null, null, null, message, emptyList())
+    }
+}
+
+internal data class NativeWatchPartyHudParticipant(
+    val displayName: String,
+    val avatarUrl: String?,
+    val role: String,
+    val ready: Boolean,
+)
+
+private const val NATIVE_WATCH_PARTY_PREVIEW_LIMIT = 6
+private const val NATIVE_WATCH_PARTY_NAME_LIMIT = 48
+private const val NATIVE_WATCH_PARTY_AVATAR_URL_LIMIT = 512
+private val NATIVE_WATCH_PARTY_AVATAR_HOSTS = setOf(
+    "s4.anilist.co",
+    "cdn.myanimelist.net",
+)
+
+internal fun parseNativeWatchPartyParticipants(value: Any?): List<NativeWatchPartyHudParticipant> {
+    val roster = value as? List<*> ?: return emptyList()
+    return roster.asSequence()
+        .take(NATIVE_WATCH_PARTY_PREVIEW_LIMIT)
+        .mapNotNull { raw ->
+            val participant = raw as? Map<*, *> ?: return@mapNotNull null
+            val allowedKeys = setOf("display_name", "avatar_url", "role", "ready")
+            if (participant.keys.any { it !is String || it !in allowedKeys }) {
+                return@mapNotNull null
+            }
+            val displayName = (participant["display_name"] as? String)
+                ?.trim()
+                ?.replace(Regex("[\\x00-\\x1f\\x7f]"), " ")
+                ?.replace(Regex("\\s+"), " ")
+                ?.takeIf {
+                    it.isNotEmpty() &&
+                        it.length <= NATIVE_WATCH_PARTY_NAME_LIMIT &&
+                        !Regex("\\S+@\\S+\\.\\S+").containsMatchIn(it)
+                }
+                ?: return@mapNotNull null
+            val role = (participant["role"] as? String)
+                ?.takeIf { it == "host" || it == "guest" }
+                ?: return@mapNotNull null
+            val ready = participant["ready"] as? Boolean ?: return@mapNotNull null
+            val rawAvatar = participant["avatar_url"]
+            val avatarUrl = safeNativeWatchPartyAvatarUrl(rawAvatar)
+            if (rawAvatar != null && avatarUrl == null) return@mapNotNull null
+            NativeWatchPartyHudParticipant(displayName, avatarUrl, role, ready)
+        }
+        .toList()
+}
+
+internal fun safeNativeWatchPartyAvatarUrl(value: Any?): String? {
+    if (value == null) return null
+    val raw = (value as? String)?.trim()?.takeIf {
+        it.isNotEmpty() && it.length <= NATIVE_WATCH_PARTY_AVATAR_URL_LIMIT
+    } ?: return null
+    val uri = runCatching { URI(raw) }.getOrNull() ?: return null
+    val host = uri.host?.lowercase()?.takeIf(NATIVE_WATCH_PARTY_AVATAR_HOSTS::contains)
+        ?: return null
+    if (
+        !uri.scheme.equals("https", ignoreCase = true) ||
+        uri.rawUserInfo != null ||
+        uri.rawQuery != null ||
+        uri.rawFragment != null ||
+        uri.port !in setOf(-1, 443) ||
+        uri.path.orEmpty().contains('\\')
+    ) return null
+    return raw
+}
+
+internal fun readBoundedWatchPartyAvatar(
+    input: InputStream,
+    maximumBytes: Int = 256 * 1024,
+): ByteArray? {
+    if (maximumBytes <= 0) return null
+    val output = ByteArrayOutputStream(min(maximumBytes, 16 * 1024))
+    val buffer = ByteArray(8 * 1024)
+    var total = 0
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        total += read
+        if (total > maximumBytes) return null
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+internal fun parseNativeWatchPartyHudResult(value: Any?): NativeWatchPartyHudResult {
+    val data = value as? Map<*, *> ?: return NativeWatchPartyHudResult.unavailable()
+    val roomCode = (data["roomCode"] as? String)
+        ?.trim()
+        ?.takeIf { Regex("^[2-9]{8}$").matches(it) }
+    val watchUrl = (data["watchUrl"] as? String)?.trim()?.takeIf { raw ->
+        val uri = runCatching { URI(raw) }.getOrNull()
+        uri != null &&
+            uri.scheme.equals("https", ignoreCase = true) &&
+            !uri.host.isNullOrBlank() &&
+            uri.userInfo.isNullOrBlank() &&
+            uri.fragment.isNullOrBlank() &&
+            uri.path == "/watch" &&
+            roomCode != null &&
+            uri.rawQuery == "room=$roomCode"
+    }
+    val status = (data["status"] as? String)?.trim()?.take(96)?.takeIf(String::isNotEmpty)
+    val message = (data["message"] as? String)
+        ?.trim()
+        ?.take(240)
+        ?.takeIf(String::isNotEmpty)
+        ?: "Watch Together could not create or open the room."
+    val participants = parseNativeWatchPartyParticipants(data["participants"])
+    val ok = data["ok"] == true && roomCode != null && watchUrl != null
+    return NativeWatchPartyHudResult(ok, roomCode, watchUrl, status, message, participants)
 }
 
 internal fun nativePlayerCommandMatchesSession(
@@ -149,11 +327,140 @@ internal fun nativePlayerCommandMatchesSession(
     requestedGeneration: Int,
     action: String,
 ): Boolean =
+    nativePlayerSessionMatches(
+        activeCheckpointKey = activeCheckpointKey,
+        activeGeneration = activeGeneration,
+        requestedCheckpointKey = requestedCheckpointKey,
+        requestedGeneration = requestedGeneration,
+    ) && action in setOf("play", "pause", "seek")
+
+internal fun nativePlayerSessionMatches(
+    activeCheckpointKey: String,
+    activeGeneration: Int,
+    requestedCheckpointKey: String,
+    requestedGeneration: Int,
+): Boolean =
+    activeCheckpointKey.isNotBlank() &&
+        activeCheckpointKey == requestedCheckpointKey &&
+        activeGeneration > 0 &&
+        activeGeneration == requestedGeneration
+
+internal fun nativeWatchPartyStateMatchesSession(
+    activeCheckpointKey: String,
+    activeGeneration: Int,
+    requestedCheckpointKey: String,
+    requestedGeneration: Int,
+    stateSequence: Int,
+    lastStateSequence: Int = 0,
+): Boolean =
     activeCheckpointKey.isNotBlank() &&
         activeCheckpointKey == requestedCheckpointKey &&
         activeGeneration > 0 &&
         activeGeneration == requestedGeneration &&
-        action in setOf("play", "pause", "seek")
+        stateSequence > lastStateSequence
+
+internal enum class NativeTransportCommandOrigin {
+    LOCAL_HUD,
+    LOCAL_KEY,
+    MEDIA_SESSION,
+    WATCH_PARTY_COORDINATOR,
+}
+
+internal fun nativeGuestLockAllowsTransportCommand(
+    guestControlsLocked: Boolean,
+    origin: NativeTransportCommandOrigin,
+): Boolean = !guestControlsLocked || origin == NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR
+
+internal inline fun dispatchNativeTransportCommand(
+    guestControlsLocked: Boolean,
+    origin: NativeTransportCommandOrigin,
+    action: String,
+    positionMs: Long? = null,
+    play: () -> Unit,
+    pause: () -> Unit,
+    seek: (Long) -> Unit,
+): Boolean {
+    if (!nativeGuestLockAllowsTransportCommand(guestControlsLocked, origin)) return false
+    when (action) {
+        "play" -> play()
+        "pause" -> pause()
+        "seek" -> seek(positionMs ?: return false)
+        else -> return false
+    }
+    return true
+}
+
+@Suppress("DEPRECATION")
+internal fun nativeGuestLockBlocksMediaSessionCommand(
+    guestControlsLocked: Boolean,
+    playerCommand: Int,
+): Boolean {
+    if (!guestControlsLocked) return false
+    return playerCommand !in setOf(
+        Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+        Player.COMMAND_GET_TIMELINE,
+        Player.COMMAND_GET_MEDIA_ITEMS_METADATA,
+        Player.COMMAND_GET_METADATA,
+        Player.COMMAND_GET_AUDIO_ATTRIBUTES,
+        Player.COMMAND_GET_VOLUME,
+        Player.COMMAND_GET_DEVICE_VOLUME,
+        Player.COMMAND_GET_TEXT,
+        Player.COMMAND_GET_TRACKS,
+        // TV remotes route volume through AudioManager on most devices, but
+        // controllers that expose it as a Player command remain permitted.
+        Player.COMMAND_SET_VOLUME,
+        Player.COMMAND_SET_DEVICE_VOLUME,
+        Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS,
+        Player.COMMAND_ADJUST_DEVICE_VOLUME,
+        Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
+    )
+}
+
+private val GUEST_LOCKED_LOCAL_COMMAND_KEYS = setOf(
+    KeyEvent.KEYCODE_J,
+    KeyEvent.KEYCODE_K,
+    KeyEvent.KEYCODE_L,
+    KeyEvent.KEYCODE_P,
+    KeyEvent.KEYCODE_SPACE,
+    KeyEvent.KEYCODE_S,
+    KeyEvent.KEYCODE_C,
+    KeyEvent.KEYCODE_A,
+    KeyEvent.KEYCODE_I,
+    KeyEvent.KEYCODE_M,
+    KeyEvent.KEYCODE_MENU,
+    KeyEvent.KEYCODE_BUTTON_X,
+    KeyEvent.KEYCODE_BUTTON_Y,
+    KeyEvent.KEYCODE_BUTTON_L1,
+    KeyEvent.KEYCODE_BUTTON_R1,
+    KeyEvent.KEYCODE_CAPTIONS,
+    KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK,
+    KeyEvent.KEYCODE_MEDIA_PLAY,
+    KeyEvent.KEYCODE_MEDIA_PAUSE,
+    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+    KeyEvent.KEYCODE_MEDIA_STOP,
+    KeyEvent.KEYCODE_MEDIA_REWIND,
+    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+    KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+    KeyEvent.KEYCODE_MEDIA_NEXT,
+    KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
+    KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+    KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD,
+    KeyEvent.KEYCODE_MEDIA_STEP_FORWARD,
+)
+
+internal fun nativeGuestLockBlocksLocalKey(
+    guestControlsLocked: Boolean,
+    keyCode: Int,
+): Boolean = guestControlsLocked && keyCode in GUEST_LOCKED_LOCAL_COMMAND_KEYS
+
+/**
+ * Attached guests keep the native player session alive at end-of-media so a
+ * later host seek/replay can be applied through the coordinator. Hosts and
+ * standalone playback retain the normal completed-result flow.
+ */
+internal fun nativePlayerShouldFinishAtEnd(
+    guestControlsLocked: Boolean,
+): Boolean = !guestControlsLocked
 
 /** Narrow, generation-guarded command path into the active native Activity. */
 internal object NativePlayerCommandBridge {
@@ -196,6 +503,85 @@ internal object NativePlayerCommandBridge {
                 matches(latest, activity, checkpointKey, generation, action)
             ) {
                 activity.applyWatchPartyCommand(action, safePositionMs)
+            }
+        }
+        return true
+    }
+
+    fun updateWatchPartyState(
+        checkpointKey: String,
+        generation: Int,
+        guestControlsLocked: Boolean,
+        stateSequence: Int,
+        status: String?,
+    ): Boolean {
+        val current = active ?: return false
+        val activity = current.activity.get() ?: run {
+            active = null
+            return false
+        }
+        if (
+            !nativeWatchPartyStateMatchesSession(
+                activeCheckpointKey = current.checkpointKey,
+                activeGeneration = current.generation,
+                requestedCheckpointKey = checkpointKey,
+                requestedGeneration = generation,
+                stateSequence = stateSequence,
+            )
+        ) return false
+        activity.runOnUiThread {
+            val latest = active
+            if (
+                latest != null &&
+                latest.activity.get() === activity &&
+                nativeWatchPartyStateMatchesSession(
+                    activeCheckpointKey = latest.checkpointKey,
+                    activeGeneration = latest.generation,
+                    requestedCheckpointKey = checkpointKey,
+                    requestedGeneration = generation,
+                    stateSequence = stateSequence,
+                )
+            ) {
+                activity.applyWatchPartyGuestControlState(
+                    guestControlsLocked = guestControlsLocked,
+                    stateSequence = stateSequence,
+                    status = status,
+                )
+            }
+        }
+        return true
+    }
+
+    fun dismissForWatchPartyTransition(
+        checkpointKey: String,
+        generation: Int,
+    ): Boolean {
+        val current = active ?: return false
+        val activity = current.activity.get() ?: run {
+            active = null
+            return false
+        }
+        if (
+            !nativePlayerSessionMatches(
+                activeCheckpointKey = current.checkpointKey,
+                activeGeneration = current.generation,
+                requestedCheckpointKey = checkpointKey,
+                requestedGeneration = generation,
+            )
+        ) return false
+        activity.runOnUiThread {
+            val latest = active
+            if (
+                latest != null &&
+                latest.activity.get() === activity &&
+                nativePlayerSessionMatches(
+                    activeCheckpointKey = latest.checkpointKey,
+                    activeGeneration = latest.generation,
+                    requestedCheckpointKey = checkpointKey,
+                    requestedGeneration = generation,
+                )
+            ) {
+                activity.finishForWatchPartyMediaTransition()
             }
         }
         return true
@@ -424,6 +810,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var pictureModeButton: ImageButton
     private lateinit var fixVideoButton: ImageButton
     private lateinit var sourcesButton: ImageButton
+    private lateinit var watchPartyButton: ImageButton
     private lateinit var optionsButton: ImageButton
     private lateinit var playPauseButton: ImageButton
     private lateinit var rewindControlContainer: View
@@ -433,12 +820,22 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private lateinit var captionControlContainer: View
     private lateinit var skipSegmentButton: Button
     private lateinit var pausedTitleView: TextView
+    private lateinit var watchPartyStatusView: TextView
+    private lateinit var footerHintView: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val metadataClient = OkHttpClient.Builder()
         .dns(PublicNetworkDns())
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .build()
+    private val watchPartyAvatarClient = OkHttpClient.Builder()
+        .dns(PublicNetworkDns())
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .retryOnConnectionFailure(false)
         .build()
 
     private var source = ""
@@ -520,6 +917,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private val autoFocusedSkipSegments = mutableSetOf<String>()
     private val autoSkippedSegments = mutableSetOf<String>()
     private var exitDialog: AlertDialog? = null
+    private var watchPartyDialog: AlertDialog? = null
+    private var watchPartyRequestInFlight = false
+    private var watchPartyGuestControlsLocked = false
+    private var watchPartyStateSequence = 0
+    private var lastGuestControlNoticeAtMs = 0L
 
     private val checkpointPreferences by lazy {
         getSharedPreferences(CHECKPOINT_PREFERENCES, MODE_PRIVATE)
@@ -647,6 +1049,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         checkpointKey = intent.getStringExtra(EXTRA_CHECKPOINT_KEY).orEmpty()
         playbackSessionGeneration =
             intent.getIntExtra(EXTRA_PLAYBACK_SESSION_GENERATION, 0).coerceAtLeast(0)
+        watchPartyGuestControlsLocked = intent.getBooleanExtra(
+            EXTRA_WATCH_PARTY_GUEST_CONTROLS_LOCKED,
+            false,
+        )
+        watchPartyStateSequence =
+            intent.getIntExtra(EXTRA_WATCH_PARTY_STATE_SEQUENCE, 0).coerceAtLeast(0)
+        NativePlayerCommandBridge.attach(this, checkpointKey, playbackSessionGeneration)
         intent.getStringExtra(EXTRA_FAILOVER_NOTICE)
             ?.trim()
             ?.takeIf(String::isNotEmpty)
@@ -894,44 +1303,68 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         configurePlayerChromeBounds()
         audioTrackButton = playerView.findViewById<ImageButton>(R.id.tetotv_audio_tracks).apply {
             setOnClickListener {
+                if (blockGuestLocalControl()) return@setOnClickListener
                 showTrackPicker(C.TRACK_TYPE_AUDIO, this)
             }
         }
         captionTrackButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_caption_tracks).apply {
                 setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
                     showTrackPicker(C.TRACK_TYPE_TEXT, this)
                 }
             }
         captionSizeButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_caption_size).apply {
-                setOnClickListener { showSubtitleSizePicker(this) }
+                setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
+                    showSubtitleSizePicker(this)
+                }
             }
         pictureModeButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_picture_mode).apply {
-                setOnClickListener { cyclePictureMode(this) }
+                setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
+                    cyclePictureMode(this)
+                }
             }
         fixVideoButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_fix_video).apply {
-                setOnClickListener { showPlayerPicker(this) }
+                setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
+                    showPlayerPicker(this)
+                }
             }
         sourcesButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_player_sources).apply {
                 visibility = if (hasDirectSources) View.VISIBLE else View.GONE
-                setOnClickListener { finishWithResult(STATUS_NEXT_STREAM) }
+                setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
+                    finishWithResult(STATUS_NEXT_STREAM)
+                }
             }
         playerView.findViewById<View>(R.id.tetotv_sources_control).visibility =
             if (hasDirectSources) View.VISIBLE else View.GONE
         playerView.findViewById<View>(R.id.tetotv_sources_spacing).visibility =
             if (hasDirectSources) View.VISIBLE else View.GONE
+        watchPartyButton =
+            playerView.findViewById<ImageButton>(R.id.tetotv_watch_party).apply {
+                setOnClickListener { showWatchPartyHud(this) }
+            }
         optionsButton =
             playerView.findViewById<ImageButton>(R.id.tetotv_player_options).apply {
-                setOnClickListener { showPlaybackOptions(this) }
+                setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
+                    showPlaybackOptions(this)
+                }
             }
         fixVideoButton.nextFocusRightId =
-            if (hasDirectSources) R.id.tetotv_player_sources else R.id.tetotv_player_options
-        optionsButton.nextFocusLeftId =
+            if (hasDirectSources) R.id.tetotv_player_sources else R.id.tetotv_watch_party
+        sourcesButton.nextFocusRightId = R.id.tetotv_watch_party
+        watchPartyButton.nextFocusLeftId =
             if (hasDirectSources) R.id.tetotv_player_sources else R.id.tetotv_fix_video
+        watchPartyButton.nextFocusRightId = R.id.tetotv_player_options
+        optionsButton.nextFocusLeftId = R.id.tetotv_watch_party
         rewindControlContainer = playerView.findViewById(R.id.tetotv_rewind_control)
         playPauseControlContainer = playerView.findViewById(R.id.tetotv_play_pause_control)
         fastForwardControlContainer = playerView.findViewById(R.id.tetotv_fast_forward_control)
@@ -940,6 +1373,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         playPauseButton =
             playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_play_pause).apply {
                 setImageResource(R.drawable.tetotv_ic_play_arrow_rounded)
+                setOnClickListener {
+                    val action = if (isPlaybackIntended()) "pause" else "play"
+                    runNativeTransportCommand(
+                        origin = NativeTransportCommandOrigin.LOCAL_HUD,
+                        action = action,
+                    )
+                }
             }
         skipSegmentButton =
             findViewById<Button>(R.id.tetotv_skip_segment).apply {
@@ -948,6 +1388,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     tvSafeHudTextSizePx(HUD_SKIP_LABEL_SIZE_DP),
                 )
                 setOnClickListener {
+                    if (blockGuestLocalControl()) return@setOnClickListener
                     val segment = activeSkipSegment ?: return@setOnClickListener
                     seekPastSkipSegment(segment, announce = false)
                 }
@@ -984,10 +1425,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getStringExtra(EXTRA_TITLE).orEmpty()
         playerView.findViewById<TextView>(R.id.tetotv_stream_label).text =
             intent.getStringExtra(EXTRA_STREAM_LABEL).orEmpty().ifBlank { "Debrid stream" }
-        playerView.findViewById<TextView>(R.id.tetotv_watch_party_status).apply {
+        watchPartyStatusView =
+            playerView.findViewById<TextView>(R.id.tetotv_watch_party_status).apply {
             text = intent.getStringExtra(EXTRA_WATCH_PARTY_STATUS).orEmpty().take(96)
             visibility = if (text.isBlank()) View.GONE else View.VISIBLE
         }
+        footerHintView = playerView.findViewById(R.id.tetotv_footer_hint)
         applyNativePlayerTheme()
         updateCaptionSizeDescription()
         playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_rew).apply {
@@ -996,7 +1439,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 R.string.tetotv_player_rewind_seconds,
                 seekBackIncrementMs / 1_000,
             )
-            setOnClickListener { seekRelative(-seekBackIncrementMs, it) }
+            setOnClickListener {
+                if (blockGuestLocalControl()) return@setOnClickListener
+                seekRelative(-seekBackIncrementMs, it)
+            }
         }
         playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_ffwd).apply {
             setImageResource(R.drawable.tetotv_ic_forward_rounded)
@@ -1004,7 +1450,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 R.string.tetotv_player_fast_forward_seconds,
                 seekForwardIncrementMs / 1_000,
             )
-            setOnClickListener { seekRelative(seekForwardIncrementMs, it) }
+            setOnClickListener {
+                if (blockGuestLocalControl()) return@setOnClickListener
+                seekRelative(seekForwardIncrementMs, it)
+            }
         }
         bindChromeControlSurface(R.id.tetotv_rewind_control, androidx.media3.ui.R.id.exo_rew)
         bindChromeControlSurface(
@@ -1023,8 +1472,15 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (hasDirectSources) {
             bindChromeControlSurface(R.id.tetotv_sources_control, R.id.tetotv_player_sources)
         }
+        bindChromeControlSurface(R.id.tetotv_watch_party_control, R.id.tetotv_watch_party)
         bindChromeControlSurface(R.id.tetotv_options_control, R.id.tetotv_player_options)
         updateTransportControlAvailability(player.availableCommands)
+        applyWatchPartyGuestControlState(
+            guestControlsLocked = watchPartyGuestControlsLocked,
+            stateSequence = watchPartyStateSequence,
+            status = intent.getStringExtra(EXTRA_WATCH_PARTY_STATUS),
+            force = true,
+        )
         val videoSurface = playerView.videoSurfaceView
         if (videoSurface !is SurfaceView) {
             terminalError =
@@ -1039,6 +1495,32 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             // asynchronous destruction has released its session. This matters
             // for auto-next and immediate retry/fallback launches.
             .setId("TetoTVNativePlayer-${SystemClock.elapsedRealtimeNanos()}")
+            .setCallback(
+                object : MediaSession.Callback {
+                    @Suppress("OVERRIDE_DEPRECATION")
+                    override fun onPlayerCommandRequest(
+                        session: MediaSession,
+                        controller: MediaSession.ControllerInfo,
+                        playerCommand: Int,
+                    ): Int = if (
+                        nativeGuestLockBlocksMediaSessionCommand(
+                            watchPartyGuestControlsLocked,
+                            playerCommand,
+                        )
+                    ) {
+                        SessionResult.RESULT_ERROR_PERMISSION_DENIED
+                    } else {
+                        SessionResult.RESULT_SUCCESS
+                    }
+
+                    @Suppress("DEPRECATION")
+                    override fun onMediaButtonEvent(
+                        session: MediaSession,
+                        controllerInfo: MediaSession.ControllerInfo,
+                        intent: Intent,
+                    ): Boolean = watchPartyGuestControlsLocked
+                },
+            )
             .build()
 
         val startFromBeginning = intent.getBooleanExtra(EXTRA_START_FROM_BEGINNING, false)
@@ -1073,7 +1555,6 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         player.setMediaItem(buildMediaItem(), startPositionMs)
         player.prepare()
         player.playWhenReady = intent.getBooleanExtra(EXTRA_AUTO_PLAY, true)
-        NativePlayerCommandBridge.attach(this, checkpointKey, playbackSessionGeneration)
         playerView.showController()
         requestTransportFocus()
         armControllerAutoHide()
@@ -1132,7 +1613,22 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                     handler.postDelayed(firstFrameWatchdog, FIRST_FRAME_TIMEOUT_MS)
                 }
             }
-            Player.STATE_ENDED -> finishWithResult(STATUS_COMPLETED)
+            Player.STATE_ENDED -> {
+                publishPlaybackProgress()
+                publishDiscordPresence()
+                if (nativePlayerShouldFinishAtEnd(watchPartyGuestControlsLocked)) {
+                    finishWithResult(STATUS_COMPLETED)
+                } else {
+                    // Do not tear down the generation-scoped command bridge.
+                    // The host may seek/replay this episode, or the Flutter
+                    // media follower may replace it with a newer catalog item.
+                    player.playWhenReady = false
+                    playerView.showController()
+                    if (::watchPartyButton.isInitialized) {
+                        watchPartyButton.requestFocus()
+                    }
+                }
+            }
             Player.STATE_BUFFERING, Player.STATE_IDLE -> Unit
         }
     }
@@ -1651,9 +2147,190 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun setChromeControlAvailable(container: View, available: Boolean) {
-        container.isEnabled = available
-        container.isClickable = available
-        container.alpha = if (available) 1f else DISABLED_CONTROL_ALPHA
+        val effectiveAvailability = available && !watchPartyGuestControlsLocked
+        container.isEnabled = effectiveAvailability
+        container.isClickable = effectiveAvailability
+        container.alpha = if (effectiveAvailability) 1f else DISABLED_CONTROL_ALPHA
+        container.setActionDescendantsAvailable(effectiveAvailability)
+    }
+
+    private fun View.setActionDescendantsAvailable(available: Boolean) {
+        when (this) {
+            is ImageButton,
+            is Button,
+            -> {
+                isEnabled = available
+                isFocusable = available
+            }
+            is ViewGroup -> {
+                for (index in 0 until childCount) {
+                    getChildAt(index).setActionDescendantsAvailable(available)
+                }
+            }
+        }
+    }
+
+    internal fun applyWatchPartyGuestControlState(
+        guestControlsLocked: Boolean,
+        stateSequence: Int,
+        status: String?,
+        force: Boolean = false,
+    ) {
+        if (!force && stateSequence <= watchPartyStateSequence) return
+        val becameLocked = guestControlsLocked && !watchPartyGuestControlsLocked
+        watchPartyGuestControlsLocked = guestControlsLocked
+        watchPartyStateSequence = max(watchPartyStateSequence, stateSequence)
+        if (!::playerView.isInitialized) return
+
+        if (::watchPartyStatusView.isInitialized) {
+            watchPartyStatusView.text = status.orEmpty().trim().take(96)
+            watchPartyStatusView.visibility =
+                if (watchPartyStatusView.text.isBlank()) View.GONE else View.VISIBLE
+        }
+        if (::footerHintView.isInitialized) {
+            footerHintView.setText(
+                if (guestControlsLocked) R.string.tetotv_player_guest_controls_hint
+                else R.string.tetotv_player_footer_hint,
+            )
+        }
+
+        updateTransportControlAvailability(player.availableCommands)
+        if (::audioControlContainer.isInitialized) {
+            setChromeControlAvailable(audioControlContainer, !guestControlsLocked)
+        }
+        if (::captionControlContainer.isInitialized) {
+            setChromeControlAvailable(captionControlContainer, !guestControlsLocked)
+        }
+        listOf(
+            R.id.tetotv_caption_size_control,
+            R.id.tetotv_picture_control,
+            R.id.tetotv_player_control,
+            R.id.tetotv_options_control,
+        ).forEach { id ->
+            playerView.findViewById<View>(id)?.let { container ->
+                setChromeControlAvailable(container, !guestControlsLocked)
+            }
+        }
+        if (hasDirectSources) {
+            playerView.findViewById<View>(R.id.tetotv_sources_control)?.let { container ->
+                setChromeControlAvailable(container, !guestControlsLocked)
+            }
+        }
+
+        if (::watchPartyButton.isInitialized) {
+            watchPartyButton.isFocusable = true
+            watchPartyButton.nextFocusLeftId = if (guestControlsLocked) {
+                R.id.tetotv_watch_party
+            } else if (hasDirectSources) {
+                R.id.tetotv_player_sources
+            } else {
+                R.id.tetotv_fix_video
+            }
+            watchPartyButton.nextFocusRightId = if (guestControlsLocked) {
+                R.id.tetotv_watch_party
+            } else {
+                R.id.tetotv_player_options
+            }
+        }
+
+        if (guestControlsLocked) {
+            pendingAudioTrackPicker?.let(handler::removeCallbacks)
+            pendingAudioTrackPicker = null
+            pendingCaptionTrackPicker?.let(handler::removeCallbacks)
+            pendingCaptionTrackPicker = null
+            activeSkipSegment = null
+            if (::skipSegmentButton.isInitialized) {
+                skipSegmentButton.visibility = View.GONE
+                skipSegmentButton.isEnabled = false
+                skipSegmentButton.isFocusable = false
+            }
+            val dialog = activeTrackDialog
+            if (dialog?.isShowing == true && dialog !== watchPartyDialog) {
+                dialog.dismiss()
+            }
+        } else {
+            if (::skipSegmentButton.isInitialized) {
+                skipSegmentButton.isEnabled = true
+                skipSegmentButton.isFocusable = true
+                updateSkipSegmentButton()
+            }
+            if (::player.isInitialized) updateTrackButtons(player.currentTracks)
+        }
+
+        if (
+            becameLocked &&
+            exitDialog?.isShowing != true &&
+            watchPartyDialog?.isShowing != true
+        ) {
+            playerView.showController()
+            watchPartyButton.post {
+                if (
+                    watchPartyGuestControlsLocked &&
+                    exitDialog?.isShowing != true &&
+                    watchPartyDialog?.isShowing != true
+                ) {
+                    watchPartyButton.requestFocus()
+                    armControllerAutoHide()
+                }
+            }
+        }
+    }
+
+    private fun blockGuestLocalControl(notify: Boolean = true): Boolean {
+        if (!watchPartyGuestControlsLocked) return false
+        if (notify) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastGuestControlNoticeAtMs >= GUEST_CONTROL_NOTICE_INTERVAL_MS) {
+                lastGuestControlNoticeAtMs = now
+                Toast.makeText(
+                    this,
+                    R.string.tetotv_player_guest_controls_locked,
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+        if (::playerView.isInitialized && ::watchPartyButton.isInitialized) {
+            playerView.showController()
+            watchPartyButton.requestFocus()
+            armControllerAutoHide()
+        }
+        return true
+    }
+
+    private fun requestChromeFocus(preferred: View) {
+        if (watchPartyGuestControlsLocked && ::watchPartyButton.isInitialized) {
+            watchPartyButton.requestFocus()
+        } else {
+            preferred.requestFocus()
+        }
+    }
+
+    private fun runNativeTransportCommand(
+        origin: NativeTransportCommandOrigin,
+        action: String,
+        positionMs: Long? = null,
+    ): Boolean {
+        val dispatched = dispatchNativeTransportCommand(
+            guestControlsLocked = watchPartyGuestControlsLocked,
+            origin = origin,
+            action = action,
+            positionMs = positionMs,
+            play = { player.play() },
+            pause = { player.pause() },
+            seek = { target ->
+                if (!seekOrUseMpv(target)) {
+                    Toast.makeText(
+                        this,
+                        "This stream does not expose seeking in Media3",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
+        )
+        if (!dispatched && origin != NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR) {
+            blockGuestLocalControl()
+        }
+        return dispatched
     }
 
     private fun publishDiscordPresence() {
@@ -1828,6 +2505,11 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             !::skipSegmentButton.isInitialized ||
             !::player.isInitialized
         ) return
+        if (watchPartyGuestControlsLocked) {
+            activeSkipSegment = null
+            skipSegmentButton.visibility = View.GONE
+            return
+        }
         val position = safePositionMs()
         val active = activeNativeSkipSegment(position, skipSegments, autoSkippedSegments)
         if (active == activeSkipSegment) return
@@ -1899,6 +2581,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             !::pictureModeButton.isInitialized ||
             !::fixVideoButton.isInitialized ||
             !::sourcesButton.isInitialized ||
+            !::watchPartyButton.isInitialized ||
             !::optionsButton.isInitialized
         ) return false
         return listOf(
@@ -1911,6 +2594,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             pictureModeButton,
             fixVideoButton,
             sourcesButton,
+            watchPartyButton,
             optionsButton,
         ).any(View::hasFocus)
     }
@@ -2101,6 +2785,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             .sumOf { group -> (0 until group.length).count(group::isTrackSupported) }
 
     private fun showTrackPicker(trackType: Int, sourceButton: View) {
+        if (blockGuestLocalControl()) return
         if (trackType == C.TRACK_TYPE_AUDIO && supportedTrackCount(trackType) < 2) {
             val advertised = nativeReleaseAdvertisesMultipleAudio(
                 intent.getStringExtra(EXTRA_FILE_NAME),
@@ -2124,6 +2809,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         maximumWaitMs: Long,
         warnIfSingle: Boolean,
     ) {
+        if (blockGuestLocalControl()) return
         if (pendingAudioTrackPicker != null) return
         handler.removeCallbacks(hideControllerRunnable)
         Toast.makeText(
@@ -2160,6 +2846,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun waitForCaptionTracks(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         if (pendingCaptionTrackPicker != null) return
         handler.removeCallbacks(hideControllerRunnable)
         Toast.makeText(
@@ -2190,6 +2877,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun showTrackPickerNow(trackType: Int, sourceButton: View) {
+        if (blockGuestLocalControl()) return
         val matchingGroups = player.currentTracks.groups.filter { it.type == trackType }
         val embeddedTrackCount = matchingGroups.sumOf { group -> group.length }
         val selectableTrackCount = matchingGroups.sumOf { group ->
@@ -2295,7 +2983,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         publishManualAudioSelectionWhenReady(audioLanguageBefore)
                     }
                     playerView.showController()
-                    sourceButton.requestFocus()
+                    requestChromeFocus(sourceButton)
                     armControllerAutoHide()
                 }
             }
@@ -2308,12 +2996,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
         }
     }
 
     private fun showSubtitleSizePicker(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         handler.removeCallbacks(hideControllerRunnable)
         activeTrackDialog?.dismiss()
         val values = SUBTITLE_SIZE_VALUES
@@ -2350,7 +3039,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
-                    sourceButton.requestFocus()
+                    requestChromeFocus(sourceButton)
                     armControllerAutoHide()
                 }
             }
@@ -2363,12 +3052,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
         }
     }
 
     private fun showSubtitleBackgroundPicker(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         handler.removeCallbacks(hideControllerRunnable)
         activeTrackDialog?.dismiss()
         val labels = arrayOf(
@@ -2418,7 +3108,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
-                    sourceButton.requestFocus()
+                    requestChromeFocus(sourceButton)
                     armControllerAutoHide()
                 }
             }
@@ -2431,12 +3121,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
         }
     }
 
     private fun cyclePictureMode(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         videoResizeMode = when (videoResizeMode) {
             AspectRatioFrameLayout.RESIZE_MODE_FIT ->
                 AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -2452,11 +3143,304 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
         Toast.makeText(this, "Picture: $label", Toast.LENGTH_SHORT).show()
         playerView.showController()
-        sourceButton.requestFocus()
+        requestChromeFocus(sourceButton)
         armControllerAutoHide()
     }
 
+    private fun buildWatchPartyHudContent(
+        result: NativeWatchPartyHudResult,
+    ): Pair<View, TextView> {
+        fun dp(value: Int): Int = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value.toFloat(),
+            resources.displayMetrics,
+        ).toInt()
+        fun text(
+            value: String,
+            sizeSp: Float = 14f,
+            color: Int = themePrimaryTextColor,
+        ) = TextView(this).apply {
+            this.text = value
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+            setTextColor(color)
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(6), dp(22), dp(8))
+        }
+        val roomCodeView = text(result.roomCode.orEmpty(), 30f, themeAccentColor).apply {
+            id = View.generateViewId()
+            gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.14f
+            isFocusable = true
+            isClickable = true
+            minimumHeight = dp(56)
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            background = themedDialogButtonBackground(danger = false)
+            contentDescription = "${result.roomCode}. Show participant preview"
+        }
+        root.addView(
+            roomCodeView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        root.addView(text("Press the room code to show who is here.", 12f, themeMutedTextColor))
+
+        val participantPreview = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        if (result.participants.isEmpty()) {
+            participantPreview.addView(
+                text("Participant profiles will appear here as people join.", 13f, themeMutedTextColor),
+            )
+        } else {
+            result.participants.take(NATIVE_WATCH_PARTY_PREVIEW_LIMIT).forEach { participant ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(4), 0, dp(4))
+                }
+                val avatar = buildNativeWatchPartyAvatar(participant, dp(38))
+                row.addView(avatar, LinearLayout.LayoutParams(dp(38), dp(38)))
+                val role = if (participant.role == "host") "HOST" else "GUEST"
+                val state = if (participant.ready) "Ready" else "Not ready"
+                val label = text("${participant.displayName}\n$role • $state", 13f).apply {
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(dp(10), 0, 0, 0)
+                }
+                row.addView(
+                    label,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+                )
+                participantPreview.addView(
+                    row,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+            }
+        }
+        root.addView(participantPreview)
+        root.addView(
+            text(
+                buildString {
+                    append(result.message)
+                    append("\n\n")
+                    append(result.watchUrl)
+                    append("\n\n")
+                    append(
+                        "Only room timing is synchronized. Video, stream URLs, tokens, " +
+                            "and headers stay on each device.",
+                    )
+                },
+                13f,
+                themeMutedTextColor,
+            ).apply { setPadding(0, dp(12), 0, 0) },
+        )
+        roomCodeView.setOnClickListener {
+            val showing = participantPreview.visibility != View.VISIBLE
+            participantPreview.visibility = if (showing) View.VISIBLE else View.GONE
+            roomCodeView.contentDescription =
+                "${result.roomCode}. ${if (showing) "Hide" else "Show"} participant preview"
+        }
+        return ScrollView(this).apply { addView(root) } to roomCodeView
+    }
+
+    private fun buildNativeWatchPartyAvatar(
+        participant: NativeWatchPartyHudParticipant,
+        sizePx: Int,
+    ): View {
+        val frame = FrameLayout(this)
+        val fallback = TextView(this).apply {
+            gravity = Gravity.CENTER
+            text = participant.displayName.trim().take(1).uppercase().ifBlank { "?" }
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextColor(nativeThemeContrastForeground(themeAccentColor))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(themeAccentColor)
+            }
+        }
+        frame.addView(
+            fallback,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        val avatarUrl = participant.avatarUrl ?: return frame
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            visibility = View.INVISIBLE
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.TRANSPARENT)
+            }
+            clipToOutline = true
+            contentDescription = "${participant.displayName} profile picture"
+        }
+        frame.addView(
+            image,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        loadNativeWatchPartyAvatar(avatarUrl, image, sizePx)
+        return frame
+    }
+
+    private fun loadNativeWatchPartyAvatar(
+        rawUrl: String,
+        target: ImageView,
+        targetSizePx: Int,
+    ) {
+        val safeUrl = safeNativeWatchPartyAvatarUrl(rawUrl) ?: return
+        val request = runCatching { Request.Builder().url(safeUrl).get().build() }.getOrNull()
+            ?: return
+        watchPartyAvatarClient.newCall(request).enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) = Unit
+
+                override fun onResponse(call: Call, response: Response) {
+                    val bitmap = response.use { safeResponse ->
+                        if (!safeResponse.isSuccessful) return@use null
+                        val body = safeResponse.body ?: return@use null
+                        val contentType = body.contentType()?.toString().orEmpty().lowercase()
+                        if (!contentType.startsWith("image/")) return@use null
+                        val length = body.contentLength()
+                        if (length > MAX_WATCH_PARTY_AVATAR_BYTES) return@use null
+                        val bytes = body.byteStream().use { input ->
+                            readBoundedWatchPartyAvatar(input)
+                        }
+                            ?: return@use null
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                        if (
+                            bounds.outWidth !in 1..MAX_WATCH_PARTY_AVATAR_DIMENSION ||
+                            bounds.outHeight !in 1..MAX_WATCH_PARTY_AVATAR_DIMENSION
+                        ) return@use null
+                        var sampleSize = 1
+                        while (
+                            bounds.outWidth / sampleSize > targetSizePx * 2 ||
+                            bounds.outHeight / sampleSize > targetSizePx * 2
+                        ) {
+                            sampleSize *= 2
+                        }
+                        BitmapFactory.decodeByteArray(
+                            bytes,
+                            0,
+                            bytes.size,
+                            BitmapFactory.Options().apply { inSampleSize = sampleSize },
+                        )
+                    } ?: return
+                    handler.post {
+                        if (!isFinishing && !isDestroyed && target.isAttachedToWindow) {
+                            target.setImageBitmap(bitmap)
+                            target.visibility = View.VISIBLE
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    private fun showWatchPartyHud(sourceButton: View) {
+        if (watchPartyRequestInFlight || activeTrackDialog?.isShowing == true) return
+        watchPartyRequestInFlight = true
+        watchPartyButton.isEnabled = false
+        watchPartyButton.alpha = 0.62f
+        val requested = NativePlayerProgressBridge.requestWatchPartyHud(
+            checkpointKey = checkpointKey,
+            playbackSessionGeneration = playbackSessionGeneration,
+        ) { result ->
+            runOnUiThread {
+                watchPartyRequestInFlight = false
+                if (::watchPartyButton.isInitialized) {
+                    watchPartyButton.isEnabled = true
+                    watchPartyButton.alpha = 1f
+                }
+                if (isFinishing || isDestroyed || resultSent) return@runOnUiThread
+                result.status?.let { status ->
+                    watchPartyStatusView.apply {
+                        text = status
+                        visibility = View.VISIBLE
+                    }
+                }
+                if (!result.ok || result.roomCode == null || result.watchUrl == null) {
+                    Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+                    requestChromeFocus(sourceButton)
+                    armControllerAutoHide()
+                    return@runOnUiThread
+                }
+                val roomCode = result.roomCode
+                val (content, roomCodeView) = buildWatchPartyHudContent(result)
+                val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
+                    .setTitle(R.string.tetotv_player_watch_party_title)
+                    .setView(content)
+                    .setNegativeButton(R.string.tetotv_player_watch_party_close, null)
+                    .setPositiveButton(R.string.tetotv_player_watch_party_copy, null)
+                    .create()
+                activeTrackDialog = dialog
+                watchPartyDialog = dialog
+                handler.removeCallbacks(hideControllerRunnable)
+                dialog.setOnDismissListener {
+                    if (activeTrackDialog === dialog) activeTrackDialog = null
+                    if (watchPartyDialog === dialog) watchPartyDialog = null
+                    consumedNavigationKeyUp = null
+                    if (!isFinishing && !isDestroyed && !resultSent) {
+                        playerView.showController()
+                        requestChromeFocus(sourceButton)
+                        armControllerAutoHide()
+                    }
+                }
+                dialog.setOnShowListener {
+                    val copyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    val closeButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+                    copyButton.setOnClickListener {
+                        val clipboard = getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(
+                            ClipData.newPlainText("TetoTV Watch Together room", roomCode),
+                        )
+                        Toast.makeText(
+                            this,
+                            R.string.tetotv_player_watch_party_copied,
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    roomCodeView.nextFocusDownId = copyButton.id
+                    copyButton.nextFocusUpId = roomCodeView.id
+                    closeButton?.nextFocusUpId = roomCodeView.id
+                    roomCodeView.requestFocus()
+                }
+                dialog.show()
+            }
+        }
+        if (!requested) {
+            watchPartyRequestInFlight = false
+            watchPartyButton.isEnabled = true
+            watchPartyButton.alpha = 1f
+            Toast.makeText(
+                this,
+                R.string.tetotv_player_watch_party_unavailable,
+                Toast.LENGTH_LONG,
+            ).show()
+            requestChromeFocus(sourceButton)
+            armControllerAutoHide()
+        }
+    }
+
     private fun showPlaybackOptions(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         handler.removeCallbacks(hideControllerRunnable)
         activeTrackDialog?.dismiss()
         val labels = mutableListOf(
@@ -2491,7 +3475,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
-                    sourceButton.requestFocus()
+                    requestChromeFocus(sourceButton)
                     armControllerAutoHide()
                 }
             }
@@ -2504,12 +3488,13 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
         }
     }
 
     private fun showPlayerPicker(sourceButton: View) {
+        if (blockGuestLocalControl()) return
         if (!allowEngineSwitch) {
             Toast.makeText(
                 this,
@@ -2517,7 +3502,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
             return
         }
@@ -2544,7 +3529,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                         }
                         else -> {
                             playerView.showController()
-                            sourceButton.requestFocus()
+                            requestChromeFocus(sourceButton)
                             armControllerAutoHide()
                         }
                     }
@@ -2557,7 +3542,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 consumedNavigationKeyUp = null
                 if (!isFinishing && !isDestroyed) {
                     playerView.showController()
-                    sourceButton.requestFocus()
+                    requestChromeFocus(sourceButton)
                     armControllerAutoHide()
                 }
             }
@@ -2570,7 +3555,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
                 Toast.LENGTH_SHORT,
             ).show()
             playerView.showController()
-            sourceButton.requestFocus()
+            requestChromeFocus(sourceButton)
             armControllerAutoHide()
         }
     }
@@ -2623,6 +3608,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun seekRelative(offsetMs: Long, sourceButton: View) {
+        if (blockGuestLocalControl()) return
         val duration = safeDurationMs()
         val candidate = safePositionMs() + offsetMs
         val target = when {
@@ -2630,16 +3616,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             duration > 0L && candidate > duration -> duration
             else -> candidate
         }
-        if (!seekOrUseMpv(target)) {
-            Toast.makeText(
-                this,
-                "This stream does not expose seeking in Media3",
-                Toast.LENGTH_SHORT,
-            ).show()
-        }
+        runNativeTransportCommand(
+            origin = NativeTransportCommandOrigin.LOCAL_HUD,
+            action = "seek",
+            positionMs = target,
+        )
         if (resultSent) return
         playerView.showController()
-        sourceButton.requestFocus()
+        requestChromeFocus(sourceButton)
         armControllerAutoHide()
     }
 
@@ -2670,24 +3654,27 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             playerCoreReleased ||
             !::player.isInitialized
         ) return
-        when (action) {
-            "play" -> runCatching { player.play() }
-            "pause" -> runCatching { player.pause() }
-            "seek" -> {
-                val requestedTarget = positionMs ?: return
-                val duration = safeDurationMs()
-                val target = if (duration > 0L) {
-                    requestedTarget.coerceIn(0L, duration)
-                } else {
-                    requestedTarget.coerceAtLeast(0L)
-                }
-                // Party seeks use the same guarded path as remote transport
-                // and intro/outro seeks. If Media3 cannot seek a torrent, the
-                // active coordinator survives the deterministic MPV handoff.
-                runCatching { seekOrUseMpv(target) }
+        val target = if (action == "seek") {
+            val requestedTarget = positionMs ?: return
+            val duration = safeDurationMs()
+            if (duration > 0L) {
+                requestedTarget.coerceIn(0L, duration)
+            } else {
+                requestedTarget.coerceAtLeast(0L)
             }
-            else -> return
+        } else {
+            null
         }
+        // Coordinator commands are the only guest-lock bypass and arrive
+        // only after NativePlayerCommandBridge repeats checkpoint+generation.
+        val dispatched = runCatching {
+            runNativeTransportCommand(
+                origin = NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR,
+                action = action,
+                positionMs = target,
+            )
+        }.getOrDefault(false)
+        if (!dispatched) return
         handler.post {
             if (!resultSent && !playbackResourcesReleased && !playerCoreReleased) {
                 publishPlaybackProgress()
@@ -2697,6 +3684,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun seekPastSkipSegment(segment: NativeSkipSegment, announce: Boolean) {
         if (resultSent || playbackResourcesReleased || !::player.isInitialized) return
+        if (blockGuestLocalControl(notify = !announce)) return
         val duration = safeDurationMs()
         val target = safeNativeSkipTargetMs(segment.endMs, duration)
         val segmentKey = nativeSkipSegmentKey(segment)
@@ -2908,8 +3896,17 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun requestTransportFocus() {
+        if (watchPartyGuestControlsLocked && ::watchPartyButton.isInitialized) {
+            watchPartyButton.requestFocus()
+            return
+        }
         val playPause = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)
         if (playPause?.requestFocus() != true) playerView.requestFocus()
+    }
+
+    internal fun finishForWatchPartyMediaTransition() {
+        if (resultSent || playbackResourcesReleased) return
+        finishWithResult(STATUS_WATCH_PARTY_TRANSITION)
     }
 
     private fun armControllerAutoHide() {
@@ -2949,6 +3946,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         }
 
         val isInitialKeyDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        if (nativeGuestLockBlocksLocalKey(watchPartyGuestControlsLocked, event.keyCode)) {
+            if (isInitialKeyDown) blockGuestLocalControl()
+            return true
+        }
+        if (
+            watchPartyGuestControlsLocked &&
+            event.keyCode in CONTROL_ACTIVATION_KEYS &&
+            !watchPartyButton.hasFocus()
+        ) {
+            if (isInitialKeyDown) blockGuestLocalControl()
+            return true
+        }
         if (isInitialKeyDown) {
             if (handleChromeShortcut(event.keyCode)) {
                 // AlertDialog has its own Window and receives the key-up, so
@@ -3005,7 +4014,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         when (keyCode) {
             KeyEvent.KEYCODE_J -> seekRelative(-seekBackIncrementMs, playerView)
             KeyEvent.KEYCODE_L -> seekRelative(seekForwardIncrementMs, playerView)
-            KeyEvent.KEYCODE_K -> if (isPlaybackIntended()) player.pause() else player.play()
+            KeyEvent.KEYCODE_K -> runNativeTransportCommand(
+                origin = NativeTransportCommandOrigin.LOCAL_KEY,
+                action = if (isPlaybackIntended()) "pause" else "play",
+            )
             KeyEvent.KEYCODE_S -> showTrackPicker(C.TRACK_TYPE_TEXT, captionTrackButton)
             KeyEvent.KEYCODE_C -> showPlayerPicker(fixVideoButton)
             KeyEvent.KEYCODE_A,
@@ -3409,11 +4421,20 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         exitDialog = null
         activeTrackDialog?.dismiss()
         activeTrackDialog = null
+        watchPartyDialog = null
         val metadataDispatcher = metadataClient.dispatcher
         val metadataConnectionPool = metadataClient.connectionPool
+        val avatarDispatcher = watchPartyAvatarClient.dispatcher
+        val avatarConnectionPool = watchPartyAvatarClient.connectionPool
         Media3NetworkCleanup.shared.schedule(
-            cancelCalls = metadataDispatcher::cancelAll,
-            evictConnections = metadataConnectionPool::evictAll,
+            cancelCalls = {
+                metadataDispatcher.cancelAll()
+                avatarDispatcher.cancelAll()
+            },
+            evictConnections = {
+                metadataConnectionPool.evictAll()
+                avatarConnectionPool.evictAll()
+            },
         )
         handler.removeCallbacksAndMessages(null)
         releasePlaybackResources()
@@ -3600,6 +4621,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"
         const val EXTRA_PLAYBACK_SESSION_GENERATION = "playbackSessionGeneration"
         const val EXTRA_WATCH_PARTY_STATUS = "watchPartyStatus"
+        const val EXTRA_WATCH_PARTY_GUEST_CONTROLS_LOCKED =
+            "watchPartyGuestControlsLocked"
+        const val EXTRA_WATCH_PARTY_STATE_SEQUENCE = "watchPartyStateSequence"
         const val EXTRA_MAL_MEDIA_ID = "malMediaId"
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
         const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
@@ -3654,6 +4678,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val STATUS_FALLBACK_MPV = "fallback_mpv"
         const val STATUS_NEXT_STREAM = "next_stream"
         const val STATUS_RELEASE_FAILED = "release_failed"
+        const val STATUS_WATCH_PARTY_TRANSITION = "watch_party_transition"
 
         private const val SKIP_DURATION_STABILITY_DELAY_MS = 1_200L
         private const val SKIP_DURATION_STABILITY_TOLERANCE_MS = 1_000L
@@ -3679,6 +4704,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         private const val CHECKPOINT_PREFERENCES = "native_media3_checkpoints"
         private const val CHECKPOINT_INTERVAL_MS = 5_000L
         private const val CONTROLLER_HIDE_TIMEOUT_MS = 5_000L
+        private const val GUEST_CONTROL_NOTICE_INTERVAL_MS = 2_000L
+        private const val MAX_WATCH_PARTY_AVATAR_BYTES = 256L * 1024L
+        private const val MAX_WATCH_PARTY_AVATAR_DIMENSION = 2_048
         private const val AUDIO_TRACK_POLL_MS = 250L
         private const val MANUAL_AUDIO_PUBLISH_POLL_MS = 125L
         private const val MANUAL_AUDIO_PUBLISH_MAX_POLLS = 8
@@ -3716,6 +4744,12 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_DOWN,
+        )
+        private val CONTROL_ACTIVATION_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_BUTTON_A,
         )
         private val CONTROLLER_INTERACTION_KEYS = CONTROLLER_NAVIGATION_KEYS + setOf(
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,

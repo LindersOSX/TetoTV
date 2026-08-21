@@ -90,7 +90,12 @@ void main() {
     );
     expect(
       source,
-      contains('if (_skipInProgress || _engineHandoffInProgress)'),
+      matches(
+        RegExp(
+          r'if \(_skipInProgress\s*\|\|\s*_engineHandoffInProgress\s*\|\|\s*'
+          r'_blockGuestLocalControl',
+        ),
+      ),
     );
     expect(source, contains('autoSkip && !_skipInProgress &&'));
     expect(source, contains('_checkSkips(_player.state.position)'));
@@ -718,16 +723,37 @@ void main() {
       hasLength(1),
       reason: 'no transport or skip path may bypass seekOrUseMpv',
     );
-    expect(source, contains('setOnClickListener { seekRelative(-'));
-    expect(source, contains('setOnClickListener { seekRelative(seekForward'));
+    expect(
+      source,
+      matches(
+        RegExp(
+          r'setOnClickListener\s*\{\s*if \(blockGuestLocalControl\(\)\) '
+          r'return@setOnClickListener\s*seekRelative\(-',
+        ),
+      ),
+    );
+    expect(
+      source,
+      matches(
+        RegExp(
+          r'setOnClickListener\s*\{\s*if \(blockGuestLocalControl\(\)\) '
+          r'return@setOnClickListener\s*seekRelative\(seekForward',
+        ),
+      ),
+    );
     expect(source, contains('KeyEvent.KEYCODE_J -> seekRelative(-'));
     expect(source, contains('KeyEvent.KEYCODE_L -> seekRelative('));
     expect(
       RegExp(r'seekOrUseMpv\(target\)').allMatches(source),
-      hasLength(3),
+      hasLength(2),
       reason:
-          'transport, party sync, and intro/outro skip must share the same fallback',
+          'transport (including coordinator sync) and intro/outro skip must share the same fallback',
     );
+    expect(
+      source,
+      contains('origin = NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR'),
+    );
+    expect(source, contains('origin = NativeTransportCommandOrigin.LOCAL_HUD'));
     expect(source, contains('handoffPositionOverrideMs = targetMs'));
     expect(source, contains('finishWithResult(STATUS_USE_MPV)'));
   });
@@ -746,8 +772,10 @@ void main() {
     final onDestroy = source.substring(onDestroyStart, releaseStart);
 
     expect(onDestroy, contains('Media3NetworkCleanup.shared.schedule('));
-    expect(onDestroy, contains('metadataDispatcher::cancelAll'));
-    expect(onDestroy, contains('metadataConnectionPool::evictAll'));
+    expect(onDestroy, contains('metadataDispatcher.cancelAll()'));
+    expect(onDestroy, contains('metadataConnectionPool.evictAll()'));
+    expect(onDestroy, contains('avatarDispatcher.cancelAll()'));
+    expect(onDestroy, contains('avatarConnectionPool.evictAll()'));
     expect(onDestroy, isNot(contains('metadataClient.dispatcher.cancelAll()')));
     expect(
       onDestroy,

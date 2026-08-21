@@ -27,6 +27,7 @@ import 'package:anime_tv/features/settings/presentation/third_party_notices_scre
 import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/watch_together/presentation/watch_together_screen.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
@@ -203,6 +204,8 @@ final appRouter = GoRouter(
           preferredQualityHeight: int.tryParse(
             query['preferredQualityHeight'] ?? '',
           ),
+          preferredAudio: _routeAudioPreference(query['preferredAudio']),
+          watchPartyFollow: query['watchPartyFollow'] == '1',
           episode: episode,
         );
       },
@@ -271,6 +274,13 @@ EpisodeReference? resolveEpisodeReferenceFromQuery(Map<String, String> query) {
 int? positiveRouteInt(String? value) {
   final parsed = int.tryParse(value ?? '');
   return parsed != null && parsed > 0 ? parsed : null;
+}
+
+PlaybackAudioPreference? _routeAudioPreference(String? value) {
+  for (final preference in PlaybackAudioPreference.values) {
+    if (preference.name == value) return preference;
+  }
+  return null;
 }
 
 /// Only public debrid HTTPS URLs and live, app-issued proxy capabilities may

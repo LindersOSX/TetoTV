@@ -322,11 +322,21 @@ class PlayerHudResourceParityTest {
                 "player.playWhenReady && player.playbackState != Player.STATE_ENDED",
             ),
         )
+        val playPauseShortcut = activity.substringAfter("KeyEvent.KEYCODE_K ->")
+            .substringBefore("KeyEvent.KEYCODE_S ->")
+        assertTrue(playPauseShortcut.contains("runNativeTransportCommand("))
         assertTrue(
-            activity.contains(
-                "KeyEvent.KEYCODE_K -> if (isPlaybackIntended()) player.pause() else player.play()",
+            playPauseShortcut.contains(
+                "origin = NativeTransportCommandOrigin.LOCAL_KEY",
             ),
         )
+        assertTrue(
+            playPauseShortcut.contains(
+                "action = if (isPlaybackIntended()) \"pause\" else \"play\"",
+            ),
+        )
+        assertFalse(playPauseShortcut.contains("player.pause()"))
+        assertFalse(playPauseShortcut.contains("player.play()"))
         assertTrue(activity.contains("playing = isPlaybackIntended()"))
         listOf("KEYCODE_I", "KEYCODE_A", "KEYCODE_BUTTON_X")
             .forEach { assertTrue(activity.contains(it)) }

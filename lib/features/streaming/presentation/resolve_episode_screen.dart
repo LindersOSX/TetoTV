@@ -25,6 +25,7 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 export 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart'
@@ -298,6 +299,8 @@ class ResolveEpisodeScreen extends ConsumerStatefulWidget {
     this.preferredSourceId,
     this.preferredWebProviderId,
     this.preferredQualityHeight,
+    this.preferredAudio,
+    this.watchPartyFollow = false,
     this.clock = DateTime.now,
     super.key,
   });
@@ -308,6 +311,8 @@ class ResolveEpisodeScreen extends ConsumerStatefulWidget {
   final String? preferredSourceId;
   final String? preferredWebProviderId;
   final int? preferredQualityHeight;
+  final PlaybackAudioPreference? preferredAudio;
+  final bool watchPartyFollow;
   final DateTime Function() clock;
 
   @override
@@ -366,6 +371,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   bool _preferredWebWaitExpired = false;
   bool _autoPickEnabledForOpen = false;
   bool _autoPickManualFallback = false;
+  bool _autoplayManualFallback = false;
   Timer? _preferredWebWaitTimer;
   Timer? _autoPickDeadlineTimer;
 
@@ -423,6 +429,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   };
 
   PlaybackAudioPreference get _preferredAudio =>
+      widget.preferredAudio ??
       effectivePlaybackAudioPreference(
         globalPreference: ref.read(settingsPreferencesProvider).preferredAudio,
         seriesAudioLanguage: _seriesPreferences.audioLanguage,
@@ -2072,6 +2079,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                     (_webStreams.isEmpty || everyDiscoveredWebStreamFailed))));
     final autoplayHasNoResult =
         widget.episode.autoPlay &&
+        !_autoplayManualFallback &&
         !_loadingReleases &&
         !_resolving &&
         ((_releases.isEmpty && _webStreams.isEmpty) ||
@@ -2083,10 +2091,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       return _Message(
         icon: Icons.error_outline_rounded,
         title: 'No playable stream found',
-        body:
-            _error ??
-            'Automatic playback checked every available source. Try the '
-                'search again or go back to the episode page.',
+        body: widget.watchPartyFollow
+            ? 'The host changed episodes, but TetoTV could not choose a '
+                  'playable source automatically. Choose a source manually '
+                  'or retry; you remain in the Watch Together room.'
+            : _error ??
+                  'Automatic playback checked every available source. Try the '
+                      'search again or go back to the episode page.',
         action: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2096,10 +2107,24 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               onPressed: context.pop,
             ),
             const SizedBox(width: 12),
+            if (widget.watchPartyFollow) ...[
+              _ActionButton(
+                label: 'Choose source',
+                icon: Icons.list_rounded,
+                onPressed: () => setState(() {
+                  _autoplayManualFallback = true;
+                  _autoPlayStarted = false;
+                }),
+              ),
+              const SizedBox(width: 12),
+            ],
             _ActionButton(
               label: 'Retry',
               icon: Icons.refresh_rounded,
-              onPressed: () => _loadConfiguredReleases(refreshWeb: true),
+              onPressed: () {
+                setState(() => _autoplayManualFallback = false);
+                _loadConfiguredReleases(refreshWeb: true);
+              },
             ),
           ],
         ),
@@ -2512,6 +2537,13 @@ class _StreamPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
+    final sourceIssueCount = failedWebProviders + failedDebridSources;
+    final sourceIssueDetails = [
+      for (final failure in webFailures)
+        '${failure.providerName}: ${failure.message}',
+      if (failedDebridSources > 0)
+        '$failedDebridSources Debrid source(s) did not return a result.',
+    ].join('\n');
     final activeAdvancedFilters = [
       qualityFilter != _StreamQualityFilter.any,
       codecFilter != _StreamCodecFilter.any,
@@ -2538,7 +2570,7 @@ class _StreamPicker extends StatelessWidget {
                     Text(
                       '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
                       ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
-                      '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
+                      '${sourceIssueCount > 0 ? ' • $sourceIssueCount source issue(s)' : ''}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyMedium,
@@ -2549,12 +2581,12 @@ class _StreamPicker extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              if (debridEnabled && connectedServices.length > 1)
+          if (debridEnabled && connectedServices.length > 1) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
                 for (final service in DebridService.values.where(
                   connectedServices.contains,
                 ))
@@ -2563,36 +2595,19 @@ class _StreamPicker extends StatelessWidget {
                     selected: selectedService == service,
                     onPressed: () => onServiceChanged(service),
                   ),
-              for (final value in _StreamLanguageFilter.values)
-                _FilterButton(
-                  label: switch (value) {
-                    _StreamLanguageFilter.all => 'ALL',
-                    _StreamLanguageFilter.sub => 'SUB',
-                    _StreamLanguageFilter.dub => 'DUB',
-                  },
-                  selected: filter == value,
-                  onPressed: () => onFilterChanged(value),
-                ),
-              _CompactAction(
-                icon: showAdvancedFilters
-                    ? Icons.tune_rounded
-                    : Icons.tune_outlined,
-                label: activeAdvancedFilters == 0
-                    ? (showAdvancedFilters ? 'Hide filters' : 'More filters')
-                    : 'Filters ($activeAdvancedFilters)',
-                onPressed: () => onAdvancedFiltersChanged(!showAdvancedFilters),
-              ),
-              _CompactAction(
-                icon: Icons.refresh_rounded,
-                label: 'Refresh',
-                onPressed: onRefresh,
-              ),
-              _CompactAction(
-                icon: showSearch ? Icons.search_off_rounded : Icons.search,
-                label: showSearch ? 'Close search' : 'Search',
-                onPressed: onSearchToggled,
-              ),
-            ],
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+          _StreamPickerPrimaryControls(
+            filter: filter,
+            onFilterChanged: onFilterChanged,
+            showAdvancedFilters: showAdvancedFilters,
+            activeAdvancedFilters: activeAdvancedFilters,
+            onAdvancedFiltersChanged: onAdvancedFiltersChanged,
+            onRefresh: onRefresh,
+            showSearch: showSearch,
+            onSearchToggled: onSearchToggled,
           ),
           if (showSearch) ...[
             const SizedBox(height: 10),
@@ -2766,45 +2781,11 @@ class _StreamPicker extends StatelessWidget {
               ),
             ),
           ],
-          if (webFailures.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              decoration: BoxDecoration(
-                color: palette.surfaceRaised,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: palette.primaryText.withValues(alpha: .12),
-                ),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(
-                    Icons.extension_off_rounded,
-                    color: Color(0xFFFFA0A8),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      webFailures
-                          .map(
-                            (failure) =>
-                                '${failure.providerName}: ${failure.message}',
-                          )
-                          .join('\n'),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: palette.primaryText.withValues(alpha: .84),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+          if (sourceIssueDetails.isNotEmpty)
+            Semantics(
+              label: sourceIssueDetails,
+              child: const SizedBox.shrink(),
             ),
-          ],
           const SizedBox(height: 18),
           Expanded(
             child: releases.isEmpty && webStreams.isEmpty
@@ -2839,6 +2820,138 @@ class _StreamPicker extends StatelessWidget {
                   )
                 : CustomScrollView(slivers: _orderedStreamSlivers),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StreamPickerPrimaryControls extends StatefulWidget {
+  const _StreamPickerPrimaryControls({
+    required this.filter,
+    required this.onFilterChanged,
+    required this.showAdvancedFilters,
+    required this.activeAdvancedFilters,
+    required this.onAdvancedFiltersChanged,
+    required this.onRefresh,
+    required this.showSearch,
+    required this.onSearchToggled,
+  });
+
+  final _StreamLanguageFilter filter;
+  final ValueChanged<_StreamLanguageFilter> onFilterChanged;
+  final bool showAdvancedFilters;
+  final int activeAdvancedFilters;
+  final ValueChanged<bool> onAdvancedFiltersChanged;
+  final VoidCallback onRefresh;
+  final bool showSearch;
+  final VoidCallback onSearchToggled;
+
+  @override
+  State<_StreamPickerPrimaryControls> createState() =>
+      _StreamPickerPrimaryControlsState();
+}
+
+class _StreamPickerPrimaryControlsState
+    extends State<_StreamPickerPrimaryControls> {
+  late final List<FocusNode> _focusNodes = [
+    FocusNode(debugLabel: 'stream-picker.all'),
+    FocusNode(debugLabel: 'stream-picker.sub'),
+    FocusNode(debugLabel: 'stream-picker.dub'),
+    FocusNode(debugLabel: 'stream-picker.filters'),
+    FocusNode(debugLabel: 'stream-picker.refresh'),
+    FocusNode(debugLabel: 'stream-picker.search'),
+  ];
+
+  @override
+  void dispose() {
+    for (final node in _focusNodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  KeyEventResult _handleHorizontalNavigation(int index, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final delta = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowLeft => -1,
+      LogicalKeyboardKey.arrowRight => 1,
+      _ => 0,
+    };
+    final target = index + delta;
+    if (delta == 0 || target < 0 || target >= _focusNodes.length) {
+      return KeyEventResult.ignored;
+    }
+    _focusNodes[target].requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  Widget _orderedControl(int index, Widget child) {
+    return FocusTraversalOrder(
+      order: NumericFocusOrder(index.toDouble()),
+      child: child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controls = <Widget>[
+      for (final value in _StreamLanguageFilter.values)
+        _FilterButton(
+          key: ValueKey('stream-picker-${value.name}'),
+          label: switch (value) {
+            _StreamLanguageFilter.all => 'ALL',
+            _StreamLanguageFilter.sub => 'SUB',
+            _StreamLanguageFilter.dub => 'DUB',
+          },
+          selected: widget.filter == value,
+          onPressed: () => widget.onFilterChanged(value),
+          focusNode: _focusNodes[value.index],
+          onKeyEvent: (node, event) =>
+              _handleHorizontalNavigation(value.index, event),
+        ),
+      _CompactAction(
+        key: const ValueKey('stream-picker-filters'),
+        icon: widget.showAdvancedFilters
+            ? Icons.tune_rounded
+            : Icons.tune_outlined,
+        label: widget.activeAdvancedFilters == 0
+            ? (widget.showAdvancedFilters ? 'Hide filters' : 'More filters')
+            : 'Filters (${widget.activeAdvancedFilters})',
+        onPressed: () =>
+            widget.onAdvancedFiltersChanged(!widget.showAdvancedFilters),
+        focusNode: _focusNodes[3],
+        onKeyEvent: (node, event) => _handleHorizontalNavigation(3, event),
+      ),
+      _CompactAction(
+        key: const ValueKey('stream-picker-refresh'),
+        icon: Icons.refresh_rounded,
+        label: 'Refresh',
+        onPressed: widget.onRefresh,
+        focusNode: _focusNodes[4],
+        onKeyEvent: (node, event) => _handleHorizontalNavigation(4, event),
+      ),
+      _CompactAction(
+        key: const ValueKey('stream-picker-search'),
+        icon: widget.showSearch ? Icons.search_off_rounded : Icons.search,
+        label: widget.showSearch ? 'Close search' : 'Search',
+        onPressed: widget.onSearchToggled,
+        focusNode: _focusNodes[5],
+        onKeyEvent: (node, event) => _handleHorizontalNavigation(5, event),
+      ),
+    ];
+    return FocusTraversalGroup(
+      policy: OrderedTraversalPolicy(),
+      child: Wrap(
+        key: const ValueKey('stream-picker-primary-controls'),
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          for (var index = 0; index < controls.length; index++)
+            _orderedControl(index, controls[index]),
         ],
       ),
     );
@@ -3113,17 +3226,24 @@ class _FilterButton extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onPressed,
+    this.focusNode,
+    this.onKeyEvent,
+    super.key,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onPressed;
+  final FocusNode? focusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
+      focusNode: focusNode,
+      onKeyEvent: onKeyEvent,
       borderRadius: BorderRadius.circular(999),
       focusScale: 1.03,
       child: Container(
@@ -3170,22 +3290,30 @@ class _CompactAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    this.focusNode,
+    this.onKeyEvent,
+    super.key,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
+  final FocusNode? focusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       onPressed: onPressed,
+      focusNode: focusNode,
+      onKeyEvent: onKeyEvent,
       borderRadius: BorderRadius.circular(10),
       focusScale: 1.03,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         color: context.appPalette.surface,
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 18),
             const SizedBox(width: 7),

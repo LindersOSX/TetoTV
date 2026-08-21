@@ -10,6 +10,14 @@
     <string name="tetotv_player_fix_video">Choose video player</string>
     <string name="tetotv_player_sources_short">Sources</string>
     <string name="tetotv_player_sources">Choose stream source</string>
+    <string name="tetotv_player_watch_party_short">Party</string>
+    <string name="tetotv_player_watch_party">Start or show Watch Together room</string>
+    <string name="tetotv_player_watch_party_title">Watch Together room</string>
+    <string name="tetotv_player_watch_party_copy">Copy code</string>
+    <string name="tetotv_player_watch_party_close">Close</string>
+    <string name="tetotv_player_watch_party_copied">Room code copied</string>
+    <string name="tetotv_player_watch_party_unavailable">Watch Together is unavailable for this player</string>
+    <string name="tetotv_player_guest_controls_locked">The host controls playback while you watch together</string>
     <string name="tetotv_player_options_short">Options</string>
     <string name="tetotv_player_options">Playback options</string>
     <string name="tetotv_player_debrid_stream">Debrid stream</string>
@@ -56,4 +64,5 @@
     <string name="tetotv_player_caption_background_high_contrast">High contrast</string>
     <string name="tetotv_player_caption_background_changed">Caption background: %1$s</string>
     <string name="tetotv_player_footer_hint">D-pad controls  |  J/L seek  |  Menu/Y options</string>
+    <string name="tetotv_player_guest_controls_hint">Following host  |  Party for room status  |  Back to exit</string>
 </resources>

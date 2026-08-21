@@ -1159,6 +1159,7 @@ void main() {
         TopNavigationDestination.search,
         TopNavigationDestination.discover,
         TopNavigationDestination.calendar,
+        TopNavigationDestination.watchTogether,
         TopNavigationDestination.settings,
       ]);
 

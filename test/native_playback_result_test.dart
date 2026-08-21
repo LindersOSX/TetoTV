@@ -1,9 +1,27 @@
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/player/presentation/native_media3_player_screen.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'Media3 completion advances for hosts but waits for attached guests',
+    () {
+      expect(
+        nativePlayerMayAdvanceAfterCompletion(guestControlsLocked: false),
+        isTrue,
+      );
+      expect(
+        nativePlayerMayAdvanceAfterCompletion(guestControlsLocked: true),
+        isFalse,
+      );
+    },
+  );
+
   test('parses native Media3 playback diagnostics', () {
     final result = NativePlaybackResult.fromMap(<Object?, Object?>{
       'status': 'no_first_frame',
@@ -51,6 +69,13 @@ void main() {
 
     expect(result.failed, isFalse);
     expect(result.firstFrameRendered, isTrue);
+  });
+
+  test('Watch Party native transition never performs ordinary route exit', () {
+    expect(
+      nativePlayerReturnNavigationForStatus('watch_party_transition'),
+      NativePlayerReturnNavigation.none,
+    );
   });
 
   test('normalizes signed Android caption colors to unsigned ARGB', () {
@@ -145,6 +170,198 @@ void main() {
     expect(progress.isPlaying, isFalse);
     expect(progress.audioLanguage, isNull);
     expect(progress.audioPreferenceSet, isFalse);
+  });
+
+  test('native Watch Together HUD contract exposes no playback capability', () {
+    final request = NativeWatchPartyHudRequest.fromMap(<Object?, Object?>{
+      'checkpointKey': '15125:9',
+      'playbackSessionGeneration': 4,
+    });
+    const response = NativeWatchPartyHudResponse(
+      ok: true,
+      roomCode: '23456789',
+      watchUrl: 'https://tetotv-bot.wisp.uno/watch?room=23456789',
+      status: 'PARTY 23456789 • HOST • 1 watching',
+      message: 'Share this code.',
+      participants: [
+        NativeWatchPartyHudParticipant(
+          displayName: 'Teto Fan',
+          avatarUrl:
+              'https://s4.anilist.co/file/anilistcdn/user/avatar/large/x.jpg',
+          role: 'host',
+          ready: true,
+        ),
+      ],
+    );
+
+    expect(request.isValid, isTrue);
+    expect(
+      NativeWatchPartyHudRequest.fromMap(const {
+        'checkpointKey': '',
+        'playbackSessionGeneration': 0,
+      }).isValid,
+      isFalse,
+    );
+    expect(response.toMap().keys, {
+      'ok',
+      'message',
+      'roomCode',
+      'watchUrl',
+      'status',
+      'participants',
+    });
+    expect(response.toMap().keys, isNot(contains('token')));
+    expect(response.toMap().keys, isNot(contains('source')));
+    expect(response.toMap().keys, isNot(contains('headers')));
+    final participant =
+        ((response.toMap()['participants'] as List).single as Map)
+            .cast<String, Object>();
+    expect(participant.keys, {'display_name', 'avatar_url', 'role', 'ready'});
+    expect(participant.keys, isNot(contains('token')));
+    expect(participant.keys, isNot(contains('account_id')));
+  });
+
+  test(
+    'native guest lock updates are generation scoped and capability free',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      const channel = MethodChannel('dev.tetotv/android_tv');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return true;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+
+      final applied = await AndroidTvBridge.instance
+          .updateNativePlayerWatchPartyState(
+            checkpointKey: '15125:9',
+            playbackSessionGeneration: 4,
+            guestControlsLocked: true,
+            stateSequence: 7,
+            status: 'PARTY 23456789 • SYNCED',
+          );
+
+      expect(applied, isTrue);
+      expect(calls, hasLength(1));
+      expect(calls.single.method, 'updateNativePlayerWatchPartyState');
+      final arguments = (calls.single.arguments as Map).cast<String, Object>();
+      expect(arguments.keys, {
+        'checkpointKey',
+        'playbackSessionGeneration',
+        'guestControlsLocked',
+        'stateSequence',
+        'status',
+      });
+      expect(arguments['guestControlsLocked'], isTrue);
+      expect(arguments.keys, isNot(contains('source')));
+      expect(arguments.keys, isNot(contains('headers')));
+      expect(arguments.keys, isNot(contains('token')));
+
+      expect(
+        await AndroidTvBridge.instance.updateNativePlayerWatchPartyState(
+          checkpointKey: '',
+          playbackSessionGeneration: 4,
+          guestControlsLocked: false,
+          stateSequence: 8,
+        ),
+        isFalse,
+      );
+      expect(calls, hasLength(1));
+    },
+  );
+
+  test(
+    'native media transition dismissal is exact-session and data free',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      const channel = MethodChannel('dev.tetotv/android_tv');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return true;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+
+      expect(
+        await AndroidTvBridge.instance
+            .dismissNativePlayerForWatchPartyTransition(
+              checkpointKey: '15125:9',
+              playbackSessionGeneration: 4,
+            ),
+        isTrue,
+      );
+      expect(calls.single.method, 'dismissNativePlayerForWatchPartyTransition');
+      final arguments = (calls.single.arguments as Map).cast<String, Object>();
+      expect(arguments, {
+        'checkpointKey': '15125:9',
+        'playbackSessionGeneration': 4,
+      });
+      expect(arguments.keys, isNot(contains('token')));
+      expect(arguments.keys, isNot(contains('source')));
+      expect(arguments.keys, isNot(contains('headers')));
+
+      expect(
+        await AndroidTvBridge.instance
+            .dismissNativePlayerForWatchPartyTransition(
+              checkpointKey: '',
+              playbackSessionGeneration: 4,
+            ),
+        isFalse,
+      );
+      expect(calls, hasLength(1));
+    },
+  );
+
+  test('native launch carries the initial attached-guest authority', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('dev.tetotv/android_tv');
+    MethodCall? recorded;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          recorded = call;
+          return <String, Object>{
+            'status': 'stopped',
+            'positionMs': 0,
+            'durationMs': 0,
+          };
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    await AndroidTvBridge.instance.startNativePlayer(
+      source: Uri.parse('https://media.example/episode.m3u8'),
+      title: 'Frieren',
+      checkpointKey: '154587:2',
+      releaseName: 'Episode 2',
+      streamLabel: 'Web stream',
+      resumePosition: Duration.zero,
+      startFromBeginning: false,
+      playbackSessionGeneration: 8,
+      watchPartyStatus: 'PARTY 23456789 • SYNCED',
+      watchPartyGuestControlsLocked: true,
+      watchPartyStateSequence: 3,
+    );
+
+    expect(recorded?.method, 'startNativePlayer');
+    final arguments = (recorded?.arguments as Map).cast<String, Object>();
+    expect(arguments['checkpointKey'], '154587:2');
+    expect(arguments['playbackSessionGeneration'], 8);
+    expect(arguments['watchPartyGuestControlsLocked'], isTrue);
+    expect(arguments['watchPartyStateSequence'], 3);
   });
 
   test('explicit native audio saves then replaces stale preparation', () async {

@@ -42,6 +42,7 @@ void main() {
         "label: 'Picture'",
         "label: 'Player'",
         "label: 'Sources'",
+        "label: 'Watch Together'",
         "label: 'Options'",
       ]);
       _expectInOrder(nativeChrome, const [
@@ -54,6 +55,7 @@ void main() {
         '@+id/tetotv_picture_mode',
         '@+id/tetotv_fix_video',
         '@+id/tetotv_player_sources',
+        '@+id/tetotv_watch_party',
         '@+id/tetotv_player_options',
       ]);
 
@@ -64,6 +66,7 @@ void main() {
         '>Picture<',
         '>Player<',
         '>Sources<',
+        '>Party<',
         '>Options<',
       ]) {
         expect(nativeStrings, contains(label));
@@ -159,12 +162,16 @@ void main() {
       'onPicture:',
       'onFixVideo:',
       'onSources:',
+      'onWatchTogether:',
+      'watchTogetherFocusNode:',
       'onOptions:',
       'onDismiss:',
     ]) {
       expect(mpv, contains(callback));
       expect(vlc, contains(callback));
     }
+    expect(mpv, contains('_watchTogetherFocus.requestFocus()'));
+    expect(vlc, contains('_watchTogetherFocus.requestFocus()'));
   });
 
   test('VLC and Media3 retain MPV picture and skip shortcuts', () {
@@ -228,15 +235,68 @@ void main() {
         'player.playWhenReady && player.playbackState != Player.STATE_ENDED',
       ),
     );
+    expect(media3, contains('origin = NativeTransportCommandOrigin.LOCAL_KEY'));
     expect(
       media3,
-      contains(
-        'KeyEvent.KEYCODE_K -> if (isPlaybackIntended()) player.pause() '
-        'else player.play()',
-      ),
+      contains('origin = NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR'),
     );
     expect(media3, contains('playing = isPlaybackIntended()'));
   });
+
+  test(
+    'Media3 guest lock preserves Party and Exit while host owns playback',
+    () {
+      final media3 = File(
+        'android/app/src/main/kotlin/dev/animetv/anime_tv/player/'
+        'Media3PlayerActivity.kt',
+      ).readAsStringSync();
+      final mainActivity = File(
+        'android/app/src/main/kotlin/dev/animetv/anime_tv/MainActivity.kt',
+      ).readAsStringSync();
+      final nativeScreen = File(
+        'lib/features/player/presentation/native_media3_player_screen.dart',
+      ).readAsStringSync();
+      final bridge = File(
+        'lib/core/platform/android_tv_bridge.dart',
+      ).readAsStringSync();
+      final controls = File(
+        'android/app/src/main/res/layout/tetotv_player_controls.xml',
+      ).readAsStringSync();
+      final strings = File(
+        'android/app/src/main/res/values/strings.xml',
+      ).readAsStringSync();
+
+      expect(nativeScreen, contains('next.guestPlaybackControlsLocked'));
+      expect(nativeScreen, contains('watchPartyGuestControlsLocked:'));
+      expect(nativeScreen, contains('updateNativePlayerWatchPartyState'));
+      expect(bridge, contains('dismissNativePlayerForWatchPartyTransition'));
+      expect(nativeScreen, contains('watchPartyPublicIdentityProvider'));
+      expect(nativeScreen, contains('participant.displayName'));
+      expect(bridge, contains("'checkpointKey': checkpointKey"));
+      expect(bridge, contains("'playbackSessionGeneration':"));
+      expect(
+        mainActivity,
+        contains('NativePlayerCommandBridge.updateWatchPartyState'),
+      );
+      expect(
+        mainActivity,
+        contains('NativePlayerCommandBridge.dismissForWatchPartyTransition'),
+      );
+      expect(media3, contains('nativeGuestLockBlocksMediaSessionCommand'));
+      expect(media3, contains('nativeGuestLockBlocksLocalKey'));
+      expect(media3, contains('watchPartyButton.nextFocusLeftId'));
+      expect(media3, contains('R.id.tetotv_watch_party'));
+      expect(media3, contains('showExitConfirmation()'));
+      expect(
+        media3,
+        contains('Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS'),
+      );
+      expect(controls, contains('android:id="@+id/tetotv_watch_party"'));
+      expect(controls, contains('android:id="@+id/tetotv_watch_party_status"'));
+      expect(strings, contains('tetotv_player_guest_controls_locked'));
+      expect(strings, contains('Following host'));
+    },
+  );
 
   test('Media3 restores the prior read-only progress bar', () {
     final flutterChrome = File(
