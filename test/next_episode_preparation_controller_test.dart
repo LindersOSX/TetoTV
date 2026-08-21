@@ -119,6 +119,107 @@ void main() {
     },
   );
 
+  test(
+    'next-episode preparation keeps the current normalized quality first',
+    () async {
+      final attempted = <String>[];
+      final sameQuality = _release(
+        hash: 'same-quality',
+        provider: 'Other provider',
+        sourceId: 'other-source',
+        name: '[Other] Show - 02 Full HD',
+        quality: 'Full HD',
+        seeders: 1,
+      );
+      final higher = _release(
+        hash: 'higher',
+        provider: 'Same source',
+        sourceId: 'stable-source',
+        name: '[Group] Show - 02 2160p',
+        quality: '2160p',
+        seeders: 1000,
+      );
+      final lower = _release(
+        hash: 'lower',
+        provider: 'Other lower',
+        sourceId: 'lower-source',
+        name: '[Lower] Show - 02 720p',
+        quality: '720p',
+        seeders: 2000,
+      );
+      final controller = _controller(
+        releases: [higher, lower, sameQuality],
+        resolver: (release) {
+          attempted.add(release.infoHash);
+          return Stream.value(
+            StreamReady(
+              uri: Uri.parse('https://cdn.example/${release.infoHash}.mkv'),
+              displayName: release.releaseName,
+              debridService: DebridService.realDebrid,
+            ),
+          );
+        },
+      );
+
+      final prepared = await controller.warm(_request());
+
+      expect(prepared?.launch.selectedRelease.infoHash, 'same-quality');
+      expect(attempted, ['same-quality']);
+      await controller.dispose();
+    },
+  );
+
+  test(
+    'next-episode quality affinity fails open after the matching stream fails',
+    () async {
+      final attempted = <String>[];
+      final sameQuality = _release(
+        hash: 'failed-1080',
+        provider: 'Other provider',
+        sourceId: 'other-source',
+        name: '[Other] Show - 02 1080p',
+        quality: '1080p',
+      );
+      final higher = _release(
+        hash: 'fallback-4k',
+        provider: 'Same source',
+        sourceId: 'stable-source',
+        name: '[Group] Show - 02 2160p',
+        quality: '2160p',
+      );
+      final lower = _release(
+        hash: 'fallback-720',
+        provider: 'Lower',
+        sourceId: 'lower-source',
+        name: '[Lower] Show - 02 720p',
+        quality: '720p',
+      );
+      final controller = _controller(
+        releases: [higher, lower, sameQuality],
+        resolver: (release) {
+          attempted.add(release.infoHash);
+          if (release.infoHash == sameQuality.infoHash) {
+            return Stream.error(StateError('1080p unavailable'));
+          }
+          return Stream.value(
+            StreamReady(
+              uri: Uri.parse('https://cdn.example/${release.infoHash}.mkv'),
+              displayName: release.releaseName,
+              debridService: DebridService.realDebrid,
+            ),
+          );
+        },
+      );
+
+      final prepared = await controller.warm(_request());
+
+      expect(attempted.first, 'failed-1080');
+      expect(attempted, hasLength(2));
+      expect(prepared?.launch.selectedRelease.infoHash, isNot('failed-1080'));
+      await controller.dispose();
+    },
+  );
+
   test('confirmed filler is skipped during preparation', () async {
     final controller = _controller(
       releases: [_release(hash: 'episode-3')],

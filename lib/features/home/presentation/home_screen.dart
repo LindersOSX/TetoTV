@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/layout/poster_card_geometry.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -74,6 +75,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   DateTime? _lastHomeActivation;
   bool _homeRefreshInProgress = false;
   bool _showHomeEasterEgg = false;
+  bool _profileVisibleAtTop = true;
+  bool? _lastUseTvRail;
   bool _lastContentWasHero = true;
   HomeShelf? _lastFocusedShelf;
   int _lastFocusedColumn = 0;
@@ -82,6 +85,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_handleHomeScroll);
     _homeEasterEggAnimation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1350),
@@ -202,7 +206,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _homeNavFocus.requestFocus();
     } else if (_profileFocus.context != null) {
       _profileFocus.requestFocus();
+    } else {
+      unawaited(_revealAndFocusProfile());
     }
+  }
+
+  void _handleHomeScroll() {
+    if (!mounted || !_scrollController.hasClients) return;
+    final visibleAtTop = _scrollController.offset <= .5;
+    if (visibleAtTop == _profileVisibleAtTop) return;
+    if (!visibleAtTop && _profileFocus.hasFocus) {
+      if (_hasVisibleNavigationAction && _homeNavFocus.context != null) {
+        _homeNavFocus.requestFocus();
+      } else {
+        unawaited(_revealAndFocusProfile());
+      }
+    }
+    setState(() => _profileVisibleAtTop = visibleAtTop);
+  }
+
+  Future<void> _revealAndFocusProfile() async {
+    if (!_scrollController.hasClients) return;
+    await _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOutCubic,
+    );
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _profileFocus.context != null) {
+        _profileFocus.requestFocus();
+      }
+    });
   }
 
   void _rememberHeroFocus(bool focused) {
@@ -722,7 +757,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       right: responsivePadding.right,
     );
     final screenSize = MediaQuery.sizeOf(context);
-    final useTvRail = !context.isCompactWidth && screenSize.width >= 840;
+    final useTvRail =
+        preferences.interfaceMode != InterfaceMode.phone &&
+        !context.isCompactWidth &&
+        screenSize.width >= 840;
+    if (_lastUseTvRail != null && _lastUseTvRail != useTvRail) {
+      // Changing between Classic and Modern replaces the scroll presentation.
+      // The controller can reattach at the top without notifying its listener,
+      // so reconcile profile visibility after the new position is laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _handleHomeScroll());
+    }
+    _lastUseTvRail = useTvRail;
     if (useTvRail) {
       final settingsInProfileMenu =
           accounts.profiles.isNotEmpty &&
@@ -760,6 +805,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ? _MediaShelfSkeleton(
                     title: row.shelf.displayName,
                     preferences: preferences,
+                    modernPosterSizing: tvNavigation,
                   )
                 : _MediaShelf(
                     key: _shelfKeys[row.shelf],
@@ -767,6 +813,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     items: row.items,
                     preferences: preferences,
                     landscape: row.landscape,
+                    modernPosterSizing: tvNavigation,
                     onManage: _manageShelfItem,
                     onOpen: (item) => _openShelfItem(row.shelf, item),
                     onFocused: (column) =>
@@ -852,30 +899,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   },
                 ),
               ),
-              Positioned(
-                right: screenSize.width >= 1400 ? 30 : 22,
-                top: 12,
-                child: RepaintBoundary(
-                  key: const ValueKey('home-fixed-profile'),
-                  child: HomeProfileSwitcher(
-                    preferences: preferences,
-                    focusNode: _profileFocus,
-                    onFocusChanged: (focused) {
-                      if (focused) unawaited(_restoreSponsoredHero());
-                    },
-                    onKeyEvent: (_, event) {
-                      final directional =
-                          event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-                          event.logicalKey == LogicalKeyboardKey.arrowDown;
-                      if (!directional) return KeyEventResult.ignored;
-                      if (event is KeyDownEvent || event is KeyRepeatEvent) {
-                        _focusHero(resetScroll: false);
-                      }
-                      return KeyEventResult.handled;
-                    },
+              if (_profileVisibleAtTop)
+                Positioned(
+                  right: screenSize.width >= 1400 ? 30 : 22,
+                  top: 12,
+                  child: RepaintBoundary(
+                    key: const ValueKey('home-fixed-profile'),
+                    child: HomeProfileSwitcher(
+                      preferences: preferences,
+                      focusNode: _profileFocus,
+                      onFocusChanged: (focused) {
+                        if (focused) unawaited(_restoreSponsoredHero());
+                      },
+                      onKeyEvent: (_, event) {
+                        final directional =
+                            event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                            event.logicalKey == LogicalKeyboardKey.arrowDown;
+                        if (!directional) return KeyEventResult.ignored;
+                        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                          _focusHero(resetScroll: false);
+                        }
+                        return KeyEventResult.handled;
+                      },
+                    ),
                   ),
                 ),
-              ),
             ] else
               SingleChildScrollView(
                 key: const ValueKey('home-scroll-content'),
@@ -1288,7 +1336,13 @@ class _HeroDot extends StatelessWidget {
 ({double height, double width}) _posterCardMetrics(
   BuildContext context, {
   required bool dense,
+  required bool matchSearchDefault,
+  required double availableWidth,
 }) {
+  if (!dense && matchSearchDefault) {
+    final geometry = defaultPosterCardGeometry(availableWidth);
+    return (height: geometry.height, width: geometry.width);
+  }
   final compact = context.isCompactWidth;
   final screenWidth = MediaQuery.sizeOf(context).width;
   if (screenWidth >= 1600) {
@@ -1311,6 +1365,7 @@ class _MediaShelf extends StatefulWidget {
     required this.onOpen,
     required this.onFocused,
     required this.onVerticalKey,
+    required this.modernPosterSizing,
     this.landscape = false,
     this.onLeftEdge,
     this.onManage,
@@ -1323,6 +1378,7 @@ class _MediaShelf extends StatefulWidget {
   final ValueChanged<_ShelfItem> onOpen;
   final ValueChanged<int> onFocused;
   final KeyEventResult Function(KeyEvent event, int column) onVerticalKey;
+  final bool modernPosterSizing;
   final bool landscape;
   final VoidCallback? onLeftEdge;
   final ValueChanged<_ShelfItem>? onManage;
@@ -1352,19 +1408,11 @@ class _MediaShelfState extends State<_MediaShelf> {
   }
 
   bool requestFocus({int? preferredIndex}) {
-    final focused = _focusController.requestFocus(
+    return _focusController.requestFocus(
       preferredIndex: preferredIndex,
+      itemExtent: _itemExtent > 0 ? _itemExtent : null,
+      spacing: _itemExtent > 0 ? _itemSpacing : null,
     );
-    if (!focused) return false;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _itemExtent <= 0) return;
-      _focusController.reveal(
-        index: _focusController.selectedIndex,
-        itemExtent: _itemExtent,
-        spacing: _itemSpacing,
-      );
-    });
-    return true;
   }
 
   @override
@@ -1374,10 +1422,20 @@ class _MediaShelfState extends State<_MediaShelf> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) =>
+        _buildShelf(context, availableWidth: constraints.maxWidth),
+  );
+
+  Widget _buildShelf(BuildContext context, {required double availableWidth}) {
     final dense = widget.preferences.homeLayout == HomeLayout.compact;
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final posterMetrics = _posterCardMetrics(context, dense: dense);
+    final posterMetrics = _posterCardMetrics(
+      context,
+      dense: dense,
+      matchSearchDefault: widget.modernPosterSizing,
+      availableWidth: availableWidth,
+    );
     final spacing = 12 * widget.preferences.contentDensity.spacingScale;
     final width = widget.landscape
         ? (screenWidth >= 1600
@@ -1461,15 +1519,33 @@ class _MediaShelfState extends State<_MediaShelf> {
 }
 
 class _MediaShelfSkeleton extends StatelessWidget {
-  const _MediaShelfSkeleton({required this.title, required this.preferences});
+  const _MediaShelfSkeleton({
+    required this.title,
+    required this.preferences,
+    required this.modernPosterSizing,
+  });
 
   final String title;
   final SettingsPreferences preferences;
+  final bool modernPosterSizing;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) =>
+        _buildSkeleton(context, availableWidth: constraints.maxWidth),
+  );
+
+  Widget _buildSkeleton(
+    BuildContext context, {
+    required double availableWidth,
+  }) {
     final dense = preferences.homeLayout == HomeLayout.compact;
-    final posterMetrics = _posterCardMetrics(context, dense: dense);
+    final posterMetrics = _posterCardMetrics(
+      context,
+      dense: dense,
+      matchSearchDefault: modernPosterSizing,
+      availableWidth: availableWidth,
+    );
     final width = posterMetrics.width * preferences.thumbnailScale;
     final cardHeight = posterMetrics.height * preferences.thumbnailScale;
     final artworkHeight =
@@ -1576,6 +1652,7 @@ class _PosterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     if (landscape) return _buildLandscape(context);
     return SizedBox(
+      key: ValueKey('home-poster-card-${item.animeId ?? item.title}'),
       width: width,
       child: TvFocusable(
         focusNode: focusNode,

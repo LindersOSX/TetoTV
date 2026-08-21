@@ -7,6 +7,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
@@ -33,9 +34,13 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _queryController = TextEditingController();
+  final _backFocusNode = FocusNode(debugLabel: 'search.back');
   final _searchFocusNode = FocusNode(debugLabel: 'search_input');
   final _voiceFocusNode = FocusNode(debugLabel: 'search.voice');
   final _firstResultFocusNode = FocusNode(debugLabel: 'search.result.first');
+  final _headerRepeatGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
   Timer? _debounce;
   AsyncValue<List<AnimeSummary>> _results = const AsyncData([]);
   var _searchGeneration = 0;
@@ -55,7 +60,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _headerRepeatGate.reset();
     _queryController.dispose();
+    _backFocusNode.dispose();
     _searchFocusNode.dispose();
     _voiceFocusNode.dispose();
     _firstResultFocusNode.dispose();
@@ -170,15 +177,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.arrowDown;
     if (!directional) return KeyEventResult.ignored;
-    if (event is KeyUpEvent) return KeyEventResult.handled;
+    if (event is KeyUpEvent) {
+      _headerRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.handled;
     }
+    if (!_headerRepeatGate.accept(event)) return KeyEventResult.handled;
 
     final current = FocusManager.instance.primaryFocus;
     if (key == LogicalKeyboardKey.arrowLeft) {
-      if (current == _searchFocusNode && layout.usesTvRail) {
-        layout.focusRail();
+      if (current == _searchFocusNode) {
+        if (layout.usesTvRail) {
+          layout.focusRail();
+        } else if (_backFocusNode.context != null) {
+          _backFocusNode.requestFocus();
+        } else {
+          return KeyEventResult.ignored;
+        }
         return KeyEventResult.handled;
       }
       if (current == _voiceFocusNode) {
@@ -187,6 +204,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       }
     }
     if (key == LogicalKeyboardKey.arrowRight) {
+      if (current == _backFocusNode) {
+        _searchFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
       if (current == _searchFocusNode) {
         _voiceFocusNode.requestFocus();
         return KeyEventResult.handled;
@@ -228,6 +249,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               children: [
                 LayoutBuilder(
                   builder: (context, constraints) {
+                    final back =
+                        preferences.interfaceMode == InterfaceMode.phone
+                        ? TvFocusable(
+                            focusNode: _backFocusNode,
+                            onPressed: () => _returnToPreviousOrHome(context),
+                            borderRadius: BorderRadius.circular(10),
+                            focusScale: 1.02,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: context.appPalette.surface.withValues(
+                                  alpha: .92,
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: context.appPalette.primaryText
+                                      .withValues(alpha: .11),
+                                ),
+                              ),
+                              child: const Padding(
+                                padding: EdgeInsets.all(10),
+                                child: Icon(Icons.arrow_back_rounded, size: 20),
+                              ),
+                            ),
+                          )
+                        : null;
                     final input = TvTextInput(
                       focusNode: _searchFocusNode,
                       controller: _queryController,
@@ -272,6 +318,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         children: [
                           Row(
                             children: [
+                              if (back != null) ...[
+                                back,
+                                const SizedBox(width: 12),
+                              ],
                               Expanded(
                                 child: Text(
                                   'Search anime',
@@ -288,6 +338,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     }
                     return Row(
                       children: [
+                        if (back != null) ...[back, const SizedBox(width: 18)],
                         Text(
                           'Search anime',
                           style: Theme.of(context).textTheme.titleLarge
@@ -391,6 +442,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       },
     );
   }
+}
+
+void _returnToPreviousOrHome(BuildContext context) {
+  if (Navigator.of(context).canPop()) {
+    context.pop();
+    return;
+  }
+  context.go('/');
 }
 
 class _SearchCard extends StatelessWidget {

@@ -29,6 +29,7 @@ import 'package:anime_tv/features/streaming/application/debrid_token_service.dar
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
+import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
@@ -1286,6 +1287,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       final preferredSourceId = _currentRelease.sourceId.trim();
       final preferredAuthor = releaseGroupKey(_currentRelease.releaseName);
       final preferredWebProviderId = _currentStream.providerId?.trim();
+      final preferredQualityHeight = releaseQualityHeight(_currentRelease);
       final query = {
         'anilistId': widget.anilistMediaId.toString(),
         'title': details.title,
@@ -1300,6 +1302,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           'preferredAuthor': preferredAuthor,
         if (preferredWebProviderId != null && preferredWebProviderId.isNotEmpty)
           'preferredWebProviderId': preferredWebProviderId,
+        if (preferredQualityHeight > 0)
+          'preferredQualityHeight': preferredQualityHeight.toString(),
         if (details.seasonYear != null) 'year': details.seasonYear.toString(),
         if (details.coverImageUrl != null) 'cover': details.coverImageUrl!,
         if (widget.malMediaId != null) 'malId': widget.malMediaId.toString(),
@@ -1734,7 +1738,6 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       final classOrder = playerFailoverClassOrder(
         currentIsWeb: _currentStream.isWebStream,
       );
-      final directFirst = classOrder.first == PlayerFailoverClass.directWeb;
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
       if (!mounted || _engineHandoffInProgress) return;
       await _database.recordStreamFailure(
@@ -1743,83 +1746,138 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         reason: reason,
       );
       if (!mounted || _engineHandoffInProgress) return;
-      if (directFirst) {
-        await _waitForInFlightDirectDiscovery();
-        if (!mounted || _engineHandoffInProgress) return;
-        if (await _switchToNextDirectStream(position)) return;
-      }
-      if (!mounted || _engineHandoffInProgress) return;
-      for (final candidate in _remainingReleaseFailoverCandidates().take(12)) {
-        _attemptedReleaseAlternatives.add(candidate);
-        final previousSource = _source;
-        final previousRelease = _currentRelease;
-        final previousStream = _currentStream;
-        final previousPreferences = _seriesPreferences;
-        final previousAudioSelected = _preferredAudioSelected;
-        final previousSubtitleSelected = _preferredSubtitleSelected;
-        final previousSoftwareFallbackUsed = _softwareFallbackUsed;
-        final previousDecoderMode = _decoderMode;
-        final previousVideoFrameSeen = _videoFrameSeen;
-        try {
-          final ready = await _resolveRelease(
-            candidate,
-            widget.launch.episode,
-            tokenService: tokenService,
-          );
-          if (!mounted || _engineHandoffInProgress) return;
-          if (ready == null) continue;
-          _source = ready.uri.toString();
-          _currentRelease = candidate;
-          _currentStream = ready;
-          _seriesPreferences = _seriesPreferences.copyWith(
-            subtitleEnabled: subtitlesEnabledForAudioPreference(
+      Future<bool> tryReleaseCandidates(
+        Iterable<ReleaseCandidate> candidates,
+      ) async {
+        for (final candidate in candidates.take(12)) {
+          _attemptedReleaseAlternatives.add(candidate);
+          final previousSource = _source;
+          final previousRelease = _currentRelease;
+          final previousStream = _currentStream;
+          final previousPreferences = _seriesPreferences;
+          final previousAudioSelected = _preferredAudioSelected;
+          final previousSubtitleSelected = _preferredSubtitleSelected;
+          final previousSoftwareFallbackUsed = _softwareFallbackUsed;
+          final previousDecoderMode = _decoderMode;
+          final previousVideoFrameSeen = _videoFrameSeen;
+          try {
+            final ready = await _resolveRelease(
               candidate,
-              _audioPreference,
-            ),
-          );
-          _preferredAudioSelected = false;
-          _preferredSubtitleSelected = false;
-          _softwareFallbackUsed = false;
-          _decoderMode = releaseRequiresSoftwareDecoder(candidate)
-              ? PlaybackDecoderMode.software
-              : PlaybackDecoderMode.hardwareSafe;
-          _softwareFallbackUsed = _decoderMode == PlaybackDecoderMode.software;
-          _videoFrameSeen = false;
-          await _openMedia(resume: position, propagateFailure: true);
-          if (!mounted || _engineHandoffInProgress) return;
-          await widget.onStreamAdopted(ready, candidate);
-          _invalidateNextEpisodePreparation();
-          if (_skips.isEmpty) {
-            _skipLoadComplete = false;
-            _skipLoadAttempts = 0;
-            _skipDurationCandidate = null;
-            _scheduleSkipSegmentLoad(_player.state.duration);
+              widget.launch.episode,
+              tokenService: tokenService,
+            );
+            if (!mounted || _engineHandoffInProgress) return false;
+            if (ready == null) continue;
+            _source = ready.uri.toString();
+            _currentRelease = candidate;
+            _currentStream = ready;
+            _seriesPreferences = _seriesPreferences.copyWith(
+              subtitleEnabled: subtitlesEnabledForAudioPreference(
+                candidate,
+                _audioPreference,
+              ),
+            );
+            _preferredAudioSelected = false;
+            _preferredSubtitleSelected = false;
+            _softwareFallbackUsed = false;
+            _decoderMode = releaseRequiresSoftwareDecoder(candidate)
+                ? PlaybackDecoderMode.software
+                : PlaybackDecoderMode.hardwareSafe;
+            _softwareFallbackUsed =
+                _decoderMode == PlaybackDecoderMode.software;
+            _videoFrameSeen = false;
+            await _openMedia(resume: position, propagateFailure: true);
+            if (!mounted || _engineHandoffInProgress) return false;
+            await widget.onStreamAdopted(ready, candidate);
+            _invalidateNextEpisodePreparation();
+            if (_skips.isEmpty) {
+              _skipLoadComplete = false;
+              _skipLoadAttempts = 0;
+              _skipDurationCandidate = null;
+              _scheduleSkipSegmentLoad(_player.state.duration);
+            }
+            setState(() => _playbackError = null);
+            return true;
+          } catch (error) {
+            if (!mounted || _engineHandoffInProgress) return false;
+            _source = previousSource;
+            _currentRelease = previousRelease;
+            _currentStream = previousStream;
+            _seriesPreferences = previousPreferences;
+            _preferredAudioSelected = previousAudioSelected;
+            _preferredSubtitleSelected = previousSubtitleSelected;
+            _softwareFallbackUsed = previousSoftwareFallbackUsed;
+            _decoderMode = previousDecoderMode;
+            _videoFrameSeen = previousVideoFrameSeen;
+            if (isTerminalDebridFailoverFailure(error)) {
+              terminalFailure = error;
+              return false;
+            }
+            // Continue only through candidate-specific/cache-miss failures.
           }
-          setState(() => _playbackError = null);
-          return;
-        } catch (error) {
-          if (!mounted || _engineHandoffInProgress) return;
-          _source = previousSource;
-          _currentRelease = previousRelease;
-          _currentStream = previousStream;
-          _seriesPreferences = previousPreferences;
-          _preferredAudioSelected = previousAudioSelected;
-          _preferredSubtitleSelected = previousSubtitleSelected;
-          _softwareFallbackUsed = previousSoftwareFallbackUsed;
-          _decoderMode = previousDecoderMode;
-          _videoFrameSeen = previousVideoFrameSeen;
-          if (isTerminalDebridFailoverFailure(error)) {
-            terminalFailure = error;
-            break;
-          }
-          // Continue only through candidate-specific/cache-miss failures.
         }
+        return false;
       }
-      if (!directFirst) {
-        if (!mounted || _engineHandoffInProgress) return;
-        await _waitForInFlightDirectDiscovery();
-        if (!mounted || _engineHandoffInProgress) return;
-        if (await _switchToNextDirectStream(position)) return;
+
+      final currentQualityHeight = releaseQualityHeight(_currentRelease);
+      await _waitForInFlightDirectDiscovery();
+      if (!mounted || _engineHandoffInProgress) return;
+      final allDirectCandidates = _remainingDirectFailoverCandidates();
+      final allReleaseCandidates = _remainingReleaseFailoverCandidates();
+      final audioRankTiers = playerFailoverAudioRankTiers([
+        for (final option in allDirectCandidates)
+          releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+        for (final candidate in allReleaseCandidates)
+          releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      ]);
+      for (final audioRank in audioRankTiers) {
+        for (final sameQuality in playerFailoverSameQualityTiers(
+          currentQualityHeight: currentQualityHeight,
+        )) {
+          final directCandidates = allDirectCandidates.where(
+            (option) =>
+                releaseAudioPreferenceRank(
+                      option.release,
+                      _effectiveAudioPreference,
+                    ) ==
+                    audioRank &&
+                playerFailoverCandidateIsInQualityTier(
+                  candidateQualityHeight: releaseQualityHeight(option.release),
+                  currentQualityHeight: currentQualityHeight,
+                  sameQuality: sameQuality,
+                ),
+          );
+          final releaseCandidates = allReleaseCandidates.where(
+            (candidate) =>
+                releaseAudioPreferenceRank(
+                      candidate,
+                      _effectiveAudioPreference,
+                    ) ==
+                    audioRank &&
+                playerFailoverCandidateIsInQualityTier(
+                  candidateQualityHeight: releaseQualityHeight(candidate),
+                  currentQualityHeight: currentQualityHeight,
+                  sameQuality: sameQuality,
+                ),
+          );
+          for (final streamClass in classOrder) {
+            final opened = switch (streamClass) {
+              PlayerFailoverClass.directWeb => await _switchToNextDirectStream(
+                position,
+                candidates: directCandidates,
+              ),
+              PlayerFailoverClass.debrid =>
+                playerFailoverClassIsAvailable(
+                      streamClass,
+                      debridAvailable: terminalFailure == null,
+                    )
+                    ? await tryReleaseCandidates(releaseCandidates)
+                    : false,
+            };
+            if (opened) return;
+            if (!mounted || _engineHandoffInProgress) return;
+          }
+        }
       }
       if (mounted && !_engineHandoffInProgress) {
         await _fallbackToVlc(
@@ -1832,7 +1890,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
-  Future<bool> _switchToNextDirectStream(Duration position) async {
+  Future<bool> _switchToNextDirectStream(
+    Duration position, {
+    Iterable<PlaybackStreamOption>? candidates,
+  }) async {
     if (!mounted || _engineHandoffInProgress) {
       return false;
     }
@@ -1840,7 +1901,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _failedDirectStreamUris.add(_currentStream.uri.toString());
     }
     final opened = await openFirstViablePlayerCandidate(
-      candidates: _remainingDirectFailoverCandidates(),
+      candidates: candidates ?? _remainingDirectFailoverCandidates(),
       resumePosition: position,
       isActive: () => mounted && !_engineHandoffInProgress,
       attempt: (candidate, resumePosition) async {
@@ -1933,6 +1994,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       candidates: candidates,
       audioRank: (candidate) =>
           releaseAudioPreferenceRank(candidate, _effectiveAudioPreference),
+      qualityRank: (candidate) => automaticQualityAffinityRank(
+        releaseQualityHeight(candidate),
+        releaseQualityHeight(_currentRelease),
+      ),
       affinityRank: _releaseFailoverAffinity,
     );
   }
@@ -1959,6 +2024,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       candidates: candidates,
       audioRank: (option) =>
           releaseAudioPreferenceRank(option.release, _effectiveAudioPreference),
+      qualityRank: (option) => automaticQualityAffinityRank(
+        releaseQualityHeight(option.release),
+        releaseQualityHeight(_currentRelease),
+      ),
       affinityRank: affinityRank,
     );
   }

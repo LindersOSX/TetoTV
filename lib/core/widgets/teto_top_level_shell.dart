@@ -35,6 +35,7 @@ class TetoTopLevelShell extends StatefulWidget {
     required this.activeDestination,
     required this.firstContentFocusNode,
     required this.builder,
+    this.fallbackContentFocusNode,
     this.autofocusRail = false,
     this.onActiveDestinationPressed,
     this.resizeToAvoidBottomInset = true,
@@ -44,6 +45,7 @@ class TetoTopLevelShell extends StatefulWidget {
   final SettingsPreferences preferences;
   final TopNavigationDestination activeDestination;
   final FocusNode firstContentFocusNode;
+  final FocusNode? fallbackContentFocusNode;
   final TetoTopLevelBuilder builder;
   final bool autofocusRail;
   final VoidCallback? onActiveDestinationPressed;
@@ -56,6 +58,9 @@ class TetoTopLevelShell extends StatefulWidget {
 class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
   final _railFocusNode = FocusNode(debugLabel: 'top-level.active-navigation');
   final _profileFocusNode = FocusNode(debugLabel: 'top-level.profile');
+  bool _profileVisibleAtTop = true;
+  bool _profileVisibilityUpdateScheduled = false;
+  bool _profileShouldBeVisibleAtTop = true;
 
   @override
   void dispose() {
@@ -78,13 +83,57 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
   void _focusContent() {
     if (widget.firstContentFocusNode.context != null) {
       widget.firstContentFocusNode.requestFocus();
+    } else if (widget.fallbackContentFocusNode?.context != null) {
+      widget.fallbackContentFocusNode!.requestFocus();
     }
+  }
+
+  bool _handleContentScroll(ScrollNotification notification) {
+    _observeContentMetrics(notification.metrics);
+    return false;
+  }
+
+  bool _handleContentMetrics(ScrollMetricsNotification notification) {
+    _observeContentMetrics(notification.metrics);
+    return false;
+  }
+
+  void _observeContentMetrics(ScrollMetrics metrics) {
+    if (metrics.axis != Axis.vertical) return;
+    _profileShouldBeVisibleAtTop = metrics.pixels <= .5;
+    if (!_profileShouldBeVisibleAtTop && _profileFocusNode.hasFocus) {
+      if (_railFocusNode.context != null) {
+        _railFocusNode.requestFocus();
+      } else {
+        _focusContent();
+      }
+    }
+    if (_profileShouldBeVisibleAtTop == _profileVisibleAtTop ||
+        _profileVisibilityUpdateScheduled) {
+      return;
+    }
+    _profileVisibilityUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _profileVisibilityUpdateScheduled = false;
+      if (!mounted || _profileShouldBeVisibleAtTop == _profileVisibleAtTop) {
+        return;
+      }
+      setState(() {
+        _profileVisibleAtTop = _profileShouldBeVisibleAtTop;
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final usesTvRail = !context.isCompactWidth && size.width >= 840;
+    // Classic Layout deliberately retains the original horizontal top-level
+    // navigation, even on a large TV canvas. Modern/Automatic keep the
+    // cinematic rail when the viewport has enough room for it.
+    final usesTvRail =
+        widget.preferences.interfaceMode != InterfaceMode.phone &&
+        !context.isCompactWidth &&
+        size.width >= 840;
     final railMetrics = homeNavigationRailMetrics(
       widget.preferences.navigationChromeSize,
     );
@@ -123,15 +172,26 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
             fit: StackFit.expand,
             children: [
               const Positioned.fill(child: _TetoDestinationBackdrop()),
-              if (usesTvRail) ...[
-                Positioned.fill(
-                  key: const ValueKey('top-level-tv-content-region'),
-                  left: railWidth,
-                  child: Padding(
-                    padding: contentPadding,
-                    child: widget.builder(context, layout),
+              // Keep the content subtree in the same Stack slot while the
+              // viewer changes layouts. Reparenting it between two branches
+              // detaches a ScrollView and can silently reset its offset
+              // without a ScrollNotification, leaving profile visibility
+              // stale when Modern is restored.
+              Positioned.fill(
+                key: const ValueKey('top-level-tv-content-region'),
+                left: usesTvRail ? railWidth : 0,
+                child: NotificationListener<ScrollMetricsNotification>(
+                  onNotification: _handleContentMetrics,
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _handleContentScroll,
+                    child: Padding(
+                      padding: contentPadding,
+                      child: widget.builder(context, layout),
+                    ),
                   ),
                 ),
+              ),
+              if (usesTvRail) ...[
                 Positioned(
                   left: 0,
                   top: 0,
@@ -146,32 +206,35 @@ class _TetoTopLevelShellState extends State<TetoTopLevelShell> {
                     metrics: railMetrics,
                   ),
                 ),
-                Positioned(
-                  right: size.width >= 1400 ? 30 : 22,
-                  top: 12,
-                  child: RepaintBoundary(
-                    key: const ValueKey('top-level-fixed-profile'),
-                    child: HomeProfileSwitcher(
-                      preferences: widget.preferences,
-                      focusNode: _profileFocusNode,
-                      onKeyEvent: (_, event) {
-                        final returnsToContent =
-                            event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-                            event.logicalKey == LogicalKeyboardKey.arrowDown;
-                        if (!returnsToContent) return KeyEventResult.ignored;
-                        if (event is KeyDownEvent || event is KeyRepeatEvent) {
-                          _focusContent();
-                        }
-                        return KeyEventResult.handled;
-                      },
+                // Use the latest observed scroll metrics directly. A layout
+                // mode change can rebuild before the coalesced setState runs;
+                // this prevents a Classic-at-top -> Modern transition from
+                // inheriting a stale hidden profile.
+                if (_profileShouldBeVisibleAtTop)
+                  Positioned(
+                    right: size.width >= 1400 ? 30 : 22,
+                    top: 12,
+                    child: RepaintBoundary(
+                      key: const ValueKey('top-level-fixed-profile'),
+                      child: HomeProfileSwitcher(
+                        preferences: widget.preferences,
+                        focusNode: _profileFocusNode,
+                        onKeyEvent: (_, event) {
+                          final returnsToContent =
+                              event.logicalKey ==
+                                  LogicalKeyboardKey.arrowLeft ||
+                              event.logicalKey == LogicalKeyboardKey.arrowDown;
+                          if (!returnsToContent) return KeyEventResult.ignored;
+                          if (event is KeyDownEvent ||
+                              event is KeyRepeatEvent) {
+                            _focusContent();
+                          }
+                          return KeyEventResult.handled;
+                        },
+                      ),
                     ),
                   ),
-                ),
-              ] else
-                Padding(
-                  padding: contentPadding,
-                  child: widget.builder(context, layout),
-                ),
+              ],
             ],
           ),
         ),

@@ -2,6 +2,7 @@ import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
@@ -26,14 +27,62 @@ class MyListScreen extends ConsumerStatefulWidget {
 class _MyListScreenState extends ConsumerState<MyListScreen> {
   TrackingListStatus _status = TrackingListStatus.watching;
   final Map<TrackingListStatus, TrackingListResult> _lastUsableResults = {};
-  final _firstStatusFocus = FocusNode(debugLabel: 'my-list.status.watching');
+  final _statusFocusNodes = <TrackingListStatus, FocusNode>{
+    for (final status in TrackingListStatus.values)
+      status: FocusNode(debugLabel: 'my-list.status.${status.name}'),
+  };
+  final _statusRepeatGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
+  final _trackedShelfKey = GlobalKey<_TrackedShelfState>();
   bool _updating = false;
   bool _refreshing = false;
 
   @override
   void dispose() {
-    _firstStatusFocus.dispose();
+    _statusRepeatGate.reset();
+    for (final node in _statusFocusNodes.values) {
+      node.dispose();
+    }
     super.dispose();
+  }
+
+  KeyEventResult _handleStatusKey(
+    KeyEvent event, {
+    required TrackingListStatus status,
+    required TetoTopLevelLayout layout,
+  }) {
+    final key = event.logicalKey;
+    final direction = switch (key) {
+      LogicalKeyboardKey.arrowLeft => -1,
+      LogicalKeyboardKey.arrowRight => 1,
+      _ => 0,
+    };
+    final directional = direction != 0 || key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) {
+      _statusRepeatGate.accept(event);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (!_statusRepeatGate.accept(event)) return KeyEventResult.handled;
+    if (key == LogicalKeyboardKey.arrowDown) {
+      _trackedShelfKey.currentState?.requestFocus();
+      return KeyEventResult.handled;
+    }
+    final index = TrackingListStatus.values.indexOf(status);
+    final next = index + direction;
+    if (next < 0) {
+      if (layout.usesTvRail) layout.focusRail();
+      return KeyEventResult.handled;
+    }
+    if (next >= TrackingListStatus.values.length) {
+      return KeyEventResult.handled;
+    }
+    _statusFocusNodes[TrackingListStatus.values[next]]!.requestFocus();
+    return KeyEventResult.handled;
   }
 
   Future<void> _refresh() async {
@@ -175,8 +224,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.myList,
-      firstContentFocusNode: _firstStatusFocus,
-      autofocusRail: true,
+      firstContentFocusNode: _statusFocusNodes[_status]!,
       builder: (context, layout) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -184,7 +232,6 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
             MainNavigationBar(
               active: MainNavigationDestination.myList,
               preferences: preferences,
-              autofocusActive: true,
             ),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -195,25 +242,13 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                     _StatusTab(
                       status: status,
                       selected: status == _status,
-                      focusNode: status == TrackingListStatus.watching
-                          ? _firstStatusFocus
-                          : null,
-                      autofocus: false,
-                      onKeyEvent:
-                          status == TrackingListStatus.watching &&
-                              layout.usesTvRail
-                          ? (_, event) {
-                              if (event.logicalKey !=
-                                  LogicalKeyboardKey.arrowLeft) {
-                                return KeyEventResult.ignored;
-                              }
-                              if (event is KeyDownEvent ||
-                                  event is KeyRepeatEvent) {
-                                layout.focusRail();
-                              }
-                              return KeyEventResult.handled;
-                            }
-                          : null,
+                      focusNode: _statusFocusNodes[status],
+                      autofocus: status == TrackingListStatus.watching,
+                      onKeyEvent: (_, event) => _handleStatusKey(
+                        event,
+                        status: status,
+                        layout: layout,
+                      ),
                       onPressed: () => setState(() => _status = status),
                     ),
                     const SizedBox(width: 8),
@@ -333,6 +368,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                             ),
                           Expanded(
                             child: _TrackedShelf(
+                              key: _trackedShelfKey,
                               items: sortMyListItems(visibleItems, sort),
                               titlePreference: titlePreference,
                               onPressed: _open,
@@ -342,6 +378,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                               onLeftEdge: layout.usesTvRail
                                   ? layout.focusRail
                                   : null,
+                              onMoveUp: () =>
+                                  _statusFocusNodes[_status]!.requestFocus(),
                             ),
                           ),
                         ],
@@ -602,14 +640,16 @@ class _SortDialog extends StatelessWidget {
   }
 }
 
-class _TrackedShelf extends StatelessWidget {
+class _TrackedShelf extends StatefulWidget {
   const _TrackedShelf({
     required this.items,
     required this.titlePreference,
     required this.onPressed,
     required this.onManage,
     required this.preferences,
+    required this.onMoveUp,
     this.onLeftEdge,
+    super.key,
   });
 
   final List<HomeTrackedAnime> items;
@@ -618,22 +658,62 @@ class _TrackedShelf extends StatelessWidget {
   final ValueChanged<HomeTrackedAnime> onManage;
   final SettingsPreferences preferences;
   final VoidCallback? onLeftEdge;
+  final VoidCallback onMoveUp;
+
+  @override
+  State<_TrackedShelf> createState() => _TrackedShelfState();
+}
+
+class _TrackedShelfState extends State<_TrackedShelf> {
+  late final TvShelfFocusController _focusController;
+  double _itemExtent = 0;
+  double _itemSpacing = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusController = TvShelfFocusController(
+      debugLabel: 'my-list.cards',
+      itemCount: widget.items.length,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _TrackedShelf oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _focusController.syncItemCount(widget.items.length);
+  }
+
+  bool requestFocus() {
+    return _focusController.requestFocus(
+      itemExtent: _itemExtent > 0 ? _itemExtent : null,
+      spacing: _itemExtent > 0 ? _itemSpacing : null,
+    );
+  }
+
+  @override
+  void dispose() {
+    _focusController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final metrics = _myListPosterMetrics(
       context,
-      dense: preferences.homeLayout == HomeLayout.compact,
+      dense: widget.preferences.homeLayout == HomeLayout.compact,
     );
+    _itemExtent = metrics.width * widget.preferences.thumbnailScale;
+    _itemSpacing = 10 * widget.preferences.contentDensity.spacingScale;
     return ListView.separated(
+      controller: _focusController.scrollController,
       scrollDirection: Axis.horizontal,
       clipBehavior: Clip.none,
       padding: const EdgeInsets.fromLTRB(4, 5, 4, 24),
-      itemCount: items.length,
-      separatorBuilder: (_, _) =>
-          SizedBox(width: 10 * preferences.contentDensity.spacingScale),
+      itemCount: widget.items.length,
+      separatorBuilder: (_, _) => SizedBox(width: _itemSpacing),
       itemBuilder: (context, index) {
-        final item = items[index];
+        final item = widget.items[index];
         final totalEpisodes = item.tracked.totalEpisodes;
         final progress = totalEpisodes == null || totalEpisodes <= 0
             ? null
@@ -641,22 +721,38 @@ class _TrackedShelf extends StatelessWidget {
         return Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: metrics.width * preferences.thumbnailScale,
-            height: metrics.height * preferences.thumbnailScale,
+            width: metrics.width * widget.preferences.thumbnailScale,
+            height: metrics.height * widget.preferences.thumbnailScale,
             child: TvFocusable(
-              onKeyEvent: index == 0 && onLeftEdge != null
-                  ? (_, event) {
-                      if (event.logicalKey != LogicalKeyboardKey.arrowLeft) {
-                        return KeyEventResult.ignored;
-                      }
-                      if (event is KeyDownEvent || event is KeyRepeatEvent) {
-                        onLeftEdge!();
-                      }
-                      return KeyEventResult.handled;
-                    }
-                  : null,
-              onPressed: () => onPressed(item),
-              onLongPress: () => onManage(item),
+              focusNode: _focusController.focusNodeAt(index),
+              onFocusChanged: (focused) {
+                if (!focused) return;
+                _focusController.rememberIndex(index);
+                _focusController.reveal(
+                  index: index,
+                  itemExtent: _itemExtent,
+                  spacing: _itemSpacing,
+                );
+              },
+              onKeyEvent: (_, event) {
+                final horizontal = _focusController.handleHorizontalKey(
+                  event,
+                  currentIndex: index,
+                  itemExtent: _itemExtent,
+                  spacing: _itemSpacing,
+                  onLeftEdge: widget.onLeftEdge,
+                );
+                if (horizontal == KeyEventResult.handled) return horizontal;
+                if (event.logicalKey != LogicalKeyboardKey.arrowUp) {
+                  return KeyEventResult.ignored;
+                }
+                if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                  widget.onMoveUp();
+                }
+                return KeyEventResult.handled;
+              },
+              onPressed: () => widget.onPressed(item),
+              onLongPress: () => widget.onManage(item),
               focusScale: 1.025,
               borderRadius: BorderRadius.circular(8),
               child: DecoratedBox(
@@ -723,7 +819,7 @@ class _TrackedShelf extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 6),
                       child: Text(
-                        item.tracked.displayTitle(titlePreference),
+                        item.tracked.displayTitle(widget.titlePreference),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

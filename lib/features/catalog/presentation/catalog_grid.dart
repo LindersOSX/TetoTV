@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/layout/poster_card_geometry.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -36,8 +37,8 @@ class CatalogGrid extends StatefulWidget {
 }
 
 class _CatalogGridState extends State<CatalogGrid> {
-  static const _maximumCardWidth = 150.0;
-  static const _crossAxisSpacing = 10.0;
+  static const _maximumCardWidth = defaultPosterMaximumWidth;
+  static const _crossAxisSpacing = defaultPosterSpacing;
   static const _mainAxisSpacing = 14.0;
   static const _gridPadding = EdgeInsets.fromLTRB(4, 8, 4, 28);
 
@@ -319,13 +320,14 @@ class _CatalogGridState extends State<CatalogGrid> {
         final cardCrossAxisExtent =
             (gridWidth - _crossAxisSpacing * (crossAxisCount - 1)) /
             crossAxisCount;
-        final cardMainAxisExtent = cardCrossAxisExtent / .57;
+        final cardMainAxisExtent =
+            cardCrossAxisExtent / defaultPosterAspectRatio;
         return GridView.builder(
           controller: _scrollController,
           padding: _gridPadding,
           gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: _maximumCardWidth,
-            childAspectRatio: .57,
+            childAspectRatio: defaultPosterAspectRatio,
             crossAxisSpacing: _crossAxisSpacing,
             mainAxisSpacing: _mainAxisSpacing,
           ),

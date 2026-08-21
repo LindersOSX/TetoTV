@@ -97,18 +97,122 @@ void main() {
     expect(find.byIcon(Icons.home_rounded), findsOneWidget);
     expect(find.byIcon(Icons.explore_rounded), findsOneWidget);
     expect(find.byIcon(Icons.calendar_month_rounded), findsOneWidget);
-    final activeMyList = find.ancestor(
-      of: find.byIcon(Icons.video_library_rounded),
+    final watchingTab = find.ancestor(
+      of: find.text('Watching').first,
       matching: find.byType(TvFocusable),
     );
     final detector = find.descendant(
-      of: activeMyList,
+      of: watchingTab,
       matching: find.byType(FocusableActionDetector),
     );
     expect(
       tester.widget<FocusableActionDetector>(detector).focusNode?.hasFocus,
       isTrue,
     );
+  });
+
+  testWidgets('Classic Layout opens My List on Watching, not navigation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _MyListLayoutSettingsController(),
+          ),
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [])),
+        ],
+        child: const MaterialApp(home: MyListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.watching',
+    );
+    expect(find.byType(HomeSideNavigation), findsNothing);
+    expect(find.byType(MainNavigationBar), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('held My List input is throttled and card focus returns to tab', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const item = HomeTrackedAnime(
+      tracked: TrackedAnime(
+        mediaId: 81,
+        title: 'Predictable focus show',
+        status: TrackingListStatus.watching,
+        progress: 2,
+      ),
+      provider: TrackingProvider.anilist,
+      anilistId: 81,
+      coverImageUrl: null,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingListProvider(
+            TrackingListStatus.watching,
+          ).overrideWith((_) async => const TrackingListResult(items: [item])),
+        ],
+        child: const MaterialApp(home: TvShortcuts(child: MyListScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.planToWatch',
+    );
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.planToWatch',
+      reason: 'an immediate held repeat must not skip a status',
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.completed',
+    );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+
+    _focusNode('my-list.status.watching').requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.cards.item.0',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'my-list.status.watching',
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shows linked tracker summaries in the global navigation row', (
@@ -1237,6 +1341,24 @@ void main() {
     expect(repository.removals, [77]);
     expect(find.textContaining('removed from AniList'), findsOneWidget);
   });
+}
+
+FocusNode _focusNode(String debugLabel) => FocusManager
+    .instance
+    .rootScope
+    .descendants
+    .singleWhere((node) => node.debugLabel == debugLabel);
+
+class _MyListLayoutSettingsController extends SettingsPreferencesController {
+  _MyListLayoutSettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(
+      interfaceMode: InterfaceMode.phone,
+      loaded: true,
+    );
+  }
+
+  @override
+  Future<void> load() async {}
 }
 
 class _RemovingRepository implements TrackingRepository {

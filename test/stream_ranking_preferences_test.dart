@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -164,6 +165,114 @@ void main() {
       ).first,
       same(dub720),
     );
+  });
+
+  test(
+    'automatic fallback keeps the current normalized quality without filtering',
+    () {
+      final p4k = release(
+        id: 'f',
+        quality: '2160p',
+        seeders: 1000,
+        size: '8 GB',
+      );
+      final p1080 = release(
+        id: 'e',
+        quality: 'Full HD',
+        seeders: 1,
+        size: '1 GB',
+      );
+      final p720 = release(
+        id: 's',
+        quality: '720p',
+        seeders: 2000,
+        size: '800 MB',
+      );
+      final ranked = rankAutomaticAutoplayReleases(
+        [p4k, p720, p1080],
+        language: 'dub',
+        quality: 'any',
+        codec: 'any',
+        hdr: 'any',
+        allowBatch: true,
+        preferredAudio: PlaybackAudioPreference.dub,
+        rankingPreference: DebridStreamSort.bestQuality,
+        preferredQualityHeight: 1080,
+      );
+
+      expect(ranked.first, same(p1080));
+      expect(ranked, containsAll([p4k, p1080, p720]));
+    },
+  );
+
+  test('Web fallback shares exact-quality-first and fail-open behavior', () {
+    final p4k = web(id: '4k', quality: '2160p');
+    final p1080 = web(id: '1080', quality: 'Full HD');
+    final p720 = web(id: '720', quality: '720p');
+    final ranked = rankAutomaticAutoplayWebStreams(
+      [p4k, p720, p1080],
+      language: 'dub',
+      quality: 'any',
+      preferredAudio: PlaybackAudioPreference.dub,
+      qualityPreference: WebStreamQualityPreference.bestAvailable,
+      preferredWebProviderId: p4k.providerId,
+      preferredQualityHeight: 1080,
+    );
+
+    expect(ranked.first, same(p1080));
+    expect(ranked, containsAll([p4k, p1080, p720]));
+  });
+
+  test('device safety stays ahead of current-quality affinity', () {
+    final unsafe1080 = ReleaseCandidate(
+      infoHash: 'unsafe'.padRight(40, '0'),
+      magnetUri: 'magnet:?xt=urn:btih:${'unsafe'.padRight(40, '0')}',
+      releaseName: 'Unsafe 1080p AV1',
+      seeders: 1000,
+      sourceId: 'unsafe',
+      quality: '1080p',
+      codec: 'AV1',
+      isDubbed: true,
+    );
+    final safe720 = ReleaseCandidate(
+      infoHash: 'safe'.padRight(40, '0'),
+      magnetUri: 'magnet:?xt=urn:btih:${'safe'.padRight(40, '0')}',
+      releaseName: 'Safe 720p H.264',
+      seeders: 1,
+      sourceId: 'safe',
+      quality: '720p',
+      codec: 'H.264',
+      isDubbed: true,
+    );
+    final ranked = rankAutomaticAutoplayReleases(
+      [unsafe1080, safe720],
+      language: 'dub',
+      quality: 'any',
+      codec: 'any',
+      hdr: 'any',
+      allowBatch: true,
+      preferredAudio: PlaybackAudioPreference.dub,
+      rankingPreference: DebridStreamSort.bestQuality,
+      preferredQualityHeight: 1080,
+      device: const TvDeviceProfile(
+        manufacturer: 'Test',
+        model: 'AVC only',
+        sdk: 36,
+        abis: ['arm64-v8a'],
+        displayModes: [],
+        hdrTypes: [],
+        codecs: [
+          TvCodecCapability(
+            name: 'AVC decoder',
+            mime: 'video/avc',
+            hardware: true,
+          ),
+        ],
+        audioOutputs: [],
+      ),
+    );
+
+    expect(ranked.first, same(safe720));
   });
 
   test('source class preference is explicit and reversible', () {

@@ -217,6 +217,195 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'Classic Layout keeps the legacy top-level content branch on TV',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final firstContentFocus = FocusNode(debugLabel: 'classic.content');
+      addTearDown(firstContentFocus.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: TetoTopLevelShell(
+              preferences: const SettingsPreferences(
+                interfaceMode: InterfaceMode.phone,
+                loaded: true,
+              ),
+              activeDestination: TopNavigationDestination.discover,
+              firstContentFocusNode: firstContentFocus,
+              builder: (_, layout) => Text(
+                layout.usesTvRail ? 'Modern content' : 'Classic content',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Classic content'), findsOneWidget);
+      expect(find.byType(HomeSideNavigation), findsNothing);
+      expect(
+        find.byKey(const ValueKey('top-level-fixed-profile')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'submenu profile is top-only and restores content focus before hiding',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final contentFocus = FocusNode(debugLabel: 'scrolling.content');
+      final scrollController = ScrollController();
+      addTearDown(contentFocus.dispose);
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _StaticTrackingAccountsController(
+                const TrackingAccountsState(
+                  profiles: {
+                    TrackingProvider.anilist: TrackingAccountProfile(
+                      provider: TrackingProvider.anilist,
+                      username: 'Top-only profile',
+                    ),
+                  },
+                ),
+              ),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: TetoTopLevelShell(
+              preferences: const SettingsPreferences(loaded: true),
+              activeDestination: TopNavigationDestination.discover,
+              firstContentFocusNode: contentFocus,
+              builder: (_, _) => ListView.builder(
+                key: const ValueKey('scrolling-submenu'),
+                controller: scrollController,
+                itemCount: 40,
+                itemBuilder: (_, index) => index == 0
+                    ? TvFocusable(
+                        focusNode: contentFocus,
+                        onPressed: () {},
+                        child: const SizedBox(
+                          height: 80,
+                          child: Text('First content option'),
+                        ),
+                      )
+                    : SizedBox(height: 80, child: Text('Option $index')),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      expect(profile, findsOneWidget);
+      final profileDetector = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: profile,
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      profileDetector.focusNode!.requestFocus();
+      await tester.pump();
+
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pump();
+      await tester.pump();
+      expect(profile, findsNothing);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'top-level.active-navigation',
+      );
+
+      scrollController.jumpTo(0);
+      await tester.pump();
+      await tester.pump();
+      expect(profile, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Classic scrolling synchronizes profile visibility before returning Modern',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final harnessKey = GlobalKey<_LayoutTransitionShellHarnessState>();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _StaticTrackingAccountsController(
+                const TrackingAccountsState(
+                  profiles: {
+                    TrackingProvider.anilist: TrackingAccountProfile(
+                      provider: TrackingProvider.anilist,
+                      username: 'Layout transition profile',
+                    ),
+                  },
+                ),
+              ),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: _LayoutTransitionShellHarness(key: harnessKey),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      expect(profile, findsOneWidget);
+
+      harnessKey.currentState!.jumpToBottom();
+      await tester.pump();
+      await tester.pump();
+      expect(profile, findsNothing);
+
+      harnessKey.currentState!.setMode(InterfaceMode.phone);
+      await tester.pumpAndSettle();
+      harnessKey.currentState!.jumpToTop();
+      await tester.pump();
+      await tester.pump();
+      harnessKey.currentState!.setMode(InterfaceMode.television);
+      await tester.pump();
+      await tester.pump();
+      expect(profile, findsOneWidget);
+
+      harnessKey.currentState!.setMode(InterfaceMode.phone);
+      await tester.pump();
+      harnessKey.currentState!.jumpToBottom();
+      await tester.pump();
+      await tester.pump();
+      harnessKey.currentState!.setMode(InterfaceMode.television);
+      await tester.pump();
+      await tester.pump();
+      expect(profile, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('relocated Settings stays hidden while LEFT reaches the rail', (
     tester,
   ) async {
@@ -388,6 +577,109 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Calendar reveals a far remembered column across days', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final firstDay = DateTime(2026, 8, 21, 20);
+    final secondDay = DateTime(2026, 8, 22, 20);
+    final anime = [
+      for (var index = 0; index < 16; index++)
+        AnimeSummary(
+          id: 500 + index,
+          title: 'Calendar far show $index',
+          description: '',
+          episodes: 12,
+          score: 8,
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          airingWeekProvider.overrideWith(
+            (_) async => [
+              for (var index = 0; index < 8; index++)
+                AiringScheduleEntry(
+                  anime: anime[index],
+                  episode: 2,
+                  airingAt: firstDay.add(Duration(minutes: index)),
+                ),
+              for (var index = 8; index < 16; index++)
+                AiringScheduleEntry(
+                  anime: anime[index],
+                  episode: 2,
+                  airingAt: secondDay.add(Duration(minutes: index)),
+                ),
+            ],
+          ),
+          trackingHomeProvider.overrideWith(
+            (_) async => TrackingHomeData(
+              watching: [
+                for (final item in anime)
+                  HomeTrackedAnime(
+                    tracked: TrackedAnime(
+                      mediaId: item.id,
+                      title: item.title,
+                      status: TrackingListStatus.watching,
+                      progress: 1,
+                    ),
+                    provider: TrackingProvider.anilist,
+                    anilistId: item.id,
+                    coverImageUrl: null,
+                  ),
+              ],
+              planToWatch: const [],
+              completed: const [],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: AiringCalendarScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    for (var index = 0; index < 12; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      allOf(contains('2026-08-21'), contains('.item.12')),
+    );
+    final firstFocusedBox =
+        FocusManager.instance.primaryFocus!.context!.findRenderObject()!
+            as RenderBox;
+    expect(
+      firstFocusedBox.localToGlobal(Offset.zero).dx +
+          firstFocusedBox.size.width,
+      lessThanOrEqualTo(1262),
+      reason: 'the complete far calendar action must be inside the viewport',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      allOf(contains('2026-08-22'), contains('.item.12')),
+    );
+    final secondFocusedBox =
+        FocusManager.instance.primaryFocus!.context!.findRenderObject()!
+            as RenderBox;
+    expect(
+      secondFocusedBox.localToGlobal(Offset.zero).dx +
+          secondFocusedBox.size.width,
+      lessThanOrEqualTo(1262),
+      reason: 'the remembered far action must stay fully visible on row change',
+    );
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _StaticTrackingAccountsController extends TrackingAccountsController {
@@ -401,6 +693,53 @@ class _StaticTrackingAccountsController extends TrackingAccountsController {
 
   @override
   Future<void> load() async {}
+}
+
+class _LayoutTransitionShellHarness extends StatefulWidget {
+  const _LayoutTransitionShellHarness({super.key});
+
+  @override
+  State<_LayoutTransitionShellHarness> createState() =>
+      _LayoutTransitionShellHarnessState();
+}
+
+class _LayoutTransitionShellHarnessState
+    extends State<_LayoutTransitionShellHarness> {
+  final _contentFocus = FocusNode(debugLabel: 'layout-transition.content');
+  final _scrollController = ScrollController();
+  InterfaceMode _mode = InterfaceMode.television;
+
+  void setMode(InterfaceMode mode) => setState(() => _mode = mode);
+
+  void jumpToTop() => _scrollController.jumpTo(0);
+
+  void jumpToBottom() =>
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+
+  @override
+  void dispose() {
+    _contentFocus.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TetoTopLevelShell(
+    preferences: SettingsPreferences(interfaceMode: _mode, loaded: true),
+    activeDestination: TopNavigationDestination.discover,
+    firstContentFocusNode: _contentFocus,
+    builder: (_, _) => ListView.builder(
+      controller: _scrollController,
+      itemCount: 40,
+      itemBuilder: (_, index) => index == 0
+          ? TvFocusable(
+              focusNode: _contentFocus,
+              onPressed: () {},
+              child: const SizedBox(height: 80, child: Text('First option')),
+            )
+          : SizedBox(height: 80, child: Text('Option $index')),
+    ),
+  );
 }
 
 class _TrackingAccountsRef extends Fake implements Ref {}

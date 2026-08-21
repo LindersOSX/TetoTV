@@ -47,6 +47,10 @@ const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
 const _debridStreamSortKey = 'streaming_debrid_sort';
 const _streamSourcePriorityKey = 'streaming_source_priority';
 const _webStreamQualityKey = 'streaming_web_quality_preference';
+const _autoPickSourceEnabledKey = 'streaming_auto_pick_source_enabled';
+const _autoPickSourceTypeKey = 'streaming_auto_pick_source_type';
+const _autoPickQualityKey = 'streaming_auto_pick_quality';
+const _autoPickAudioKey = 'streaming_auto_pick_audio';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -229,6 +233,71 @@ extension PreferredPlayerLabel on PreferredPlayer {
   };
 }
 
+/// Restricts which source class may be selected by the opt-in source picker.
+/// Manual source discovery is never restricted by this preference.
+enum AutoPickSourceType { any, debridOnly, webOnly }
+
+extension AutoPickSourceTypeLabel on AutoPickSourceType {
+  String get displayName => switch (this) {
+    AutoPickSourceType.any => 'Any',
+    AutoPickSourceType.debridOnly => 'Debrid only',
+    AutoPickSourceType.webOnly => 'Web only',
+  };
+
+  String get description => switch (this) {
+    AutoPickSourceType.any => 'Use the preferred source order',
+    AutoPickSourceType.debridOnly => 'Automatically select cached releases',
+    AutoPickSourceType.webOnly => 'Automatically select Web streams',
+  };
+}
+
+/// Exact resolution required for automatic source selection.
+/// [any] keeps quality as a ranking preference instead of a hard filter.
+enum AutoPickQuality { any, p2160, p1080, p720, p480 }
+
+extension AutoPickQualityLabel on AutoPickQuality {
+  String get displayName => switch (this) {
+    AutoPickQuality.any => 'Any',
+    AutoPickQuality.p2160 => '2160p (4K)',
+    AutoPickQuality.p1080 => '1080p',
+    AutoPickQuality.p720 => '720p',
+    AutoPickQuality.p480 => '480p',
+  };
+
+  String get description => switch (this) {
+    AutoPickQuality.any => 'Allow every available resolution',
+    AutoPickQuality.p2160 => 'Require an exact 2160p stream',
+    AutoPickQuality.p1080 => 'Require an exact 1080p stream',
+    AutoPickQuality.p720 => 'Require an exact 720p stream',
+    AutoPickQuality.p480 => 'Require an exact 480p stream',
+  };
+
+  int? get targetHeight => switch (this) {
+    AutoPickQuality.any => null,
+    AutoPickQuality.p2160 => 2160,
+    AutoPickQuality.p1080 => 1080,
+    AutoPickQuality.p720 => 720,
+    AutoPickQuality.p480 => 480,
+  };
+}
+
+/// Exact audio class required for automatic source selection.
+enum AutoPickAudio { any, dubOnly, subOnly }
+
+extension AutoPickAudioLabel on AutoPickAudio {
+  String get displayName => switch (this) {
+    AutoPickAudio.any => 'Any',
+    AutoPickAudio.dubOnly => 'Dub only',
+    AutoPickAudio.subOnly => 'Sub only',
+  };
+
+  String get description => switch (this) {
+    AutoPickAudio.any => 'Allow dubbed or subtitled streams',
+    AutoPickAudio.dubOnly => 'Require English audio support',
+    AutoPickAudio.subOnly => 'Require original audio support',
+  };
+}
+
 class SettingsPreferences {
   const SettingsPreferences({
     this.debridProvider = DebridService.realDebrid,
@@ -272,6 +341,10 @@ class SettingsPreferences {
     this.debridStreamSort = DebridStreamSort.bestQuality,
     this.streamSourcePriority = StreamSourcePriority.debridFirst,
     this.webStreamQuality = WebStreamQualityPreference.bestAvailable,
+    this.autoPickSourceEnabled = false,
+    this.autoPickSourceType = AutoPickSourceType.any,
+    this.autoPickQuality = AutoPickQuality.any,
+    this.autoPickAudio = AutoPickAudio.any,
     this.anonymousCrashReportingEnabled = false,
     this.loaded = false,
   });
@@ -315,6 +388,10 @@ class SettingsPreferences {
   final DebridStreamSort debridStreamSort;
   final StreamSourcePriority streamSourcePriority;
   final WebStreamQualityPreference webStreamQuality;
+  final bool autoPickSourceEnabled;
+  final AutoPickSourceType autoPickSourceType;
+  final AutoPickQuality autoPickQuality;
+  final AutoPickAudio autoPickAudio;
   final bool anonymousCrashReportingEnabled;
   final bool loaded;
 
@@ -358,6 +435,10 @@ class SettingsPreferences {
     DebridStreamSort? debridStreamSort,
     StreamSourcePriority? streamSourcePriority,
     WebStreamQualityPreference? webStreamQuality,
+    bool? autoPickSourceEnabled,
+    AutoPickSourceType? autoPickSourceType,
+    AutoPickQuality? autoPickQuality,
+    AutoPickAudio? autoPickAudio,
     bool? anonymousCrashReportingEnabled,
     bool? loaded,
   }) => SettingsPreferences(
@@ -403,6 +484,10 @@ class SettingsPreferences {
     debridStreamSort: debridStreamSort ?? this.debridStreamSort,
     streamSourcePriority: streamSourcePriority ?? this.streamSourcePriority,
     webStreamQuality: webStreamQuality ?? this.webStreamQuality,
+    autoPickSourceEnabled: autoPickSourceEnabled ?? this.autoPickSourceEnabled,
+    autoPickSourceType: autoPickSourceType ?? this.autoPickSourceType,
+    autoPickQuality: autoPickQuality ?? this.autoPickQuality,
+    autoPickAudio: autoPickAudio ?? this.autoPickAudio,
     anonymousCrashReportingEnabled:
         anonymousCrashReportingEnabled ?? this.anonymousCrashReportingEnabled,
     loaded: loaded ?? this.loaded,
@@ -521,6 +606,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_topNavigationOrderKey),
       _safeRead(_settingsEntryPlacementKey),
       _safeRead(_navigationChromeSizeKey),
+      // Append-only: existing positions above are migration-sensitive.
+      _safeRead(_autoPickSourceEnabledKey),
+      _safeRead(_autoPickSourceTypeKey),
+      _safeRead(_autoPickQualityKey),
+      _safeRead(_autoPickAudioKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -752,6 +842,38 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
           NavigationChromeSize.values,
           valueAt(40),
           NavigationChromeSize.medium,
+        ),
+      );
+    }
+    if (canRestore(_autoPickSourceEnabledKey, 41)) {
+      restored = restored.copyWith(
+        autoPickSourceEnabled: valueAt(41) == 'true',
+      );
+    }
+    if (canRestore(_autoPickSourceTypeKey, 42)) {
+      restored = restored.copyWith(
+        autoPickSourceType: _enumByName(
+          AutoPickSourceType.values,
+          valueAt(42),
+          AutoPickSourceType.any,
+        ),
+      );
+    }
+    if (canRestore(_autoPickQualityKey, 43)) {
+      restored = restored.copyWith(
+        autoPickQuality: _enumByName(
+          AutoPickQuality.values,
+          valueAt(43),
+          AutoPickQuality.any,
+        ),
+      );
+    }
+    if (canRestore(_autoPickAudioKey, 44)) {
+      restored = restored.copyWith(
+        autoPickAudio: _enumByName(
+          AutoPickAudio.values,
+          valueAt(44),
+          AutoPickAudio.any,
         ),
       );
     }
@@ -1028,6 +1150,26 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setWebStreamQuality(WebStreamQualityPreference value) => _update(
     state.copyWith(webStreamQuality: value),
     {_webStreamQualityKey: value.name},
+  );
+
+  Future<void> setAutoPickSourceEnabled(bool value) => _update(
+    state.copyWith(autoPickSourceEnabled: value),
+    {_autoPickSourceEnabledKey: value.toString()},
+  );
+
+  Future<void> setAutoPickSourceType(AutoPickSourceType value) => _update(
+    state.copyWith(autoPickSourceType: value),
+    {_autoPickSourceTypeKey: value.name},
+  );
+
+  Future<void> setAutoPickQuality(AutoPickQuality value) => _update(
+    state.copyWith(autoPickQuality: value),
+    {_autoPickQualityKey: value.name},
+  );
+
+  Future<void> setAutoPickAudio(AutoPickAudio value) => _update(
+    state.copyWith(autoPickAudio: value),
+    {_autoPickAudioKey: value.name},
   );
 
   Future<void> setAnonymousCrashReportingEnabled(bool value) => _update(
