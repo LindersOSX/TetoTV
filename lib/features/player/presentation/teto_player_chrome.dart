@@ -84,10 +84,13 @@ class TetoPlayerChrome extends StatelessWidget {
     required this.onPicture,
     required this.onFixVideo,
     this.onSources,
+    this.onWatchTogether,
+    this.watchTogetherFocusNode,
     required this.onOptions,
     required this.onDismiss,
     this.engineLabel,
     this.partyStatus,
+    this.playbackControlsLocked = false,
     this.footerHint = 'D-pad controls  |  J/L seek  |  Menu/Y options',
     super.key,
   });
@@ -97,6 +100,7 @@ class TetoPlayerChrome extends StatelessWidget {
   final String streamLabel;
   final String? engineLabel;
   final String? partyStatus;
+  final bool playbackControlsLocked;
   final Duration position;
   final Duration duration;
   final bool isPlaying;
@@ -112,6 +116,8 @@ class TetoPlayerChrome extends StatelessWidget {
   final VoidCallback onPicture;
   final VoidCallback onFixVideo;
   final VoidCallback? onSources;
+  final VoidCallback? onWatchTogether;
+  final FocusNode? watchTogetherFocusNode;
   final VoidCallback onOptions;
   final VoidCallback onDismiss;
   final String footerHint;
@@ -217,6 +223,7 @@ class TetoPlayerChrome extends StatelessWidget {
                           icon: Icons.replay_rounded,
                           label: 'Back ${seekBackSeconds}s',
                           iconOnly: true,
+                          enabled: !playbackControlsLocked,
                           revealScrollStart: true,
                           onPressed: onRewind,
                           onDismiss: onDismiss,
@@ -230,6 +237,7 @@ class TetoPlayerChrome extends StatelessWidget {
                               : Icons.play_arrow_rounded,
                           label: isPlaying ? 'Pause' : 'Play',
                           iconOnly: true,
+                          enabled: !playbackControlsLocked,
                           onPressed: onPlayPause,
                           onDismiss: onDismiss,
                         ),
@@ -238,6 +246,7 @@ class TetoPlayerChrome extends StatelessWidget {
                           icon: Icons.forward_rounded,
                           label: 'Forward ${seekForwardSeconds}s',
                           iconOnly: true,
+                          enabled: !playbackControlsLocked,
                           onPressed: onForward,
                           onDismiss: onDismiss,
                         ),
@@ -245,6 +254,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.audiotrack_rounded,
                           label: 'Audio',
+                          enabled: !playbackControlsLocked,
                           onPressed: onAudio,
                           onDismiss: onDismiss,
                         ),
@@ -252,6 +262,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.closed_caption_rounded,
                           label: 'CC',
+                          enabled: !playbackControlsLocked,
                           onPressed: onSubtitles,
                           onDismiss: onDismiss,
                         ),
@@ -259,6 +270,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.text_fields_rounded,
                           label: 'Size',
+                          enabled: !playbackControlsLocked,
                           onPressed: onCaptionSize,
                           onDismiss: onDismiss,
                         ),
@@ -266,6 +278,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.aspect_ratio_rounded,
                           label: 'Picture',
+                          enabled: !playbackControlsLocked,
                           onPressed: onPicture,
                           onDismiss: onDismiss,
                         ),
@@ -273,6 +286,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.smart_display_outlined,
                           label: 'Player',
+                          enabled: !playbackControlsLocked,
                           onPressed: onFixVideo,
                           onDismiss: onDismiss,
                         ),
@@ -281,7 +295,18 @@ class TetoPlayerChrome extends StatelessWidget {
                           TetoPlayerControl(
                             icon: Icons.video_library_rounded,
                             label: 'Sources',
+                            enabled: !playbackControlsLocked,
                             onPressed: onSources!,
+                            onDismiss: onDismiss,
+                          ),
+                        ],
+                        if (onWatchTogether != null) ...[
+                          const SizedBox(width: 8),
+                          TetoPlayerControl(
+                            icon: Icons.groups_rounded,
+                            label: 'Watch Together',
+                            focusNode: watchTogetherFocusNode,
+                            onPressed: onWatchTogether!,
                             onDismiss: onDismiss,
                           ),
                         ],
@@ -289,6 +314,7 @@ class TetoPlayerChrome extends StatelessWidget {
                         TetoPlayerControl(
                           icon: Icons.tune_rounded,
                           label: 'Options',
+                          enabled: !playbackControlsLocked,
                           revealScrollEnd: true,
                           onPressed: onOptions,
                           onDismiss: onDismiss,
@@ -420,6 +446,7 @@ class TetoPlayerControl extends StatelessWidget {
     this.revealScrollStart = false,
     this.revealScrollEnd = false,
     this.onDismiss,
+    this.enabled = true,
     super.key,
   });
 
@@ -432,6 +459,7 @@ class TetoPlayerControl extends StatelessWidget {
   final bool revealScrollStart;
   final bool revealScrollEnd;
   final VoidCallback? onDismiss;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -439,6 +467,54 @@ class TetoPlayerControl extends StatelessWidget {
     final foreground = primary
         ? _playerPrimaryControlTextColor(palette)
         : _playerPrimaryTextColor(palette);
+    final surface = Container(
+      key: ValueKey('player-control-$label'),
+      width: iconOnly ? 40 : null,
+      height: 40,
+      padding: iconOnly
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: primary ? palette.accent : _playerControlSurfaceColor(palette),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: iconOnly
+            ? MainAxisAlignment.center
+            : MainAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: foreground),
+          if (!iconOnly) ...[
+            const SizedBox(width: 6),
+            MediaQuery.withClampedTextScaling(
+              maxScaleFactor: _playerControlMaxTextScale,
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+    if (!enabled) {
+      return Semantics(
+        label: iconOnly ? label : null,
+        button: true,
+        enabled: false,
+        child: ExcludeFocus(
+          child: IgnorePointer(child: Opacity(opacity: .38, child: surface)),
+        ),
+      );
+    }
     final control = TvFocusable(
       focusNode: focusNode,
       onPressed: onPressed,
@@ -489,44 +565,7 @@ class TetoPlayerControl extends StatelessWidget {
             },
       focusScale: 1.025,
       borderRadius: BorderRadius.circular(8),
-      child: Container(
-        key: ValueKey('player-control-$label'),
-        width: iconOnly ? 40 : null,
-        height: 40,
-        padding: iconOnly
-            ? EdgeInsets.zero
-            : const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: primary ? palette.accent : _playerControlSurfaceColor(palette),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: iconOnly
-              ? MainAxisAlignment.center
-              : MainAxisAlignment.start,
-          children: [
-            Icon(icon, size: 18, color: foreground),
-            if (!iconOnly) ...[
-              const SizedBox(width: 6),
-              MediaQuery.withClampedTextScaling(
-                maxScaleFactor: _playerControlMaxTextScale,
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: foreground,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+      child: surface,
     );
     if (!iconOnly) return control;
     return Semantics(label: label, button: true, child: control);

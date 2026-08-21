@@ -49,6 +49,13 @@ class WatchPartyClient {
 
   final Uri _baseUri;
   final Dio _dio;
+  WatchPartyPublicIdentity? _publicIdentity;
+
+  /// Sets the small public identity shared with authenticated room members.
+  /// It remains in memory only and contains no provider or account identifier.
+  void setPublicIdentity(WatchPartyPublicIdentity? identity) {
+    _publicIdentity = identity;
+  }
 
   Future<bool> health() async {
     final response = await _request(
@@ -60,20 +67,41 @@ class WatchPartyClient {
   }
 
   Future<WatchPartyCreated> create() async {
-    final value = await _request(
-      'POST',
-      '/v1/watch-parties',
-      authenticated: false,
-      data: const <String, Object>{},
-    );
+    final identity = _publicIdentity;
+    Map<String, Object?> value;
+    try {
+      value = await _request(
+        'POST',
+        '/v1/watch-parties',
+        authenticated: false,
+        data: <String, Object>{
+          if (identity != null) 'identity': identity.toJson(),
+        },
+      );
+    } on WatchPartyClientException catch (error) {
+      if (identity == null || error.code != 'invalid_payload') rethrow;
+      // Identity is an append-only protocol extension. A still-running v1
+      // broker can create the room without it and will use the Host fallback.
+      value = await _request(
+        'POST',
+        '/v1/watch-parties',
+        authenticated: false,
+        data: const <String, Object>{},
+      );
+    }
     final roomCode = _roomCode(value['room_code']);
     final token = _token(value['host_token']);
     final expiresAt = _date(value['expires_at']);
     final watchPath = value['watch_url'] as String? ?? '/watch?room=$roomCode';
-    final watchUri = _baseUri.resolve(watchPath);
-    if (watchUri.origin != _baseUri.origin || watchUri.scheme != 'https') {
+    final advertisedWatchUri = _baseUri.resolve(watchPath);
+    if (advertisedWatchUri.origin != _baseUri.origin ||
+        advertisedWatchUri.scheme != 'https') {
       throw const WatchPartyClientException('invalid_response');
     }
+    // The room capability belongs only in the Authorization header. Build the
+    // public share URL locally so an accidental query value in a broker
+    // response can never enter a QR code, clipboard, or native player HUD.
+    final watchUri = _baseUri.resolve('/watch?room=$roomCode');
     return WatchPartyCreated(
       session: WatchPartySession(
         roomCode: roomCode,
@@ -90,12 +118,27 @@ class WatchPartyClient {
     if (roomCode == null) {
       throw const WatchPartyClientException('invalid_room_code');
     }
-    final value = await _request(
-      'POST',
-      '/v1/watch-parties/join',
-      authenticated: false,
-      data: <String, Object>{'room_code': roomCode},
-    );
+    final identity = _publicIdentity;
+    Map<String, Object?> value;
+    try {
+      value = await _request(
+        'POST',
+        '/v1/watch-parties/join',
+        authenticated: false,
+        data: <String, Object>{
+          'room_code': roomCode,
+          if (identity != null) 'identity': identity.toJson(),
+        },
+      );
+    } on WatchPartyClientException catch (error) {
+      if (identity == null || error.code != 'invalid_payload') rethrow;
+      value = await _request(
+        'POST',
+        '/v1/watch-parties/join',
+        authenticated: false,
+        data: <String, Object>{'room_code': roomCode},
+      );
+    }
     final token = _token(value['participant_token']);
     final expiresAt = _date(value['expires_at']);
     final snapshotValue = _map(value['state']);
@@ -144,14 +187,34 @@ class WatchPartyClient {
   Future<WatchPartySnapshot> setReady({
     required WatchPartySession session,
     required bool ready,
-  }) async => WatchPartySnapshot.fromJson(
-    await _request(
-      'POST',
-      '/v1/watch-parties/${session.roomCode}/ready',
-      token: session.token,
-      data: <String, Object>{'ready': ready},
-    ),
-  );
+  }) async {
+    final identity = _publicIdentity;
+    Map<String, Object?> value;
+    try {
+      value = await _request(
+        'POST',
+        '/v1/watch-parties/${session.roomCode}/ready',
+        token: session.token,
+        data: <String, Object>{
+          'ready': ready,
+          if (identity != null) 'identity': identity.toJson(),
+        },
+      );
+    } on WatchPartyClientException catch (error) {
+      if (identity == null ||
+          error.code != 'invalid_ready_state' &&
+              error.code != 'invalid_payload') {
+        rethrow;
+      }
+      value = await _request(
+        'POST',
+        '/v1/watch-parties/${session.roomCode}/ready',
+        token: session.token,
+        data: <String, Object>{'ready': ready},
+      );
+    }
+    return WatchPartySnapshot.fromJson(value);
+  }
 
   Future<void> leave(WatchPartySession session) async {
     await _request(
@@ -230,13 +293,10 @@ Uri _validOrigin(String rawValue) {
 }
 
 String? normalizeWatchPartyCode(String rawValue) {
-  final normalized = rawValue.trim().toUpperCase().replaceAll(
-    RegExp('[^A-Z0-9]'),
-    '',
-  );
-  return RegExp(r'^[A-HJ-NP-Z2-9]{8}$').hasMatch(normalized)
-      ? normalized
-      : null;
+  // Spaces and hyphens are display separators only. Keep every other
+  // character so pasted letters are rejected instead of silently discarded.
+  final normalized = rawValue.trim().replaceAll(RegExp(r'[\s-]'), '');
+  return RegExp(r'^[2-9]{8}$').hasMatch(normalized) ? normalized : null;
 }
 
 Map<String, Object?> _map(Object? value) {

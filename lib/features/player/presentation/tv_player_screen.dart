@@ -24,6 +24,7 @@ import 'package:anime_tv/features/player/presentation/player_stream_source_picke
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/player/presentation/vlc_tv_player_screen.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
+import 'package:anime_tv/features/player/presentation/watch_party_player_dialog.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -37,6 +38,7 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_media_follower.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_playback_coordinator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/foundation.dart';
@@ -190,6 +192,9 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
   bool _manualEngineSelection = false;
   late final WatchPartyPlaybackCoordinator _watchPartyPlayback;
   late final WatchPartyController _watchPartyController;
+  late final WatchPartyPlaybackAffinityController _watchPartyAffinity;
+  final Object _watchPartyAffinityOwner = Object();
+  int _watchPartyAffinityRevision = 0;
 
   bool get _isLibraryPlayback => widget.libraryPlayback != null;
   bool get _media3Only =>
@@ -211,6 +216,8 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
     super.initState();
     _activeSource = widget.source;
     _activeLaunch = widget.launch;
+    _watchPartyAffinity = ref.read(watchPartyPlaybackAffinityProvider.notifier);
+    _scheduleWatchPartyAffinity();
     final libraryResume = widget.libraryPlayback?.request.initialPosition;
     if (libraryResume != null && libraryResume > Duration.zero) {
       _resumeOverride = libraryResume;
@@ -252,6 +259,12 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
 
   @override
   void dispose() {
+    _watchPartyAffinityRevision++;
+    unawaited(
+      Future<void>(() {
+        _watchPartyAffinity.unbind(_watchPartyAffinityOwner);
+      }),
+    );
     unawaited(_watchPartyController.detachPlayback(_watchPartyPlayback));
     unawaited(_watchPartyPlayback.dispose());
     unawaited(_activeLaunch.stream.playbackLease?.close());
@@ -279,6 +292,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       episode: _activeLaunch.episode,
       release: release,
     );
+    _scheduleWatchPartyAffinity();
     if (!identical(previous.playbackLease, stream.playbackLease)) {
       try {
         await previous.playbackLease?.close();
@@ -344,6 +358,7 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
         episode: _activeLaunch.episode,
         release: _activeLaunch.selectedRelease,
       );
+      _scheduleWatchPartyAffinity();
       if (!identical(previousLease, _activeLaunch.stream.playbackLease)) {
         unawaited(previousLease?.close());
       }
@@ -411,13 +426,36 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
       episode: launch.episode,
       release: launch.selectedRelease,
     );
+    _activeSource = source;
+    _activeLaunch = launch;
+    _scheduleWatchPartyAffinity();
     setState(() {
-      _activeSource = source;
-      _activeLaunch = launch;
       _engine = engine;
       _resumeOverride = resume;
       _manualEngineSelection = manualSelection;
     });
+  }
+
+  void _scheduleWatchPartyAffinity() {
+    final release = _activeLaunch.selectedRelease;
+    final stream = _activeLaunch.stream;
+    final affinity = WatchPartyPlaybackAffinity(
+      preferredProvider: release.provider,
+      preferredAuthor: releaseGroupKey(release.releaseName),
+      preferredSourceId: release.sourceId,
+      preferredWebProviderId: stream.providerId,
+      preferredQualityHeight: releaseQualityHeight(release),
+      preferredAudio: release.isDubbed
+          ? PlaybackAudioPreference.dub
+          : PlaybackAudioPreference.sub,
+    );
+    final revision = ++_watchPartyAffinityRevision;
+    unawaited(
+      Future<void>(() {
+        if (!mounted || revision != _watchPartyAffinityRevision) return;
+        _watchPartyAffinity.bind(_watchPartyAffinityOwner, affinity);
+      }),
+    );
   }
 
   @override
@@ -622,6 +660,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   );
   final _playControlFocus = FocusNode(debugLabel: 'player.play');
   final _skipControlFocus = FocusNode(debugLabel: 'player.skip-segment');
+  final _watchTogetherFocus = FocusNode(debugLabel: 'player.watch-together');
   Timer? _controlsTimer;
   Timer? _videoWatchdog;
   Timer? _performanceWatchdog;
@@ -719,6 +758,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Duration? _pendingInheritedResume;
   bool _lastResumeSeekSucceeded = true;
   String? _watchPartyStatus;
+  bool _guestControlsLocked = false;
+  DateTime _lastGuestControlNotice = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
     current: _currentStream,
@@ -813,13 +854,30 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _watchPartyStatus = watchPartyPlayerStatus(
-      ref.read(watchPartyControllerProvider),
-    );
+    final initialParty = ref.read(watchPartyControllerProvider);
+    _watchPartyStatus = watchPartyPlayerStatus(initialParty);
+    _guestControlsLocked = initialParty.guestPlaybackControlsLocked;
     ref.listenManual(watchPartyControllerProvider, (_, next) {
       final status = watchPartyPlayerStatus(next);
-      if (!mounted || status == _watchPartyStatus) return;
-      setState(() => _watchPartyStatus = status);
+      final locked = next.guestPlaybackControlsLocked;
+      if (!mounted ||
+          status == _watchPartyStatus && locked == _guestControlsLocked) {
+        return;
+      }
+      final becameLocked = locked && !_guestControlsLocked;
+      setState(() {
+        _watchPartyStatus = status;
+        _guestControlsLocked = locked;
+        if (locked) _queuedSeekTarget = null;
+      });
+      if (becameLocked) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_guestControlsLocked) return;
+          _showControls();
+          _watchTogetherFocus.requestFocus();
+          _showGuestControlLockMessage();
+        });
+      }
     });
     // Final checkpoints and preferences are written during State.dispose,
     // after Riverpod has invalidated ConsumerState.ref.
@@ -1110,6 +1168,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   void _checkSkips(Duration position) {
+    if (_guestControlsLocked) {
+      if (_canSkipNow || _activeSkip != null) {
+        setState(() {
+          _canSkipNow = false;
+          _activeSkip = null;
+        });
+      }
+      return;
+    }
     final active = _skips
         .where(
           (skip) =>
@@ -1150,9 +1217,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _autoSkipSegment(SkipSegment segment) async {
-    if (_skipInProgress || _engineHandoffInProgress) return;
-    _skipInProgress = true;
     final segmentKey = '${segment.kind.name}:${segment.start.inMilliseconds}';
+    if (_skipInProgress ||
+        _engineHandoffInProgress ||
+        _blockGuestLocalControl(notify: false)) {
+      _consumedSkipSegments.remove(segmentKey);
+      return;
+    }
+    _skipInProgress = true;
     try {
       final duration = _player.state.duration;
       final wasPlaying = _player.state.playing;
@@ -1407,6 +1479,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _playNextEpisode() async {
+    if (_blockGuestLocalControl()) return;
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
@@ -1608,7 +1681,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<bool> _seekForSkip(Duration target) {
-    if (_engineHandoffInProgress) return Future<bool>.value(false);
+    if (_engineHandoffInProgress || _blockGuestLocalControl(notify: false)) {
+      return Future<bool>.value(false);
+    }
     late final Future<bool> operation;
     operation =
         (() async {
@@ -1842,6 +1917,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   void _handleMediaAction(MediaAction action) {
     if (_engineHandoffInProgress) return;
+    if (_blockGuestLocalControl()) return;
     switch (action.action) {
       case 'play':
         unawaited(_player.play());
@@ -2610,6 +2686,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _offerNextEpisode() async {
+    if (_blockGuestLocalControl(notify: false)) return;
     if (!_animeFeaturesEnabled) return;
     if (!mounted || widget.episode == null || widget.anilistMediaId == null) {
       return;
@@ -2919,6 +2996,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openStreamSourcePicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final selected = await showPlayerStreamSourcePicker(
       context: context,
@@ -2934,6 +3012,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           : null,
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selected == null || selected.stream.uri == _currentStream.uri) {
       _showControls();
       return;
@@ -3026,6 +3108,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openCaptionSizePicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     if (mounted) setState(() => _controlsVisible = true);
     final selected = await showPlayerCaptionSizePicker(
@@ -3033,6 +3116,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       current: _subtitleSize,
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selected == null) {
       _scheduleControlsHide();
       return;
@@ -3049,6 +3136,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openPlaybackMenu() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     if (mounted) setState(() => _controlsVisible = true);
     final result = await showDialog<_PlaybackMenuResult>(
@@ -3070,6 +3158,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       ),
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (result == null) {
       _scheduleControlsHide();
       return;
@@ -3120,12 +3212,28 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _scheduleControlsHide();
   }
 
+  Future<void> _openWatchParty() async {
+    _controlsTimer?.cancel();
+    if (mounted) setState(() => _controlsVisible = true);
+    await showWatchPartyPlayerDialog(context);
+    if (!mounted) return;
+    _showControls();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _controlsVisible) _watchTogetherFocus.requestFocus();
+    });
+  }
+
   Future<void> _openPlayerPicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final selected = await showPlayerEnginePicker(
       context: context,
       current: PreferredPlayer.mpv,
     );
+    if (mounted && _blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (!mounted || selected == null || selected == PreferredPlayer.mpv) {
       if (mounted) _showControls();
       return;
@@ -3163,6 +3271,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   void _cycleFit() {
+    if (_blockGuestLocalControl()) return;
     final next = switch (_videoFit) {
       BoxFit.contain => BoxFit.cover,
       BoxFit.cover => BoxFit.fill,
@@ -3252,7 +3361,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.numpadEnter ||
         key == LogicalKeyboardKey.keyK) {
-      _player.playOrPause();
+      _playOrPauseLocal();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyS) {
@@ -3270,6 +3379,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyC) {
+      if (_blockGuestLocalControl()) return KeyEventResult.handled;
       if (_softwareFallbackUsed) {
         _showTrackMessage('Compatibility decoder is already enabled');
       } else {
@@ -3286,7 +3396,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _seekBy(Duration offset) async {
-    if (_engineHandoffInProgress) return;
+    if (_engineHandoffInProgress || _blockGuestLocalControl()) return;
     _queuedSeekTarget = playerSeekTarget(
       position: _queuedSeekTarget ?? _player.state.position,
       offset: offset,
@@ -3296,7 +3406,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _seekTo(Duration target) async {
-    if (_engineHandoffInProgress) return;
+    if (_engineHandoffInProgress || _blockGuestLocalControl()) return;
     _queuedSeekTarget = playerSeekTarget(
       position: target,
       offset: Duration.zero,
@@ -3315,6 +3425,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _seekDrainCompleter = drain;
     try {
       while (_queuedSeekTarget != null) {
+        if (_guestControlsLocked) {
+          _queuedSeekTarget = null;
+          break;
+        }
         final target = _queuedSeekTarget!;
         _queuedSeekTarget = null;
         await _player.seek(target);
@@ -3369,6 +3483,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openAudioTrackPicker() async {
+    if (_blockGuestLocalControl()) return;
     final expectsMultipleAudio = releaseAdvertisesMultipleAudio(
       _currentRelease.releaseName,
     );
@@ -3393,6 +3508,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           : const Duration(seconds: 2),
     );
     if (!mounted || _engineHandoffInProgress) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (tracks.isEmpty) {
       _showTrackMessage('This file has no selectable embedded audio tracks');
       return;
@@ -3420,6 +3539,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           .toList(growable: false),
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selectedId == null) {
       _showControls();
       return;
@@ -3456,7 +3579,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _skipCurrentSegment() async {
-    if (_skipInProgress || _engineHandoffInProgress) return;
+    if (_skipInProgress ||
+        _engineHandoffInProgress ||
+        _blockGuestLocalControl()) {
+      return;
+    }
     final segment = _activeSkip;
     if (segment == null) return;
     _skipInProgress = true;
@@ -3502,6 +3629,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<void> _openSubtitleTrackPicker() async {
+    if (_blockGuestLocalControl()) return;
     _showTrackMessage('Checking embedded and external captions…');
     final discovered = await waitForStableTrackSnapshot<List<SubtitleTrack>>(
       read: () async {
@@ -3520,6 +3648,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           : const Duration(seconds: 3),
     );
     if (!mounted || _engineHandoffInProgress) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     // media_kit can select a URI subtitle before it adds that external track
     // to the demuxer's published list. Keep the selected track visible in the
     // picker instead of incorrectly presenting only "Off".
@@ -3563,6 +3695,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           .toList(growable: false),
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selectedId == null) {
       _showControls();
       return;
@@ -3601,11 +3737,38 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     });
   }
 
+  void _showGuestControlLockMessage() {
+    final now = DateTime.now();
+    if (now.difference(_lastGuestControlNotice) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastGuestControlNotice = now;
+    _showTrackMessage(
+      'Only the host can control playback while you are synced',
+    );
+  }
+
+  bool _blockGuestLocalControl({bool notify = true}) {
+    if (!_guestControlsLocked) return false;
+    if (notify) _showGuestControlLockMessage();
+    return true;
+  }
+
+  void _playOrPauseLocal() {
+    if (_blockGuestLocalControl()) return;
+    unawaited(_player.playOrPause());
+  }
+
   void _showControls({bool focusControls = false}) {
     if (mounted) setState(() => _controlsVisible = true);
     if (focusControls) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _playControlFocus.requestFocus();
+        if (!mounted) return;
+        if (_guestControlsLocked) {
+          _watchTogetherFocus.requestFocus();
+        } else {
+          _playControlFocus.requestFocus();
+        }
       });
     }
     _scheduleControlsHide();
@@ -3646,7 +3809,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     } else if (x > width * 2 / 3) {
       unawaited(_seekBy(Duration(seconds: _seekForwardSeconds)));
     } else {
-      unawaited(_player.playOrPause());
+      _playOrPauseLocal();
     }
     _showControls();
   }
@@ -3668,9 +3831,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     // the video surface focus through the dialog on some Android TV devices.
     _controlsTimer?.cancel();
     final wasPlaying = _player.state.playing;
+    final shouldTemporarilyPause = wasPlaying && !_guestControlsLocked;
     bool? exit;
     try {
-      if (wasPlaying) {
+      if (shouldTemporarilyPause) {
         // A decoder that is already failing may reject pause. Exiting must
         // remain reachable even in that state, so the dialog is independent
         // of a successful pause acknowledgement.
@@ -3695,7 +3859,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _popPlayerRouteAfterHandoff(navigator);
       }
     } else {
-      if (wasPlaying) {
+      if (shouldTemporarilyPause) {
         try {
           await _player.play();
         } catch (_) {
@@ -3752,6 +3916,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _transportFocusScope.dispose();
     _playControlFocus.dispose();
     _skipControlFocus.dispose();
+    _watchTogetherFocus.dispose();
     if (!_playerReleasedForHandoff) {
       unawaited(
         _handoffRelease.release(() async {
@@ -3884,12 +4049,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                                 '${widget.debridService.displayName} stream',
                             decoderMode: _decoderMode,
                             partyStatus: _watchPartyStatus,
+                            playbackControlsLocked: _guestControlsLocked,
                             playFocusNode: _playControlFocus,
                             seekBackSeconds: _seekBackSeconds,
                             seekForwardSeconds: _seekForwardSeconds,
                             onRewind: () =>
                                 _seekBy(Duration(seconds: -_seekBackSeconds)),
-                            onPlayPause: _player.playOrPause,
+                            onPlayPause: _playOrPauseLocal,
                             onForward: () =>
                                 _seekBy(Duration(seconds: _seekForwardSeconds)),
                             onAudio: _openAudioTrackPicker,
@@ -3901,6 +4067,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                             onSources: _currentStream.isWebStream
                                 ? _openStreamSourcePicker
                                 : null,
+                            onWatchTogether: _openWatchParty,
+                            watchTogetherFocusNode: _watchTogetherFocus,
                             onOptions: _openPlaybackMenu,
                             onDismiss: _hideControls,
                           ),
@@ -3908,7 +4076,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                       ),
                     ),
                   ),
-                if (_canSkipNow && _activeSkip != null)
+                if (!_guestControlsLocked && _canSkipNow && _activeSkip != null)
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 180),
                     curve: Curves.easeOutCubic,
@@ -3929,6 +4097,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                     bottom: 110,
                     child: _PlaybackError(
                       message: error,
+                      controlsLocked: _guestControlsLocked,
                       onRetry: () => unawaited(_retryCurrentStream()),
                       onNextStream: () => unawaited(
                         _tryNextStream('Selected after failure', notify: false),
@@ -4019,6 +4188,7 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
     required this.streamLabel,
     required this.decoderMode,
     this.partyStatus,
+    required this.playbackControlsLocked,
     required this.playFocusNode,
     required this.seekBackSeconds,
     required this.seekForwardSeconds,
@@ -4031,6 +4201,8 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
     required this.onFit,
     required this.onCompatibility,
     this.onSources,
+    required this.onWatchTogether,
+    required this.watchTogetherFocusNode,
     required this.onOptions,
     required this.onDismiss,
   });
@@ -4040,6 +4212,7 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
   final String streamLabel;
   final PlaybackDecoderMode decoderMode;
   final String? partyStatus;
+  final bool playbackControlsLocked;
   final FocusNode playFocusNode;
   final int seekBackSeconds;
   final int seekForwardSeconds;
@@ -4052,6 +4225,8 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
   final VoidCallback onFit;
   final VoidCallback onCompatibility;
   final VoidCallback? onSources;
+  final VoidCallback onWatchTogether;
+  final FocusNode watchTogetherFocusNode;
   final VoidCallback onOptions;
   final VoidCallback onDismiss;
 
@@ -4070,6 +4245,7 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
             engineKey: 'mpv',
             engineLabel: 'MPV - ${playbackDecoderLabel(decoderMode)}',
             partyStatus: partyStatus,
+            playbackControlsLocked: playbackControlsLocked,
             title: title,
             streamLabel: streamLabel,
             position: positionSnapshot.data ?? Duration.zero,
@@ -4087,6 +4263,8 @@ class _UnifiedMpvPlayerChrome extends StatelessWidget {
             onPicture: onFit,
             onFixVideo: onCompatibility,
             onSources: onSources,
+            onWatchTogether: onWatchTogether,
+            watchTogetherFocusNode: watchTogetherFocusNode,
             onOptions: onOptions,
             onDismiss: onDismiss,
           ),
@@ -4388,6 +4566,7 @@ class _OptionChip extends StatelessWidget {
 class _PlaybackError extends StatelessWidget {
   const _PlaybackError({
     required this.message,
+    required this.controlsLocked,
     required this.onRetry,
     required this.onNextStream,
     required this.onSwitchEngine,
@@ -4395,6 +4574,7 @@ class _PlaybackError extends StatelessWidget {
   });
 
   final String message;
+  final bool controlsLocked;
   final VoidCallback onRetry;
   final VoidCallback onNextStream;
   final VoidCallback onSwitchEngine;
@@ -4435,33 +4615,39 @@ class _PlaybackError extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _RecoveryAction(
-                  label: 'Retry stream',
-                  icon: Icons.refresh_rounded,
-                  primary: true,
-                  onPressed: onRetry,
-                ),
-                _RecoveryAction(
-                  label: 'Next stream',
-                  icon: Icons.skip_next_rounded,
-                  onPressed: onNextStream,
-                ),
-                _RecoveryAction(
-                  label: 'Use VLC',
-                  icon: Icons.swap_horiz_rounded,
-                  onPressed: onSwitchEngine,
-                ),
-                _RecoveryAction(
-                  label: 'Choose stream',
-                  icon: Icons.list_rounded,
-                  onPressed: onChooseStream,
-                ),
-              ],
-            ),
+            if (controlsLocked)
+              Text(
+                'The host controls playback. Open Watch Together or Exit.',
+                style: TextStyle(color: palette.mutedText),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _RecoveryAction(
+                    label: 'Retry stream',
+                    icon: Icons.refresh_rounded,
+                    primary: true,
+                    onPressed: onRetry,
+                  ),
+                  _RecoveryAction(
+                    label: 'Next stream',
+                    icon: Icons.skip_next_rounded,
+                    onPressed: onNextStream,
+                  ),
+                  _RecoveryAction(
+                    label: 'Use VLC',
+                    icon: Icons.swap_horiz_rounded,
+                    onPressed: onSwitchEngine,
+                  ),
+                  _RecoveryAction(
+                    label: 'Choose stream',
+                    icon: Icons.list_rounded,
+                    onPressed: onChooseStream,
+                  ),
+                ],
+              ),
           ],
         ),
       ),

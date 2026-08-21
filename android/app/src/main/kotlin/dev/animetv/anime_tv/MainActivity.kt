@@ -180,6 +180,32 @@ class MainActivity : FlutterActivity() {
                             ),
                         )
                     }
+                    "dismissNativePlayerForWatchPartyTransition" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val data = call.arguments as? Map<String, Any?> ?: emptyMap()
+                        result.success(
+                            NativePlayerCommandBridge.dismissForWatchPartyTransition(
+                                checkpointKey = data["checkpointKey"] as? String ?: "",
+                                generation = (data["playbackSessionGeneration"] as? Number)
+                                    ?.toInt() ?: 0,
+                            ),
+                        )
+                    }
+                    "updateNativePlayerWatchPartyState" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val data = call.arguments as? Map<String, Any?> ?: emptyMap()
+                        result.success(
+                            NativePlayerCommandBridge.updateWatchPartyState(
+                                checkpointKey = data["checkpointKey"] as? String ?: "",
+                                generation = (data["playbackSessionGeneration"] as? Number)
+                                    ?.toInt() ?: 0,
+                                guestControlsLocked =
+                                    data["guestControlsLocked"] as? Boolean ?: false,
+                                stateSequence = (data["stateSequence"] as? Number)?.toInt() ?: 0,
+                                status = (data["status"] as? String)?.take(96),
+                            ),
+                        )
+                    }
                     "setPreferredFrameRate" -> {
                         val fps = call.argument<Double>("fps") ?: 0.0
                         result.success(setPreferredFrameRate(fps))
@@ -511,6 +537,14 @@ class MainActivity : FlutterActivity() {
             putExtra(
                 Media3PlayerActivity.EXTRA_WATCH_PARTY_STATUS,
                 (data["watchPartyStatus"] as? String)?.take(96),
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_WATCH_PARTY_GUEST_CONTROLS_LOCKED,
+                data["watchPartyGuestControlsLocked"] as? Boolean ?: false,
+            )
+            putExtra(
+                Media3PlayerActivity.EXTRA_WATCH_PARTY_STATE_SEQUENCE,
+                (data["watchPartyStateSequence"] as? Number)?.toInt() ?: 0,
             )
         }
         pendingNativePlayerResult = result

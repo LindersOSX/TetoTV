@@ -9,6 +9,7 @@ void main() {
     tester,
   ) async {
     final playFocus = FocusNode();
+    var watchPartyPressed = false;
     addTearDown(playFocus.dispose);
     await tester.pumpWidget(
       MaterialApp(
@@ -34,6 +35,7 @@ void main() {
             onPicture: () {},
             onFixVideo: () {},
             onSources: () {},
+            onWatchTogether: () => watchPartyPressed = true,
             onOptions: () {},
             onDismiss: () {},
           ),
@@ -47,6 +49,7 @@ void main() {
     expect(find.text('Picture'), findsOneWidget);
     expect(find.text('Player'), findsOneWidget);
     expect(find.text('Sources'), findsOneWidget);
+    expect(find.text('Watch Together'), findsOneWidget);
     expect(find.text('Options'), findsOneWidget);
     expect(find.text('Back 10s'), findsNothing);
     expect(find.text('Pause'), findsNothing);
@@ -101,6 +104,11 @@ void main() {
     expect(progress.color, AppColors.accentBright);
     expect(progress.backgroundColor, Colors.white.withValues(alpha: .24));
     expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(find.text('Watch Together'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Watch Together'));
+    expect(watchPartyPressed, isTrue);
   });
 
   testWidgets('icon-only transport controls keep their D-pad actions', (
@@ -318,6 +326,7 @@ void main() {
             onPicture: () {},
             onFixVideo: () {},
             onSources: () {},
+            onWatchTogether: () {},
             onOptions: () {},
             onDismiss: () {},
           ),
@@ -331,7 +340,7 @@ void main() {
 
     playFocus.requestFocus();
     await tester.pump();
-    for (var move = 0; move < 8; move++) {
+    for (var move = 0; move < 9; move++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump(const Duration(milliseconds: 120));
     }
@@ -430,6 +439,7 @@ void main() {
                 onPicture: () {},
                 onFixVideo: () {},
                 onSources: () {},
+                onWatchTogether: () {},
                 onOptions: () => optionsActivated = true,
                 onDismiss: () {},
               ),
@@ -439,7 +449,7 @@ void main() {
 
         playFocus.requestFocus();
         await tester.pump();
-        for (var move = 0; move < 8; move++) {
+        for (var move = 0; move < 9; move++) {
           await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
           await tester.pump(const Duration(milliseconds: 120));
         }
@@ -483,7 +493,7 @@ void main() {
         // Traverse all the way back from the trailing edge. This mirrors the
         // real remote-control path and catches a leading-edge regression that
         // a fresh, already-left-aligned HUD would hide.
-        for (var move = 0; move < 9; move++) {
+        for (var move = 0; move < 10; move++) {
           await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
           await tester.pump(const Duration(milliseconds: 120));
         }

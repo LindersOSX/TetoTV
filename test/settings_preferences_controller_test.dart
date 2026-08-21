@@ -26,6 +26,7 @@ void main() {
     await controller.setShowMyList(false);
     await controller.setShowDiscover(false);
     await controller.setShowCalendar(false);
+    await controller.setShowWatchTogether(false);
     await controller.setShowHero(false);
     await controller.setShowPosterMetadata(false);
     await controller.setShowCardSubtitles(false);
@@ -47,6 +48,7 @@ void main() {
     await controller.setAnonymousCrashReportingEnabled(true);
     await controller.setNavigationChromeSize(NavigationChromeSize.large);
     await controller.setTopNavigationOrder(const [
+      TopNavigationDestination.watchTogether,
       TopNavigationDestination.settings,
       TopNavigationDestination.calendar,
       TopNavigationDestination.discover,
@@ -69,6 +71,7 @@ void main() {
     expect(restored.state.showMyList, isFalse);
     expect(restored.state.showDiscover, isFalse);
     expect(restored.state.showCalendar, isFalse);
+    expect(restored.state.showWatchTogether, isFalse);
     expect(restored.state.showHero, isFalse);
     expect(restored.state.showPosterMetadata, isFalse);
     expect(restored.state.showCardSubtitles, isFalse);
@@ -93,6 +96,7 @@ void main() {
     expect(restored.state.anonymousCrashReportingEnabled, isTrue);
     expect(restored.state.navigationChromeSize, NavigationChromeSize.large);
     expect(restored.state.topNavigationOrder, [
+      TopNavigationDestination.watchTogether,
       TopNavigationDestination.settings,
       TopNavigationDestination.calendar,
       TopNavigationDestination.discover,
@@ -139,11 +143,13 @@ void main() {
         TopNavigationDestination.myList,
         TopNavigationDestination.discover,
         TopNavigationDestination.calendar,
+        TopNavigationDestination.watchTogether,
         TopNavigationDestination.settings,
       ]);
       expect(controller.state.showMyList, isTrue);
       expect(controller.state.showDiscover, isTrue);
       expect(controller.state.showCalendar, isTrue);
+      expect(controller.state.showWatchTogether, isTrue);
       expect(controller.state.anonymousCrashReportingEnabled, isFalse);
       expect(controller.state.preferredAudio, PlaybackAudioPreference.dub);
       expect(controller.state.debridStreamSort, DebridStreamSort.bestQuality);
@@ -167,28 +173,39 @@ void main() {
     },
   );
 
-  test('stored custom top navigation order survives the new default', () async {
-    const customOrder = <TopNavigationDestination>[
-      TopNavigationDestination.calendar,
-      TopNavigationDestination.settings,
-      TopNavigationDestination.discover,
-      TopNavigationDestination.myList,
-      TopNavigationDestination.search,
-      TopNavigationDestination.home,
-    ];
-    FlutterSecureStorage.setMockInitialValues({
-      'navigation_top_bar_order': customOrder
-          .map((destination) => destination.name)
-          .join(','),
-    });
-    final controller = SettingsPreferencesController(
-      const FlutterSecureStorage(),
-    );
+  test(
+    'legacy custom navigation keeps its order and inserts Watch Together',
+    () async {
+      const customOrder = <TopNavigationDestination>[
+        TopNavigationDestination.calendar,
+        TopNavigationDestination.settings,
+        TopNavigationDestination.discover,
+        TopNavigationDestination.myList,
+        TopNavigationDestination.search,
+        TopNavigationDestination.home,
+      ];
+      FlutterSecureStorage.setMockInitialValues({
+        'navigation_top_bar_order': customOrder
+            .map((destination) => destination.name)
+            .join(','),
+      });
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
 
-    await controller.load();
+      await controller.load();
 
-    expect(controller.state.topNavigationOrder, customOrder);
-  });
+      expect(controller.state.topNavigationOrder, const [
+        TopNavigationDestination.calendar,
+        TopNavigationDestination.watchTogether,
+        TopNavigationDestination.settings,
+        TopNavigationDestination.discover,
+        TopNavigationDestination.myList,
+        TopNavigationDestination.search,
+        TopNavigationDestination.home,
+      ]);
+    },
+  );
 
   test('invalid Auto Pick values migrate safely without enabling it', () async {
     FlutterSecureStorage.setMockInitialValues({
@@ -373,11 +390,13 @@ void main() {
       await controller.setSettingsEntryPlacement(
         SettingsEntryPlacement.profileMenu,
       );
+      await controller.setShowWatchTogether(false);
       expect(
         controller.state.settingsEntryPlacement,
         SettingsEntryPlacement.profileMenu,
       );
       expect(controller.state.showSettings, isTrue);
+      expect(controller.state.showWatchTogether, isFalse);
 
       final restored = SettingsPreferencesController(storage);
       await restored.load();
@@ -385,18 +404,21 @@ void main() {
         restored.state.settingsEntryPlacement,
         SettingsEntryPlacement.profileMenu,
       );
+      expect(restored.state.showWatchTogether, isFalse);
 
       await restored.resetCustomization();
       expect(
         restored.state.settingsEntryPlacement,
         SettingsEntryPlacement.topNavigation,
       );
+      expect(restored.state.showWatchTogether, isTrue);
       final resetRestored = SettingsPreferencesController(storage);
       await resetRestored.load();
       expect(
         resetRestored.state.settingsEntryPlacement,
         SettingsEntryPlacement.topNavigation,
       );
+      expect(resetRestored.state.showWatchTogether, isTrue);
     },
   );
 
@@ -410,6 +432,7 @@ void main() {
       TopNavigationDestination.search,
     ]);
     expect(controller.state.topNavigationOrder, [
+      TopNavigationDestination.watchTogether,
       TopNavigationDestination.settings,
       TopNavigationDestination.search,
       TopNavigationDestination.home,
@@ -423,7 +446,7 @@ void main() {
       -2,
     );
     expect(
-      controller.state.topNavigationOrder[3],
+      controller.state.topNavigationOrder[4],
       TopNavigationDestination.calendar,
     );
 
@@ -494,7 +517,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 45, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 46, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

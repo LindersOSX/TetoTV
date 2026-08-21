@@ -11,7 +11,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-enum MainNavigationDestination { home, myList, discover, calendar }
+enum MainNavigationDestination {
+  home,
+  myList,
+  discover,
+  calendar,
+  watchTogether,
+}
 
 /// The shared geometry contract for the Modern Layout navigation rail.
 ///
@@ -230,6 +236,8 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         context.go('/discover');
       case TopNavigationDestination.calendar:
         context.go('/calendar');
+      case TopNavigationDestination.watchTogether:
+        context.go('/watch-together');
       case TopNavigationDestination.settings:
         context.push('/settings/accounts');
     }
@@ -337,6 +345,9 @@ Key _navigationKey(TopNavigationDestination destination) =>
       TopNavigationDestination.myList => const ValueKey('main-nav-my-list'),
       TopNavigationDestination.discover => const ValueKey('main-nav-discover'),
       TopNavigationDestination.calendar => const ValueKey('main-nav-calendar'),
+      TopNavigationDestination.watchTogether => const ValueKey(
+        'main-nav-watch-together',
+      ),
       TopNavigationDestination.settings => const ValueKey('main-nav-settings'),
     };
 
@@ -347,6 +358,7 @@ IconData _navigationIcon(TopNavigationDestination destination) =>
       TopNavigationDestination.myList => Icons.video_library_rounded,
       TopNavigationDestination.discover => Icons.explore_rounded,
       TopNavigationDestination.calendar => Icons.calendar_month_rounded,
+      TopNavigationDestination.watchTogether => Icons.person_outline_rounded,
       TopNavigationDestination.settings => Icons.settings_rounded,
     };
 
@@ -537,6 +549,8 @@ class MainNavigationBar extends ConsumerWidget {
     required this.preferences,
     this.onHomePressed,
     this.homeFocusNode,
+    this.activeFocusNode,
+    this.onActivePressed,
     this.autofocusActive = false,
     super.key,
   });
@@ -545,6 +559,8 @@ class MainNavigationBar extends ConsumerWidget {
   final SettingsPreferences preferences;
   final VoidCallback? onHomePressed;
   final FocusNode? homeFocusNode;
+  final FocusNode? activeFocusNode;
+  final VoidCallback? onActivePressed;
   final bool autofocusActive;
 
   @override
@@ -608,8 +624,11 @@ class MainNavigationBar extends ConsumerWidget {
                   destination: visibleDestinations[index],
                   active: active,
                   settingsCompact: width < 1200,
+                  dense: width < 500,
                   autofocusActive: autofocusActive,
                   homeFocusNode: homeFocusNode,
+                  activeFocusNode: activeFocusNode,
+                  onActivePressed: onActivePressed,
                   onHomePressed: onHomePressed,
                 ),
               ],
@@ -653,8 +672,11 @@ Widget _navigationAction({
   required TopNavigationDestination destination,
   required MainNavigationDestination active,
   required bool settingsCompact,
+  required bool dense,
   required bool autofocusActive,
   required FocusNode? homeFocusNode,
+  required FocusNode? activeFocusNode,
+  required VoidCallback? onActivePressed,
   required VoidCallback? onHomePressed,
 }) => switch (destination) {
   TopNavigationDestination.search => _NavigationAction(
@@ -662,6 +684,7 @@ Widget _navigationAction({
     icon: Icons.search_rounded,
     label: 'Search',
     compact: true,
+    dense: dense,
     onPressed: () => context.push('/search'),
   ),
   TopNavigationDestination.home => _NavigationAction(
@@ -669,20 +692,29 @@ Widget _navigationAction({
     icon: Icons.home_rounded,
     label: 'Home',
     compact: true,
+    dense: dense,
     active: active == MainNavigationDestination.home,
     autofocus: autofocusActive && active == MainNavigationDestination.home,
-    focusNode: homeFocusNode,
-    onPressed: onHomePressed ?? () => context.go('/'),
+    focusNode: active == MainNavigationDestination.home
+        ? activeFocusNode ?? homeFocusNode
+        : homeFocusNode,
+    onPressed: active == MainNavigationDestination.home
+        ? onActivePressed ?? onHomePressed ?? () => context.go('/')
+        : onHomePressed ?? () => context.go('/'),
   ),
   TopNavigationDestination.myList => _NavigationAction(
     key: const ValueKey('main-nav-my-list'),
     icon: Icons.video_library_rounded,
     label: 'My List',
     compact: false,
+    dense: dense,
     active: active == MainNavigationDestination.myList,
     autofocus: autofocusActive && active == MainNavigationDestination.myList,
+    focusNode: active == MainNavigationDestination.myList
+        ? activeFocusNode
+        : null,
     onPressed: active == MainNavigationDestination.myList
-        ? () {}
+        ? onActivePressed ?? () {}
         : () => context.go('/my-list'),
   ),
   TopNavigationDestination.discover => _NavigationAction(
@@ -690,10 +722,14 @@ Widget _navigationAction({
     icon: Icons.explore_rounded,
     label: 'Discover',
     compact: true,
+    dense: dense,
     active: active == MainNavigationDestination.discover,
     autofocus: autofocusActive && active == MainNavigationDestination.discover,
+    focusNode: active == MainNavigationDestination.discover
+        ? activeFocusNode
+        : null,
     onPressed: active == MainNavigationDestination.discover
-        ? () {}
+        ? onActivePressed ?? () {}
         : () => context.go('/discover'),
   ),
   TopNavigationDestination.calendar => _NavigationAction(
@@ -701,17 +737,38 @@ Widget _navigationAction({
     icon: Icons.calendar_month_rounded,
     label: 'Calendar',
     compact: true,
+    dense: dense,
     active: active == MainNavigationDestination.calendar,
     autofocus: autofocusActive && active == MainNavigationDestination.calendar,
+    focusNode: active == MainNavigationDestination.calendar
+        ? activeFocusNode
+        : null,
     onPressed: active == MainNavigationDestination.calendar
-        ? () {}
+        ? onActivePressed ?? () {}
         : () => context.go('/calendar'),
+  ),
+  TopNavigationDestination.watchTogether => _NavigationAction(
+    key: const ValueKey('main-nav-watch-together'),
+    icon: Icons.person_outline_rounded,
+    label: 'Watch Together',
+    compact: true,
+    dense: dense,
+    active: active == MainNavigationDestination.watchTogether,
+    autofocus:
+        autofocusActive && active == MainNavigationDestination.watchTogether,
+    focusNode: active == MainNavigationDestination.watchTogether
+        ? activeFocusNode
+        : null,
+    onPressed: active == MainNavigationDestination.watchTogether
+        ? onActivePressed ?? () {}
+        : () => context.go('/watch-together'),
   ),
   TopNavigationDestination.settings => _NavigationAction(
     key: const ValueKey('main-nav-settings'),
     icon: Icons.settings_rounded,
     label: 'Settings',
     compact: settingsCompact,
+    dense: dense,
     onPressed: () => context.push('/settings/accounts'),
   ),
 };
@@ -1122,6 +1179,7 @@ class _NavigationAction extends StatelessWidget {
     required this.onPressed,
     this.active = false,
     this.compact = false,
+    this.dense = false,
     this.autofocus = false,
     this.focusNode,
     super.key,
@@ -1132,6 +1190,7 @@ class _NavigationAction extends StatelessWidget {
   final VoidCallback onPressed;
   final bool active;
   final bool compact;
+  final bool dense;
   final bool autofocus;
   final FocusNode? focusNode;
 
@@ -1147,7 +1206,7 @@ class _NavigationAction extends StatelessWidget {
         focusScale: 1.02,
         child: Container(
           padding: EdgeInsets.symmetric(
-            horizontal: compact ? 8 : 11,
+            horizontal: dense ? 5 : (compact ? 8 : 11),
             vertical: 8,
           ),
           decoration: BoxDecoration(

@@ -35,29 +35,82 @@ class LocalMediaScreen extends ConsumerStatefulWidget {
 }
 
 class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
+  static const _mediaRowExtent = 92.0;
+
   final _addressController = TextEditingController(text: 'http://');
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _addressFocus = FocusNode(debugLabel: 'Jellyfin server address');
-  final _usernameFocus = FocusNode(debugLabel: 'Jellyfin username');
-  final _passwordFocus = FocusNode(debugLabel: 'Jellyfin password');
+  final _addressFocus = FocusNode(debugLabel: 'local-media.jellyfin.address');
+  final _usernameFocus = FocusNode(debugLabel: 'local-media.jellyfin.username');
+  final _passwordFocus = FocusNode(debugLabel: 'local-media.jellyfin.password');
   final _plexAddressController = TextEditingController(text: 'http://');
   final _plexTokenController = TextEditingController();
-  final _plexAddressFocus = FocusNode(debugLabel: 'Plex server address');
-  final _plexTokenFocus = FocusNode(debugLabel: 'Plex access token');
+  final _plexAddressFocus = FocusNode(debugLabel: 'local-media.plex.address');
+  final _plexTokenFocus = FocusNode(debugLabel: 'local-media.plex.token');
   final _searchController = TextEditingController();
+  final _pageScrollController = ScrollController();
+  final _searchResultsScrollController = ScrollController();
+  final _jellyfinItemsScrollController = ScrollController();
+  final _plexItemsScrollController = ScrollController();
+  final _contentRootFocus = FocusNode(
+    debugLabel: 'local-media.content-root',
+    canRequestFocus: false,
+  );
+  final _contentEntryFocus = FocusNode(
+    debugLabel: 'local-media.content-entry',
+    skipTraversal: true,
+  );
   final _backFocus = FocusNode(debugLabel: 'local-media.back');
   final _searchFocus = FocusNode(debugLabel: 'local-media.unified-search');
   final _searchActionFocus = FocusNode(debugLabel: 'local-media.search-action');
   final _clearSearchFocus = FocusNode(debugLabel: 'local-media.clear-search');
   final _chooseVideoFocus = FocusNode(debugLabel: 'local-media.choose-video');
-  final _directionalRepeatGate = TvDirectionalRepeatGate();
+  final _recentVideoFocus = FocusNode(debugLabel: 'local-media.recent-video');
+  final _jellyfinConnectFocus = FocusNode(
+    debugLabel: 'local-media.jellyfin.connect',
+  );
+  final _jellyfinUpFocus = FocusNode(debugLabel: 'local-media.jellyfin.up');
+  final _jellyfinRefreshFocus = FocusNode(
+    debugLabel: 'local-media.jellyfin.refresh',
+  );
+  final _jellyfinDisconnectFocus = FocusNode(
+    debugLabel: 'local-media.jellyfin.disconnect',
+  );
+  final _jellyfinLoadMoreFocus = FocusNode(
+    debugLabel: 'local-media.jellyfin.load-more',
+  );
+  final _plexConnectFocus = FocusNode(debugLabel: 'local-media.plex.connect');
+  final _plexUpFocus = FocusNode(debugLabel: 'local-media.plex.up');
+  final _plexRefreshFocus = FocusNode(debugLabel: 'local-media.plex.refresh');
+  final _plexDisconnectFocus = FocusNode(
+    debugLabel: 'local-media.plex.disconnect',
+  );
+  final _plexLoadMoreFocus = FocusNode(
+    debugLabel: 'local-media.plex.load-more',
+  );
+  final _searchResultFocusNodes = <FocusNode>[];
+  final _jellyfinItemFocusNodes = <FocusNode>[];
+  final _plexItemFocusNodes = <FocusNode>[];
+  final _directionalRepeatGate = TvDirectionalRepeatGate(
+    repeatInterval: const Duration(milliseconds: 92),
+  );
+  FocusNode? _lastContentFocus;
+  int _focusRequestGeneration = 0;
   bool _hydratedFields = false;
   bool _hydratedPlexFields = false;
   bool _openingPlayer = false;
 
   @override
+  void initState() {
+    super.initState();
+    _contentEntryFocus.addListener(_handleContentEntryFocus);
+    FocusManager.instance.addListener(_handlePrimaryFocusChanged);
+  }
+
+  @override
   void dispose() {
+    FocusManager.instance.removeListener(_handlePrimaryFocusChanged);
+    _contentEntryFocus.removeListener(_handleContentEntryFocus);
     _addressController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
@@ -69,13 +122,254 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     _plexAddressFocus.dispose();
     _plexTokenFocus.dispose();
     _searchController.dispose();
+    _pageScrollController.dispose();
+    _searchResultsScrollController.dispose();
+    _jellyfinItemsScrollController.dispose();
+    _plexItemsScrollController.dispose();
+    _contentRootFocus.dispose();
+    _contentEntryFocus.dispose();
     _backFocus.dispose();
     _searchFocus.dispose();
     _searchActionFocus.dispose();
     _clearSearchFocus.dispose();
     _chooseVideoFocus.dispose();
+    _recentVideoFocus.dispose();
+    _jellyfinConnectFocus.dispose();
+    _jellyfinUpFocus.dispose();
+    _jellyfinRefreshFocus.dispose();
+    _jellyfinDisconnectFocus.dispose();
+    _jellyfinLoadMoreFocus.dispose();
+    _plexConnectFocus.dispose();
+    _plexUpFocus.dispose();
+    _plexRefreshFocus.dispose();
+    _plexDisconnectFocus.dispose();
+    _plexLoadMoreFocus.dispose();
+    for (final node in _searchResultFocusNodes) {
+      node.dispose();
+    }
+    for (final node in _jellyfinItemFocusNodes) {
+      node.dispose();
+    }
+    for (final node in _plexItemFocusNodes) {
+      node.dispose();
+    }
     _directionalRepeatGate.reset();
     super.dispose();
+  }
+
+  void _syncFocusNodes(List<FocusNode> nodes, int count, String debugLabel) {
+    final rememberedIndex = _lastContentFocus == null
+        ? -1
+        : nodes.indexOf(_lastContentFocus!);
+    if (rememberedIndex >= count) _lastContentFocus = null;
+    while (nodes.length < count) {
+      nodes.add(FocusNode(debugLabel: '$debugLabel.${nodes.length}'));
+    }
+    while (nodes.length > count) {
+      final removed = nodes.removeLast();
+      WidgetsBinding.instance.addPostFrameCallback((_) => removed.dispose());
+    }
+  }
+
+  void _handlePrimaryFocusChanged() {
+    if (!mounted) return;
+    final current = FocusManager.instance.primaryFocus;
+    if (current == null ||
+        identical(current, _contentEntryFocus) ||
+        identical(current, _contentRootFocus) ||
+        identical(current, _backFocus) ||
+        !current.ancestors.contains(_contentRootFocus)) {
+      return;
+    }
+    _lastContentFocus = current;
+  }
+
+  void _handleContentEntryFocus() {
+    if (!_contentEntryFocus.hasFocus) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_contentEntryFocus.hasFocus) return;
+      _restoreContentFocus();
+    });
+  }
+
+  void _restoreContentFocus() {
+    final target = _lastContentFocus;
+    if (target != null) {
+      _focusAndReveal(target, towardEnd: true);
+    } else {
+      _focusAndReveal(_searchFocus, towardEnd: false);
+    }
+  }
+
+  _NestedFocusTarget? _nestedTargetFor(FocusNode node) {
+    var index = _searchResultFocusNodes.indexOf(node);
+    if (index >= 0) {
+      return _NestedFocusTarget(
+        controller: _searchResultsScrollController,
+        index: index,
+      );
+    }
+    index = _jellyfinItemFocusNodes.indexOf(node);
+    if (index >= 0) {
+      return _NestedFocusTarget(
+        controller: _jellyfinItemsScrollController,
+        index: index,
+      );
+    }
+    index = _plexItemFocusNodes.indexOf(node);
+    if (index >= 0) {
+      return _NestedFocusTarget(
+        controller: _plexItemsScrollController,
+        index: index,
+      );
+    }
+    return null;
+  }
+
+  void _focusAndReveal(FocusNode node, {required bool towardEnd}) {
+    final generation = ++_focusRequestGeneration;
+    unawaited(
+      _materializeFocusTarget(
+        node,
+        generation: generation,
+        towardEnd: towardEnd,
+      ),
+    );
+  }
+
+  Future<void> _materializeFocusTarget(
+    FocusNode node, {
+    required int generation,
+    required bool towardEnd,
+  }) async {
+    for (var attempt = 0; attempt < 14; attempt++) {
+      if (!mounted || generation != _focusRequestGeneration) return;
+      final targetContext = node.context;
+      if (targetContext != null && targetContext.mounted) {
+        node.requestFocus();
+        await Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
+          alignmentPolicy: towardEnd
+              ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+              : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+        );
+        return;
+      }
+
+      final nested = _nestedTargetFor(node);
+      if (nested != null && nested.controller.hasClients) {
+        final position = nested.controller.position;
+        final targetOffset = (nested.index * _mediaRowExtent).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        );
+        if ((targetOffset - position.pixels).abs() > .5) {
+          position.jumpTo(targetOffset);
+        }
+      } else if (_pageScrollController.hasClients) {
+        final position = _pageScrollController.position;
+        final step = position.viewportDimension * .72;
+        final targetOffset = (position.pixels + (towardEnd ? step : -step))
+            .clamp(position.minScrollExtent, position.maxScrollExtent);
+        if ((targetOffset - position.pixels).abs() > .5) {
+          position.jumpTo(targetOffset);
+        }
+      }
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    final fallbackContext = _searchFocus.context;
+    if (mounted &&
+        generation == _focusRequestGeneration &&
+        node != _searchFocus &&
+        fallbackContext != null &&
+        fallbackContext.mounted) {
+      _searchFocus.requestFocus();
+      await Scrollable.ensureVisible(
+        fallbackContext,
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+      );
+    }
+  }
+
+  List<List<FocusNode>> _focusRows(
+    LocalMediaState state,
+    PlexState plexState,
+    UnifiedMediaSearchState searchState,
+  ) {
+    final rows = <List<FocusNode>>[
+      [
+        _searchFocus,
+        _searchActionFocus,
+        if (searchState.query.isNotEmpty) _clearSearchFocus,
+      ],
+      for (final node in _searchResultFocusNodes.take(
+        searchState.results.length,
+      ))
+        [node],
+      [
+        _chooseVideoFocus,
+        if (state.recentLocalDocument != null) _recentVideoFocus,
+      ],
+    ];
+
+    if (state.connection == null) {
+      rows.addAll([
+        [_addressFocus],
+        [_usernameFocus],
+        [_passwordFocus],
+        [_jellyfinConnectFocus],
+      ]);
+    } else {
+      rows.add([
+        if (state.breadcrumbs.isNotEmpty) _jellyfinUpFocus,
+        _jellyfinRefreshFocus,
+        _jellyfinDisconnectFocus,
+      ]);
+      rows.addAll(
+        _jellyfinItemFocusNodes.take(state.items.length).map((node) => [node]),
+      );
+      if (state.nextStartIndex < state.totalCount) {
+        rows.add([_jellyfinLoadMoreFocus]);
+      }
+    }
+
+    if (plexState.connection == null) {
+      rows.addAll([
+        [_plexAddressFocus],
+        [_plexTokenFocus],
+        [_plexConnectFocus],
+      ]);
+    } else {
+      final browsingItems = plexState.locations.isNotEmpty;
+      rows.add([
+        if (browsingItems) _plexUpFocus,
+        _plexRefreshFocus,
+        _plexDisconnectFocus,
+      ]);
+      final rowCount = browsingItems
+          ? plexState.items.length
+          : plexState.libraries.length;
+      rows.addAll(_plexItemFocusNodes.take(rowCount).map((node) => [node]));
+      if (browsingItems && plexState.nextOffset < plexState.totalCount) {
+        rows.add([_plexLoadMoreFocus]);
+      }
+    }
+    return rows;
+  }
+
+  ({int row, int column})? _focusPosition(
+    FocusNode node,
+    List<List<FocusNode>> rows,
+  ) {
+    for (var row = 0; row < rows.length; row++) {
+      final column = rows[row].indexOf(node);
+      if (column >= 0) return (row: row, column: column);
+    }
+    return null;
   }
 
   void _hydrateFields(LocalMediaState state) {
@@ -288,6 +582,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
   }
 
   void _focusNavigationOrBack(TetoTopLevelLayout layout) {
+    // Once focus leaves this screen, its key-up packet is delivered to the
+    // rail/back target instead. Do not let a stale held key throttle the next
+    // content move when the viewer returns.
+    _directionalRepeatGate.reset();
     if (layout.usesTvRail) {
       layout.focusRail();
     } else if (_backFocus.context != null) {
@@ -295,10 +593,21 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     }
   }
 
-  KeyEventResult _handleNavigation(KeyEvent event, TetoTopLevelLayout layout) {
+  KeyEventResult _handleNavigation(
+    KeyEvent event,
+    TetoTopLevelLayout layout,
+    LocalMediaState state,
+    PlexState plexState,
+    UnifiedMediaSearchState searchState,
+  ) {
     final key = event.logicalKey;
-    if (key != LogicalKeyboardKey.arrowLeft &&
-        key != LogicalKeyboardKey.arrowRight) {
+    final isHorizontal =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight;
+    final isVertical =
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!isHorizontal && !isVertical) {
       return KeyEventResult.ignored;
     }
     if (event is KeyUpEvent) {
@@ -313,40 +622,52 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     }
 
     final current = FocusManager.instance.primaryFocus;
-    if (key == LogicalKeyboardKey.arrowLeft) {
-      if (current == _searchFocus ||
-          current == _chooseVideoFocus ||
-          current == _addressFocus ||
-          current == _usernameFocus ||
-          current == _passwordFocus ||
-          current == _plexAddressFocus ||
-          current == _plexTokenFocus) {
-        _focusNavigationOrBack(layout);
-        return KeyEventResult.handled;
-      }
-      if (current == _searchActionFocus) {
-        _searchFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
-      if (current == _clearSearchFocus) {
-        _searchActionFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
-    } else {
-      if (current == _backFocus) {
-        _searchFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
-      if (current == _searchFocus) {
-        _searchActionFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
-      if (current == _searchActionFocus && _clearSearchFocus.context != null) {
-        _clearSearchFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
+    if (current == null || current == _contentEntryFocus) {
+      return KeyEventResult.handled;
     }
-    return KeyEventResult.ignored;
+    if (current == _backFocus) {
+      if (key == LogicalKeyboardKey.arrowRight ||
+          key == LogicalKeyboardKey.arrowDown) {
+        _restoreContentFocus();
+      }
+      return KeyEventResult.handled;
+    }
+
+    final rows = _focusRows(state, plexState, searchState);
+    final position = _focusPosition(current, rows);
+    if (position == null) return KeyEventResult.handled;
+
+    if (isHorizontal) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        if (position.column == 0) {
+          _focusNavigationOrBack(layout);
+        } else {
+          _focusAndReveal(
+            rows[position.row][position.column - 1],
+            towardEnd: false,
+          );
+        }
+      } else if (position.column + 1 < rows[position.row].length) {
+        _focusAndReveal(
+          rows[position.row][position.column + 1],
+          towardEnd: true,
+        );
+      }
+      return KeyEventResult.handled;
+    }
+
+    final movingDown = key == LogicalKeyboardKey.arrowDown;
+    final targetRow = position.row + (movingDown ? 1 : -1);
+    if (targetRow < 0) {
+      if (!layout.usesTvRail && _backFocus.context != null) {
+        _focusAndReveal(_backFocus, towardEnd: false);
+      }
+      return KeyEventResult.handled;
+    }
+    if (targetRow >= rows.length) return KeyEventResult.handled;
+    final targetColumn = position.column.clamp(0, rows[targetRow].length - 1);
+    _focusAndReveal(rows[targetRow][targetColumn], towardEnd: movingDown);
+    return KeyEventResult.handled;
   }
 
   @override
@@ -357,6 +678,22 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     final preferences = ref.watch(settingsPreferencesProvider);
     _hydrateFields(state);
     _hydratePlexFields(plexState);
+    _syncFocusNodes(
+      _searchResultFocusNodes,
+      searchState.results.length,
+      'local-media.search-result',
+    );
+    _syncFocusNodes(
+      _jellyfinItemFocusNodes,
+      state.connection == null ? 0 : state.items.length,
+      'local-media.jellyfin.item',
+    );
+    final plexRowCount = plexState.connection == null
+        ? 0
+        : plexState.locations.isNotEmpty
+        ? plexState.items.length
+        : plexState.libraries.length;
+    _syncFocusNodes(_plexItemFocusNodes, plexRowCount, 'local-media.plex.item');
     ref.listen(localMediaControllerProvider, (previous, next) {
       if (next.message != null && next.message != previous?.message) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -374,12 +711,15 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: widget.activeDestination,
-      firstContentFocusNode: _searchFocus,
-      onActiveDestinationPressed: _searchFocus.requestFocus,
+      firstContentFocusNode: _contentEntryFocus,
+      fallbackContentFocusNode: _searchFocus,
+      onActiveDestinationPressed: _restoreContentFocus,
       resizeToAvoidBottomInset: true,
       builder: (context, layout) => Focus(
+        focusNode: _contentRootFocus,
         canRequestFocus: false,
-        onKeyEvent: (_, event) => _handleNavigation(event, layout),
+        onKeyEvent: (_, event) =>
+            _handleNavigation(event, layout, state, plexState, searchState),
         child: Padding(
           padding: layout.usesTvRail
               ? EdgeInsets.zero
@@ -387,6 +727,11 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Focus(
+                focusNode: _contentEntryFocus,
+                skipTraversal: true,
+                child: const SizedBox.shrink(),
+              ),
               Row(
                 children: [
                   if (!layout.usesTvRail) ...[
@@ -424,6 +769,8 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               const SizedBox(height: 16),
               Expanded(
                 child: ListView(
+                  key: const ValueKey('local-media-page-scroll'),
+                  controller: _pageScrollController,
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: EdgeInsets.only(
@@ -450,6 +797,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                             _ActionButton(
                               label: 'Play ${recent.name}',
                               icon: Icons.replay_rounded,
+                              focusNode: _recentVideoFocus,
                               onPressed: _openingPlayer
                                   ? null
                                   : () => _playDocument(recent),
@@ -562,11 +910,13 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             height: (searchState.results.length * 92.0).clamp(92.0, 460.0),
             child: ListView.separated(
               key: const ValueKey('unified-media-results'),
+              controller: _searchResultsScrollController,
               itemCount: searchState.results.length,
               itemBuilder: (context, index) {
                 final result = searchState.results[index];
                 return _UnifiedMediaRow(
                   key: ValueKey('unified-media-${result.origin.name}-$index'),
+                  focusNode: _searchResultFocusNodes[index],
                   result: result,
                   jellyfinImageUri: result.jellyfinItem == null
                       ? null
@@ -632,6 +982,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         child: _ActionButton(
           label: 'Connect Jellyfin',
           icon: Icons.lan_rounded,
+          focusNode: _jellyfinConnectFocus,
           onExitLeft: () => _focusNavigationOrBack(layout),
           onPressed: state.busy ? null : _connectJellyfin,
         ),
@@ -690,6 +1041,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                 _ActionButton(
                   label: 'Up',
                   icon: Icons.arrow_upward_rounded,
+                  focusNode: _jellyfinUpFocus,
                   onExitLeft: () => _focusNavigationOrBack(layout),
                   onPressed: state.busy
                       ? null
@@ -698,6 +1050,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               _ActionButton(
                 label: 'Refresh',
                 icon: Icons.refresh_rounded,
+                focusNode: _jellyfinRefreshFocus,
                 onExitLeft: state.breadcrumbs.isEmpty
                     ? () => _focusNavigationOrBack(layout)
                     : null,
@@ -708,6 +1061,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               _ActionButton(
                 label: 'Disconnect',
                 icon: Icons.link_off_rounded,
+                focusNode: _jellyfinDisconnectFocus,
                 onPressed: state.busy
                     ? null
                     : ref
@@ -730,10 +1084,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             SizedBox(
               height: (state.items.length * 92.0).clamp(92.0, 520.0),
               child: ListView.separated(
+                key: const ValueKey('jellyfin-library-list'),
+                controller: _jellyfinItemsScrollController,
                 itemCount: state.items.length,
                 itemBuilder: (context, index) {
                   final item = state.items[index];
                   return _MediaRow(
+                    key: ValueKey('jellyfin-item-${item.id}'),
+                    focusNode: _jellyfinItemFocusNodes[index],
                     item: item,
                     imageUri: ref
                         .read(localMediaControllerProvider.notifier)
@@ -758,6 +1116,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             _ActionButton(
               label: 'Load more (${state.items.length} of ${state.totalCount})',
               icon: Icons.expand_more_rounded,
+              focusNode: _jellyfinLoadMoreFocus,
               onExitLeft: () => _focusNavigationOrBack(layout),
               onPressed: state.busy
                   ? null
@@ -791,6 +1150,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             child: _ActionButton(
               label: 'Connect Plex',
               icon: Icons.connected_tv_rounded,
+              focusNode: _plexConnectFocus,
               onExitLeft: () => _focusNavigationOrBack(layout),
               onPressed: state.busy ? null : _connectPlex,
             ),
@@ -852,12 +1212,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               _ActionButton(
                 label: 'Up',
                 icon: Icons.arrow_upward_rounded,
+                focusNode: _plexUpFocus,
                 onExitLeft: () => _focusNavigationOrBack(layout),
                 onPressed: state.busy ? null : controller.goUp,
               ),
             _ActionButton(
               label: 'Refresh',
               icon: Icons.refresh_rounded,
+              focusNode: _plexRefreshFocus,
               onExitLeft: browsingItems
                   ? null
                   : () => _focusNavigationOrBack(layout),
@@ -866,6 +1228,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             _ActionButton(
               label: 'Disconnect',
               icon: Icons.link_off_rounded,
+              focusNode: _plexDisconnectFocus,
               onPressed: state.busy ? null : controller.disconnect,
             ),
           ],
@@ -885,12 +1248,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             height: (rowCount * 92.0).clamp(92.0, 520.0),
             child: ListView.separated(
               key: const ValueKey('plex-library-list'),
+              controller: _plexItemsScrollController,
               itemCount: rowCount,
               itemBuilder: (context, index) {
                 if (!browsingItems) {
                   final library = state.libraries[index];
                   return _PlexBrowseRow(
                     key: ValueKey('plex-library-${library.key}'),
+                    focusNode: _plexItemFocusNodes[index],
                     title: library.title,
                     subtitle: library.isMovieLibrary ? 'Movies' : 'TV shows',
                     isFolder: true,
@@ -906,6 +1271,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                 final item = state.items[index];
                 return _PlexBrowseRow(
                   key: ValueKey('plex-item-${item.ratingKey}'),
+                  focusNode: _plexItemFocusNodes[index],
                   title: item.displayTitle,
                   subtitle: item.secondaryLabel,
                   isFolder: item.isFolder,
@@ -931,6 +1297,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           _ActionButton(
             label: 'Load more (${state.items.length} of ${state.totalCount})',
             icon: Icons.expand_more_rounded,
+            focusNode: _plexLoadMoreFocus,
             onExitLeft: () => _focusNavigationOrBack(layout),
             onPressed: state.busy ? null : controller.loadMore,
           ),
@@ -938,6 +1305,13 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       ],
     );
   }
+}
+
+class _NestedFocusTarget {
+  const _NestedFocusTarget({required this.controller, required this.index});
+
+  final ScrollController controller;
+  final int index;
 }
 
 class _SectionCard extends StatelessWidget {
@@ -1067,6 +1441,7 @@ class _MediaProgressBar extends StatelessWidget {
 class _UnifiedMediaRow extends StatelessWidget {
   const _UnifiedMediaRow({
     super.key,
+    required this.focusNode,
     required this.result,
     required this.jellyfinImageUri,
     required this.jellyfinImageLoader,
@@ -1076,6 +1451,7 @@ class _UnifiedMediaRow extends StatelessWidget {
     required this.onPressed,
   });
 
+  final FocusNode focusNode;
   final UnifiedMediaSearchItem result;
   final Uri? jellyfinImageUri;
   final Future<Uint8List> Function(Uri uri) jellyfinImageLoader;
@@ -1100,6 +1476,7 @@ class _UnifiedMediaRow extends StatelessWidget {
   Widget build(BuildContext context) => Opacity(
     opacity: onPressed == null ? .55 : 1,
     child: TvFocusable(
+      focusNode: focusNode,
       onPressed: onPressed ?? () {},
       onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
       child: Container(
@@ -1204,6 +1581,8 @@ class _UnifiedMediaRow extends StatelessWidget {
 
 class _MediaRow extends StatelessWidget {
   const _MediaRow({
+    super.key,
+    required this.focusNode,
     required this.item,
     required this.imageUri,
     required this.imageLoader,
@@ -1211,6 +1590,7 @@ class _MediaRow extends StatelessWidget {
     required this.onPressed,
   });
 
+  final FocusNode focusNode;
   final JellyfinMediaItem item;
   final Uri? imageUri;
   final Future<Uint8List> Function(Uri uri) imageLoader;
@@ -1221,6 +1601,7 @@ class _MediaRow extends StatelessWidget {
   Widget build(BuildContext context) => Opacity(
     opacity: onPressed == null ? .55 : 1,
     child: TvFocusable(
+      focusNode: focusNode,
       onPressed: onPressed ?? () {},
       onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
       child: Container(
@@ -1283,6 +1664,7 @@ class _MediaRow extends StatelessWidget {
 class _PlexBrowseRow extends StatelessWidget {
   const _PlexBrowseRow({
     super.key,
+    required this.focusNode,
     required this.title,
     required this.subtitle,
     required this.isFolder,
@@ -1293,6 +1675,7 @@ class _PlexBrowseRow extends StatelessWidget {
     required this.onPressed,
   });
 
+  final FocusNode focusNode;
   final String title;
   final String subtitle;
   final bool isFolder;
@@ -1306,6 +1689,7 @@ class _PlexBrowseRow extends StatelessWidget {
   Widget build(BuildContext context) => Opacity(
     opacity: onPressed == null ? .55 : 1,
     child: TvFocusable(
+      focusNode: focusNode,
       onPressed: onPressed ?? () {},
       onKeyEvent: (_, event) => _handleExitLeft(event, onExitLeft),
       child: Container(

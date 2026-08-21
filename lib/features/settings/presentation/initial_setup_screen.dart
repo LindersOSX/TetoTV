@@ -348,6 +348,13 @@ class _TvExperienceStep extends ConsumerWidget {
                             !preferences.showCalendar,
                           ),
                         ),
+                        _SetupChoice(
+                          label: 'Watch Together',
+                          selected: preferences.showWatchTogether,
+                          onPressed: () => controller.setShowWatchTogether(
+                            !preferences.showWatchTogether,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -393,6 +400,7 @@ class _TvExperiencePreview extends StatelessWidget {
         TopNavigationDestination.myList => Icons.video_library_rounded,
         TopNavigationDestination.discover => Icons.explore_rounded,
         TopNavigationDestination.calendar => Icons.calendar_month_rounded,
+        TopNavigationDestination.watchTogether => Icons.person_outline_rounded,
         TopNavigationDestination.settings => Icons.settings_rounded,
       };
 

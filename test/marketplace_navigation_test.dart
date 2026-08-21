@@ -192,6 +192,10 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Install Provider 11?'), findsOneWidget);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'marketplace.confirm.action',
+      );
       expect(tester.takeException(), isNull);
     },
   );

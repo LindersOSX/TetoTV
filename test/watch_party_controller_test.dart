@@ -7,10 +7,18 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('room codes normalize without accepting ambiguous characters', () {
-    expect(normalizeWatchPartyCode('abcd-2345'), 'ABCD2345');
-    expect(normalizeWatchPartyCode('ABCI2345'), isNull);
+  test('room codes normalize separators but accept only digits 2-9', () {
+    expect(normalizeWatchPartyCode('2345-6789'), '23456789');
+    expect(normalizeWatchPartyCode(' 2345 6789 '), '23456789');
+    expect(normalizeWatchPartyCode('ABCD2345'), isNull);
+    expect(normalizeWatchPartyCode('12345678'), isNull);
     expect(normalizeWatchPartyCode('short'), isNull);
+    expect(
+      watchPartyFriendlyError(
+        const WatchPartyClientException('invalid_room_code'),
+      ),
+      'Enter the eight-digit room code using numbers 2-9 only.',
+    );
   });
 
   test('client requires one root HTTPS origin', () {
@@ -26,6 +34,20 @@ void main() {
         reason: value,
       );
     }
+  });
+
+  test('only an attached guest yields playback authority to the host', () {
+    final guestLobby = WatchPartyState(session: _session(WatchPartyRole.guest));
+    final attachedGuest = guestLobby.copyWith(attachedMedia: _media);
+    final attachedHost = WatchPartyState(
+      session: _session(WatchPartyRole.host),
+      attachedMedia: _media,
+    );
+
+    expect(guestLobby.guestPlaybackControlsLocked, isFalse);
+    expect(attachedGuest.guestPlaybackControlsLocked, isTrue);
+    expect(attachedHost.guestPlaybackControlsLocked, isFalse);
+    expect(const WatchPartyState().guestPlaybackControlsLocked, isFalse);
   });
 
   test(
@@ -55,13 +77,46 @@ void main() {
 
       final snapshot = await client.snapshot(session);
 
-      expect(snapshot.roomCode, 'ABCD2345');
-      expect(recorded?.path, '/v1/watch-parties/ABCD2345');
+      expect(snapshot.roomCode, '23456789');
+      expect(recorded?.path, '/v1/watch-parties/23456789');
       expect(recorded?.uri.query, isEmpty);
       expect(recorded?.headers['Authorization'], 'Bearer ${session.token}');
       expect(recorded?.data, isNull);
     },
   );
+
+  test('client strips broker query data from the public room URL', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<Object?>(
+              requestOptions: options,
+              statusCode: 201,
+              data: {
+                'room_code': '23456789',
+                'host_token': List.filled(48, 'a').join(),
+                'expires_at': '2030-01-01T00:00:00Z',
+                'watch_url':
+                    '/watch?room=23456789&host_token=must-not-be-shared',
+              },
+            ),
+          ),
+        ),
+      );
+    final client = WatchPartyClient(
+      baseUrl: 'https://tetotv.example',
+      dio: dio,
+    );
+
+    final created = await client.create();
+
+    expect(
+      created.session.watchUrl.toString(),
+      'https://tetotv.example/watch?room=23456789',
+    );
+    expect(created.session.watchUrl.queryParameters.keys, {'room'});
+  });
 
   test(
     'host publishes public media identity but never a playback URL',
@@ -104,7 +159,7 @@ void main() {
   );
 
   test(
-    'guest follows host play, pause, and drift without publishing',
+    'attached guest rejects local play but applies queued host play and seek',
     () async {
       final client = _FakeWatchPartyClient()
         ..joinSnapshot = _snapshot(
@@ -116,10 +171,16 @@ void main() {
         );
       final controller = WatchPartyController(client);
       addTearDown(controller.dispose);
-      expect(await controller.join('ABCD2345'), isTrue);
+      expect(await controller.join('23456789'), isTrue);
       final port = _FakePlaybackPort();
       addTearDown(port.dispose);
       await controller.attachPlayback(port: port, media: _media);
+      expect(controller.state.guestPlaybackControlsLocked, isTrue);
+      if (!controller.state.guestPlaybackControlsLocked) {
+        await port.play();
+      }
+      expect(port.playCalls, 0, reason: 'guest-local Play is rejected');
+      expect(client.readyValues, [false]);
       port.emit(
         WatchPartyPlaybackSample(
           media: _media,
@@ -131,13 +192,50 @@ void main() {
         ),
       );
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      await controller.setGuestReady(true);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
 
       expect(port.seekTargets.single, greaterThan(const Duration(seconds: 40)));
-      expect(port.playCalls, 1);
+      expect(
+        port.playCalls,
+        1,
+        reason: 'the coordinator-originated host Play bypasses the local lock',
+      );
       expect(client.updateCalls, 0);
-      expect(client.readyValues, contains(true));
+      expect(client.readyValues, [false, true]);
+    },
+  );
+
+  test(
+    'old episode readiness cannot control or ready a new host episode',
+    () async {
+      const oldMedia = WatchPartyMedia(
+        kind: 'anilist',
+        title: 'Frieren',
+        anilistId: 154587,
+        episode: 1,
+      );
+      final client = _FakeWatchPartyClient()
+        ..joinSnapshot = _snapshot(
+          role: WatchPartyRole.guest,
+          revision: 7,
+          playing: true,
+          position: const Duration(seconds: 50),
+          media: _media,
+        );
+      final controller = WatchPartyController(client);
+      addTearDown(controller.dispose);
+      expect(await controller.join('23456789'), isTrue);
+      final port = _FakePlaybackPort();
+      addTearDown(port.dispose);
+      await controller.attachPlayback(port: port, media: oldMedia);
+
+      port.emit(_readySample(media: oldMedia));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(client.readyValues, [false]);
+      expect(client.remoteReady, isFalse);
+      expect(port.seekTargets, isEmpty);
+      expect(port.playCalls, 0);
+      expect(controller.state.attachedMedia, oldMedia);
     },
   );
 
@@ -152,7 +250,7 @@ void main() {
       );
     final controller = WatchPartyController(client);
     addTearDown(controller.dispose);
-    expect(await controller.join('ABCD2345'), isTrue);
+    expect(await controller.join('23456789'), isTrue);
     final seekGate = Completer<void>();
     final port = _FakePlaybackPort()..seekGate = seekGate;
     addTearDown(port.dispose);
@@ -193,7 +291,7 @@ void main() {
         );
       final controller = WatchPartyController(client);
       addTearDown(controller.dispose);
-      expect(await controller.join('ABCD2345'), isTrue);
+      expect(await controller.join('23456789'), isTrue);
       final port = _FakePlaybackPort()..seekError = StateError('decoder busy');
       addTearDown(port.dispose);
       await controller.attachPlayback(port: port, media: _media);
@@ -241,7 +339,7 @@ void main() {
         );
       final controller = WatchPartyController(client);
       addTearDown(controller.dispose);
-      expect(await controller.join('ABCD2345'), isTrue);
+      expect(await controller.join('23456789'), isTrue);
       final port = _FakePlaybackPort();
       addTearDown(port.dispose);
       await controller.attachPlayback(port: port, media: _media);
@@ -281,25 +379,31 @@ void main() {
     final readyTrueGate = Completer<void>();
     final readyTrueStarted = Completer<void>();
     final client = _FakeWatchPartyClient()
+      ..joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
+        revision: 1,
+        media: _media,
+      )
       ..readyTrueGate = readyTrueGate
       ..readyTrueStarted = readyTrueStarted;
     final controller = WatchPartyController(client);
     addTearDown(controller.dispose);
-    expect(await controller.join('ABCD2345'), isTrue);
+    expect(await controller.join('23456789'), isTrue);
     final port = _FakePlaybackPort();
     addTearDown(port.dispose);
 
-    final attach = controller.attachPlayback(port: port, media: _media);
+    await controller.attachPlayback(port: port, media: _media);
+    port.emit(_readySample(media: _media));
     await readyTrueStarted.future;
     final detach = controller.detachPlayback(port);
     await Future<void>.delayed(Duration.zero);
 
-    expect(client.readyCompletionOrder, isEmpty);
+    expect(client.readyCompletionOrder, [false]);
     readyTrueGate.complete();
-    await Future.wait([attach, detach]);
+    await detach;
 
-    expect(client.readyValues, [true, false]);
-    expect(client.readyCompletionOrder, [true, false]);
+    expect(client.readyValues, [false, true, false]);
+    expect(client.readyCompletionOrder, [false, true, false]);
     expect(client.remoteReady, isFalse);
     expect(controller.state.attachedMedia, isNull);
   });
@@ -309,23 +413,28 @@ void main() {
     final readyTrueStarted = Completer<void>();
     final readyFalseCompleted = Completer<void>();
     final client = _FakeWatchPartyClient()
+      ..joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
+        revision: 1,
+        media: _media,
+      )
       ..readyTrueGate = readyTrueGate
-      ..readyTrueStarted = readyTrueStarted
-      ..readyFalseCompleted = readyFalseCompleted;
+      ..readyTrueStarted = readyTrueStarted;
     final controller = WatchPartyController(client);
-    expect(await controller.join('ABCD2345'), isTrue);
+    expect(await controller.join('23456789'), isTrue);
     final port = _FakePlaybackPort();
     addTearDown(port.dispose);
 
-    final attach = controller.attachPlayback(port: port, media: _media);
+    await controller.attachPlayback(port: port, media: _media);
+    port.emit(_readySample(media: _media));
     await readyTrueStarted.future;
+    client.readyFalseCompleted = readyFalseCompleted;
     controller.dispose();
     readyTrueGate.complete();
 
-    await expectLater(attach, completes);
     await readyFalseCompleted.future.timeout(const Duration(seconds: 1));
-    expect(client.readyValues, [true, false]);
-    expect(client.readyCompletionOrder, [true, false]);
+    expect(client.readyValues, [false, true, false]);
+    expect(client.readyCompletionOrder, [false, true, false]);
     expect(client.remoteReady, isFalse);
   });
 
@@ -377,11 +486,11 @@ const _media = WatchPartyMedia(
 );
 
 WatchPartySession _session(WatchPartyRole role) => WatchPartySession(
-  roomCode: 'ABCD2345',
+  roomCode: '23456789',
   token: List.filled(43, 'a').join(),
   role: role,
   expiresAt: DateTime.utc(2026, 8, 21),
-  watchUrl: Uri.parse('https://tetotv.example/watch?room=ABCD2345'),
+  watchUrl: Uri.parse('https://tetotv.example/watch?room=23456789'),
 );
 
 WatchPartySnapshot _snapshot({
@@ -394,7 +503,7 @@ WatchPartySnapshot _snapshot({
   DateTime? serverTime,
   DateTime? receivedAt,
 }) => WatchPartySnapshot(
-  roomCode: 'ABCD2345',
+  roomCode: '23456789',
   role: role,
   revision: revision,
   media: media,
@@ -408,8 +517,18 @@ WatchPartySnapshot _snapshot({
   expiresAt: DateTime.now().toUtc().add(const Duration(hours: 6)),
 );
 
+WatchPartyPlaybackSample _readySample({required WatchPartyMedia media}) =>
+    WatchPartyPlaybackSample(
+      media: media,
+      position: const Duration(seconds: 3),
+      duration: const Duration(minutes: 24),
+      playing: false,
+      ready: true,
+      sampledAt: DateTime.now().toUtc(),
+    );
+
 Map<String, Object?> _snapshotJson({required String role}) => {
-  'room_code': 'ABCD2345',
+  'room_code': '23456789',
   'role': role,
   'revision': 1,
   'media': null,

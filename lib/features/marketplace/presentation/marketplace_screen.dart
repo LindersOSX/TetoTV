@@ -1274,15 +1274,15 @@ Future<bool> _confirm(
   title: title,
   body: body,
   action: action,
-  autofocusAction: action == 'UNINSTALL',
+  autofocusAction: action == 'INSTALL' || action == 'UNINSTALL',
 );
 
 /// Shows the Marketplace confirmation used for install and removal actions.
 ///
-/// The uninstall action deliberately owns initial focus so a TV remote can
-/// confirm it immediately. Left and right are handled explicitly because some
-/// Android TV focus engines do not enter [AlertDialog.actions] until a second
-/// directional key press.
+/// Install and uninstall actions deliberately own initial focus so a TV remote
+/// can confirm them immediately. Left and right are handled explicitly because
+/// some Android TV focus engines do not enter [AlertDialog.actions] until a
+/// second directional key press.
 Future<bool> showMarketplaceConfirmationDialog(
   BuildContext context, {
   required String title,

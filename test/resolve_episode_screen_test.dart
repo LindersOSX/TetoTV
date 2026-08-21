@@ -854,6 +854,138 @@ void main() {
     },
   );
 
+  for (final size in const [Size(960, 540), Size(1280, 720)]) {
+    testWidgets(
+      'primary source actions share one TV row at ${size.width.toInt()}x${size.height.toInt()}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(size);
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              configuredReleaseSourceProvider.overrideWithValue(
+                const _FakeReleaseSource(),
+              ),
+            ],
+            child: const MaterialApp(
+              home: ResolveEpisodeScreen(
+                episode: EpisodeReference(
+                  anilistMediaId: 42001,
+                  title: 'TV toolbar geometry',
+                  episode: 1,
+                ),
+              ),
+            ),
+          ),
+        );
+        await _pumpUntilFound(tester, find.text('More filters'));
+
+        const labels = [
+          'ALL',
+          'SUB',
+          'DUB',
+          'More filters',
+          'Refresh',
+          'Search',
+        ];
+        final rects = [
+          for (final label in labels) tester.getRect(find.text(label)),
+        ];
+        final centerY = rects.first.center.dy;
+        for (var index = 0; index < rects.length; index++) {
+          expect(
+            rects[index].center.dy,
+            closeTo(centerY, 0.5),
+            reason: '${labels[index]} wrapped onto another row at $size',
+          );
+          expect(rects[index].left, greaterThanOrEqualTo(0));
+          expect(rects[index].right, lessThanOrEqualTo(size.width));
+        }
+
+        final allControl = find.descendant(
+          of: find.byKey(const ValueKey('stream-picker-all')),
+          matching: find.byType(FocusableActionDetector),
+        );
+        tester
+            .widget<FocusableActionDetector>(allControl)
+            .focusNode!
+            .requestFocus();
+        await tester.pump();
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'stream-picker.all',
+        );
+        for (final expected in [
+          'stream-picker.sub',
+          'stream-picker.dub',
+          'stream-picker.filters',
+          'stream-picker.refresh',
+          'stream-picker.search',
+        ]) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+          await tester.pump();
+          expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
+        }
+      },
+    );
+  }
+
+  testWidgets(
+    'provider no-match notices stay compact while discovered streams remain visible',
+    (tester) async {
+      const size = Size(960, 540);
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final available = _providerWebStream(
+        providerId: 'available-web',
+        providerName: 'Available provider',
+        quality: '1080p',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _ListReleaseSource([]),
+            ),
+            webStreamAggregatorProvider.overrideWithValue(
+              _FailureAndStreamWebAggregator(available),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42002,
+                title: 'Provider warning geometry',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text(available.title));
+
+      expect(find.textContaining('1 source issue(s)'), findsOneWidget);
+      expect(find.textContaining('No matching title or episode'), findsNothing);
+      final streamRect = tester.getRect(find.text(available.title));
+      expect(streamRect.top, greaterThanOrEqualTo(0));
+      expect(streamRect.bottom, lessThanOrEqualTo(size.height));
+      final streamControl = find
+          .ancestor(
+            of: find.text(available.title),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first;
+      final streamFocusNode = tester
+          .widget<FocusableActionDetector>(streamControl)
+          .focusNode!;
+      streamFocusNode.requestFocus();
+      await tester.pump();
+      expect(streamFocusNode.hasFocus, isTrue);
+    },
+  );
+
   test('local stream search covers useful Debrid and Web metadata', () {
     const release = ReleaseCandidate(
       infoHash: 'searchable-release',
@@ -2825,6 +2957,50 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Watch Together follow failure keeps manual source recovery available',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _ListReleaseSource([]),
+            ),
+            webStreamAggregatorProvider.overrideWithValue(
+              _FixedWebAggregator(const []),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              watchPartyFollow: true,
+              episode: EpisodeReference(
+                anilistMediaId: 565659,
+                title: 'Host Follow Show',
+                episode: 3,
+                autoPlay: true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await _pumpUntilFound(tester, find.text('No playable stream found'));
+      expect(find.text('Choose source'), findsOneWidget);
+      expect(
+        find.textContaining('remain in the Watch Together room'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Choose source'));
+      await tester.pump();
+      expect(find.text('No playable stream found'), findsNothing);
+      expect(find.text('Choose source'), findsNothing);
+    },
+  );
+
   testWidgets('terminal Retry forces a fresh web-provider session', (
     tester,
   ) async {
@@ -4420,6 +4596,34 @@ class _FixedWebAggregator extends WebStreamAggregator {
       aggregation: WebStreamAggregation(streams: streams),
       completedProviders: 1,
       totalProviders: 1,
+    );
+  }
+}
+
+class _FailureAndStreamWebAggregator extends WebStreamAggregator {
+  _FailureAndStreamWebAggregator(this.available)
+    : super(AddonStore(TetoTvDatabase.instance));
+
+  final WebStreamResult available;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) async* {
+    yield WebStreamSearchProgress(
+      aggregation: WebStreamAggregation(
+        streams: [available],
+        failures: const [
+          WebProviderFailure(
+            providerId: 'unavailable-web',
+            providerName: 'Unavailable provider',
+            message: 'No matching title or episode from this provider.',
+            reason: 'no_stream',
+          ),
+        ],
+      ),
+      completedProviders: 2,
+      totalProviders: 2,
     );
   }
 }

@@ -201,6 +201,89 @@ class NativePlaybackProgress {
       );
 }
 
+@immutable
+class NativeWatchPartyHudRequest {
+  const NativeWatchPartyHudRequest({
+    required this.checkpointKey,
+    required this.playbackSessionGeneration,
+  });
+
+  final String checkpointKey;
+  final int playbackSessionGeneration;
+
+  factory NativeWatchPartyHudRequest.fromMap(Map<Object?, Object?> value) =>
+      NativeWatchPartyHudRequest(
+        checkpointKey: (value['checkpointKey'] as String? ?? '').trim(),
+        playbackSessionGeneration:
+            (value['playbackSessionGeneration'] as num?)?.toInt() ?? 0,
+      );
+
+  bool get isValid =>
+      checkpointKey.isNotEmpty &&
+      checkpointKey.length <= 256 &&
+      playbackSessionGeneration > 0;
+}
+
+@immutable
+class NativeWatchPartyHudParticipant {
+  const NativeWatchPartyHudParticipant({
+    required this.displayName,
+    required this.role,
+    required this.ready,
+    this.avatarUrl,
+  });
+
+  final String displayName;
+  final String? avatarUrl;
+  final String role;
+  final bool ready;
+
+  Map<String, Object> toMap() => <String, Object>{
+    'display_name': displayName,
+    'avatar_url': ?avatarUrl,
+    'role': role,
+    'ready': ready,
+  };
+}
+
+@immutable
+class NativeWatchPartyHudResponse {
+  const NativeWatchPartyHudResponse({
+    required this.ok,
+    required this.message,
+    this.roomCode,
+    this.watchUrl,
+    this.status,
+    this.participants = const <NativeWatchPartyHudParticipant>[],
+  });
+
+  final bool ok;
+  final String message;
+  final String? roomCode;
+  final String? watchUrl;
+  final String? status;
+  final List<NativeWatchPartyHudParticipant> participants;
+
+  Map<String, Object> toMap() => <String, Object>{
+    'ok': ok,
+    'message': message,
+    'roomCode': ?roomCode,
+    'watchUrl': ?watchUrl,
+    'status': ?status,
+    // The native player renders only a compact preview. Bound this again at
+    // the platform boundary even though the server/domain roster is bounded.
+    'participants': participants
+        .take(6)
+        .map((participant) => participant.toMap())
+        .toList(growable: false),
+  };
+}
+
+typedef NativeWatchPartyHudHandler =
+    Future<NativeWatchPartyHudResponse> Function(
+      NativeWatchPartyHudRequest request,
+    );
+
 class DiscordBridgeEvent {
   const DiscordBridgeEvent(this.type, this.data);
 
@@ -440,6 +523,7 @@ class AndroidTvBridge {
   final _nativePlaybackProgress =
       StreamController<NativePlaybackProgress>.broadcast();
   final _discordEvents = StreamController<DiscordBridgeEvent>.broadcast();
+  NativeWatchPartyHudHandler? _nativeWatchPartyHudHandler;
   TvDeviceProfile? _cachedProfile;
   AndroidDeviceCategory? _cachedDeviceCategory;
 
@@ -518,6 +602,31 @@ class AndroidTvBridge {
           _nativePlaybackProgress.add(progress);
         }
         return;
+      case 'nativeWatchPartyHud':
+        if (args == null) {
+          return const NativeWatchPartyHudResponse(
+            ok: false,
+            message: 'Watch Together is unavailable for this player.',
+          ).toMap();
+        }
+        final request = NativeWatchPartyHudRequest.fromMap(args);
+        final handler = _nativeWatchPartyHudHandler;
+        if (!request.isValid || handler == null) {
+          return const NativeWatchPartyHudResponse(
+            ok: false,
+            message: 'Watch Together is unavailable for this player.',
+          ).toMap();
+        }
+        try {
+          return (await handler(
+            request,
+          ).timeout(const Duration(seconds: 12))).toMap();
+        } catch (_) {
+          return const NativeWatchPartyHudResponse(
+            ok: false,
+            message: 'Watch Together could not create or open the room.',
+          ).toMap();
+        }
       case 'discordConnectionState':
       case 'discordPresenceError':
         _discordEvents.add(DiscordBridgeEvent(call.method, args ?? const {}));
@@ -526,6 +635,22 @@ class AndroidTvBridge {
         _discordEvents.add(DiscordBridgeEvent(call.method, const {}));
         return;
     }
+  }
+
+  /// Registers the one active Media3 route that may answer its HUD action.
+  ///
+  /// The callback receives only a checkpoint identity and generation. Its
+  /// typed response deliberately has no field for playback URLs, request
+  /// headers, media-server credentials, or room capability tokens.
+  VoidCallback registerNativeWatchPartyHudHandler(
+    NativeWatchPartyHudHandler handler,
+  ) {
+    _nativeWatchPartyHudHandler = handler;
+    return () {
+      if (identical(_nativeWatchPartyHudHandler, handler)) {
+        _nativeWatchPartyHudHandler = null;
+      }
+    };
   }
 
   Future<Map<Object?, Object?>> discordSdkInfo() async {
@@ -815,6 +940,8 @@ class AndroidTvBridge {
     String? failoverNotice,
     int playbackSessionGeneration = 0,
     String? watchPartyStatus,
+    bool watchPartyGuestControlsLocked = false,
+    int watchPartyStateSequence = 0,
     Map<String, Object> theme = const {},
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -877,6 +1004,10 @@ class AndroidTvBridge {
             'failoverNotice': failoverNotice,
           if (watchPartyStatus != null && watchPartyStatus.isNotEmpty)
             'watchPartyStatus': watchPartyStatus,
+          if (watchPartyGuestControlsLocked)
+            'watchPartyGuestControlsLocked': true,
+          if (watchPartyStateSequence > 0)
+            'watchPartyStateSequence': watchPartyStateSequence,
           for (final key in const [
             'themeBackgroundColor',
             'themeSurfaceColor',
@@ -898,6 +1029,43 @@ class AndroidTvBridge {
           : NativePlaybackResult.fromMap(value);
     } on PlatformException catch (error) {
       return NativePlaybackResult.platformError(error);
+    }
+  }
+
+  /// Updates the Watch Together authority shown by the exact active Media3
+  /// session. A checkpoint and engine generation are both required so a late
+  /// role transition cannot lock or unlock a replacement player.
+  Future<bool> updateNativePlayerWatchPartyState({
+    required String checkpointKey,
+    required int playbackSessionGeneration,
+    required bool guestControlsLocked,
+    required int stateSequence,
+    String? status,
+  }) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        checkpointKey.trim().isEmpty ||
+        playbackSessionGeneration <= 0 ||
+        stateSequence <= 0) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>(
+            'updateNativePlayerWatchPartyState',
+            <String, Object>{
+              'checkpointKey': checkpointKey,
+              'playbackSessionGeneration': playbackSessionGeneration,
+              'guestControlsLocked': guestControlsLocked,
+              'stateSequence': stateSequence,
+              if (status != null && status.trim().isNotEmpty)
+                'status': status.trim(),
+            },
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
     }
   }
 
@@ -929,6 +1097,35 @@ class AndroidTvBridge {
                 86_400_000,
               ),
           }) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  /// Closes only the exact active native Media3 generation before an attached
+  /// guest follows a newer host catalog item. This carries no playback source,
+  /// room capability, or authorization data.
+  Future<bool> dismissNativePlayerForWatchPartyTransition({
+    required String checkpointKey,
+    required int playbackSessionGeneration,
+  }) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        checkpointKey.trim().isEmpty ||
+        playbackSessionGeneration <= 0) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>(
+            'dismissNativePlayerForWatchPartyTransition',
+            <String, Object>{
+              'checkpointKey': checkpointKey,
+              'playbackSessionGeneration': playbackSessionGeneration,
+            },
+          ) ??
           false;
     } on PlatformException {
       return false;

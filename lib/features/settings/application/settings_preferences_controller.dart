@@ -51,6 +51,7 @@ const _autoPickSourceEnabledKey = 'streaming_auto_pick_source_enabled';
 const _autoPickSourceTypeKey = 'streaming_auto_pick_source_type';
 const _autoPickQualityKey = 'streaming_auto_pick_quality';
 const _autoPickAudioKey = 'streaming_auto_pick_audio';
+const _showWatchTogetherKey = 'navigation_show_watch_together';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -167,6 +168,9 @@ enum TopNavigationDestination {
   discover,
   calendar,
   settings,
+  // Keep new destinations append-only so persisted enum assumptions remain
+  // stable. The separately persisted order still places this before Settings.
+  watchTogether,
 }
 
 /// Chooses which always-reachable navigation surface owns Settings.
@@ -185,6 +189,7 @@ const defaultTopNavigationOrder = <TopNavigationDestination>[
   TopNavigationDestination.myList,
   TopNavigationDestination.discover,
   TopNavigationDestination.calendar,
+  TopNavigationDestination.watchTogether,
   TopNavigationDestination.settings,
 ];
 
@@ -196,6 +201,7 @@ extension TopNavigationDestinationLabel on TopNavigationDestination {
     TopNavigationDestination.discover => 'Discover',
     TopNavigationDestination.calendar => 'Calendar',
     TopNavigationDestination.settings => 'Settings',
+    TopNavigationDestination.watchTogether => 'Watch Together',
   };
 }
 
@@ -324,6 +330,7 @@ class SettingsPreferences {
     this.showMyList = true,
     this.showDiscover = true,
     this.showCalendar = true,
+    this.showWatchTogether = true,
     this.showSettings = true,
     this.topNavigationOrder = defaultTopNavigationOrder,
     this.settingsEntryPlacement = SettingsEntryPlacement.topNavigation,
@@ -371,6 +378,7 @@ class SettingsPreferences {
   final bool showMyList;
   final bool showDiscover;
   final bool showCalendar;
+  final bool showWatchTogether;
   final bool showSettings;
   final List<TopNavigationDestination> topNavigationOrder;
   final SettingsEntryPlacement settingsEntryPlacement;
@@ -418,6 +426,7 @@ class SettingsPreferences {
     bool? showMyList,
     bool? showDiscover,
     bool? showCalendar,
+    bool? showWatchTogether,
     bool? showSettings,
     List<TopNavigationDestination>? topNavigationOrder,
     SettingsEntryPlacement? settingsEntryPlacement,
@@ -465,6 +474,7 @@ class SettingsPreferences {
     showMyList: showMyList ?? this.showMyList,
     showDiscover: showDiscover ?? this.showDiscover,
     showCalendar: showCalendar ?? this.showCalendar,
+    showWatchTogether: showWatchTogether ?? this.showWatchTogether,
     showSettings: showSettings ?? this.showSettings,
     topNavigationOrder: topNavigationOrder ?? this.topNavigationOrder,
     settingsEntryPlacement:
@@ -501,6 +511,7 @@ class SettingsPreferences {
     TopNavigationDestination.myList => showMyList,
     TopNavigationDestination.discover => showDiscover,
     TopNavigationDestination.calendar => showCalendar,
+    TopNavigationDestination.watchTogether => showWatchTogether,
     // Settings is the permanent recovery path for navigation customization.
     TopNavigationDestination.settings => true,
   };
@@ -611,6 +622,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _safeRead(_autoPickSourceTypeKey),
       _safeRead(_autoPickQualityKey),
       _safeRead(_autoPickAudioKey),
+      // Append-only: do not shift any migration-sensitive index above.
+      _safeRead(_showWatchTogetherKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -877,6 +890,10 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
+    if (canRestore(_showWatchTogetherKey, 45)) {
+      // Existing installations have no saved value and migrate to visible.
+      restored = restored.copyWith(showWatchTogether: valueAt(45) != 'false');
+    }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
@@ -1009,6 +1026,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         value,
       );
 
+  Future<void> setShowWatchTogether(bool value) =>
+      setTopNavigationDestinationVisible(
+        TopNavigationDestination.watchTogether,
+        value,
+      );
+
   Future<void> setShowSettings(bool value) =>
       setTopNavigationDestinationVisible(
         TopNavigationDestination.settings,
@@ -1032,6 +1055,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.calendar => state.copyWith(
         showCalendar: visible,
       ),
+      TopNavigationDestination.watchTogether => state.copyWith(
+        showWatchTogether: visible,
+      ),
       TopNavigationDestination.settings => state.copyWith(
         showSettings: visible,
       ),
@@ -1042,6 +1068,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.myList => _showMyListKey,
       TopNavigationDestination.discover => _showDiscoverKey,
       TopNavigationDestination.calendar => _showCalendarKey,
+      TopNavigationDestination.watchTogether => _showWatchTogetherKey,
       TopNavigationDestination.settings => _showSettingsKey,
     };
     final landingPage = _landingPageForTopDestination(destination);
@@ -1186,6 +1213,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _showMyListKey,
       _showDiscoverKey,
       _showCalendarKey,
+      _showWatchTogetherKey,
       _showSettingsKey,
       _topNavigationOrderKey,
       _settingsEntryPlacementKey,
@@ -1205,6 +1233,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       showMyList: defaults.showMyList,
       showDiscover: defaults.showDiscover,
       showCalendar: defaults.showCalendar,
+      showWatchTogether: defaults.showWatchTogether,
       showSettings: defaults.showSettings,
       topNavigationOrder: defaults.topNavigationOrder,
       settingsEntryPlacement: defaults.settingsEntryPlacement,
@@ -1317,6 +1346,7 @@ LandingPage? _landingPageForTopDestination(
   TopNavigationDestination.myList => LandingPage.myList,
   TopNavigationDestination.discover => LandingPage.discover,
   TopNavigationDestination.calendar => LandingPage.calendar,
+  TopNavigationDestination.watchTogether => null,
   TopNavigationDestination.settings => null,
 };
 
@@ -1336,8 +1366,24 @@ List<TopNavigationDestination> _normalizeTopNavigationOrder(
   Iterable<TopNavigationDestination> order,
 ) {
   final normalized = <TopNavigationDestination>[];
-  for (final destination in [...order, ...defaultTopNavigationOrder]) {
+  for (final destination in order) {
     if (!normalized.contains(destination)) normalized.add(destination);
+  }
+  for (final destination in defaultTopNavigationOrder) {
+    if (normalized.contains(destination)) continue;
+    // An older saved order already contains Settings. Insert the newly added
+    // Watch Together entry immediately before it without disturbing the
+    // relative order of any destination the viewer customized.
+    if (destination == TopNavigationDestination.watchTogether) {
+      final settingsIndex = normalized.indexOf(
+        TopNavigationDestination.settings,
+      );
+      if (settingsIndex >= 0) {
+        normalized.insert(settingsIndex, destination);
+        continue;
+      }
+    }
+    normalized.add(destination);
   }
   return List<TopNavigationDestination>.unmodifiable(normalized);
 }

@@ -27,6 +27,7 @@ import 'package:anime_tv/features/player/presentation/player_presentation_palett
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
+import 'package:anime_tv/features/player/presentation/watch_party_player_dialog.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -237,6 +238,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   );
   final _playFocus = FocusNode(debugLabel: 'vlc.player.play');
   final _skipFocus = FocusNode(debugLabel: 'vlc.player.skip-segment');
+  final _watchTogetherFocus = FocusNode(
+    debugLabel: 'vlc.player.watch-together',
+  );
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   Timer? _controlsTimer;
   Timer? _trackMessageTimer;
@@ -320,6 +324,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   final Set<VlcPlayerController> _disposeAttemptedControllers =
       Set<VlcPlayerController>.identity();
   String? _watchPartyStatus;
+  bool _guestControlsLocked = false;
+  DateTime _lastGuestControlNotice = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get _hasUntriedDirectStream => hasUntriedDirectWebStream(
     current: _currentStream,
@@ -336,13 +342,33 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _watchPartyStatus = watchPartyPlayerStatus(
-      ref.read(watchPartyControllerProvider),
-    );
+    final initialParty = ref.read(watchPartyControllerProvider);
+    _watchPartyStatus = watchPartyPlayerStatus(initialParty);
+    _guestControlsLocked = initialParty.guestPlaybackControlsLocked;
     ref.listenManual(watchPartyControllerProvider, (_, next) {
       final status = watchPartyPlayerStatus(next);
-      if (!mounted || status == _watchPartyStatus) return;
-      setState(() => _watchPartyStatus = status);
+      final locked = next.guestPlaybackControlsLocked;
+      if (!mounted ||
+          status == _watchPartyStatus && locked == _guestControlsLocked) {
+        return;
+      }
+      final becameLocked = locked && !_guestControlsLocked;
+      setState(() {
+        _watchPartyStatus = status;
+        _guestControlsLocked = locked;
+        if (locked) _queuedSeekTarget = null;
+      });
+      if (becameLocked) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_guestControlsLocked) return;
+          _showControls();
+          _watchTogetherFocus.requestFocus();
+          _showGuestControlLockMessage();
+        });
+      } else if (!locked) {
+        final controller = _controller;
+        if (controller != null) _checkSkips(controller.value.position);
+      }
     });
     _database = ref.read(tetoTvDatabaseProvider);
     _nextEpisodePreparation = ref.read(
@@ -1113,6 +1139,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   void _handleMediaAction(MediaAction action) {
     final controller = _controller;
     if (controller == null) return;
+    if (_blockGuestLocalControl()) return;
     switch (action.action) {
       case 'play':
         unawaited(controller.play());
@@ -1210,6 +1237,15 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   void _checkSkips(Duration position) {
+    if (_guestControlsLocked) {
+      if (_canSkip || _activeSkip != null) {
+        setState(() {
+          _canSkip = false;
+          _activeSkip = null;
+        });
+      }
+      return;
+    }
     final active = _skips
         .where(
           (skip) =>
@@ -1275,7 +1311,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _skipCurrentSegment() async {
-    if (_skipInProgress || _engineHandoffInProgress) return;
+    if (_skipInProgress ||
+        _engineHandoffInProgress ||
+        _blockGuestLocalControl()) {
+      return;
+    }
     final controller = _controller;
     final segment = _activeSkip;
     if (controller == null || segment == null) return;
@@ -1325,7 +1365,11 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     VlcPlayerController controller,
     SkipSegment segment,
   ) async {
-    if (_skipInProgress || _engineHandoffInProgress) return;
+    if (_skipInProgress ||
+        _engineHandoffInProgress ||
+        _blockGuestLocalControl(notify: false)) {
+      return;
+    }
     _skipInProgress = true;
     final segmentKey = '${segment.kind.name}:${segment.start.inMilliseconds}';
     try {
@@ -1384,7 +1428,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<bool> _seekForSkip(VlcPlayerController controller, Duration target) {
-    if (_engineHandoffInProgress || controller != _controller) {
+    if (_engineHandoffInProgress ||
+        controller != _controller ||
+        _blockGuestLocalControl(notify: false)) {
       return Future<bool>.value(false);
     }
     late final Future<bool> operation;
@@ -1408,6 +1454,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openAudioTrackPicker() async {
+    if (_blockGuestLocalControl()) return;
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     final expectsMultipleAudio = releaseAdvertisesMultipleAudio(
@@ -1433,7 +1480,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             ? const Duration(seconds: 5)
             : const Duration(seconds: 2),
       );
-      if (!mounted || controller != _controller) return;
+      if (!mounted || controller != _controller || _blockGuestLocalControl()) {
+        return;
+      }
       final ids = tracks.keys.where((id) => id >= 0).toList()..sort();
       if (ids.isEmpty) {
         _showMessage('This file has no selectable embedded audio tracks');
@@ -1472,7 +1521,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             )
             .toList(growable: false),
       );
-      if (!mounted || selected == null) return;
+      if (!mounted || selected == null || _blockGuestLocalControl()) return;
       await controller
           .setAudioTrack(selected)
           .timeout(vlcInteractiveCommandTimeout);
@@ -1490,6 +1539,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openSubtitleTrackPicker() async {
+    if (_blockGuestLocalControl()) return;
     final controller = _controller;
     if (controller == null) {
       _showMessage('Captions are still loading');
@@ -1526,7 +1576,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             ? const Duration(seconds: 4)
             : const Duration(seconds: 3),
       );
-      if (!mounted || controller != _controller) return;
+      if (!mounted || controller != _controller || _blockGuestLocalControl()) {
+        return;
+      }
       final current =
           await controller.getSpuTrack().timeout(
             vlcInteractiveCommandTimeout,
@@ -1563,7 +1615,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
             )
             .toList(growable: false),
       );
-      if (!mounted || selected == null) return;
+      if (!mounted || selected == null || _blockGuestLocalControl()) return;
       await controller
           .setSpuTrack(selected)
           .timeout(vlcInteractiveCommandTimeout);
@@ -1585,6 +1637,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _cyclePicture() async {
+    if (_blockGuestLocalControl()) return;
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     const values = ['', '16:9', '4:3'];
@@ -1655,7 +1708,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _seekBy(Duration offset) async {
-    if (_engineHandoffInProgress || _restarting) return;
+    if (_engineHandoffInProgress || _restarting || _blockGuestLocalControl()) {
+      return;
+    }
     final controller = _controller;
     if (controller == null) return;
     _queuedSeekTarget = playerSeekTarget(
@@ -1676,6 +1731,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _seekDrainCompleter = drain;
     try {
       while (_queuedSeekTarget != null) {
+        if (_guestControlsLocked) {
+          _queuedSeekTarget = null;
+          break;
+        }
         final target = _queuedSeekTarget!;
         _queuedSeekTarget = null;
         final activeController = _controller;
@@ -2072,6 +2131,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _returnToStreamPicker() async {
+    if (_blockGuestLocalControl()) return;
     final navigator = Navigator.of(context);
     final position = _effectiveHandoffPosition();
     _pendingHandoffPosition = position;
@@ -2112,7 +2172,9 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _offerNextEpisode() async {
-    if (!_animeFeaturesEnabled) return;
+    if (!_animeFeaturesEnabled || _blockGuestLocalControl(notify: false)) {
+      return;
+    }
     final controller = _controller;
     if (!mounted || controller == null) return;
     try {
@@ -2284,6 +2346,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _playNextEpisode() async {
+    if (_blockGuestLocalControl()) return;
     if (!mounted || widget.anilistMediaId == null || widget.episode == null) {
       return;
     }
@@ -2400,6 +2463,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   void _playOrPause() {
+    if (_blockGuestLocalControl()) return;
     final controller = _controller;
     if (controller == null) return;
     if (!controller.value.isInitialized) {
@@ -2506,6 +2570,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openStreamSourcePicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final selected = await showPlayerStreamSourcePicker(
       context: context,
@@ -2521,6 +2586,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
           : null,
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selected == null || selected.stream.uri == _currentStream.uri) {
       _showControls();
       return;
@@ -2740,6 +2809,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _handoffTo(PreferredPlayer selected) async {
+    if (_blockGuestLocalControl()) return;
     final callback = widget.onSelectEngine;
     if (callback == null && selected != PreferredPlayer.mpv) {
       _showMessage('This player is not available from this screen');
@@ -2768,11 +2838,16 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openPlayerPicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final selected = await showPlayerEnginePicker(
       context: context,
       current: PreferredPlayer.vlc,
     );
+    if (mounted && _blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (!mounted || selected == null || selected == PreferredPlayer.vlc) {
       if (mounted) _showControls();
       return;
@@ -2781,12 +2856,17 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openCaptionSizePicker() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final selected = await showPlayerCaptionSizePicker(
       context: context,
       current: _subtitleSize,
     );
     if (!mounted) return;
+    if (_blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (selected == null) {
       _scheduleControlsHide();
       return;
@@ -2806,6 +2886,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
   }
 
   Future<void> _openOptions() async {
+    if (_blockGuestLocalControl()) return;
     _controlsTimer?.cancel();
     final result = await showDialog<_VlcMenuResult>(
       context: context,
@@ -2822,6 +2903,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         hasDirectSources: _currentStream.isWebStream,
       ),
     );
+    if (mounted && _blockGuestLocalControl()) {
+      _showControls(focusControls: true);
+      return;
+    }
     if (!mounted || result == null) {
       _scheduleControlsHide();
       return;
@@ -2861,6 +2946,17 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     }
     if (!mounted) return;
     _scheduleControlsHide();
+  }
+
+  Future<void> _openWatchParty() async {
+    _controlsTimer?.cancel();
+    if (mounted) setState(() => _controlsVisible = true);
+    await showWatchPartyPlayerDialog(context);
+    if (!mounted) return;
+    _showControls();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _controlsVisible) _watchTogetherFocus.requestFocus();
+    });
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
@@ -2926,6 +3022,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyC) {
+      if (_blockGuestLocalControl()) return KeyEventResult.handled;
       if (_decoderMode == VlcDecoderMode.software) {
         _showMessage('VLC software decoding is already enabled');
       } else {
@@ -2963,11 +3060,31 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     });
   }
 
+  void _showGuestControlLockMessage() {
+    final now = DateTime.now();
+    if (now.difference(_lastGuestControlNotice) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastGuestControlNotice = now;
+    _showMessage('Only the host can control playback while you are synced');
+  }
+
+  bool _blockGuestLocalControl({bool notify = true}) {
+    if (!_guestControlsLocked) return false;
+    if (notify) _showGuestControlLockMessage();
+    return true;
+  }
+
   void _showControls({bool focusControls = false}) {
     if (mounted) setState(() => _controlsVisible = true);
     if (focusControls) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _playFocus.requestFocus();
+        if (!mounted) return;
+        if (_guestControlsLocked) {
+          _watchTogetherFocus.requestFocus();
+        } else {
+          _playFocus.requestFocus();
+        }
       });
     }
     _scheduleControlsHide();
@@ -3031,9 +3148,10 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _controlsTimer?.cancel();
     final controller = _controller;
     final wasPlaying = controller?.value.isPlaying == true;
+    final shouldTemporarilyPause = wasPlaying && !_guestControlsLocked;
     bool? exit;
     try {
-      if (wasPlaying) {
+      if (shouldTemporarilyPause) {
         // Do not let a failed native pause strand Back behind the confirmation
         // guard. The user must still be able to release and exit a bad decoder.
         try {
@@ -3060,7 +3178,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
         _popPlayerRouteAfterHandoff(navigator);
       }
     } else {
-      if (wasPlaying) {
+      if (shouldTemporarilyPause) {
         try {
           final play = controller?.play();
           if (play != null) {
@@ -3128,6 +3246,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
     _transportFocusScope.dispose();
     _playFocus.dispose();
     _skipFocus.dispose();
+    _watchTogetherFocus.dispose();
     super.dispose();
   }
 
@@ -3259,6 +3378,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                           seekForwardSeconds: _seekForwardSeconds,
                           mode: _decoderMode,
                           partyStatus: _watchPartyStatus,
+                          playbackControlsLocked: _guestControlsLocked,
                           onRewind: () => unawaited(
                             _seekBy(Duration(seconds: -_seekBackSeconds)),
                           ),
@@ -3276,6 +3396,8 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                           onSources: _currentStream.isWebStream
                               ? () => unawaited(_openStreamSourcePicker())
                               : null,
+                          onWatchTogether: () => unawaited(_openWatchParty()),
+                          watchTogetherFocusNode: _watchTogetherFocus,
                           onOptions: () => unawaited(_openOptions()),
                           onDismiss: _hideControls,
                         ),
@@ -3283,7 +3405,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     ),
                   ),
                 ),
-                if (_canSkip && _activeSkip != null)
+                if (!_guestControlsLocked && _canSkip && _activeSkip != null)
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 180),
                     curve: Curves.easeOutCubic,
@@ -3304,6 +3426,7 @@ class _VlcTvPlayerScreenState extends ConsumerState<VlcTvPlayerScreen> {
                     bottom: 104,
                     child: _VlcPlaybackError(
                       message: error,
+                      controlsLocked: _guestControlsLocked,
                       onRetry: () => unawaited(_restart(_decoderMode)),
                       onNextStream: () => unawaited(
                         _tryNextStream('Selected after failure', notify: false),
@@ -3354,6 +3477,7 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
     required this.seekForwardSeconds,
     required this.mode,
     this.partyStatus,
+    required this.playbackControlsLocked,
     required this.onRewind,
     required this.onPlayPause,
     required this.onForward,
@@ -3363,6 +3487,8 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
     required this.onPicture,
     required this.onFixVideo,
     this.onSources,
+    required this.onWatchTogether,
+    required this.watchTogetherFocusNode,
     required this.onOptions,
     required this.onDismiss,
   });
@@ -3375,6 +3501,7 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
   final int seekForwardSeconds;
   final VlcDecoderMode mode;
   final String? partyStatus;
+  final bool playbackControlsLocked;
   final VoidCallback onRewind;
   final VoidCallback onPlayPause;
   final VoidCallback onForward;
@@ -3384,6 +3511,8 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
   final VoidCallback onPicture;
   final VoidCallback onFixVideo;
   final VoidCallback? onSources;
+  final VoidCallback onWatchTogether;
+  final FocusNode watchTogetherFocusNode;
   final VoidCallback onOptions;
   final VoidCallback onDismiss;
 
@@ -3404,6 +3533,7 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
       engineKey: 'vlc',
       engineLabel: vlcDecoderLabel(mode),
       partyStatus: partyStatus,
+      playbackControlsLocked: playbackControlsLocked,
       title: title,
       streamLabel: streamLabel,
       position: value?.position ?? Duration.zero,
@@ -3421,6 +3551,8 @@ class _UnifiedVlcPlayerChrome extends StatelessWidget {
       onPicture: onPicture,
       onFixVideo: onFixVideo,
       onSources: onSources,
+      onWatchTogether: onWatchTogether,
+      watchTogetherFocusNode: watchTogetherFocusNode,
       onOptions: onOptions,
       onDismiss: onDismiss,
     );
@@ -3747,6 +3879,7 @@ class _VlcControl extends StatelessWidget {
 class _VlcPlaybackError extends StatelessWidget {
   const _VlcPlaybackError({
     required this.message,
+    required this.controlsLocked,
     required this.onRetry,
     required this.onNextStream,
     required this.onUseMpv,
@@ -3754,6 +3887,7 @@ class _VlcPlaybackError extends StatelessWidget {
   });
 
   final String message;
+  final bool controlsLocked;
   final VoidCallback onRetry;
   final VoidCallback onNextStream;
   final VoidCallback onUseMpv;
@@ -3779,27 +3913,34 @@ class _VlcPlaybackError extends StatelessWidget {
             width: 300,
             child: Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
           ),
-          _VlcControl(
-            icon: Icons.refresh_rounded,
-            label: 'Retry VLC',
-            primary: true,
-            onPressed: onRetry,
-          ),
-          _VlcControl(
-            icon: Icons.skip_next_rounded,
-            label: 'Next stream',
-            onPressed: onNextStream,
-          ),
-          _VlcControl(
-            icon: Icons.swap_horiz_rounded,
-            label: 'Use MPV',
-            onPressed: onUseMpv,
-          ),
-          _VlcControl(
-            icon: Icons.list_rounded,
-            label: 'Choose stream',
-            onPressed: onChooseStream,
-          ),
+          if (controlsLocked)
+            Text(
+              'The host controls playback. Open Watch Together or Exit.',
+              style: TextStyle(color: palette.mutedText),
+            )
+          else ...[
+            _VlcControl(
+              icon: Icons.refresh_rounded,
+              label: 'Retry VLC',
+              primary: true,
+              onPressed: onRetry,
+            ),
+            _VlcControl(
+              icon: Icons.skip_next_rounded,
+              label: 'Next stream',
+              onPressed: onNextStream,
+            ),
+            _VlcControl(
+              icon: Icons.swap_horiz_rounded,
+              label: 'Use MPV',
+              onPressed: onUseMpv,
+            ),
+            _VlcControl(
+              icon: Icons.list_rounded,
+              label: 'Choose stream',
+              onPressed: onChooseStream,
+            ),
+          ],
         ],
       ),
     );

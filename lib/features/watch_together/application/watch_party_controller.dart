@@ -37,6 +37,12 @@ class WatchPartyState {
   bool get isActive => session != null;
   bool get isHost => session?.role == WatchPartyRole.host;
 
+  /// Guests hand playback authority to the host only while a concrete player
+  /// is attached. Browsing the lobby before choosing matching media remains
+  /// fully interactive.
+  bool get guestPlaybackControlsLocked =>
+      session?.role == WatchPartyRole.guest && attachedMedia != null;
+
   WatchPartyState copyWith({
     WatchPartyConnection? connection,
     Object? session = _unset,
@@ -131,9 +137,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       );
       _schedulePoll(generation, immediate: false);
       if (_playbackPort case final port?) {
+        final sample = _lastSample;
         unawaited(
           _setGuestReady(
-            true,
+            sample?.ready == true,
             sessionOverride: joined.session,
             attachmentGeneration: _playbackAttachmentGeneration,
             attachmentPort: port,
@@ -181,26 +188,66 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       _lastSample = sample;
       if (state.isHost) {
         unawaited(_publishHostSample(force: false));
-      } else if (state.snapshot case final snapshot?) {
-        unawaited(_applyGuestSnapshot(snapshot));
+      } else if (state.session case final session?
+          when session.role == WatchPartyRole.guest) {
+        unawaited(
+          _handleGuestPlaybackSample(
+            session: session,
+            port: port,
+            attachmentGeneration: attachmentGeneration,
+            sample: sample,
+          ),
+        );
       }
     });
     if (state.session case final session?
         when session.role == WatchPartyRole.guest) {
       await _setGuestReady(
-        true,
+        false,
         sessionOverride: session,
         attachmentGeneration: attachmentGeneration,
         attachmentPort: port,
+        force: true,
       );
-      if (_disposed ||
-          attachmentGeneration != _playbackAttachmentGeneration ||
-          !identical(_playbackPort, port)) {
-        return;
-      }
-      final snapshot = state.snapshot;
-      if (snapshot != null) await _applyGuestSnapshot(snapshot);
     }
+  }
+
+  Future<void> _handleGuestPlaybackSample({
+    required WatchPartySession session,
+    required WatchPartyPlaybackPort port,
+    required int attachmentGeneration,
+    required WatchPartyPlaybackSample sample,
+  }) async {
+    final observedSnapshot = state.snapshot;
+    final readyForObservedMedia =
+        sample.ready &&
+        _guestSampleMatchesRemoteMedia(sample.media, observedSnapshot?.media);
+    await _setGuestReady(
+      readyForObservedMedia,
+      sessionOverride: session,
+      attachmentGeneration: attachmentGeneration,
+      attachmentPort: port,
+    );
+    if (_disposed ||
+        attachmentGeneration != _playbackAttachmentGeneration ||
+        !identical(_playbackPort, port) ||
+        state.session != session) {
+      return;
+    }
+    final snapshot = state.snapshot;
+    if (snapshot == null) return;
+    if (readyForObservedMedia &&
+        !_guestSampleMatchesRemoteMedia(sample.media, snapshot.media)) {
+      await _setGuestReady(
+        false,
+        sessionOverride: session,
+        attachmentGeneration: attachmentGeneration,
+        attachmentPort: port,
+        force: true,
+      );
+      return;
+    }
+    await _applyGuestSnapshot(snapshot);
   }
 
   Future<void> detachPlayback(WatchPartyPlaybackPort port) async {
@@ -518,7 +565,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
             !attachmentGuarded ||
             (attachmentGeneration == _playbackAttachmentGeneration &&
                 identical(_playbackPort, attachmentPort));
-        if (state.session == session && attachmentStillCurrent) {
+        final currentRevision = state.snapshot?.revision ?? -1;
+        if (state.session == session &&
+            attachmentStillCurrent &&
+            snapshot.revision >= currentRevision) {
           state = state.copyWith(snapshot: snapshot);
         }
       } on WatchPartyClientException catch (error) {
@@ -584,7 +634,8 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
 
 String watchPartyFriendlyError(WatchPartyClientException error) =>
     switch (error.code) {
-      'invalid_room_code' => 'Enter the eight-character room code.',
+      'invalid_room_code' =>
+        'Enter the eight-digit room code using numbers 2-9 only.',
       'party_not_found' => 'That room ended or expired.',
       'party_full' => 'That room is full.',
       'party_capacity_reached' =>
@@ -596,3 +647,17 @@ String watchPartyFriendlyError(WatchPartyClientException error) =>
         'Watch Together cannot reach the room service right now.',
       _ => 'Watch Together could not complete that request.',
     };
+
+bool _guestSampleMatchesRemoteMedia(
+  WatchPartyMedia local,
+  WatchPartyMedia? remote,
+) {
+  if (remote == null) return false;
+  // A website host publishes an opaque private file identity that the app
+  // cannot resolve. The guest's explicit local choice is therefore the only
+  // readiness assertion available for that legacy/coarse-sync mode.
+  if (remote.kind == 'private') return true;
+  return local.kind == remote.kind &&
+      local.anilistId == remote.anilistId &&
+      local.episode == remote.episode;
+}

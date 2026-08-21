@@ -9,6 +9,7 @@ import 'package:anime_tv/features/discord/application/discord_presence_controlle
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_media_follower.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -47,10 +48,13 @@ class TetoTvApp extends ConsumerWidget {
           builder: (context, ref, _) {
             final preferences = ref.watch(settingsPreferencesProvider);
             final mq = MediaQuery.of(context);
-            final content = InteractionSoundScope(
-              navigationEnabled: preferences.navigationSounds,
-              clickEnabled: preferences.clickSounds,
-              child: TvShortcuts(child: child ?? const SizedBox.shrink()),
+            final content = WatchPartyMediaFollowScope(
+              router: appRouter,
+              child: InteractionSoundScope(
+                navigationEnabled: preferences.navigationSounds,
+                clickEnabled: preferences.clickSounds,
+                child: TvShortcuts(child: child ?? const SizedBox.shrink()),
+              ),
             );
             final scale = interfaceCanvasScale(
               logicalWidth: mq.size.width,

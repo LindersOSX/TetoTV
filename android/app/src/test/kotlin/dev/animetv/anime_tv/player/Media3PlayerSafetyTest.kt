@@ -1,5 +1,8 @@
 package dev.animetv.anime_tv.player
 
+import android.view.KeyEvent
+import androidx.media3.common.Player
+import java.io.ByteArrayInputStream
 import java.util.concurrent.Executor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +11,151 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class Media3PlayerSafetyTest {
+    @Test
+    fun `Watch Together HUD accepts only public room display fields`() {
+        val result = parseNativeWatchPartyHudResult(
+            mapOf(
+                "ok" to true,
+                "roomCode" to "23456789",
+                "watchUrl" to "https://tetotv-bot.wisp.uno/watch?room=23456789",
+                "status" to "PARTY 23456789 - HOST",
+                "message" to "Share this code.",
+                "participants" to listOf(
+                    mapOf(
+                        "display_name" to "Teto Fan",
+                        "avatar_url" to
+                            "https://s4.anilist.co/file/anilistcdn/user/avatar/large/x.jpg",
+                        "role" to "host",
+                        "ready" to true,
+                    ),
+                    mapOf(
+                        "display_name" to "Injected",
+                        "role" to "guest",
+                        "ready" to true,
+                        "token" to "must-not-cross",
+                    ),
+                ),
+                "host_token" to "must-not-cross-the-HUD-bridge",
+                "stream_url" to "https://private.invalid/video",
+                "headers" to mapOf("Authorization" to "secret"),
+            ),
+        )
+
+        assertTrue(result.ok)
+        assertEquals("23456789", result.roomCode)
+        assertEquals(
+            "https://tetotv-bot.wisp.uno/watch?room=23456789",
+            result.watchUrl,
+        )
+        assertEquals("Share this code.", result.message)
+        assertEquals(1, result.participants.size)
+        assertEquals("Teto Fan", result.participants.single().displayName)
+        assertEquals("host", result.participants.single().role)
+        assertTrue(result.participants.single().ready)
+    }
+
+    @Test
+    fun `native participant preview is bounded and rejects unsafe profile data`() {
+        val roster = (0 until 10).map { index ->
+            mapOf(
+                "display_name" to "Guest $index",
+                "avatar_url" to "https://cdn.myanimelist.net/images/userimages/$index.jpg",
+                "role" to "guest",
+                "ready" to (index % 2 == 0),
+            )
+        }
+        assertEquals(6, parseNativeWatchPartyParticipants(roster).size)
+        assertTrue(
+            parseNativeWatchPartyParticipants(
+                listOf(
+                    mapOf(
+                        "display_name" to "Guest",
+                        "avatar_url" to "https://s4.anilist.co/avatar.png",
+                        "role" to "guest",
+                        "ready" to true,
+                    ),
+                ),
+            ).single().avatarUrl!!.startsWith("https://s4.anilist.co/"),
+        )
+        assertTrue(
+            parseNativeWatchPartyParticipants(
+                listOf(
+                    mapOf(
+                        "display_name" to "Guest",
+                        "avatar_url" to "https://evil.example/avatar.png",
+                        "role" to "guest",
+                        "ready" to true,
+                    ),
+                ),
+            ).isEmpty(),
+        )
+        assertTrue(
+            parseNativeWatchPartyParticipants(
+                listOf(
+                    mapOf(
+                        "display_name" to "person@example.com",
+                        "role" to "guest",
+                        "ready" to true,
+                    ),
+                ),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `native participant avatar download has a hard byte bound`() {
+        assertEquals(
+            4,
+            readBoundedWatchPartyAvatar(ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)), 4)
+                ?.size,
+        )
+        assertNull(
+            readBoundedWatchPartyAvatar(ByteArrayInputStream(ByteArray(5)), 4),
+        )
+    }
+
+    @Test
+    fun `Watch Together HUD rejects malformed codes and unsafe URLs`() {
+        val malformedCode = parseNativeWatchPartyHudResult(
+            mapOf(
+                "ok" to true,
+                "roomCode" to "A3456789",
+                "watchUrl" to "https://tetotv-bot.wisp.uno/watch?room=A3456789",
+                "message" to "bad code",
+            ),
+        )
+        val ambiguousDigits = parseNativeWatchPartyHudResult(
+            mapOf(
+                "ok" to true,
+                "roomCode" to "12345678",
+                "watchUrl" to "https://tetotv-bot.wisp.uno/watch?room=12345678",
+                "message" to "bad digits",
+            ),
+        )
+        val credentialUrl = parseNativeWatchPartyHudResult(
+            mapOf(
+                "ok" to true,
+                "roomCode" to "23456789",
+                "watchUrl" to "https://secret@example.test/watch",
+                "message" to "bad URL",
+            ),
+        )
+        val capabilityQuery = parseNativeWatchPartyHudResult(
+            mapOf(
+                "ok" to true,
+                "roomCode" to "23456789",
+                "watchUrl" to
+                    "https://tetotv-bot.wisp.uno/watch?room=23456789&host_token=secret",
+                "message" to "bad query",
+            ),
+        )
+
+        assertFalse(malformedCode.ok)
+        assertFalse(ambiguousDigits.ok)
+        assertFalse(credentialUrl.ok)
+        assertFalse(capabilityQuery.ok)
+    }
+
     @Test
     fun `HLS media source factory remains available at runtime`() {
         val factory = Class.forName(
@@ -219,6 +367,181 @@ class Media3PlayerSafetyTest {
                 requestedCheckpointKey = "154587:2",
                 requestedGeneration = 8,
                 action = "stop",
+            ),
+        )
+    }
+
+    @Test
+    fun `attached guest local transport is rejected while coordinator play bypasses lock`() {
+        var playing = false
+        var seekTarget = -1L
+
+        for (
+            origin in listOf(
+                NativeTransportCommandOrigin.LOCAL_HUD,
+                NativeTransportCommandOrigin.LOCAL_KEY,
+                NativeTransportCommandOrigin.MEDIA_SESSION,
+            )
+        ) {
+            assertFalse(
+                dispatchNativeTransportCommand(
+                    guestControlsLocked = true,
+                    origin = origin,
+                    action = "play",
+                    play = { playing = true },
+                    pause = { playing = false },
+                    seek = { seekTarget = it },
+                ),
+            )
+        }
+        assertFalse(playing)
+
+        assertTrue(
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+                action = "play",
+            ),
+        )
+        assertTrue(
+            dispatchNativeTransportCommand(
+                guestControlsLocked = true,
+                origin = NativeTransportCommandOrigin.WATCH_PARTY_COORDINATOR,
+                action = "play",
+                play = { playing = true },
+                pause = { playing = false },
+                seek = { seekTarget = it },
+            ),
+        )
+        assertTrue(playing)
+        assertEquals(-1L, seekTarget)
+    }
+
+    @Test
+    fun `Watch Party media transition dismissal requires exact native generation`() {
+        assertTrue(
+            nativePlayerSessionMatches(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+            ),
+        )
+        assertFalse(
+            nativePlayerSessionMatches(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:3",
+                requestedGeneration = 8,
+            ),
+        )
+        assertFalse(
+            nativePlayerSessionMatches(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 7,
+            ),
+        )
+    }
+
+    @Test
+    fun `guest MediaSession rejects playback and settings but preserves volume`() {
+        for (
+            command in listOf(
+                Player.COMMAND_PLAY_PAUSE,
+                Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+                Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS,
+                Player.COMMAND_SET_MEDIA_ITEM,
+                Player.COMMAND_SET_VIDEO_SURFACE,
+            )
+        ) {
+            assertTrue(nativeGuestLockBlocksMediaSessionCommand(true, command))
+        }
+        assertFalse(
+            nativeGuestLockBlocksMediaSessionCommand(
+                true,
+                Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
+            ),
+        )
+        assertFalse(
+            nativeGuestLockBlocksMediaSessionCommand(
+                true,
+                Player.COMMAND_SET_VOLUME,
+            ),
+        )
+        assertFalse(
+            nativeGuestLockBlocksMediaSessionCommand(
+                false,
+                Player.COMMAND_PLAY_PAUSE,
+            ),
+        )
+    }
+
+    @Test
+    fun `guest key lock consumes local player shortcuts but not D-pad or volume`() {
+        for (
+            keyCode in listOf(
+                KeyEvent.KEYCODE_K,
+                KeyEvent.KEYCODE_S,
+                KeyEvent.KEYCODE_C,
+                KeyEvent.KEYCODE_I,
+                KeyEvent.KEYCODE_MENU,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            )
+        ) {
+            assertTrue(nativeGuestLockBlocksLocalKey(true, keyCode))
+        }
+        assertFalse(nativeGuestLockBlocksLocalKey(true, KeyEvent.KEYCODE_DPAD_LEFT))
+        assertFalse(nativeGuestLockBlocksLocalKey(true, KeyEvent.KEYCODE_VOLUME_UP))
+        assertFalse(nativeGuestLockBlocksLocalKey(false, KeyEvent.KEYCODE_K))
+    }
+
+    @Test
+    fun `ended Media3 session stays attached for guests but completes for hosts`() {
+        assertFalse(nativePlayerShouldFinishAtEnd(guestControlsLocked = true))
+        assertTrue(nativePlayerShouldFinishAtEnd(guestControlsLocked = false))
+    }
+
+    @Test
+    fun `guest lock role transitions require exact session and monotonic sequence`() {
+        assertTrue(
+            nativeWatchPartyStateMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+                stateSequence = 4,
+            ),
+        )
+        assertFalse(
+            nativeWatchPartyStateMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:3",
+                requestedGeneration = 8,
+                stateSequence = 4,
+            ),
+        )
+        assertFalse(
+            nativeWatchPartyStateMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 7,
+                stateSequence = 4,
+            ),
+        )
+        assertFalse(
+            nativeWatchPartyStateMatchesSession(
+                activeCheckpointKey = "154587:2",
+                activeGeneration = 8,
+                requestedCheckpointKey = "154587:2",
+                requestedGeneration = 8,
+                stateSequence = 4,
+                lastStateSequence = 4,
             ),
         )
     }

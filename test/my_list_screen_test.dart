@@ -579,7 +579,11 @@ void main() {
 
       final navigation = find.byKey(const ValueKey('main-navigation'));
       final calendar = find.byKey(const ValueKey('main-nav-calendar'));
+      final watchTogether = find.byKey(
+        const ValueKey('main-nav-watch-together'),
+      );
       final settings = find.byKey(const ValueKey('main-nav-settings'));
+      expect(watchTogether, findsOneWidget, reason: 'width $width');
       expect(settings, findsOneWidget, reason: 'width $width');
       expect(
         find.descendant(
@@ -590,9 +594,16 @@ void main() {
         reason: 'My List must stay visibly labelled at width $width',
       );
       expect(
-        tester.getRect(settings).left - tester.getRect(calendar).right,
+        tester.getRect(watchTogether).left - tester.getRect(calendar).right,
         inInclusiveRange(2, 4),
-        reason: 'Settings must sit immediately after Calendar at width $width',
+        reason:
+            'Watch Together must sit immediately after Calendar at width $width',
+      );
+      expect(
+        tester.getRect(settings).left - tester.getRect(watchTogether).right,
+        inInclusiveRange(2, 4),
+        reason:
+            'Settings must sit immediately after Watch Together at width $width',
       );
       expect(
         tester.getSize(navigation).height,
@@ -795,7 +806,17 @@ void main() {
       findsOneWidget,
     );
     expect(
-      tester.getRect(settings).left - tester.getRect(calendar).right,
+      tester
+              .getRect(find.byKey(const ValueKey('main-nav-watch-together')))
+              .left -
+          tester.getRect(calendar).right,
+      inInclusiveRange(2, 4),
+    );
+    expect(
+      tester.getRect(settings).left -
+          tester
+              .getRect(find.byKey(const ValueKey('main-nav-watch-together')))
+              .right,
       inInclusiveRange(2, 4),
     );
     expect(tester.getSize(navigation).height, 96);
@@ -1021,6 +1042,16 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();
+    final watchTogetherDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-watch-together')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(watchTogetherDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
     final calendarDetector = tester.widget<FocusableActionDetector>(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-calendar')),
@@ -1028,6 +1059,10 @@ void main() {
       ),
     );
     expect(calendarDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(watchTogetherDetector.focusNode!.hasFocus, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();

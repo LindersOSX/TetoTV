@@ -148,17 +148,27 @@ broker restart can end an active pairing session.
 ## Watch Together
 
 Watch Together is optional. Creating or joining a room sends the Wispbyte
-TetoTV service an eight-character room code, a high-entropy room capability,
-public catalog identity such as AniList title ID and episode number, an
-optional opaque release-timeline fingerprint, playback position and
-play/pause state, readiness counts, and request timing. It does not send a
-stream URL, HTTP header, Plex or Jellyfin address/token, debrid credential,
-magnet link, local filename/path, or video/audio bytes.
+TetoTV service an eight-digit room code containing only 2 through 9 and a
+high-entropy room capability. Capability-authenticated room members can see a
+bounded roster containing a public display name, an optional HTTPS avatar from
+an allowlisted AniList or MyAnimeList image host, Host or Guest role, and
+readiness. When no safe tracker profile is available, the app shares no
+tracker identity and the service uses an anonymous Host or Guest name with
+deterministic initials. Tracker provider, account/slot ID, email address,
+OAuth identifier, and token are never included in the roster payload.
 
-Room state and hashed capabilities are held only in the bot process, are
-bounded, and expire automatically within six hours or sooner after inactivity.
-The service uses ordinary connection metadata for rate limiting and abuse
-prevention. There is no room history or TetoTV user profile database.
+The room also synchronizes public catalog identity such as AniList title ID
+and episode number, an optional opaque release-timeline fingerprint, playback
+position and play/pause state, readiness counts, and request timing. It does
+not send a stream URL, HTTP header, Plex or Jellyfin address/token, debrid
+credential, magnet link, local filename/path, or video/audio bytes.
+
+Room state, the roster, and hashed capabilities are held only in the bot
+process, are bounded, and expire automatically within six hours or sooner
+after inactivity. The service uses ordinary connection metadata for rate
+limiting and abuse prevention. There is no room history or TetoTV user profile
+database. TetoTV does not put room codes, participant names, or avatar URLs in
+diagnostics, crash reports, persistence, or analytics.
 
 The public <https://tetotv-bot.wisp.uno/watch> page can join a room and play a
 video selected through the browser's local file picker. The selected file is

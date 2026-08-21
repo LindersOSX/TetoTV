@@ -32,7 +32,9 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_media_follower.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_playback_coordinator.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -58,6 +60,13 @@ NativePlayerReturnNavigation nativePlayerReturnNavigationForStatus(
   'cancelled' => NativePlayerReturnNavigation.previousRoute,
   _ => NativePlayerReturnNavigation.none,
 };
+
+/// A completed Media3 activity may advance only while this device still owns
+/// playback decisions. Attached guests wait for the host's next catalog media
+/// snapshot, which the global Watch Together follower resolves locally.
+bool nativePlayerMayAdvanceAfterCompletion({
+  required bool guestControlsLocked,
+}) => !guestControlsLocked;
 
 /// Runs terminal-player cleanup without letting optional bookkeeping prevent
 /// the user from leaving playback. Each operation is isolated so one failed
@@ -217,8 +226,12 @@ class _NativeMedia3PlayerScreenState
   List<PlaybackStreamOption> _directStreamOptions = const [];
   StreamSubscription<WebStreamSearchProgress>? _sourceDiscoverySubscription;
   StreamSubscription<NativePlaybackProgress>? _nativeProgressSubscription;
+  late final VoidCallback _unregisterNativeWatchPartyHud;
   late final WatchPartyPlaybackEngineHandle _watchPartyHandle;
   late final WatchPartyPlaybackCoordinator _watchPartyPlayback;
+  late final WatchPartyNativePlayerSessionController
+  _nativePlayerSessionRegistration;
+  final Object _nativePlayerSessionOwner = Object();
   late final bool _ownsWatchPartyPlayback;
   SeriesPlaybackPreferences _preferences = const SeriesPlaybackPreferences();
   PlaybackAudioPreference _globalAudioPreference = PlaybackAudioPreference.dub;
@@ -242,6 +255,9 @@ class _NativeMedia3PlayerScreenState
   Duration _nativePlaybackPosition = Duration.zero;
   Duration _nativePlaybackDuration = Duration.zero;
   bool _nativePlaybackIsPlaying = false;
+  bool _nativeGuestControlsLocked = false;
+  String? _nativeWatchPartyStatus;
+  int _nativeWatchPartyStateSequence = 1;
   Future<void> _nativeAudioSelectionOperation = Future.value();
   bool _preserveNextEpisodePreparation = false;
   bool _nativeReleaseFailed = false;
@@ -337,6 +353,84 @@ class _NativeMedia3PlayerScreenState
         position: _nativePlaybackPosition,
         duration: _nativePlaybackDuration,
       );
+    }
+  }
+
+  Future<NativeWatchPartyHudResponse> _handleNativeWatchPartyHud(
+    NativeWatchPartyHudRequest request,
+  ) async {
+    if (!mounted ||
+        request.checkpointKey != _checkpointKey ||
+        request.playbackSessionGeneration != _watchPartyHandle.generation) {
+      return const NativeWatchPartyHudResponse(
+        ok: false,
+        message: 'This player session is no longer active.',
+      );
+    }
+    final controller = ref.read(watchPartyControllerProvider.notifier);
+    var party = ref.read(watchPartyControllerProvider);
+    if (!party.isActive) {
+      ref
+          .read(watchPartyClientProvider)
+          .setPublicIdentity(ref.read(watchPartyPublicIdentityProvider));
+      final created = await controller.create();
+      if (!mounted) {
+        return const NativeWatchPartyHudResponse(
+          ok: false,
+          message: 'This player session is no longer active.',
+        );
+      }
+      party = ref.read(watchPartyControllerProvider);
+      if (!created || !party.isActive) {
+        return NativeWatchPartyHudResponse(
+          ok: false,
+          message: party.message ?? 'Watch Together could not create a room.',
+        );
+      }
+    }
+    final session = party.session!;
+    final participants = party.snapshot?.participants
+        .take(6)
+        .map(
+          (participant) => NativeWatchPartyHudParticipant(
+            displayName: participant.displayName,
+            avatarUrl: participant.avatarUrl,
+            role: participant.role.name,
+            ready: participant.ready,
+          ),
+        )
+        .toList(growable: false);
+    return NativeWatchPartyHudResponse(
+      ok: true,
+      roomCode: session.roomCode,
+      watchUrl: session.watchUrl.toString(),
+      status: watchPartyPlayerStatus(party),
+      participants: participants ?? const <NativeWatchPartyHudParticipant>[],
+      message:
+          'Share this code or open the website on a phone. Closing this panel keeps the room active.',
+    );
+  }
+
+  Future<void> _pushNativeWatchPartyState({
+    required int sequence,
+    required bool guestControlsLocked,
+    required String? status,
+  }) async {
+    // The role may change during the short Activity startup window before its
+    // generation guard is attached. Retry only the latest transition; stale
+    // updates are rejected here and again by the native sequence guard.
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (!mounted || sequence != _nativeWatchPartyStateSequence) return;
+      final applied = await AndroidTvBridge.instance
+          .updateNativePlayerWatchPartyState(
+            checkpointKey: _checkpointKey,
+            playbackSessionGeneration: _watchPartyHandle.generation,
+            guestControlsLocked: guestControlsLocked,
+            stateSequence: sequence,
+            status: status,
+          );
+      if (applied) return;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
     }
   }
 
@@ -445,6 +539,43 @@ class _NativeMedia3PlayerScreenState
         );
       },
     );
+    _nativePlayerSessionRegistration = ref.read(
+      watchPartyNativePlayerSessionProvider.notifier,
+    );
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      _nativePlayerSessionRegistration.bind(
+        _nativePlayerSessionOwner,
+        WatchPartyNativePlayerSession(
+          checkpointKey: _checkpointKey,
+          playbackSessionGeneration: _watchPartyHandle.generation,
+        ),
+      );
+    });
+    _unregisterNativeWatchPartyHud = AndroidTvBridge.instance
+        .registerNativeWatchPartyHudHandler(_handleNativeWatchPartyHud);
+    final initialParty = ref.read(watchPartyControllerProvider);
+    _nativeGuestControlsLocked = initialParty.guestPlaybackControlsLocked;
+    _nativeWatchPartyStatus = watchPartyPlayerStatus(initialParty);
+    ref.listenManual(watchPartyControllerProvider, (_, next) {
+      final locked = next.guestPlaybackControlsLocked;
+      final status = watchPartyPlayerStatus(next);
+      if (!mounted ||
+          locked == _nativeGuestControlsLocked &&
+              status == _nativeWatchPartyStatus) {
+        return;
+      }
+      _nativeGuestControlsLocked = locked;
+      _nativeWatchPartyStatus = status;
+      final sequence = ++_nativeWatchPartyStateSequence;
+      unawaited(
+        _pushNativeWatchPartyState(
+          sequence: sequence,
+          guestControlsLocked: locked,
+          status: status,
+        ),
+      );
+    });
     _nativeProgressSubscription = AndroidTvBridge
         .instance
         .nativePlaybackProgress
@@ -491,6 +622,9 @@ class _NativeMedia3PlayerScreenState
         });
         final pendingFailoverNotice = _pendingFailoverNotice;
         _pendingFailoverNotice = null;
+        final party = ref.read(watchPartyControllerProvider);
+        _nativeGuestControlsLocked = party.guestPlaybackControlsLocked;
+        _nativeWatchPartyStatus = watchPartyPlayerStatus(party);
         final result = await AndroidTvBridge.instance.startNativePlayer(
           source: Uri.parse(_source),
           title: widget.title,
@@ -516,9 +650,9 @@ class _NativeMedia3PlayerScreenState
           trustedPlaybackProxy: WebPlaybackProxy.instance
               .isOwnedPlaybackProxyUri(_currentStream.uri),
           failoverNotice: pendingFailoverNotice,
-          watchPartyStatus: watchPartyPlayerStatus(
-            ref.read(watchPartyControllerProvider),
-          ),
+          watchPartyStatus: _nativeWatchPartyStatus,
+          watchPartyGuestControlsLocked: _nativeGuestControlsLocked,
+          watchPartyStateSequence: _nativeWatchPartyStateSequence,
           audioLanguage: _preferences.audioPreferenceSet
               ? _preferences.audioLanguage
               : effectiveAudio.audioLanguage,
@@ -612,10 +746,25 @@ class _NativeMedia3PlayerScreenState
         }
 
         switch (result.status) {
+          case 'watch_party_transition':
+            setState(() {
+              _status = 'Following the host to the next episode…';
+              _diagnostic = null;
+            });
+            return;
           case 'completed':
           case 'ended':
             await _syncProgress();
             if (!mounted) return;
+            if (!nativePlayerMayAdvanceAfterCompletion(
+              guestControlsLocked: _nativeGuestControlsLocked,
+            )) {
+              setState(() {
+                _status = 'Waiting for the host to choose what plays next…';
+                _diagnostic = null;
+              });
+              return;
+            }
             await _offerNextEpisode();
             return;
           case 'retry':
@@ -1413,6 +1562,11 @@ class _NativeMedia3PlayerScreenState
 
   Future<void> _offerNextEpisode() async {
     if (!mounted) return;
+    if (!nativePlayerMayAdvanceAfterCompletion(
+      guestControlsLocked: _nativeGuestControlsLocked,
+    )) {
+      return;
+    }
     if (!_animeFeaturesEnabled) {
       widget.libraryPlayback?.markCompleted(
         position: _nativePlaybackDuration > Duration.zero
@@ -1665,6 +1819,10 @@ class _NativeMedia3PlayerScreenState
 
   @override
   void dispose() {
+    _unregisterNativeWatchPartyHud();
+    scheduleMicrotask(
+      () => _nativePlayerSessionRegistration.unbind(_nativePlayerSessionOwner),
+    );
     _watchPartyPlayback.unbindEngine(_watchPartyHandle);
     if (_ownsWatchPartyPlayback) unawaited(_watchPartyPlayback.dispose());
     if (!_preserveNextEpisodePreparation && widget.episode != null) {

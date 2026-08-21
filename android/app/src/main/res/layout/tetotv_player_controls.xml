@@ -294,7 +294,7 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_fix_video"
                             android:nextFocusLeft="@id/tetotv_picture_mode"
-                            android:nextFocusRight="@id/tetotv_player_sources"
+                            android:nextFocusRight="@id/tetotv_watch_party"
                             android:src="@drawable/tetotv_ic_player" />
 
                         <TextView
@@ -319,12 +319,34 @@
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_sources"
                             android:nextFocusLeft="@id/tetotv_fix_video"
-                            android:nextFocusRight="@id/tetotv_player_options"
+                            android:nextFocusRight="@id/tetotv_watch_party"
                             android:src="@drawable/tetotv_ic_sources" />
 
                         <TextView
                             style="@style/TetoTVPlayerControlLabel"
                             android:text="@string/tetotv_player_sources_short" />
+                    </LinearLayout>
+
+                    <Space
+                        android:layout_width="8dp"
+                        android:layout_height="1dp" />
+
+                    <LinearLayout
+                        android:id="@+id/tetotv_watch_party_control"
+                        style="@style/TetoTVPlayerControlPill"
+                        android:addStatesFromChildren="true">
+
+                        <ImageButton
+                            android:id="@+id/tetotv_watch_party"
+                            style="@style/TetoTVPlayerControlIcon"
+                            android:contentDescription="@string/tetotv_player_watch_party"
+                            android:nextFocusLeft="@id/tetotv_fix_video"
+                            android:nextFocusRight="@id/tetotv_player_options"
+                            android:src="@drawable/tetotv_ic_watch_party" />
+
+                        <TextView
+                            style="@style/TetoTVPlayerControlLabel"
+                            android:text="@string/tetotv_player_watch_party_short" />
                     </LinearLayout>
 
                     <Space
@@ -340,7 +362,7 @@
                             android:id="@+id/tetotv_player_options"
                             style="@style/TetoTVPlayerControlIcon"
                             android:contentDescription="@string/tetotv_player_options"
-                            android:nextFocusLeft="@id/tetotv_player_sources"
+                            android:nextFocusLeft="@id/tetotv_watch_party"
                             android:src="@drawable/tetotv_ic_options" />
 
                         <TextView
