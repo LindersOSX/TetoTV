@@ -252,6 +252,7 @@ String buildRedactedDiagnosticsText({
       'sourcePairingConfigured': AppConfig.hasSourcePairingBroker,
       'crashReportingEndpointConfigured': AppConfig.hasCrashReportEndpoint,
       'diagnosticEndpointConfigured': AppConfig.hasDiagnosticReportEndpoint,
+      'watchTogetherConfigured': AppConfig.hasWatchTogether,
       'optionalReleaseResolverConfigured': AppConfig.hasReleaseResolver,
       'oauthAndSupportShareOrigin': _sameOrigin(
         AppConfig.authBrokerBaseUrl,

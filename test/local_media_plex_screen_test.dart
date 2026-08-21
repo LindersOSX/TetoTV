@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -7,6 +8,9 @@ import 'package:anime_tv/features/local_media/data/jellyfin_client.dart';
 import 'package:anime_tv/features/local_media/data/plex_client.dart';
 import 'package:anime_tv/features/local_media/domain/plex_models.dart';
 import 'package:anime_tv/features/local_media/presentation/local_media_screen.dart';
+import 'package:anime_tv/features/player/domain/library_playback_request.dart';
+import 'package:anime_tv/features/player/presentation/library_tv_player_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -39,16 +43,22 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       Map<Object?, Object?>? playerArguments;
+      final playerExit = Completer<Map<String, Object?>>();
+      addTearDown(() {
+        if (!playerExit.isCompleted) {
+          playerExit.complete({
+            'status': 'exit',
+            'positionMs': 0,
+            'durationMs': 0,
+          });
+        }
+      });
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(androidChannel, (call) async {
             if (call.method == 'startNativePlayer') {
               playerArguments = (call.arguments as Map)
                   .cast<Object?, Object?>();
-              return <String, Object?>{
-                'status': 'exit',
-                'positionMs': 0,
-                'durationMs': 0,
-              };
+              return playerExit.future;
             }
             return null;
           });
@@ -76,6 +86,9 @@ void main() {
           overrides: [
             localMediaControllerProvider.overrideWith((_) => localController),
             plexControllerProvider.overrideWith((_) => plexController),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _Media3SettingsController(),
+            ),
           ],
           child: const MaterialApp(home: LocalMediaScreen()),
         ),
@@ -115,8 +128,80 @@ void main() {
         isTrue,
       );
 
+      final rowFocus = tester
+          .widget<FocusableActionDetector>(
+            find.descendant(
+              of: find.byKey(const ValueKey('plex-item-movie-1')),
+              matching: find.byType(FocusableActionDetector),
+            ),
+          )
+          .focusNode!;
+      rowFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'top-level.active-navigation',
+      );
+
       await tester.tap(find.text('Movie One'));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 450));
+
+      final libraryPlayer = tester.widget<LibraryTvPlayerScreen>(
+        find.byType(LibraryTvPlayerScreen),
+      );
+      final request = libraryPlayer.request;
+      expect(request.source.toString(), isNot(contains(_token)));
+      expect(request.headers['X-Plex-Token'], _token);
+      expect(request.artworkUrl, isNot(contains(_token)));
+      expect(
+        request.allowsFlutterEngines,
+        isFalse,
+        reason: 'Plex credentials stay inside origin-scoped native Media3',
+      );
+      expect(request.isolation.animeTrackingEnabled, isFalse);
+      expect(request.isolation.animeCheckpointEnabled, isFalse);
+      expect(request.isolation.aniSkipEnabled, isFalse);
+      expect(request.isolation.nextEpisodeEnabled, isFalse);
+      expect(request.checkpointKey, isNot(contains(_token)));
+      expect(request.timelineIdentity, isNot(contains(_token)));
+
+      final report = request.onProgress!;
+      final firstSample = DateTime.utc(2026, 8, 20, 12);
+      final reportsBeforeSamples = plexClient.timelineStates.length;
+      await report(
+        LibraryPlaybackProgress(
+          position: const Duration(seconds: 20),
+          duration: const Duration(minutes: 90),
+          playing: true,
+          sampledAt: firstSample,
+        ),
+      );
+      expect(plexClient.timelineStates.length, reportsBeforeSamples + 1);
+      await report(
+        LibraryPlaybackProgress(
+          position: const Duration(seconds: 22),
+          duration: const Duration(minutes: 90),
+          playing: true,
+          sampledAt: firstSample.add(const Duration(seconds: 2)),
+        ),
+      );
+      expect(
+        plexClient.timelineStates.length,
+        reportsBeforeSamples + 1,
+        reason: 'ordinary progress writes are throttled before secure storage',
+      );
+      await report(
+        LibraryPlaybackProgress(
+          position: const Duration(seconds: 23),
+          duration: const Duration(minutes: 90),
+          playing: false,
+          sampledAt: firstSample.add(const Duration(seconds: 3)),
+        ),
+      );
+      expect(plexClient.timelineStates.last, isFalse);
 
       expect(playerArguments, isNotNull);
       expect(
@@ -129,7 +214,27 @@ void main() {
       expect(headers['X-Plex-Token'], _token);
       expect(headers, isNot(contains('Accept')));
       expect(playerArguments!['trustedLocalSource'], isTrue);
-      expect(playerArguments, isNot(contains('artworkUrl')));
+      expect(playerArguments!['libraryPlayback'], isTrue);
+      expect(
+        playerArguments!['allowEngineSwitch'],
+        isFalse,
+        reason: 'authenticated Plex headers must stay in native Media3',
+      );
+      expect(
+        playerArguments!['artworkUrl'],
+        'https://plex.example.com/base/library/metadata/movie-1/thumb/1',
+      );
+      expect(playerArguments!['artworkUrl'], isNot(contains(_token)));
+      playerExit.complete({'status': 'exit', 'positionMs': 0, 'durationMs': 0});
+      await tester.pumpAndSettle();
+      if (find.byType(LibraryTvPlayerScreen).evaluate().isNotEmpty) {
+        Navigator.of(tester.element(find.byType(LibraryTvPlayerScreen))).pop();
+        await tester.pumpAndSettle();
+      }
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      expect(plexClient.timelineStates, containsAllInOrder([true, false]));
       debugDefaultTargetPlatformOverride = null;
     },
   );
@@ -151,6 +256,7 @@ const _token = 'plex-access-token-123456';
 
 class _ScreenPlexClient extends PlexClient {
   final loadedImages = <Uri>[];
+  final timelineStates = <bool>[];
 
   final library = const PlexLibrary(
     key: '1',
@@ -201,4 +307,26 @@ class _ScreenPlexClient extends PlexClient {
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
     );
   }
+
+  @override
+  Future<void> reportTimeline(
+    PlexConnection connection,
+    PlexMediaItem item, {
+    required Duration position,
+    required bool playing,
+  }) async {
+    timelineStates.add(playing);
+  }
+}
+
+class _Media3SettingsController extends SettingsPreferencesController {
+  _Media3SettingsController() : super(const FlutterSecureStorage()) {
+    state = const SettingsPreferences(
+      loaded: true,
+      preferredPlayer: PreferredPlayer.media3,
+    );
+  }
+
+  @override
+  Future<void> load() async {}
 }

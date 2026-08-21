@@ -203,7 +203,7 @@ void main() {
     ('phone', const Size(390, 844)),
   ]) {
     testWidgets(
-      'Local Media entry stays hidden outside Developer Mode on ${layout.$1}',
+      'Media and Watch Together stay available outside Developer Mode on ${layout.$1}',
       (tester) async {
         FlutterSecureStorage.setMockInitialValues({});
         tester.view.physicalSize = layout.$2;
@@ -217,9 +217,19 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Streaming'));
         await tester.pumpAndSettle();
+        for (
+          var scroll = 0;
+          scroll < 16 && find.text('Open rooms').evaluate().isEmpty;
+          scroll++
+        ) {
+          await tester.drag(find.byType(ListView).last, const Offset(0, -450));
+          await tester.pumpAndSettle();
+        }
 
-        expect(find.text('Local media, Jellyfin & Plex'), findsNothing);
-        expect(find.text('Open media'), findsNothing);
+        expect(find.text('Local media, Jellyfin & Plex'), findsOneWidget);
+        expect(find.text('Open media'), findsOneWidget);
+        expect(find.text('Watch Together'), findsOneWidget);
+        expect(find.text('Open rooms'), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
@@ -1040,7 +1050,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.local-media',
+      'accounts.streaming.watch-together',
+    );
+    expect(find.text('Open rooms'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.watch-together',
     );
     expect(tester.takeException(), isNull);
   });

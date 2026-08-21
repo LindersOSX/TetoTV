@@ -82,6 +82,10 @@ class MarketplaceAddon {
     this.payloadUri,
     this.inlinePayload,
     this.userConfigDefaults = const {},
+    this.reportedWorking,
+    this.reportedBroken = false,
+    this.isDeprecated = false,
+    this.lastWorkingVersion,
   });
 
   final String id;
@@ -99,6 +103,14 @@ class MarketplaceAddon {
   final String? inlinePayload;
   final Map<String, String> userConfigDefaults;
 
+  /// Optional community-catalog metadata. This is advisory only: executable
+  /// compatibility is still validated from the separately downloaded
+  /// manifest and payload.
+  final bool? reportedWorking;
+  final bool reportedBroken;
+  final bool isDeprecated;
+  final String? lastWorkingVersion;
+
   bool get isOnlineStreamProvider => type == 'onlinestream-provider';
   bool get isJavascript => language.toLowerCase() == 'javascript';
   bool get isTypescript => language.toLowerCase() == 'typescript';
@@ -107,19 +119,53 @@ class MarketplaceAddon {
 
   MarketplaceAddon mergeManifest(MarketplaceAddon manifest) => MarketplaceAddon(
     id: id,
-    name: manifest.name,
-    description: manifest.description,
-    author: manifest.author,
+    name: manifest.name.isEmpty ? name : manifest.name,
+    description: manifest.description.isEmpty
+        ? description
+        : manifest.description,
+    author: manifest.author == 'Unknown' ? author : manifest.author,
     manifestUri: manifestUri,
     repositoryUrl: repositoryUrl,
-    language: manifest.language,
-    type: manifest.type,
-    locale: manifest.locale,
-    version: manifest.version,
+    language: manifest.language.isEmpty ? language : manifest.language,
+    type: manifest.type.isEmpty ? type : manifest.type,
+    locale: manifest.locale == 'unknown' ? locale : manifest.locale,
+    version: manifest.version ?? version,
     iconUri: manifest.iconUri ?? iconUri,
-    payloadUri: manifest.payloadUri,
-    inlinePayload: manifest.inlinePayload,
-    userConfigDefaults: manifest.userConfigDefaults,
+    payloadUri: manifest.payloadUri ?? payloadUri,
+    inlinePayload: manifest.inlinePayload ?? inlinePayload,
+    userConfigDefaults: manifest.userConfigDefaults.isEmpty
+        ? userConfigDefaults
+        : manifest.userConfigDefaults,
+    reportedWorking: manifest.reportedWorking ?? reportedWorking,
+    reportedBroken: reportedBroken || manifest.reportedBroken,
+    isDeprecated: isDeprecated || manifest.isDeprecated,
+    lastWorkingVersion: manifest.lastWorkingVersion ?? lastWorkingVersion,
+  );
+
+  MarketplaceAddon withCatalogStatus({
+    bool? reportedWorking,
+    bool? reportedBroken,
+    bool? isDeprecated,
+    String? lastWorkingVersion,
+  }) => MarketplaceAddon(
+    id: id,
+    name: name,
+    description: description,
+    author: author,
+    manifestUri: manifestUri,
+    repositoryUrl: repositoryUrl,
+    language: language,
+    type: type,
+    locale: locale,
+    version: version,
+    iconUri: iconUri,
+    payloadUri: payloadUri,
+    inlinePayload: inlinePayload,
+    userConfigDefaults: userConfigDefaults,
+    reportedWorking: reportedWorking ?? this.reportedWorking,
+    reportedBroken: reportedBroken ?? this.reportedBroken,
+    isDeprecated: isDeprecated ?? this.isDeprecated,
+    lastWorkingVersion: lastWorkingVersion ?? this.lastWorkingVersion,
   );
 
   Map<String, Object?> toJson() => {
@@ -135,6 +181,10 @@ class MarketplaceAddon {
     'version': version,
     'icon': iconUri?.toString(),
     'payloadURI': payloadUri?.toString(),
+    if (reportedWorking != null) 'workingTag': reportedWorking,
+    if (reportedBroken) 'brokenTag': true,
+    if (isDeprecated) 'deprecatedTag': true,
+    if (lastWorkingVersion != null) 'lastWorkingVersion': lastWorkingVersion,
     if (userConfigDefaults.isNotEmpty)
       'userConfig': {
         'fields': [
@@ -151,14 +201,18 @@ class MarketplaceAddon {
   }) {
     if (value is! Map) return null;
     final json = value.map((key, value) => MapEntry('$key', value));
-    final id = _clean(json['id'], 80);
-    final name = _clean(json['name'], 120);
+    final id = _clean(
+      _firstValue(json, const ['id', 'extensionId', 'identifier']),
+      80,
+    );
+    final name = _clean(_firstValue(json, const ['name', 'title']), 120);
     final manifest = _safeMarketplaceResourceUri(
       _firstValue(json, const [
         'manifestURI',
         'manifestUri',
         'manifestURL',
         'manifestUrl',
+        'manifest',
       ]),
       repositoryUrl: repositoryUrl,
       resourceBaseUri: resourceBaseUri,
@@ -176,8 +230,10 @@ class MarketplaceAddon {
       author: _clean(json['author'], 120) ?? 'Unknown',
       manifestUri: manifest,
       repositoryUrl: repositoryUrl,
-      language: _normalizedAddonLanguage(json['language']),
-      type: _normalizedAddonType(json['type']),
+      language: _normalizedAddonLanguage(
+        _firstValue(json, const ['language', 'runtime']),
+      ),
+      type: _normalizedAddonType(_firstValue(json, const ['type', 'kind'])),
       locale:
           (_clean(_firstValue(json, const ['lang', 'locale']), 12) ?? 'unknown')
               .toLowerCase(),
@@ -193,12 +249,38 @@ class MarketplaceAddon {
           'payloadUri',
           'payloadURL',
           'payloadUrl',
+          'sourceURI',
+          'sourceUri',
+          'sourceURL',
+          'sourceUrl',
+          'scriptURI',
+          'scriptUri',
+          'scriptURL',
+          'scriptUrl',
         ]),
         repositoryUrl: repositoryUrl,
         resourceBaseUri: resourceBaseUri,
       ),
       inlinePayload: _cleanPayload(json['payload']),
       userConfigDefaults: _userConfigDefaults(json['userConfig']),
+      reportedWorking: _optionalBool(
+        _firstValue(json, const ['workingTag', 'isWorking', 'working']),
+      ),
+      reportedBroken:
+          _optionalBool(
+            _firstValue(json, const ['brokenTag', 'isBroken', 'broken']),
+          ) ??
+          false,
+      isDeprecated:
+          _optionalBool(
+            _firstValue(json, const [
+              'deprecatedTag',
+              'isDeprecated',
+              'deprecated',
+            ]),
+          ) ??
+          false,
+      lastWorkingVersion: _clean(json['lastWorkingVersion'], 32),
     );
   }
 }
@@ -228,6 +310,22 @@ Object? _firstValue(Map<String, Object?> json, List<String> keys) {
   }
   return null;
 }
+
+bool? _optionalBool(Object? value) => switch (value) {
+  final bool result => result,
+  final num result =>
+    result == 1
+        ? true
+        : result == 0
+        ? false
+        : null,
+  final String result => switch (result.trim().toLowerCase()) {
+    'true' || 'yes' || '1' => true,
+    'false' || 'no' || '0' => false,
+    _ => null,
+  },
+  _ => null,
+};
 
 String _normalizedAddonLanguage(Object? value) {
   final language = (_clean(value, 24) ?? '').toLowerCase();
@@ -336,10 +434,25 @@ class WebStreamResult {
 }
 
 class WebProviderFailure {
-  const WebProviderFailure({required this.providerName, required this.message});
+  const WebProviderFailure({
+    required this.providerName,
+    required this.message,
+    this.providerId,
+    this.providerVersion,
+    this.repositoryHost,
+    this.executableHost,
+    this.stage,
+    this.reason,
+  });
 
   final String providerName;
   final String message;
+  final String? providerId;
+  final String? providerVersion;
+  final String? repositoryHost;
+  final String? executableHost;
+  final String? stage;
+  final String? reason;
 }
 
 class WebStreamAggregation {

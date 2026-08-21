@@ -78,6 +78,7 @@ import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
+import java.lang.ref.WeakReference
 
 internal fun nativePlaybackProgressIsPublishable(
     checkpointKey: String,
@@ -107,6 +108,7 @@ internal object NativePlayerProgressBridge {
 
     fun publish(
         checkpointKey: String,
+        playbackSessionGeneration: Int = 0,
         positionMs: Long,
         durationMs: Long,
         isPlaying: Boolean,
@@ -122,6 +124,7 @@ internal object NativePlayerProgressBridge {
         val activeChannel = channel ?: return
         val event = mapOf(
             "checkpointKey" to checkpointKey,
+            "playbackSessionGeneration" to playbackSessionGeneration,
             "positionMs" to positionMs.coerceAtLeast(0L),
             "durationMs" to durationMs,
             "isPlaying" to isPlaying,
@@ -137,6 +140,82 @@ internal object NativePlayerProgressBridge {
             Handler(Looper.getMainLooper()).post(deliver)
         }
     }
+}
+
+internal fun nativePlayerCommandMatchesSession(
+    activeCheckpointKey: String,
+    activeGeneration: Int,
+    requestedCheckpointKey: String,
+    requestedGeneration: Int,
+    action: String,
+): Boolean =
+    activeCheckpointKey.isNotBlank() &&
+        activeCheckpointKey == requestedCheckpointKey &&
+        activeGeneration > 0 &&
+        activeGeneration == requestedGeneration &&
+        action in setOf("play", "pause", "seek")
+
+/** Narrow, generation-guarded command path into the active native Activity. */
+internal object NativePlayerCommandBridge {
+    private data class ActiveSession(
+        val activity: WeakReference<Media3PlayerActivity>,
+        val checkpointKey: String,
+        val generation: Int,
+    )
+
+    @Volatile
+    private var active: ActiveSession? = null
+
+    fun attach(activity: Media3PlayerActivity, checkpointKey: String, generation: Int) {
+        if (checkpointKey.isBlank() || generation <= 0) return
+        active = ActiveSession(WeakReference(activity), checkpointKey, generation)
+    }
+
+    fun detach(activity: Media3PlayerActivity) {
+        val current = active ?: return
+        if (current.activity.get() === activity) active = null
+    }
+
+    fun dispatch(
+        checkpointKey: String,
+        generation: Int,
+        action: String,
+        positionMs: Long?,
+    ): Boolean {
+        val current = active ?: return false
+        val activity = current.activity.get() ?: run {
+            active = null
+            return false
+        }
+        if (!matches(current, activity, checkpointKey, generation, action)) return false
+        val safePositionMs = positionMs?.coerceIn(0L, 86_400_000L)
+        activity.runOnUiThread {
+            val latest = active
+            if (
+                latest != null &&
+                matches(latest, activity, checkpointKey, generation, action)
+            ) {
+                activity.applyWatchPartyCommand(action, safePositionMs)
+            }
+        }
+        return true
+    }
+
+    private fun matches(
+        session: ActiveSession,
+        activity: Media3PlayerActivity,
+        checkpointKey: String,
+        generation: Int,
+        action: String,
+    ): Boolean =
+        session.activity.get() === activity &&
+            nativePlayerCommandMatchesSession(
+                activeCheckpointKey = session.checkpointKey,
+                activeGeneration = session.generation,
+                requestedCheckpointKey = checkpointKey,
+                requestedGeneration = generation,
+                action = action,
+            )
 }
 
 internal fun safeNativeSkipTargetMs(
@@ -311,6 +390,12 @@ internal data class NativeSkipSegment(
 internal fun nativeSkipSegmentKey(segment: NativeSkipSegment): String =
     "${segment.kind}:${segment.startMs}"
 
+internal fun nativeShouldAutoFocusSkipAction(
+    controllerVisible: Boolean,
+    transportFocused: Boolean,
+    modalVisible: Boolean,
+): Boolean = !modalVisible && (!controllerVisible || transportFocused)
+
 internal fun activeNativeSkipSegment(
     positionMs: Long,
     segments: List<NativeSkipSegment>,
@@ -361,6 +446,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var displayTitle = "TetoTV"
     private var artworkUrl = ""
     private var checkpointKey = ""
+    private var playbackSessionGeneration = 0
     private var firstFrameRendered = false
     private var everFirstFrameRendered = false
     private var surfaceReady = false
@@ -403,6 +489,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private var autoSkipOutros = false
     private var hasDirectSources = false
     private var expectedSeekable = false
+    private var allowEngineSwitch = true
     private var handoffPositionOverrideMs: Long? = null
     private var videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var preferredAudioOverrideApplied = false
@@ -558,6 +645,14 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         displayTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "TetoTV" }
         artworkUrl = intent.getStringExtra(EXTRA_ARTWORK_URL).orEmpty()
         checkpointKey = intent.getStringExtra(EXTRA_CHECKPOINT_KEY).orEmpty()
+        playbackSessionGeneration =
+            intent.getIntExtra(EXTRA_PLAYBACK_SESSION_GENERATION, 0).coerceAtLeast(0)
+        intent.getStringExtra(EXTRA_FAILOVER_NOTICE)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let { notice ->
+                Toast.makeText(this, notice.take(180), Toast.LENGTH_LONG).show()
+            }
         resumeProvided = intent.getBooleanExtra(EXTRA_RESUME_PROVIDED, false)
         requestedResumeMs = intent.getLongExtra(EXTRA_RESUME_MS, 0L).coerceAtLeast(0L)
         requestedResumeUpdatedAtMs =
@@ -569,7 +664,9 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         val trustedLocalSource = intent.getBooleanExtra(EXTRA_TRUSTED_LOCAL_SOURCE, false)
         val trustedPlaybackProxy =
             intent.getBooleanExtra(EXTRA_TRUSTED_PLAYBACK_PROXY, false)
-        suppressDiscordPresence = trustedLocalSource
+        val libraryPlayback = intent.getBooleanExtra(EXTRA_LIBRARY_PLAYBACK, false)
+        allowEngineSwitch = intent.getBooleanExtra(EXTRA_ALLOW_ENGINE_SWITCH, true)
+        suppressDiscordPresence = trustedLocalSource || libraryPlayback
         if (suppressDiscordPresence) {
             // Local filenames and private media-server titles are not part of
             // the viewer's public anime activity. Never disclose them through
@@ -887,6 +984,10 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             intent.getStringExtra(EXTRA_TITLE).orEmpty()
         playerView.findViewById<TextView>(R.id.tetotv_stream_label).text =
             intent.getStringExtra(EXTRA_STREAM_LABEL).orEmpty().ifBlank { "Debrid stream" }
+        playerView.findViewById<TextView>(R.id.tetotv_watch_party_status).apply {
+            text = intent.getStringExtra(EXTRA_WATCH_PARTY_STATUS).orEmpty().take(96)
+            visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+        }
         applyNativePlayerTheme()
         updateCaptionSizeDescription()
         playerView.findViewById<ImageButton>(androidx.media3.ui.R.id.exo_rew).apply {
@@ -972,6 +1073,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         player.setMediaItem(buildMediaItem(), startPositionMs)
         player.prepare()
         player.playWhenReady = intent.getBooleanExtra(EXTRA_AUTO_PLAY, true)
+        NativePlayerCommandBridge.attach(this, checkpointKey, playbackSessionGeneration)
         playerView.showController()
         requestTransportFocus()
         armControllerAutoHide()
@@ -1751,15 +1853,66 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             )
             val focusKey = nativeSkipSegmentKey(active)
             if (
-                autoFocusedSkipSegments.add(focusKey) &&
-                !playerView.isControllerFullyVisible
+                nativeShouldAutoFocusSkipAction(
+                    controllerVisible = playerView.isControllerFullyVisible,
+                    transportFocused = nativeTransportHubHasFocus(),
+                    modalVisible =
+                        exitDialog?.isShowing == true || activeTrackDialog?.isShowing == true,
+                ) &&
+                autoFocusedSkipSegments.add(focusKey)
             ) {
-                // Never steal focus from a viewer already operating the HUD.
-                // When playback is unobstructed, retain the MPV behavior of
-                // focusing a newly available skip action once.
-                skipSegmentButton.post { skipSegmentButton.requestFocus() }
+                skipSegmentButton.post {
+                    if (
+                        activeSkipSegment == active &&
+                        nativeShouldAutoFocusSkipAction(
+                            controllerVisible = playerView.isControllerFullyVisible,
+                            transportFocused = nativeTransportHubHasFocus(),
+                            modalVisible =
+                                exitDialog?.isShowing == true ||
+                                    activeTrackDialog?.isShowing == true,
+                        )
+                    ) {
+                        skipSegmentButton.requestFocus()
+                    }
+                }
             }
         }
+    }
+
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int,
+    ) {
+        if (resultSent || playbackResourcesReleased) return
+        publishPlaybackProgress()
+    }
+
+    private fun nativeTransportHubHasFocus(): Boolean {
+        if (
+            !::rewindControlContainer.isInitialized ||
+            !::playPauseControlContainer.isInitialized ||
+            !::fastForwardControlContainer.isInitialized ||
+            !::audioControlContainer.isInitialized ||
+            !::captionControlContainer.isInitialized ||
+            !::captionSizeButton.isInitialized ||
+            !::pictureModeButton.isInitialized ||
+            !::fixVideoButton.isInitialized ||
+            !::sourcesButton.isInitialized ||
+            !::optionsButton.isInitialized
+        ) return false
+        return listOf(
+            rewindControlContainer,
+            playPauseControlContainer,
+            fastForwardControlContainer,
+            audioControlContainer,
+            captionControlContainer,
+            captionSizeButton,
+            pictureModeButton,
+            fixVideoButton,
+            sourcesButton,
+            optionsButton,
+        ).any(View::hasFocus)
     }
 
     override fun onPlayerError(error: PlaybackException) {
@@ -1780,7 +1933,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
             // Bad MP4 brands and unusual torrent containers are an engine
             // compatibility issue, not a reason to discard the selected
             // release. MPV resumes the same stream and position immediately.
-            finishWithResult(STATUS_USE_MPV)
+            finishWithResult(STATUS_FALLBACK_MPV)
         } else {
             finishWithResult(STATUS_ERROR)
         }
@@ -2306,18 +2459,18 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     private fun showPlaybackOptions(sourceButton: View) {
         handler.removeCallbacks(hideControllerRunnable)
         activeTrackDialog?.dismiss()
-        val labels = arrayOf(
+        val labels = mutableListOf(
             "Picture mode",
             "Audio tracks",
             "Closed captions",
             "Caption size",
             getString(R.string.tetotv_player_caption_background),
-            "Choose player",
         )
+        if (allowEngineSwitch) labels += "Choose player"
         try {
             val dialog = AlertDialog.Builder(this, R.style.NativePlayerTrackDialogTheme)
                 .setTitle(R.string.tetotv_player_options)
-                .setItems(labels) { picker, index ->
+                .setItems(labels.toTypedArray()) { picker, index ->
                     picker.dismiss()
                     handler.post {
                         when (index) {
@@ -2357,7 +2510,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
     }
 
     private fun showPlayerPicker(sourceButton: View) {
-        if (suppressDiscordPresence) {
+        if (!allowEngineSwitch) {
             Toast.makeText(
                 this,
                 R.string.tetotv_player_local_media3_only,
@@ -2508,6 +2661,38 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         ).show()
         finishWithResult(STATUS_USE_MPV)
         return true
+    }
+
+    internal fun applyWatchPartyCommand(action: String, positionMs: Long?) {
+        if (
+            resultSent ||
+            playbackResourcesReleased ||
+            playerCoreReleased ||
+            !::player.isInitialized
+        ) return
+        when (action) {
+            "play" -> runCatching { player.play() }
+            "pause" -> runCatching { player.pause() }
+            "seek" -> {
+                val requestedTarget = positionMs ?: return
+                val duration = safeDurationMs()
+                val target = if (duration > 0L) {
+                    requestedTarget.coerceIn(0L, duration)
+                } else {
+                    requestedTarget.coerceAtLeast(0L)
+                }
+                // Party seeks use the same guarded path as remote transport
+                // and intro/outro seeks. If Media3 cannot seek a torrent, the
+                // active coordinator survives the deterministic MPV handoff.
+                runCatching { seekOrUseMpv(target) }
+            }
+            else -> return
+        }
+        handler.post {
+            if (!resultSent && !playbackResourcesReleased && !playerCoreReleased) {
+                publishPlaybackProgress()
+            }
+        }
     }
 
     private fun seekPastSkipSegment(segment: NativeSkipSegment, announce: Boolean) {
@@ -3079,6 +3264,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         ) return
         NativePlayerProgressBridge.publish(
             checkpointKey = checkpointKey,
+            playbackSessionGeneration = playbackSessionGeneration,
             positionMs = safePositionMs(),
             durationMs = safeDurationMs(),
             isPlaying = isPlayingOverride
@@ -3218,6 +3404,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         if (!preserveDiscordPresenceForEngineHandoff) {
             DiscordRichPresenceBridge.clearPlayback()
         }
+        NativePlayerCommandBridge.detach(this)
         exitDialog?.dismiss()
         exitDialog = null
         activeTrackDialog?.dismiss()
@@ -3235,6 +3422,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
 
     private fun releasePlaybackResources() {
         if (playbackResourcesReleased) return
+        NativePlayerCommandBridge.detach(this)
         if (!playerViewReleased) {
             playerViewReleased = !::playerView.isInitialized || runCatching {
                 (playerView.videoSurfaceView as? SurfaceView)?.holder
@@ -3383,6 +3571,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_TITLE = "title"
         const val EXTRA_ARTWORK_URL = "artworkUrl"
         const val EXTRA_STREAM_LABEL = "streamLabel"
+        const val EXTRA_FAILOVER_NOTICE = "failoverNotice"
         const val EXTRA_SUBTITLE_URL = "subtitleUrl"
         const val EXTRA_SUBTITLE_MIME_TYPE = "subtitleMimeType"
         const val EXTRA_SUBTITLE_LANGUAGE = "subtitleLanguage"
@@ -3409,12 +3598,16 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val EXTRA_VIDEO_FIT = "videoFit"
         const val EXTRA_START_FROM_BEGINNING = "startFromBeginning"
         const val EXTRA_CHECKPOINT_KEY = "checkpointKey"
+        const val EXTRA_PLAYBACK_SESSION_GENERATION = "playbackSessionGeneration"
+        const val EXTRA_WATCH_PARTY_STATUS = "watchPartyStatus"
         const val EXTRA_MAL_MEDIA_ID = "malMediaId"
         const val EXTRA_EPISODE_NUMBER = "episodeNumber"
         const val EXTRA_HAS_DIRECT_SOURCES = "hasDirectSources"
         const val EXTRA_EXPECT_SEEKABLE = "expectedSeekable"
         const val EXTRA_TRUSTED_LOCAL_SOURCE = "trustedLocalSource"
         const val EXTRA_TRUSTED_PLAYBACK_PROXY = "trustedPlaybackProxy"
+        const val EXTRA_LIBRARY_PLAYBACK = "libraryPlayback"
+        const val EXTRA_ALLOW_ENGINE_SWITCH = "allowEngineSwitch"
         const val EXTRA_THEME_BACKGROUND_COLOR = "themeBackgroundColor"
         const val EXTRA_THEME_SURFACE_COLOR = "themeSurfaceColor"
         const val EXTRA_THEME_ACCENT_COLOR = "themeAccentColor"
@@ -3458,6 +3651,7 @@ class Media3PlayerActivity : ComponentActivity(), Player.Listener, AnalyticsList
         const val STATUS_ERROR = "error"
         const val STATUS_USE_MPV = "use_mpv"
         const val STATUS_USE_VLC = "use_vlc"
+        const val STATUS_FALLBACK_MPV = "fallback_mpv"
         const val STATUS_NEXT_STREAM = "next_stream"
         const val STATUS_RELEASE_FAILED = "release_failed"
 

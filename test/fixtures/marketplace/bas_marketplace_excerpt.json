@@ -1,0 +1,41 @@
+[
+  {
+    "id": "allmangaanime",
+    "name": "AllManga (Anime)",
+    "version": "1.0.0",
+    "author": "Pal",
+    "description": "AllManga (Anime) streaming provider for Seanime",
+    "type": "onlinestream-provider",
+    "language": "typescript",
+    "lang": "en",
+    "manifestURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/allmanga/manifest.json",
+    "payloadURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/refs/heads/main/src/anime/allmanga/provider.js",
+    "workingTag": false,
+    "brokenTag": true,
+    "deprecatedTag": false,
+    "lastWorkingVersion": null
+  },
+  {
+    "id": "anidb",
+    "name": "AniDB",
+    "version": "1.0.1",
+    "author": "Pal",
+    "description": "AniDB is an online streaming provider for subbed & dubbed anime in english",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en",
+    "manifestURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/anidb/manifest.json",
+    "payloadURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/anidb/provider.js",
+    "workingTag": true,
+    "brokenTag": false,
+    "deprecatedTag": false,
+    "lastWorkingVersion": "3.10.2"
+  },
+  {
+    "id": "not-an-online-provider",
+    "name": "Catalog UI plugin",
+    "manifestURI": "https://example.com/plugin/manifest.json",
+    "type": "plugin",
+    "language": "javascript"
+  }
+]

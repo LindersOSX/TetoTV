@@ -19,6 +19,11 @@ abstract final class AppConfig {
     defaultValue: 'https://tetotv-bot.wisp.uno',
   );
 
+  static const watchTogetherBaseUrl = String.fromEnvironment(
+    'WATCH_TOGETHER_BASE_URL',
+    defaultValue: 'https://tetotv-bot.wisp.uno',
+  );
+
   static const releaseResolverBaseUrl = String.fromEnvironment(
     'RELEASE_RESOLVER_BASE_URL',
   );
@@ -30,6 +35,7 @@ abstract final class AppConfig {
       crashReportBaseUrl.trim().isNotEmpty;
   static bool get hasDiagnosticReportEndpoint =>
       diagnosticReportBaseUrl.trim().isNotEmpty;
+  static bool get hasWatchTogether => watchTogetherBaseUrl.trim().isNotEmpty;
   static bool get hasReleaseResolver =>
       releaseResolverBaseUrl.trim().isNotEmpty;
 }

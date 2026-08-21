@@ -153,6 +153,47 @@ int compareWebStreamsByAudioAndQuality(
   );
 }
 
+Iterable<String> _localStreamSearchTerms(String query) => query
+    .toLowerCase()
+    .split(RegExp(r'\s+'))
+    .map((term) => term.trim())
+    .where((term) => term.isNotEmpty);
+
+bool releaseMatchesLocalStreamSearch(ReleaseCandidate release, String query) {
+  final terms = _localStreamSearchTerms(query);
+  if (terms.isEmpty) return true;
+  final searchable = [
+    release.releaseName,
+    release.provider,
+    release.sourceId,
+    release.quality,
+    release.codec,
+    release.sizeLabel,
+    release.isDubbed ? 'dub dubbed dual audio' : 'sub subtitled',
+    if (release.hasSubtitles) 'subtitles captions',
+    if (release.isHdr) 'hdr',
+    if (release.isBatch) 'batch',
+    if (release.seeders > 0) '${release.seeders} seeders',
+  ].whereType<String>().join(' ').toLowerCase();
+  return terms.every(searchable.contains);
+}
+
+bool webStreamMatchesLocalSearch(WebStreamResult stream, String query) {
+  final terms = _localStreamSearchTerms(query);
+  if (terms.isEmpty) return true;
+  final searchable = [
+    stream.title,
+    stream.providerName,
+    stream.providerId,
+    stream.quality,
+    stream.subtitleLanguage,
+    stream.uri.host,
+    stream.isDubbed ? 'dub dubbed dual audio' : 'sub subtitled',
+    if (stream.subtitleUri != null) 'subtitles captions',
+  ].whereType<String>().join(' ').toLowerCase();
+  return terms.every(searchable.contains);
+}
+
 /// Ranks automatic next-episode web candidates without changing the manual
 /// picker order. The viewer's audio choice remains authoritative; within the
 /// matching audio class, the exact provider used by the previous episode wins.
@@ -276,11 +317,14 @@ class ResolveEpisodeScreen extends ConsumerStatefulWidget {
 
 class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   final _magnetController = TextEditingController();
+  final _streamSearchController = TextEditingController();
   bool _loadingAccount = true;
   bool _loadingReleases = false;
   bool _resolving = false;
   bool _showManual = false;
   bool _showAdvancedFilters = false;
+  bool _showStreamSearch = false;
+  String _streamSearchQuery = '';
   double _progress = 0;
   String _status = 'Preparing…';
   String? _error;
@@ -1904,6 +1948,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     _preferredWebWaitTimer?.cancel();
     _autoPickDeadlineTimer?.cancel();
     _magnetController.dispose();
+    _streamSearchController.dispose();
     super.dispose();
   }
 
@@ -2080,8 +2125,17 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if ((_releases.isNotEmpty || _webStreams.isNotEmpty) && !_showManual) {
-      final filtered = _filteredAndSortedReleases(_releases);
-      final filteredWeb = _filteredWebStreams(_webStreams);
+      final filtered = _filteredAndSortedReleases(_releases)
+          .where(
+            (release) =>
+                releaseMatchesLocalStreamSearch(release, _streamSearchQuery),
+          )
+          .toList(growable: false);
+      final filteredWeb = _filteredWebStreams(_webStreams)
+          .where(
+            (stream) => webStreamMatchesLocalSearch(stream, _streamSearchQuery),
+          )
+          .toList(growable: false);
       final sourcePreferences = ref.read(settingsPreferencesProvider);
       return _StreamPicker(
         releases: filtered,
@@ -2124,7 +2178,25 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ? null
             : () => _resolveCandidate(_lastAttemptedRelease!),
         onRefresh: () => _loadConfiguredReleases(refreshWeb: true),
-        onManual: () => setState(() => _showManual = true),
+        showSearch: _showStreamSearch,
+        searchController: _streamSearchController,
+        searchQuery: _streamSearchQuery,
+        onSearchToggled: () {
+          setState(() {
+            _showStreamSearch = !_showStreamSearch;
+            if (!_showStreamSearch) {
+              _streamSearchController.clear();
+              _streamSearchQuery = '';
+            }
+          });
+        },
+        onSearchChanged: (value) => setState(() {
+          _streamSearchQuery = value.trim();
+        }),
+        onSearchCleared: () => setState(() {
+          _streamSearchController.clear();
+          _streamSearchQuery = '';
+        }),
       );
     }
     if (!_hasDebrid && _webStreams.isEmpty) {
@@ -2310,7 +2382,12 @@ class _StreamPicker extends StatelessWidget {
     required this.error,
     required this.onRetry,
     required this.onRefresh,
-    required this.onManual,
+    required this.showSearch,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchToggled,
+    required this.onSearchChanged,
+    required this.onSearchCleared,
   });
 
   final List<ReleaseCandidate> releases;
@@ -2347,7 +2424,12 @@ class _StreamPicker extends StatelessWidget {
   final String? error;
   final VoidCallback? onRetry;
   final VoidCallback onRefresh;
-  final VoidCallback onManual;
+  final bool showSearch;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final VoidCallback onSearchToggled;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onSearchCleared;
 
   List<Widget> get _debridSlivers => releases.isEmpty
       ? const []
@@ -2442,92 +2524,103 @@ class _StreamPicker extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: context.isCompactWidth ? 820 : 1260,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Choose your stream',
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
-                          ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
-                          '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Choose your stream',
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  if (debridEnabled && connectedServices.length > 1) ...[
-                    for (final service in DebridService.values.where(
-                      connectedServices.contains,
-                    )) ...[
-                      _FilterButton(
-                        label: service.shortName,
-                        selected: selectedService == service,
-                        onPressed: () => onServiceChanged(service),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    Container(
-                      width: 1,
-                      height: 32,
-                      color: palette.primaryText.withValues(alpha: .12),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${debridEnabled ? '$totalCount Debrid' : 'Debrid off'}'
+                      ' • ${webEnabled ? '$webTotalCount Web' : 'Web off'}'
+                      '${failedWebProviders + failedDebridSources > 0 ? ' • ${failedWebProviders + failedDebridSources} source issue(s)' : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                    const SizedBox(width: 8),
                   ],
-                  for (final value in _StreamLanguageFilter.values) ...[
-                    _FilterButton(
-                      label: switch (value) {
-                        _StreamLanguageFilter.all => 'ALL',
-                        _StreamLanguageFilter.sub => 'SUB',
-                        _StreamLanguageFilter.dub => 'DUB',
-                      },
-                      selected: filter == value,
-                      onPressed: () => onFilterChanged(value),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  _CompactAction(
-                    icon: showAdvancedFilters
-                        ? Icons.tune_rounded
-                        : Icons.tune_outlined,
-                    label: activeAdvancedFilters == 0
-                        ? (showAdvancedFilters
-                              ? 'Hide filters'
-                              : 'More filters')
-                        : 'Filters ($activeAdvancedFilters)',
-                    onPressed: () =>
-                        onAdvancedFiltersChanged(!showAdvancedFilters),
-                  ),
-                  const SizedBox(width: 8),
-                  _CompactAction(
-                    icon: Icons.refresh_rounded,
-                    label: 'Refresh',
-                    onPressed: onRefresh,
-                  ),
-                  const SizedBox(width: 8),
-                  if (debridEnabled)
-                    _CompactAction(
-                      icon: Icons.add_link_rounded,
-                      label: 'Magnet',
-                      onPressed: onManual,
-                    ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (debridEnabled && connectedServices.length > 1)
+                for (final service in DebridService.values.where(
+                  connectedServices.contains,
+                ))
+                  _FilterButton(
+                    label: service.shortName,
+                    selected: selectedService == service,
+                    onPressed: () => onServiceChanged(service),
+                  ),
+              for (final value in _StreamLanguageFilter.values)
+                _FilterButton(
+                  label: switch (value) {
+                    _StreamLanguageFilter.all => 'ALL',
+                    _StreamLanguageFilter.sub => 'SUB',
+                    _StreamLanguageFilter.dub => 'DUB',
+                  },
+                  selected: filter == value,
+                  onPressed: () => onFilterChanged(value),
+                ),
+              _CompactAction(
+                icon: showAdvancedFilters
+                    ? Icons.tune_rounded
+                    : Icons.tune_outlined,
+                label: activeAdvancedFilters == 0
+                    ? (showAdvancedFilters ? 'Hide filters' : 'More filters')
+                    : 'Filters ($activeAdvancedFilters)',
+                onPressed: () => onAdvancedFiltersChanged(!showAdvancedFilters),
+              ),
+              _CompactAction(
+                icon: Icons.refresh_rounded,
+                label: 'Refresh',
+                onPressed: onRefresh,
+              ),
+              _CompactAction(
+                icon: showSearch ? Icons.search_off_rounded : Icons.search,
+                label: showSearch ? 'Close search' : 'Search',
+                onPressed: onSearchToggled,
+              ),
+            ],
+          ),
+          if (showSearch) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TvTextInput(
+                    key: const ValueKey('stream-picker-search-input'),
+                    controller: searchController,
+                    autofocus: true,
+                    labelText: 'Search streams',
+                    hintText: 'Provider, group, quality, codec, dub…',
+                    keyboardTitle: 'Search this stream list',
+                    onChanged: onSearchChanged,
+                    onSubmitted: onSearchChanged,
+                  ),
+                ),
+                if (searchQuery.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  _CompactAction(
+                    icon: Icons.clear_rounded,
+                    label: 'Clear',
+                    onPressed: onSearchCleared,
+                  ),
+                ],
+              ],
+            ),
+          ],
           if (isSearching) ...[
             const SizedBox(height: 10),
             Container(
@@ -2716,9 +2809,32 @@ class _StreamPicker extends StatelessWidget {
           Expanded(
             child: releases.isEmpty && webStreams.isEmpty
                 ? Center(
-                    child: Text(
-                      'No streams match the selected filters.',
-                      style: Theme.of(context).textTheme.titleLarge,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          searchQuery.isEmpty
+                              ? Icons.filter_alt_off_rounded
+                              : Icons.search_off_rounded,
+                          size: 34,
+                          color: palette.mutedText,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          searchQuery.isEmpty
+                              ? 'No streams match the selected filters.'
+                              : 'No streams match this search.',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        if (searchQuery.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _CompactAction(
+                            icon: Icons.clear_rounded,
+                            label: 'Clear search',
+                            onPressed: onSearchCleared,
+                          ),
+                        ],
+                      ],
                     ),
                   )
                 : CustomScrollView(slivers: _orderedStreamSlivers),
@@ -2810,6 +2926,8 @@ class _WebStreamCard extends StatelessWidget {
                     '${stream.isDubbed ? 'DUB' : 'SUB'}'
                     '${stream.quality == null ? '' : ' / ${stream.quality}'}'
                     '${stream.subtitleUri == null ? '' : ' / English captions'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -2844,118 +2962,147 @@ class _ReleaseCard extends StatelessWidget {
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(18),
       focusScale: 1.015,
-      child: Container(
-        height: 126,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 17),
-        color: palette.surface,
-        child: Row(
-          children: [
-            Container(
-              width: 92,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [palette.accent, palette.secondaryAccent],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Center(
-                child: Text(
-                  release.quality?.toUpperCase() ?? 'AUTO',
-                  style: TextStyle(
-                    color: contrastForeground(palette.accent),
-                    fontSize: 19,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 560;
+          final compactMetadata = <String>[
+            release.isDubbed ? 'DUB / DUAL' : 'SUB',
+            release.provider ?? '',
+            release.seeders > 0 ? '${release.seeders} seeders' : '',
+            release.sizeLabel ?? '',
+          ].where((label) => label.isNotEmpty).join(' • ');
+          return Container(
+            height: 126,
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 14 : 22,
+              vertical: 17,
             ),
-            const SizedBox(width: 20),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    release.releaseName.replaceAll('\n', ' • '),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+            color: palette.surface,
+            child: Row(
+              children: [
+                Container(
+                  width: compact ? 64 : 92,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [palette.accent, palette.secondaryAccent],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Center(
+                    child: Text(
+                      release.quality?.toUpperCase() ?? 'AUTO',
+                      style: TextStyle(
+                        color: contrastForeground(palette.accent),
+                        fontSize: compact ? 15 : 19,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 9),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
+                ),
+                SizedBox(width: compact ? 12 : 20),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (recommended)
-                        const _MetaPill(
-                          label: 'RECOMMENDED',
-                          color: Color(0xFF67D49B),
-                        ),
-                      _MetaPill(
-                        label: release.isDubbed ? 'DUB / DUAL' : 'SUB',
-                        color: release.isDubbed
-                            ? const Color(0xFFFFB86C)
-                            : palette.secondaryAccent,
+                      Text(
+                        release.releaseName.replaceAll('\n', ' • '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
-                      if (isTvSafeRelease(release))
-                        const _MetaPill(
-                          label: 'TV SAFE',
-                          color: Color(0xFF67D49B),
+                      SizedBox(height: compact ? 6 : 9),
+                      if (compact)
+                        Text(
+                          compactMetadata,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            if (recommended)
+                              const _MetaPill(
+                                label: 'RECOMMENDED',
+                                color: Color(0xFF67D49B),
+                              ),
+                            _MetaPill(
+                              label: release.isDubbed ? 'DUB / DUAL' : 'SUB',
+                              color: release.isDubbed
+                                  ? const Color(0xFFFFB86C)
+                                  : palette.secondaryAccent,
+                            ),
+                            if (isTvSafeRelease(release))
+                              const _MetaPill(
+                                label: 'TV SAFE',
+                                color: Color(0xFF67D49B),
+                              ),
+                            if (release.hasSubtitles && release.isDubbed)
+                              _MetaPill(
+                                label: 'SUBTITLES',
+                                color: palette.secondaryAccent,
+                              ),
+                            if (release.codec case final codec?)
+                              _MetaPill(label: codec),
+                            if (release.isHdr)
+                              const _MetaPill(
+                                label: 'HDR',
+                                color: Color(0xFFFFD166),
+                              ),
+                            if (release.isBatch)
+                              const _MetaPill(label: 'BATCH'),
+                          ],
                         ),
-                      if (release.hasSubtitles && release.isDubbed)
-                        _MetaPill(
-                          label: 'SUBTITLES',
-                          color: palette.secondaryAccent,
-                        ),
-                      if (release.codec case final codec?)
-                        _MetaPill(label: codec),
-                      if (release.isHdr)
-                        const _MetaPill(label: 'HDR', color: Color(0xFFFFD166)),
-                      if (release.isBatch) const _MetaPill(label: 'BATCH'),
                     ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 18),
-            SizedBox(
-              width: 190,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    [
-                      if (release.seeders > 0) '● ${release.seeders} seeders',
-                      if (release.sizeLabel != null) release.sizeLabel!,
-                    ].join('  •  '),
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 7),
-                  Text(
-                    release.provider ?? 'User source',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: palette.mutedText,
-                      fontWeight: FontWeight.w600,
+                ),
+                if (!compact) ...[
+                  const SizedBox(width: 18),
+                  SizedBox(
+                    width: 190,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          [
+                            if (release.seeders > 0)
+                              '● ${release.seeders} seeders',
+                            if (release.sizeLabel != null) release.sizeLabel!,
+                          ].join('  •  '),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 7),
+                        Text(
+                          release.provider ?? 'User source',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: palette.mutedText,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                  const SizedBox(width: 18),
+                ] else
+                  const SizedBox(width: 10),
+                Icon(
+                  Icons.play_circle_fill_rounded,
+                  color: palette.accentBright,
+                  size: compact ? 24 : 34,
+                ),
+              ],
             ),
-            const SizedBox(width: 18),
-            Icon(
-              Icons.play_circle_fill_rounded,
-              color: palette.accentBright,
-              size: 34,
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

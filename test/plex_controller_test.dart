@@ -106,6 +106,37 @@ void main() {
   });
 
   test(
+    'hydrates a playable search result and keeps server resume time',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'local_media_plex_base_url': 'http://192.168.1.25:32400/plex',
+        'local_media_plex_access_token': _token,
+        'local_media_plex_client_identifier': _clientIdentifier,
+      });
+      final client = _FakePlexClient();
+      final controller = PlexController(storage, client);
+      addTearDown(controller.dispose);
+      await controller.load();
+      const searchResult = PlexMediaItem(
+        ratingKey: 'episode-search',
+        key: '/library/metadata/episode-search',
+        title: 'Search Episode',
+        type: PlexMediaType.episode,
+        viewOffsetMilliseconds: 42_000,
+      );
+
+      final playable = await controller.preparePlayableItem(searchResult);
+
+      expect(playable.isPlayable, isTrue);
+      expect(client.metadataRequests, ['episode-search']);
+      expect(
+        controller.serverResumePosition(searchResult),
+        const Duration(seconds: 42),
+      );
+    },
+  );
+
+  test(
     'disconnect removes the Plex token but preserves device identity',
     () async {
       FlutterSecureStorage.setMockInitialValues({
@@ -138,6 +169,7 @@ class _FakePlexClient extends PlexClient {
 
   final bool stalledPage;
   final libraryStarts = <int>[];
+  final metadataRequests = <String>[];
 
   final librariesValue = const [
     PlexLibrary(key: '1', title: 'Movies', type: PlexMediaType.movie),
@@ -231,6 +263,22 @@ class _FakePlexClient extends PlexClient {
   @override
   Future<Uint8List> imageBytes(PlexConnection connection, Uri uri) async =>
       Uint8List.fromList(const [1]);
+
+  @override
+  Future<PlexMediaItem> metadata(
+    PlexConnection connection,
+    PlexMediaItem item,
+  ) async {
+    metadataRequests.add(item.ratingKey);
+    return PlexMediaItem(
+      ratingKey: item.ratingKey,
+      key: item.key,
+      title: item.title,
+      type: item.type,
+      viewOffsetMilliseconds: item.viewOffsetMilliseconds,
+      parts: const [PlexMediaPart(key: '/library/parts/search/file.mkv')],
+    );
+  }
 }
 
 const _showOne = PlexMediaItem(

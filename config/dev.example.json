@@ -3,5 +3,6 @@
   "SOURCE_PAIRING_BROKER_BASE_URL": "https://your-source-pairing-receiver.example",
   "CRASH_REPORT_BASE_URL": "https://your-crash-receiver.example",
   "DIAGNOSTIC_REPORT_BASE_URL": "https://your-diagnostic-receiver.example",
+  "WATCH_TOGETHER_BASE_URL": "https://your-watch-together-service.example",
   "RELEASE_RESOLVER_BASE_URL": ""
 }

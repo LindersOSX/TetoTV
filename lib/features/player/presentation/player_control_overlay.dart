@@ -23,6 +23,25 @@ bool consumeHiddenPlayerHudDownRepeat({
   return isRepeat && !controlsVisible && key == LogicalKeyboardKey.arrowDown;
 }
 
+/// A newly available Skip Intro/Outro action may take focus once when playback
+/// itself owns focus, or when the viewer is already navigating the transport
+/// HUD. Modal routes and unrelated controls remain authoritative.
+bool shouldAutoFocusSkipAction({
+  required bool controlsVisible,
+  required bool transportFocused,
+  required bool playerRouteIsCurrent,
+  bool handoffInProgress = false,
+}) =>
+    playerRouteIsCurrent &&
+    !handoffInProgress &&
+    (!controlsVisible || transportFocused);
+
+class PlayerSkipAutoFocusGate {
+  final Set<String> _claimedSegments = {};
+
+  bool claim(String segmentKey) => _claimedSegments.add(segmentKey);
+}
+
 Duration playerSeekTarget({
   required Duration position,
   required Duration offset,

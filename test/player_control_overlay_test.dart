@@ -5,6 +5,61 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('skip action takes focus only from playback or the transport HUD', () {
+    expect(
+      shouldAutoFocusSkipAction(
+        controlsVisible: false,
+        transportFocused: false,
+        playerRouteIsCurrent: true,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldAutoFocusSkipAction(
+        controlsVisible: true,
+        transportFocused: true,
+        playerRouteIsCurrent: true,
+      ),
+      isTrue,
+      reason: 'a visible transport HUD must yield to a new intro/outro action',
+    );
+    expect(
+      shouldAutoFocusSkipAction(
+        controlsVisible: true,
+        transportFocused: false,
+        playerRouteIsCurrent: true,
+      ),
+      isFalse,
+      reason: 'unrelated player controls keep their viewer-selected focus',
+    );
+    expect(
+      shouldAutoFocusSkipAction(
+        controlsVisible: false,
+        transportFocused: false,
+        playerRouteIsCurrent: false,
+      ),
+      isFalse,
+      reason: 'options, track, and confirmation dialogs own focus',
+    );
+    expect(
+      shouldAutoFocusSkipAction(
+        controlsVisible: false,
+        transportFocused: false,
+        playerRouteIsCurrent: true,
+        handoffInProgress: true,
+      ),
+      isFalse,
+    );
+  });
+
+  test('skip autofocus is claimed once per intro and once per outro', () {
+    final gate = PlayerSkipAutoFocusGate();
+    expect(gate.claim('opening:60000'), isTrue);
+    expect(gate.claim('opening:60000'), isFalse);
+    expect(gate.claim('ending:1290000'), isTrue);
+    expect(gate.claim('ending:1290000'), isFalse);
+  });
+
   testWidgets('track picker is bottom aligned and D-pad selectable', (
     tester,
   ) async {

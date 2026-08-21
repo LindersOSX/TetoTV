@@ -1,0 +1,32 @@
+[
+  {
+    "id": "library-grid-layout",
+    "name": "Library Grid Layout",
+    "description": "Adjust how many cards per row the manga & anime library grids show, from a tray stepper.",
+    "author": "Carloss616",
+    "manifestURI": "https://raw.githubusercontent.com/Carloss616/seanime-extensions/main/src/plugins/library-grid-layout/manifest.json",
+    "type": "plugin",
+    "language": "typescript",
+    "lang": "en"
+  },
+  {
+    "id": "local-catalog",
+    "name": "Local Catalog",
+    "description": "A custom metadata source for manga not on AniList/MangaUpdates.",
+    "author": "Carloss616",
+    "manifestURI": "https://raw.githubusercontent.com/Carloss616/seanime-extensions/main/src/custom-source/local-catalog/manifest.json",
+    "type": "custom-source",
+    "language": "typescript",
+    "lang": "en"
+  },
+  {
+    "id": "local-catalog-manager",
+    "name": "Local Catalog Manager",
+    "description": "Manage your local-catalog from inside seanime.",
+    "author": "Carloss616",
+    "manifestURI": "https://raw.githubusercontent.com/Carloss616/seanime-extensions/main/src/plugins/local-catalog-manager/manifest.json",
+    "type": "plugin",
+    "language": "typescript",
+    "lang": "en"
+  }
+]

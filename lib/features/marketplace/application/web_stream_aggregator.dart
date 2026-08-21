@@ -137,10 +137,14 @@ class WebStreamAggregator {
       },
       onFailure: (provider, error, noMatch) async {
         if (noMatch) return;
-        await _store.recordProviderFailure(provider.id, error);
+        final healthMessage = seanimeProviderFailureMessage(error);
+        await _store.recordProviderFailure(provider.id, healthMessage);
+        final diagnostic = provider is SeanimeJavascriptProvider
+            ? seanimeProviderDiagnosticMessage(provider, error)
+            : 'provider=${provider.id} reason=provider_error';
         await _store.database.recordDiagnosticEvent(
           category: 'provider',
-          message: '${provider.name}: $error',
+          message: diagnostic,
         );
       },
     );
@@ -423,6 +427,8 @@ Future<_WebProviderOutcome> _searchWebProvider(
       return _WebProviderOutcome(providerId: provider.id, cancelled: true);
     }
     final noMatch = isSeanimeProviderNoMatch(error);
+    final details = seanimeProviderFailureDetails(error);
+    final seanime = provider is SeanimeJavascriptProvider ? provider : null;
     try {
       await onFailure?.call(provider, error, noMatch);
     } catch (_) {
@@ -432,6 +438,12 @@ Future<_WebProviderOutcome> _searchWebProvider(
       providerId: provider.id,
       failure: WebProviderFailure(
         providerName: provider.name,
+        providerId: provider.id,
+        providerVersion: seanime?.version,
+        repositoryHost: seanime?.repositoryHost,
+        executableHost: seanime?.executableHost,
+        stage: details?.stage,
+        reason: details?.reason,
         message: noMatch
             ? 'No matching title or episode from this provider.'
             : error is TimeoutException

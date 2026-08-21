@@ -1,0 +1,22 @@
+[
+  {
+    "id": "animeAV1",
+    "name": "AnimeAV1",
+    "description": "AnimeAV1 is an Anime provider for spanish anime for Seanime",
+    "manifestURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/AnimeAV1/manifest.json",
+    "author": "Pal & jabifx",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "es"
+  },
+  {
+    "id": "anidb",
+    "name": "AniDB",
+    "description": "AniDB is an Anime provider for english sub & dub for Seanime",
+    "manifestURI": "https://raw.githubusercontent.com/Pal-droid/Seanime-Providers/main/src/anime/anidb/manifest.json",
+    "author": "Pal",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en"
+  }
+]

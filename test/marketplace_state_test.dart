@@ -7,20 +7,29 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   MarketplaceAddon manifest({
+    String id = 'provider.test',
+    String repositoryUrl = 'https://example.com/marketplace.json',
+    String manifestUrl = 'https://example.com/manifest.json',
     String? version,
     Map<String, String> defaults = const {},
+    bool? reportedWorking,
+    bool reportedBroken = false,
+    bool isDeprecated = false,
   }) => MarketplaceAddon(
-    id: 'provider.test',
+    id: id,
     name: 'Test provider',
     description: 'Fixture',
     author: 'TetoTV tests',
-    manifestUri: Uri.parse('https://example.com/manifest.json'),
-    repositoryUrl: 'https://example.com/marketplace.json',
+    manifestUri: Uri.parse(manifestUrl),
+    repositoryUrl: repositoryUrl,
     language: 'typescript',
     type: 'onlinestream-provider',
     locale: 'en',
     version: version,
     userConfigDefaults: defaults,
+    reportedWorking: reportedWorking,
+    reportedBroken: reportedBroken,
+    isDeprecated: isDeprecated,
   );
 
   InstalledStreamingAddon installed({
@@ -116,6 +125,93 @@ void main() {
     expect(state.installedById(casingUpdate.id), same(current));
     expect(addonProvenanceMatches(current, casingUpdate), isTrue);
     expect(state.updateAvailable(casingUpdate), isTrue);
+  });
+
+  test('prefers a maintained duplicate over repository URL order', () {
+    final unknownOld = manifest(
+      repositoryUrl: 'https://a.example/marketplace.json',
+      manifestUrl: 'https://a.example/provider/manifest.json',
+      version: '1.0.0',
+    );
+    final maintained = manifest(
+      repositoryUrl: 'https://z.example/marketplace.json',
+      manifestUrl: 'https://z.example/provider/manifest.json',
+      version: '1.2.0',
+      reportedWorking: true,
+    );
+    final brokenNewest = manifest(
+      repositoryUrl: 'https://b.example/marketplace.json',
+      manifestUrl: 'https://b.example/provider/manifest.json',
+      version: '99.0.0',
+      reportedBroken: true,
+    );
+
+    final selected = selectMarketplaceCatalogCandidates([
+      unknownOld,
+      brokenNewest,
+      maintained,
+    ]);
+
+    expect(selected, hasLength(1));
+    expect(selected.single.repositoryUrl, maintained.repositoryUrl);
+    expect(selected.single.version, '1.2.0');
+  });
+
+  test('shares advisory status only for the identical manifest URI', () {
+    final sharedManifest = manifest(
+      repositoryUrl: 'https://mirror-a.example/marketplace.json',
+      manifestUrl: 'https://source.example/provider/manifest.json',
+      version: '1.0.0',
+    );
+    final brokenReport = manifest(
+      repositoryUrl: 'https://mirror-b.example/marketplace.json',
+      manifestUrl: 'https://source.example/provider/manifest.json',
+      version: '1.0.0',
+      reportedBroken: true,
+    );
+    final differentImplementation = manifest(
+      repositoryUrl: 'https://mirror-c.example/marketplace.json',
+      manifestUrl: 'https://other.example/provider/manifest.json',
+      version: '0.9.0',
+      reportedWorking: true,
+    );
+
+    final selected = selectMarketplaceCatalogCandidates([
+      sharedManifest,
+      brokenReport,
+      differentImplementation,
+    ]);
+
+    expect(selected.single.manifestUri, differentImplementation.manifestUri);
+    expect(selected.single.reportedWorking, isTrue);
+    final sharedOnly = selectMarketplaceCatalogCandidates([
+      sharedManifest,
+      brokenReport,
+    ]);
+    expect(sharedOnly.single.reportedBroken, isTrue);
+    expect(sharedOnly.single.reportedWorking, isFalse);
+  });
+
+  test('keeps installed repository provenance across duplicate catalogs', () {
+    final owned = manifest(
+      repositoryUrl: 'https://owned.example/marketplace.json',
+      manifestUrl: 'https://owned.example/provider/manifest.json',
+      version: '1.0.0',
+    );
+    final replacement = manifest(
+      repositoryUrl: 'https://other.example/marketplace.json',
+      manifestUrl: 'https://other.example/provider/manifest.json',
+      version: '9.0.0',
+      reportedWorking: true,
+    );
+
+    final selected = selectMarketplaceCatalogCandidates(
+      [replacement, owned],
+      installed: [installed(addon: owned)],
+    );
+
+    expect(selected.single.repositoryUrl, owned.repositoryUrl);
+    expect(selected.single.version, '1.0.0');
   });
 
   test('rejects a non-public repository before persisting it', () async {

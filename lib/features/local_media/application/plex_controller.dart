@@ -264,7 +264,7 @@ class PlexController extends StateNotifier<PlexState> {
       : _loadLocation(locations: state.locations, append: false);
 
   Future<void> openFolder(PlexMediaItem item) {
-    if (!item.isFolder || state.locations.isEmpty) return Future.value();
+    if (!item.isFolder) return Future.value();
     return _loadLocation(
       locations: [...state.locations, PlexLocation.item(item)],
       append: false,
@@ -285,6 +285,29 @@ class PlexController extends StateNotifier<PlexState> {
       return Future.value();
     }
     return _loadLocation(locations: state.locations, append: true);
+  }
+
+  Future<List<PlexMediaItem>> search(String query) async {
+    final connection = state.connection;
+    if (_disposed || connection == null) return const [];
+    return _client.search(connection, query);
+  }
+
+  Future<PlexMediaItem> preparePlayableItem(PlexMediaItem item) async {
+    if (item.isPlayable) return item;
+    final connection = state.connection;
+    if (connection == null) {
+      throw const PlexException('Connect Plex before playing media.');
+    }
+    if (item.type != PlexMediaType.movie &&
+        item.type != PlexMediaType.episode) {
+      throw const PlexException('Choose a Plex movie or episode to play.');
+    }
+    final hydrated = await _client.metadata(connection, item);
+    if (!hydrated.isPlayable) {
+      throw const PlexException('Plex did not provide a playable media part.');
+    }
+    return hydrated;
   }
 
   Uri playbackUri(PlexMediaItem item) {
@@ -312,6 +335,30 @@ class PlexController extends StateNotifier<PlexState> {
     return connection == null
         ? const {}
         : _client.authenticatedHeaders(connection);
+  }
+
+  Duration serverResumePosition(PlexMediaItem item) => Duration(
+    milliseconds: (item.viewOffsetMilliseconds ?? 0).clamp(0, 1 << 53),
+  );
+
+  Future<void> reportTimeline(
+    PlexMediaItem item, {
+    required Duration position,
+    required bool playing,
+  }) async {
+    final connection = state.connection;
+    if (_disposed || connection == null) return;
+    try {
+      await _client.reportTimeline(
+        connection,
+        item,
+        position: position,
+        playing: playing,
+      );
+    } catch (_) {
+      // Plex timeline reporting is best effort. Local playback and the
+      // encrypted device checkpoint remain authoritative while offline.
+    }
   }
 
   Future<Uint8List> imageBytes(Uri uri) {

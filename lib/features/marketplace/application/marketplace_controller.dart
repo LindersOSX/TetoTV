@@ -138,19 +138,16 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         }
       }),
     );
-    final combined = <String, MarketplaceAddon>{};
+    final variants = <MarketplaceAddon>[];
     final errors = <String, String>{};
     for (final result in results) {
       if (result.error != null) errors[result.repository.url] = result.error!;
-      for (final addon in result.addons) {
-        combined.putIfAbsent(
-          marketplaceAddonIdentityKey(addon.id),
-          () => addon,
-        );
-      }
+      variants.addAll(result.addons);
     }
-    var catalog = combined.values.toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    var catalog = selectMarketplaceCatalogCandidates(
+      variants,
+      installed: state.installed,
+    )..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     final installedIds = state.installed
         .map((addon) => marketplaceAddonIdentityKey(addon.manifest.id))
         .toSet();
@@ -374,7 +371,10 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         );
         return;
       }
-      final health = await _store.recordProviderFailure(id, error);
+      final health = await _store.recordProviderFailure(
+        id,
+        seanimeProviderFailureMessage(error),
+      );
       state = state.copyWith(
         providerHealth: {...state.providerHealth, id: health},
         providerMessages: {
@@ -403,6 +403,112 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
           .toList(),
     );
   }
+}
+
+/// Selects one visible candidate for each extension ID without allowing a
+/// second repository to silently replace installed executable code.
+///
+/// For an installed provider, its original repository always wins. For a new
+/// provider, advisory catalog status and version metadata avoid an older or
+/// explicitly broken duplicate shadowing a maintained entry merely because
+/// its repository URL sorted first. The explicit install confirmation and
+/// same-provenance update guard remain the executable trust boundary.
+List<MarketplaceAddon> selectMarketplaceCatalogCandidates(
+  Iterable<MarketplaceAddon> variants, {
+  Iterable<InstalledStreamingAddon> installed = const [],
+}) {
+  final groups = <String, List<MarketplaceAddon>>{};
+  for (final addon in variants) {
+    groups
+        .putIfAbsent(marketplaceAddonIdentityKey(addon.id), () => [])
+        .add(addon);
+  }
+  final installedById = <String, InstalledStreamingAddon>{
+    for (final addon in installed)
+      marketplaceAddonIdentityKey(addon.manifest.id): addon,
+  };
+  final selected = <MarketplaceAddon>[];
+  for (final entry in groups.entries) {
+    final candidates = _mergeSharedManifestStatus(entry.value);
+    final current = installedById[entry.key];
+    MarketplaceAddon? sameOwner;
+    if (current != null) {
+      for (final candidate in candidates) {
+        if (addonProvenanceMatches(current, candidate)) {
+          sameOwner = candidate;
+          break;
+        }
+      }
+    }
+    if (sameOwner != null) {
+      selected.add(sameOwner);
+      continue;
+    }
+    candidates.sort(_compareCatalogCandidates);
+    selected.add(candidates.first);
+  }
+  return selected;
+}
+
+List<MarketplaceAddon> _mergeSharedManifestStatus(
+  List<MarketplaceAddon> candidates,
+) {
+  return [
+    for (final candidate in candidates)
+      () {
+        final peers = candidates.where(
+          (other) => other.manifestUri == candidate.manifestUri,
+        );
+        final broken = peers.any((other) => other.reportedBroken);
+        final deprecated = peers.any((other) => other.isDeprecated);
+        final reports = peers
+            .map((other) => other.reportedWorking)
+            .whereType<bool>()
+            .toList(growable: false);
+        final working = broken
+            ? false
+            : reports.contains(true)
+            ? true
+            : reports.contains(false)
+            ? false
+            : null;
+        final lastWorking = peers
+            .map((other) => other.lastWorkingVersion)
+            .whereType<String>()
+            .fold<String?>(
+              null,
+              (best, value) => best == null || _compareVersions(value, best) > 0
+                  ? value
+                  : best,
+            );
+        return candidate.withCatalogStatus(
+          reportedWorking: working,
+          reportedBroken: broken,
+          isDeprecated: deprecated,
+          lastWorkingVersion: lastWorking,
+        );
+      }(),
+  ];
+}
+
+int _compareCatalogCandidates(MarketplaceAddon left, MarketplaceAddon right) {
+  int statusRank(MarketplaceAddon addon) {
+    if (addon.isDeprecated) return 4;
+    if (addon.reportedBroken) return 3;
+    if (addon.reportedWorking == false) return 2;
+    if (addon.reportedWorking == null) return 1;
+    return 0;
+  }
+
+  final status = statusRank(left).compareTo(statusRank(right));
+  if (status != 0) return status;
+  final version = _compareVersions(right.version ?? '0', left.version ?? '0');
+  if (version != 0) return version;
+  final manifest = left.manifestUri.toString().compareTo(
+    right.manifestUri.toString(),
+  );
+  if (manifest != 0) return manifest;
+  return left.repositoryUrl.compareTo(right.repositoryUrl);
 }
 
 /// An add-on ID alone is not a trusted update identity. A second repository
